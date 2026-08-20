@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>組裝系統結構說明表</title>
+<style>
+  :root{
+    --bg:#1e2127; --panel:#272b33; --panel2:#2f343d; --line:#3a4049;
+    --txt:#e6e8ec; --dim:#9aa3ae; --accent:#4a9eff; --danger:#e05a5a; --ok:#4dd39a; --warn:#ffd166;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;
+    font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+    background:var(--bg);color:var(--txt);font-size:13px;}
+  #app{display:flex;height:100vh;}
+  #left{width:264px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
+  #right{width:352px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
+  #left.collapsed,#right.collapsed{display:none;}
+  .panel-scroll{overflow-y:auto;overflow-x:hidden;flex:1;padding:10px;}
+  .splitter{width:6px;flex:none;cursor:col-resize;background:var(--line);position:relative;}
+  .splitter:hover,.splitter.active{background:var(--accent);}
+  .splitter:after{content:'';position:absolute;left:2px;top:50%;width:2px;height:34px;margin-top:-17px;
+    background:rgba(255,255,255,.28);border-radius:1px;}
+  body.resizing{cursor:col-resize;user-select:none;}
+  h3{font-size:12px;color:var(--dim);margin:14px 0 6px;letter-spacing:1px;font-weight:600;}
+  h3:first-child{margin-top:0;}
+  #center{flex:1;display:flex;flex-direction:column;min-width:0;}
+  #tabs{height:36px;flex:none;background:#20242b;border-bottom:1px solid var(--line);display:flex;align-items:stretch;}
+  .tab{padding:0 20px;display:flex;align-items:center;cursor:pointer;color:var(--dim);
+    border-right:1px solid var(--line);user-select:none;}
+  .tab.on{background:var(--bg);color:var(--txt);box-shadow:inset 0 -2px 0 var(--accent);}
+  .toolbar{height:44px;flex:none;background:var(--panel);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:6px;padding:0 10px;overflow-x:auto;}
+  button,select,input[type=text],input[type=number],input[type=date]{
+    background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:5px;padding:5px 9px;font-size:12px;font-family:inherit;cursor:pointer;}
+  button:hover{border-color:var(--accent);}
+  button.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  button.danger:hover{border-color:var(--danger);color:var(--danger);}
+  input[type=text],input[type=number],input[type=date]{cursor:text;width:100%;}
+  select{width:100%;}
+  .sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none;}
+  label.ck{display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;}
+  .stage{flex:1;position:relative;overflow:auto;}
+  .stage.hide{display:none;}
+  #sheetWrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;}
+  #sheet{background:#fff;max-width:100%;max-height:100%;box-shadow:0 6px 30px rgba(0,0,0,.5);}
+  #gl{position:absolute;inset:0;}
+  #gl canvas{display:block;}
+  .float{position:absolute;color:var(--dim);font-size:11px;background:rgba(30,33,39,.85);
+    padding:6px 10px;border-radius:5px;pointer-events:none;line-height:1.7;z-index:5;}
+  .row{display:flex;gap:6px;align-items:center;margin-bottom:7px;min-width:0;}
+  .row label{width:76px;flex:none;color:var(--dim);font-size:11px;white-space:nowrap;}
+  .row input,.row select{min-width:0;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;min-width:0;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;min-width:0;}
+  .grid2>*,.grid3>*{min-width:0;}
+  .grid3 .row label,.grid2 .row label{width:28px;}
+  .mini{font-size:11px;color:var(--dim);line-height:1.7;margin-top:4px;}
+  .fullbtn{width:100%;margin-bottom:6px;text-align:center;}
+  /* 標準料勾選 */
+  .stock{display:flex;flex-wrap:wrap;gap:4px;}
+  .stock label{display:flex;align-items:center;gap:3px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:4px;padding:3px 6px;font-size:11px;cursor:pointer;font-variant-numeric:tabular-nums;}
+  .stock label.on{border-color:var(--accent);color:var(--accent);}
+  /* 方案清單 */
+  .cand{border:1px solid var(--line);border-radius:6px;padding:7px 9px;margin-bottom:5px;cursor:pointer;
+    background:var(--panel2);}
+  .cand:hover{border-color:var(--accent);}
+  .cand.on{border-color:var(--accent);background:#31465f;}
+  .cand .t{display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:3px;}
+  .cand .exp{font-size:12px;font-variant-numeric:tabular-nums;word-break:break-all;}
+  .pill{font-size:10px;padding:1px 5px;border-radius:3px;background:#3a4049;color:var(--dim);}
+  .pill.ok{background:#245040;color:var(--ok);}
+  .pill.warn{background:#54481f;color:var(--warn);}
+  .gap0{color:var(--ok);} .gapN{color:var(--warn);}
+  /* 折疊分組 */
+  .grpbar{display:flex;gap:5px;margin-bottom:6px;}
+  .grpbar button{flex:1;padding:3px 6px;font-size:11px;}
+  .grp{display:flex;align-items:center;gap:6px;padding:6px 8px;margin-top:5px;cursor:pointer;
+    background:#20242b;border:1px solid var(--line);border-radius:6px;user-select:none;}
+  .grp:hover{border-color:var(--accent);}
+  .grp.open{border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;}
+  .grp.has .gn{color:var(--accent);}
+  .grp .arw{color:var(--dim);width:12px;flex:none;font-size:10px;}
+  .grp .gn{font-size:12px;font-weight:600;}
+  .grp .gi{margin-left:auto;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .grpbody:not(:empty){border:1px solid var(--line);border-top:none;
+    border-radius:0 0 6px 6px;padding:6px 6px 1px;}
+  /* 跨距編輯 */
+  .bay{display:flex;gap:5px;align-items:center;margin-bottom:5px;}
+  .bay .i{width:16px;flex:none;color:var(--dim);font-size:10px;text-align:center;}
+  .bay select{flex:1;}
+  .bay button{flex:none;padding:4px 7px;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{padding:4px 6px;border-bottom:1px solid #31363f;text-align:left;}
+  th{color:var(--dim);font-weight:600;font-size:10.5px;}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
+  tr.tot td{border-top:1px solid var(--line);color:var(--ok);font-weight:600;}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:9px;margin-bottom:8px;}
+  .big{font-size:17px;font-variant-numeric:tabular-nums;}
+  /* 說明表分頁列 */
+  #shBar{flex:none;display:flex;align-items:stretch;gap:4px;padding:5px 8px;overflow-x:auto;
+    background:#23272e;border-bottom:1px solid var(--line);}
+  .shtab{flex:none;display:flex;flex-direction:column;justify-content:center;gap:1px;
+    padding:4px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;
+    background:var(--panel2);user-select:none;min-width:96px;}
+  .shtab:hover{border-color:var(--accent);}
+  .shtab.on{border-color:var(--accent);background:#31465f;}
+  .shtab .sn{font-size:12px;white-space:nowrap;}
+  .shtab .sd{font-size:9.5px;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .shadd{flex:none;padding:4px 12px;}
+  /* 列印區 */
+  #printArea{display:none;}
+  #printArea .psheet{display:block;width:100%;}
+  @media print{
+    @page{ size:A4 landscape; margin:8mm; }
+    #left,#right,#tabs,.toolbar,.splitter,.float,#shBar{display:none!important;}
+    html,body,#app,#center,.stage{height:auto;overflow:visible;background:#fff;}
+    #sheetWrap{position:static;padding:0;}
+    #sheet{box-shadow:none;max-width:100%;width:100%;}
+    #stage3d{display:none!important;}
+    body.printing #stageSheet{display:none!important;}
+    body.printing #printArea{display:block!important;}
+    #printArea .psheet{page-break-after:always;break-after:page;}
+    #printArea .psheet:last-child{page-break-after:auto;break-after:auto;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= 左：需求輸入 ================= -->
+  <div id="left">
+    <div class="panel-scroll">
+      <h3>表頭資料（全案共用）</h3>
+      <div class="row"><label>進場日期</label><input type="date" id="hDate"></div>
+      <div class="row"><label>客戶單號</label><input type="text" id="hNo" value="ABA-0107"></div>
+      <div class="row"><label>案件名稱</label><input type="text" id="hName" value="意霏-UQ員工大會"></div>
+
+      <h3>這張說明表</h3>
+      <div class="row"><label>系統名稱</label><input type="text" id="shName" value="系統1"></div>
+      <div class="row"><label>套數</label><input type="number" id="shQty" value="1" min="1" max="99"></div>
+      <div class="mini" style="margin-bottom:8px">同一組配置要做幾套。圖不變，備料自動乘上去。</div>
+      <div class="grid2">
+        <button onclick="addSheet(false)">＋ 新增一張</button>
+        <button onclick="addSheet(true)">⧉ 複製這張</button>
+      </div>
+      <div class="grid3" style="margin-top:6px">
+        <button onclick="moveSheet(-1)" title="往前移">◀</button>
+        <button onclick="moveSheet(1)" title="往後移">▶</button>
+        <button class="danger" onclick="delSheet()">刪除</button>
+      </div>
+
+      <h3>需求尺寸（cm）</h3>
+      <div class="grid3">
+        <div class="row"><label>寬</label><input type="number" id="rW" value="290"></div>
+        <div class="row"><label>高</label><input type="number" id="rH" value="220"></div>
+        <div class="row"><label>深</label><input type="number" id="rD" value="36"></div>
+      </div>
+      <div class="row"><label>立柱斷面寬</label><input type="number" id="pS" value="4"></div>
+      <div class="mini">立柱斷面寬＝展開式裡的「4」，也就是每支立柱佔掉的寬度。
+        需求尺寸扣掉所有立柱後，剩下的才是跨距可用空間。</div>
+
+      <h3>橫料層數</h3>
+      <div class="grid3">
+        <div class="row"><label>前</label><input type="number" id="lF" value="3" min="0" max="12"></div>
+        <div class="row"><label>後</label><input type="number" id="lB" value="2" min="0" max="12"></div>
+        <div class="row"><label>深</label><input type="number" id="lD" value="2" min="0" max="12"></div>
+      </div>
+      <div class="mini">前 3 後 2 ＝ 每個跨距 5 支橫料。「深」為每座前後連接料的層數。</div>
+
+      <h3>可用標準料（cm）</h3>
+      <div class="mini" style="margin:0 0 5px">勾選＝可當<b>橫料</b>使用</div>
+      <div class="stock" id="stockBeam"></div>
+      <div class="mini" style="margin:8px 0 5px">勾選＝可當<b>立柱</b>使用</div>
+      <div class="stock" id="stockPost"></div>
+
+      <h3>排料條件</h3>
+      <div class="row"><label>最多座數</label><input type="number" id="maxPost" value="8" min="2" max="16"></div>
+      <div class="row"><label>單跨接料</label>
+        <select id="maxPiece">
+          <option value="1">只用單支料</option>
+          <option value="2" selected>最多接 2 支</option>
+          <option value="3">最多接 3 支</option>
+        </select></div>
+      <div class="grid2">
+        <div class="row"><label>容許差</label><input type="number" id="tolW" value="30"></div>
+        <div class="row"><label>每組</label><input type="number" id="topN" value="3" min="1" max="8"></div>
+      </div>
+      <label class="ck" style="margin-bottom:7px"><input type="checkbox" id="onlySingle"> 自動選用時只考慮單支料</label>
+      <button class="fullbtn" onclick="recalc()">↻ 重新計算方案</button>
+      <div class="mini">自動選用規則：<b>座數最少</b>且差距 ≤ 容許差；都不符合才取差距最小的。</div>
+    </div>
+  </div>
+  <div class="splitter" id="splitL" title="拖曳調整寬度・雙擊還原"></div>
+
+  <!-- ================= 中 ================= -->
+  <div id="center">
+    <div id="tabs">
+      <div class="tab on" id="tabSheet" onclick="setTab('sheet')">▤ 說明表</div>
+      <div class="tab" id="tab3d" onclick="setTab('3d')">◈ 3D 預覽</div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px">
+        <button onclick="togglePanel('left')">◧ 需求</button>
+        <button onclick="togglePanel('right')">◨ 排料</button>
+      </div>
+    </div>
+
+    <div class="toolbar" id="barSheet">
+      <button onclick="exportPNG()">🖼 這張 PNG</button>
+      <button onclick="exportAllPNG()">🖼 全部 PNG</button>
+      <button onclick="printAll()">🖨 列印全部 / PDF</button>
+      <button onclick="exportCSV()">⬇ 備料 CSV</button>
+      <div class="sep"></div>
+      <button onclick="exportForPlanner()" title="匯出成平面規劃器可讀的檔案">⇪ 匯出給平面圖</button>
+      <div class="sep"></div>
+      <button onclick="saveJSON()">💾 存檔</button>
+      <button onclick="document.getElementById('fJson').click()">📂 讀檔</button>
+      <input type="file" id="fJson" accept=".json" style="display:none">
+      <div class="sep"></div>
+      <label class="ck" title="關閉則直接存到瀏覽器預設下載資料夾"><input type="checkbox" id="askPath" checked> 指定存放位置</label>
+      <div class="sep"></div>
+      <label class="ck"><input type="checkbox" id="oGrid" checked onchange="drawSheet()"> 虛線格</label>
+      <label class="ck"><input type="checkbox" id="oDot" checked onchange="drawSheet()"> 接點圓標</label>
+      <label class="ck"><input type="checkbox" id="oDepth" checked onchange="drawSheet()"> 側視圖</label>
+    </div>
+
+    <div class="toolbar" id="bar3d" style="display:none">
+      <button onclick="setView('iso')">等角</button>
+      <button onclick="setView('front')">前視</button>
+      <button onclick="setView('side')">側視</button>
+      <button onclick="setView('top')">俯視</button>
+      <div class="sep"></div>
+      <label class="ck"><input type="checkbox" id="sShadow" checked onchange="build3D()"> 陰影</label>
+      <label class="ck"><input type="checkbox" id="sLabel" checked onchange="build3D()"> 尺寸標註</label>
+      <div class="sep"></div>
+      <button onclick="shot3D()">🖼 存下畫面</button>
+    </div>
+
+    <div id="shBar"></div>
+
+    <div class="stage" id="stageSheet">
+      <div id="sheetWrap"><canvas id="sheet" width="1600" height="1120"></canvas></div>
+    </div>
+    <div id="printArea"></div>
+
+    <div class="stage hide" id="stage3d">
+      <div id="gl"></div>
+      <div class="float" style="left:12px;bottom:10px">左鍵 = 旋轉　·　右鍵 = 平移　·　滾輪 = 遠近</div>
+      <div class="float" id="glErr" style="display:none;left:50%;top:50%">3D 需要網路載入 three.js</div>
+    </div>
+  </div>
+
+  <div class="splitter" id="splitR" title="拖曳調整寬度・雙擊還原"></div>
+
+  <!-- ================= 右：排料與備料 ================= -->
+  <div id="right">
+    <div class="panel-scroll">
+      <h3>目前配置</h3>
+      <div class="card" id="curBox"></div>
+
+      <h3>寬度排料方案（點選套用）</h3>
+      <div id="candBox"></div>
+
+      <h3>逐跨距調整</h3>
+      <div id="bayBox"></div>
+
+      <h3>備料明細</h3>
+      <div class="grpbar">
+        <button id="bmOne" class="on" onclick="setBomMode('one')">這張</button>
+        <button id="bmAll" onclick="setBomMode('all')">全案合計</button>
+      </div>
+      <div id="bomBox"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+/* =========================================================
+   標準料
+   ========================================================= */
+const STOCK = [26,34,40,46,60,94,150,200,292,300];
+let beamOK = {}, postOK = {};
+// 預設：292 / 300 只當立柱，不當橫料（依實際案例回推的慣例，可自行勾選調整）
+STOCK.forEach(v=>{ beamOK[v] = (v!==292 && v!==300); postOK[v]=true; });
+
+/* =========================================================
+   狀態
+   ========================================================= */
+// 一個「案件」＝共用表頭 + 多張說明表
+function newSheet(name){
+  return { name: name||'系統1', qty:1,
+    req:{w:290,h:220,d:36}, ps:4, lv:{f:3,b:2,d:2},
+    bays:[], postH:200, postHPieces:[200],
+    depth:{len:26,pieces:[26]}, pickSig:null };
+}
+let DOC = { head:{date:'',no:'ABA-0001',name:'新案件'}, sheets:[newSheet('系統1')], cur:0 };
+let S = DOC.sheets[0];          // 目前編輯中的說明表（指向 DOC.sheets[DOC.cur]）
+let tab='sheet', three=null, raf=null;
+
+const $ = id=>document.getElementById(id);
+const PS = ()=> +S.ps||4;                          // 立柱斷面 cm
+const LF = ()=> Math.max(0,+S.lv.f||0);
+const LB = ()=> Math.max(0,+S.lv.b||0);
+const LD = ()=> Math.max(0,+S.lv.d||0);
+const QTY = ()=> Math.max(1,+S.qty||1);            // 這張說明表要做幾套
+const sum = a=>a.reduce((x,y)=>x+y,0);
+
+const wOf  = sh => (+sh.ps||4)*(sh.bays.length+1) + sum(sh.bays.map(b=>b.len));
+const dOf  = sh => (+sh.ps||4)*2 + sh.depth.len;
+const actualW = ()=> wOf(S);
+const actualH = ()=> S.postH;
+const actualD = ()=> dOf(S);
+const expr = ()=>{
+  const p=PS(); const parts=[String(p)];
+  S.bays.forEach(b=>{ parts.push(b.pieces.length>1?'('+b.pieces.join('+')+')':String(b.len)); parts.push(String(p)); });
+  return parts.join('+')+'='+actualW();
+};
+
+/* ---------- 說明表切換／管理 ---------- */
+function useSheet(i){
+  DOC.cur=Math.max(0,Math.min(DOC.sheets.length-1,i));
+  S=DOC.sheets[DOC.cur];
+  syncToDOM();
+  S.openK=null;
+  if(!S.bays || !S.bays.length){ recalc(); return; }   // 新表自動排料
+  S.groups=candidates();
+  refresh();
+}
+function syncToDOM(){
+  $('hDate').value=DOC.head.date; $('hNo').value=DOC.head.no; $('hName').value=DOC.head.name;
+  $('rW').value=S.req.w; $('rH').value=S.req.h; $('rD').value=S.req.d; $('pS').value=S.ps;
+  $('lF').value=S.lv.f; $('lB').value=S.lv.b; $('lD').value=S.lv.d;
+  $('shName').value=S.name; $('shQty').value=S.qty||1;
+}
+function syncFromDOM(){
+  DOC.head={date:$('hDate').value,no:$('hNo').value,name:$('hName').value};
+  S.req={w:+$('rW').value||0,h:+$('rH').value||0,d:+$('rD').value||0};
+  S.ps=+$('pS').value||4;
+  S.lv={f:+$('lF').value||0,b:+$('lB').value||0,d:+$('lD').value||0};
+  S.name=$('shName').value||S.name;
+  S.qty=Math.max(1,+$('shQty').value||1);
+}
+function addSheet(copy){
+  syncFromDOM();
+  const n = copy
+    ? { name:S.name+' 複本', req:{...S.req}, ps:S.ps, lv:{...S.lv},
+        bays:JSON.parse(JSON.stringify(S.bays)), postH:S.postH,
+        postHPieces:[...S.postHPieces], depth:JSON.parse(JSON.stringify(S.depth)),
+        pickSig:S.pickSig }
+    // 新表沿用目前的立柱斷面與層數，尺寸從目前這張帶過去當起點，跨距留空自動重排
+    : { ...newSheet('系統'+(DOC.sheets.length+1)),
+        ps:S.ps, lv:{...S.lv}, req:{...S.req} };
+  DOC.sheets.splice(DOC.cur+1,0,n);
+  useSheet(DOC.cur+1);
+}
+function delSheet(){
+  if(DOC.sheets.length<=1){ alert('至少要保留一張說明表。'); return; }
+  if(!confirm(`確定刪除「${S.name}」？`)) return;
+  DOC.sheets.splice(DOC.cur,1);
+  useSheet(Math.min(DOC.cur,DOC.sheets.length-1));
+}
+function moveSheet(d){
+  const i=DOC.cur, j=i+d;
+  if(j<0||j>=DOC.sheets.length) return;
+  const [x]=DOC.sheets.splice(i,1); DOC.sheets.splice(j,0,x);
+  useSheet(j);
+}
+function renderSheetBar(){
+  $('shBar').innerHTML = DOC.sheets.map((sh,i)=>
+    `<div class="shtab${i===DOC.cur?' on':''}" data-i="${i}">
+       <span class="sn">${(sh.name||'未命名').replace(/</g,'&lt;')}${(sh.qty>1)?` <b style="color:var(--warn)">×${sh.qty}</b>`:''}</span>
+       <span class="sd">${wOf(sh)}×${sh.postH}×${dOf(sh)}</span>
+     </div>`).join('')
+    + `<button class="shadd" onclick="addSheet(false)" title="新增說明表">＋</button>`;
+  $('shBar').querySelectorAll('.shtab').forEach(el=>
+    el.addEventListener('click',()=>{ syncFromDOM(); useSheet(+el.dataset.i); }));
+}
+
+/* =========================================================
+   排料演算法
+   ========================================================= */
+function bayOptions(maxPieces){
+  const allow = STOCK.filter(v=>beamOK[v]);
+  const map=new Map();
+  const put=(len,pieces)=>{ if(!map.has(len)||map.get(len).length>pieces.length) map.set(len,pieces); };
+  allow.forEach(a=>put(a,[a]));
+  if(maxPieces>=2) allow.forEach(a=>allow.forEach(b=>{ if(b>=a) put(a+b,[a,b]); }));
+  if(maxPieces>=3) allow.forEach(a=>allow.forEach(b=>allow.forEach(c=>{ if(b>=a&&c>=b) put(a+b+c,[a,b,c]); })));
+  return [...map.entries()].map(([len,pieces])=>({len,pieces})).sort((x,y)=>x.len-y.len);
+}
+// 用「恰好 k 個跨距」求 ≤ T 的最大總寬；回傳各 k 的最佳解
+// 總寬 = P + Σ(跨距 + P)，故令 cap = T - P，物品重量 u = 跨距 + P
+// dp[k][w] = 恰好 k 個跨距、佔用 ≤ w 的最大佔用量（單調遞增，故自帶餘裕）
+function solveSpan(T, opts, P, maxBays){
+  const cap = T - P;
+  const out=[];
+  if(cap<0 || !opts.length) return out;
+  const dp=[], bk=[];
+  dp[0]=new Array(cap+1).fill(0);          // 0 個跨距＝佔用 0
+  bk[0]=new Array(cap+1).fill(null);
+  for(let k=1;k<=maxBays;k++){
+    const cur=new Array(cap+1).fill(-1), b=new Array(cap+1).fill(null);
+    for(let w=1;w<=cap;w++){
+      for(const o of opts){
+        const u=o.len+P;
+        if(u>w) continue;
+        const pv=dp[k-1][w-u];
+        if(pv<0) continue;
+        if(pv+u>cur[w]){ cur[w]=pv+u; b[w]={o, pw:w-u}; }
+      }
+    }
+    dp[k]=cur; bk[k]=b;
+    if(cur[cap]>0){
+      const bays=[]; let w=cap, kk=k, guard=0;
+      while(kk>0 && guard++<200){
+        const e=bk[kk][w]; if(!e) break;
+        bays.push(e.o); w=e.pw; kk--;
+      }
+      if(bays.length===k){
+        bays.reverse();
+        out.push({posts:k+1, bays, total:P+cur[cap]});
+      }
+    }
+  }
+  return out;
+}
+// 可達性表：reach[k][w] = 恰好 k 個跨距、佔用剛好 w
+function reachTable(cap, opts, P, maxBays){
+  const reach=[new Uint8Array(cap+1)]; reach[0][0]=1;
+  for(let k=1;k<=maxBays;k++){
+    const r=new Uint8Array(cap+1);
+    for(let w=1;w<=cap;w++){
+      for(const o of opts){
+        const u=o.len+P;
+        if(u<=w && reach[k-1][w-u]){ r[w]=1; break; }
+      }
+    }
+    reach[k]=r;
+  }
+  return reach;
+}
+function buildBays(k,w,P,opts,reach){
+  const bays=[];
+  while(k>0){
+    let ok=false;
+    for(const o of opts){
+      const u=o.len+P;
+      if(u<=w && reach[k-1][w-u]){ bays.push(o); w-=u; k--; ok=true; break; }
+    }
+    if(!ok) return null;
+  }
+  return bays;
+}
+// 依「座數」分組，每組列出前 N 名（單支料與含接料各取，再合併去重）
+function candidates(){
+  const T=+S.req.w||0, P=PS();
+  const maxB=Math.max(1,(+$('maxPost').value||8)-1);
+  const mp=+$('maxPiece').value||2;
+  const perGroup=Math.max(1,+($('topN')&&$('topN').value)||3);
+  const cap=T-P;
+  const groups=[];
+  if(cap<1) return groups;
+
+  const run=(opts,tag)=>{
+    if(!opts.length) return [];
+    const reach=reachTable(cap,opts,P,maxB);
+    const out=[];
+    for(let k=1;k<=maxB;k++){
+      const picks=[];
+      for(let w=cap;w>=0 && picks.length<perGroup;w--){
+        if(!reach[k][w]) continue;
+        const bays=buildBays(k,w,P,opts,reach);
+        if(bays) picks.push({posts:k+1, bays, total:P+w, tag,
+          joins:bays.filter(b=>b.pieces.length>1).length});
+      }
+      out.push(...picks);
+    }
+    return out;
+  };
+  const all=[...run(bayOptions(1),'單支料'), ...(mp>1?run(bayOptions(mp),'含接料'):[])];
+  const seen=new Set(), byK=new Map();
+  all.forEach(c=>{
+    const sig=c.posts+':'+c.bays.map(b=>b.pieces.join('+')).join('|');
+    if(seen.has(sig)) return;
+    seen.add(sig);
+    c.gap=T-c.total;
+    if(!byK.has(c.posts)) byK.set(c.posts,[]);
+    byK.get(c.posts).push(c);
+  });
+  [...byK.keys()].sort((a,b)=>a-b).forEach(k=>{
+    const arr=byK.get(k)
+      .filter(c=>c.gap>=0)
+      .sort((a,b)=> a.gap-b.gap || a.joins-b.joins)
+      .slice(0, perGroup*2);
+    if(arr.length) groups.push({posts:k, items:arr});
+  });
+  return groups;
+}
+// 預設挑選：最少座數且差距 ≤ 容許值；都不符合就取差距最小
+function autoPick(groups){
+  const tol=+$('tolW').value;
+  const onlySingle=$('onlySingle').checked;
+  const flat=[];
+  groups.forEach(g=>g.items.forEach(c=>{ if(!onlySingle||!c.joins) flat.push(c); }));
+  if(!flat.length) return null;
+  const okOnes=flat.filter(c=>c.gap<=(isNaN(tol)?30:tol));
+  if(okOnes.length){
+    // 偏好順序：接料少 → 座數少 → 差距小（比照實際排料習慣）
+    okOnes.sort((a,b)=> a.joins-b.joins || a.posts-b.posts || a.gap-b.gap);
+    return okOnes[0];
+  }
+  return flat.slice().sort((a,b)=>a.joins-b.joins||a.gap-b.gap||a.posts-b.posts)[0];
+}
+// 單一維度選料：**單支優先**，只有在單支差距超過容許值時才考慮接料
+function pickLen(limit, allow, maxPieces){
+  if(limit<0) return null;
+  const tol = +$('tolW').value; const T = isNaN(tol)?30:tol;
+  let single=null;
+  allow.forEach(a=>{ if(a<=limit && (single==null||a>single)) single=a; });
+  if(single!=null && limit-single<=T) return {len:single, pieces:[single]};
+  const map=new Map();
+  const put=(l,p)=>{ if(!map.has(l)||map.get(l).length>p.length) map.set(l,p); };
+  allow.forEach(a=>put(a,[a]));
+  if(maxPieces>=2) allow.forEach(a=>allow.forEach(b=>{ if(b>=a) put(a+b,[a,b]); }));
+  if(maxPieces>=3) allow.forEach(a=>allow.forEach(b=>allow.forEach(c=>{ if(b>=a&&c>=b) put(a+b+c,[a,b,c]); })));
+  let best=null;
+  map.forEach((p,l)=>{ if(l<=limit && (!best||l>best.len)) best={len:l,pieces:p}; });
+  if(best) return best;
+  return single!=null ? {len:single,pieces:[single]} : null;
+}
+// 深度：實際深 = 立柱斷面×2 + 跨距
+function bestFit(T, extra, maxPieces){
+  return pickLen(T-extra, STOCK.filter(v=>beamOK[v]), maxPieces);
+}
+function bestPost(T, maxPieces){
+  return pickLen(T, STOCK.filter(v=>postOK[v]), maxPieces);
+}
+
+const sigOf = c => c.posts+':'+c.bays.map(b=>b.pieces.join('+')).join('|');
+function recalc(){
+  const mp=+$('maxPiece').value||2;
+  S.groups=candidates();
+  S.openK=null;                      // 重算後重新依「目前選用」決定展開哪一組
+  const pick=autoPick(S.groups);
+  if(pick) applyPick(pick,true); else S.bays=[];
+  const ph=bestPost(+S.req.h||0, mp);
+  if(ph){ S.postH=ph.len; S.postHPieces=ph.pieces; }
+  const d=bestFit(+S.req.d||0, PS()*2, mp);
+  if(d) S.depth=d;
+  refresh();
+}
+function applyPick(c, silent){
+  if(!c) return;
+  S.pickSig=sigOf(c);
+  S.bays=c.bays.map(b=>({len:b.len, pieces:[...b.pieces]}));
+  if(!silent) refresh();
+}
+
+/* =========================================================
+   備料明細
+   ========================================================= */
+function computeBOM(){
+  const perBay = LF()+LB();
+  const beams=new Map();     // key 組成字串 -> {pieces, len, qty}
+  S.bays.forEach(b=>{
+    const key=b.pieces.join('+');
+    const g=beams.get(key)||{pieces:b.pieces, len:b.len, per:0, qty:0};
+    g.per+=perBay; beams.set(key,g);
+  });
+  const q = QTY();                       // 這張說明表要做幾套
+  const seatsPer=S.bays.length+1;
+  const depth = LD()>0
+    ? {pieces:S.depth.pieces, len:S.depth.len, per:seatsPer*LD(), qty:seatsPer*LD()*q}
+    : null;
+  beams.forEach(g=>g.qty=g.per*q);
+  // 每根實際料支數（含接料展開，已乘上套數）
+  const cut=new Map();
+  const addCut=(l,n)=>cut.set(l,(cut.get(l)||0)+n);
+  beams.forEach(g=>g.pieces.forEach(p=>addCut(p,g.qty)));
+  if(depth) depth.pieces.forEach(p=>addCut(p,depth.qty));
+  S.postHPieces.forEach(p=>addCut(p,seatsPer*2*q));
+  return {beams:[...beams.values()], depth,
+    qty:q, seatsPer, seats:seatsPer*q,
+    posts:{len:S.postH, pieces:S.postHPieces, seatsPer, seats:seatsPer*q,
+           barsPer:seatsPer*2, bars:seatsPer*2*q},
+    cut:[...cut.entries()].map(([len,qty])=>({len,qty})).sort((a,b)=>b.len-a.len)};
+}
+
+/* =========================================================
+   說明表繪製
+   ========================================================= */
+function drawSheet(){
+  const cv=$('sheet'), c=cv.getContext('2d'), W=cv.width, H=cv.height;
+  c.setTransform(1,0,0,1,0,0);
+  c.fillStyle='#fff'; c.fillRect(0,0,W,H);
+  c.strokeStyle='#000'; c.fillStyle='#000';
+  const F=(s,w)=>`${w||''} ${s}px "Noto Sans TC","Microsoft JhengHei",sans-serif`;
+
+  // 外框
+  c.lineWidth=2; c.strokeRect(40,40,W-80,H-80);
+
+  const line=(x1,y1,x2,y2)=>{c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();};
+  const txt=(s,x,y,size,align,weight)=>{
+    c.font=F(size,weight); c.textAlign=align||'left'; c.textBaseline='alphabetic';
+    c.fillText(s,x,y);
+    return c.measureText(s).width;
+  };
+  const field=(label,val,x,y,lw,ls,vs)=>{
+    const w1=txt(label,x,y,ls||26);
+    txt(val,x+w1+16+lw/2,y-4,vs||28,'center');
+    c.lineWidth=1.6; line(x+w1+12,y+6,x+w1+16+lw,y+6);
+    return x+w1+16+lw;
+  };
+
+  // ── 表頭第一列
+  let x=70, y=110;
+  field('進場日期時間', DOC.head.date||'', x, y, 250);
+  txt('組裝系統結構說明表', W/2+30, y, 38, 'center', 'bold');
+  const nx=W-430;
+  field('客戶單號', DOC.head.no||'', nx, y, 230);
+  // 說明表識別：名稱（第幾張/總數）＋套數
+  {
+    const i=DOC.sheets.indexOf(S)+1, n=DOC.sheets.length, q=QTY();
+    txt(`${S.name||'未命名'}（${i}/${n}）${q>1?'　×　'+q+' 套':''}`, W-70, y+42, 24, 'right');
+  }
+
+  // ── 表頭第二列
+  y=185; x=110;
+  const afterName = field('案件名稱', DOC.head.name||'', x, y, 300);
+  let sx = afterName+50;
+  txt('系統尺寸', sx, y, 24); sx += 110;
+  const dim=(lab,req,act)=>{
+    txt(lab, sx, y, 24); sx+=36;
+    const s=`${req}(${act})`;
+    txt(s, sx+95, y-4, 27,'center');
+    c.lineWidth=1.6; line(sx,y+6,sx+190,y+6);
+    sx+=210;
+  };
+  dim('寬', +S.req.w||0, actualW());
+  dim('高', +S.req.h||0, actualH());
+  dim('深', +S.req.d||0, actualD());
+
+  // ── 繪圖區
+  const gx=110, gy=230, gw=W-220, gh=640;
+  if($('oGrid').checked){
+    c.save(); c.setLineDash([7,7]); c.lineWidth=1.4; c.strokeStyle='#222';
+    const step=Math.round(gw/16);
+    for(let i=0;i*step<=gw+1;i++) line(gx+i*step,gy,gx+i*step,gy+gh);
+    for(let j=0;j*step<=gh+1;j++) line(gx,gy+j*step,gx+gw,gy+j*step);
+    c.restore();
+  }
+
+  const showSide=$('oDepth').checked;
+  const frontRegion = {x:gx+30, w: showSide ? gw*0.60 : gw-60};
+  const sideRegion  = {x:gx+gw*0.70, w: gw*0.26};
+  const drawTop=gy+95, drawBot=gy+gh-160;
+  const hpx=drawBot-drawTop;
+
+  const P=PS(), aw=actualW(), ad=actualD(), ah=actualH();
+  const sxScale = frontRegion.w/Math.max(1,aw);
+  const RED='#e2231a';
+
+  // 正面圖
+  const postXs=[];
+  {
+    let cx=0;
+    postXs.push(cx+P/2); // 中心
+    S.bays.forEach(b=>{ cx+=P+b.len; postXs.push(cx+P/2); });
+  }
+  const FX = v => frontRegion.x + v*sxScale;
+  const levelsY = n => {
+    if(n<=0) return [];
+    if(n===1) return [drawBot];
+    const out=[];
+    for(let i=0;i<n;i++) out.push(drawBot - hpx*i/(n-1));
+    return out;
+  };
+  c.strokeStyle=RED; c.lineWidth=9; c.lineCap='butt';
+  const front = levelsY(Math.max(LF(),LB()));
+  // 橫線畫到頭尾立柱的「中心線」為止，端點正好被接點圓標蓋住，不會突出
+  const fx0=postXs[0], fx1=postXs[postXs.length-1];
+  front.forEach(yy=> line(FX(fx0), yy, FX(fx1), yy));
+  postXs.forEach(px=> line(FX(px), drawTop, FX(px), drawBot));
+
+  if($('oDot').checked){
+    c.lineWidth=5;
+    [drawTop,drawBot].forEach(yy=>postXs.forEach(px=>{
+      c.beginPath(); c.arc(FX(px),yy,15,0,7); c.fillStyle='#fff'; c.fill(); c.strokeStyle=RED; c.stroke();
+    }));
+  }
+  // 展開式
+  c.fillStyle='#000';
+  txt(expr(), frontRegion.x+frontRegion.w/2, drawTop-30, 34, 'center');
+  txt(`前${LF()}後${LB()}`, frontRegion.x+frontRegion.w/2, drawBot+95, 44, 'center');
+
+  // 側面圖
+  if(showSide){
+    const sScale=sideRegion.w/Math.max(1,ad);
+    const SX=v=>sideRegion.x+v*sScale;
+    const sPost=[P/2, ad-P/2];
+    c.strokeStyle=RED; c.lineWidth=9;
+    [drawTop,drawBot].forEach(yy=> line(SX(sPost[0]),yy,SX(sPost[1]),yy));
+    sPost.forEach(px=> line(SX(px),drawTop,SX(px),drawBot));
+    if($('oDot').checked){
+      c.lineWidth=5;
+      [drawTop,drawBot].forEach(yy=>sPost.forEach(px=>{
+        c.beginPath(); c.arc(SX(px),yy,15,0,7); c.fillStyle='#fff'; c.fill(); c.strokeStyle=RED; c.stroke();
+      }));
+    }
+    c.fillStyle='#000';
+    txt(String(ad), sideRegion.x+sideRegion.w/2, drawTop-30, 34, 'center');
+    txt(String(ah), SX(ad)+30, (drawTop+drawBot)/2, 34, 'left');
+    txt(`${cn(S.bays.length+1)}座`, sideRegion.x+sideRegion.w/2, drawBot+95, 44, 'center');
+  }
+
+  // ── 備料明細框
+  const bx=gx+150, by=gy+gh+20, bw=gw-150, bh=H-40-16-by;
+  c.strokeStyle='#000'; c.lineWidth=2; c.strokeRect(bx,by,bw,bh);
+  txt('系統備料明細', gx, by+bh/2+9, 24);
+  const b=computeBOM();
+  const per = b.qty>1 ? (n=>`　（單套 ${n} 支）`) : (()=> '');
+  txt('橫料', bx+18, by+bh/2+10, 30);
+  let ly=by+40;
+  b.beams.forEach(g=>{
+    txt(`${g.pieces.join('+')} 共 ${g.qty} 支${per(g.per)}`, bx+100, ly, 24); ly+=36;
+  });
+  if(b.depth) txt(`深度料 ${b.depth.pieces.join('+')} 共 ${b.depth.qty} 支${per(b.depth.per)}`, bx+100, ly, 24);
+  txt(`立柱 ${S.postHPieces.join('+')} 共 ${b.seats} 座（${b.posts.bars} 支）`,
+      bx+bw*0.58, by+bh/2+(b.qty>1?-6:10), 26);
+  if(b.qty>1)
+    txt(`本表 ${b.qty} 套　單套 ${b.seatsPer} 座`, bx+bw*0.58, by+bh/2+30, 22);
+}
+const CN='〇一二三四五六七八九十';
+function cn(n){
+  if(n<=10) return CN[n];
+  if(n<20) return '十'+CN[n-10];
+  return String(n);
+}
+
+/* =========================================================
+   右側面板
+   ========================================================= */
+function renderCur(){
+  $('curBox').innerHTML=`
+    <div class="big" style="margin-bottom:6px">
+      寬 ${+S.req.w||0}(${actualW()})　高 ${+S.req.h||0}(${actualH()})　深 ${+S.req.d||0}(${actualD()})
+    </div>
+    <div class="exp" style="font-size:13px;margin-bottom:6px">${expr()}</div>
+    <table>
+      <tr><td>套數</td><td class="n">${QTY()} 套</td></tr>
+      <tr><td>座數</td><td class="n">${S.bays.length+1} 座${QTY()>1?` / 共 ${(S.bays.length+1)*QTY()} 座`:''}</td></tr>
+      <tr><td>寬度差距</td><td class="n ${((+S.req.w||0)-actualW())===0?'gap0':'gapN'}">${(+S.req.w||0)-actualW()} cm</td></tr>
+      <tr><td>立柱</td><td class="n">${S.postHPieces.join('+')} cm</td></tr>
+      <tr><td>深度跨距</td><td class="n">${S.depth.pieces.join('+')} cm</td></tr>
+    </table>`;
+}
+function exprOf(bays,total){
+  const p=PS();
+  return p+'+'+bays.map(b=>b.pieces.length>1?'('+b.pieces.join('+')+')':b.len).join('+'+p+'+')+'+'+p+'='+total;
+}
+function renderCands(){
+  const box=$('candBox'), gs=S.groups||[];
+  if(!gs.length){ box.innerHTML='<div class="mini">找不到可行方案，請放寬需求或勾選更多標準料。</div>'; return; }
+  // 預設只展開「目前選用」所在的那一組
+  if(!S.openK){
+    S.openK=new Set();
+    const cur=gs.find(g=>g.items.some(c=>sigOf(c)===S.pickSig));
+    S.openK.add(cur?cur.posts:gs[0].posts);
+  }
+  const flat=[];
+  const head=`<div class="grpbar">
+      <button onclick="expandAll(true)">全部展開</button>
+      <button onclick="expandAll(false)">全部收合</button>
+    </div>`;
+  box.innerHTML = head + gs.map(g=>{
+    const open=S.openK.has(g.posts);
+    const hasPick=g.items.some(c=>sigOf(c)===S.pickSig);
+    const minGap=Math.min(...g.items.map(c=>c.gap));
+    const rows=open ? g.items.map(c=>{
+      const i=flat.push(c)-1;
+      const on = sigOf(c)===S.pickSig;
+      return `<div class="cand${on?' on':''}" data-i="${i}">
+        <div class="t">
+          <span class="pill ${c.joins?'warn':'ok'}">${c.joins?'接料 '+c.joins:'單支料'}</span>
+          <span style="margin-left:auto" class="${c.gap===0?'gap0':'gapN'}">差 ${c.gap} cm</span>
+        </div>
+        <div class="exp">${exprOf(c.bays,c.total)}</div></div>`;
+    }).join('') : '';
+    return `<div class="grp${open?' open':''}${hasPick?' has':''}" data-k="${g.posts}">
+        <span class="arw">${open?'▾':'▸'}</span>
+        <span class="gn">${g.posts} 座</span>
+        ${hasPick?'<span class="pill ok">目前選用</span>':''}
+        <span class="gi">${g.items.length} 案　最小差 ${minGap}</span>
+      </div>
+      <div class="grpbody">${rows}</div>`;
+  }).join('');
+  S.flatCands=flat;
+  box.querySelectorAll('.grp').forEach(el=>el.addEventListener('click',()=>{
+    const k=+el.dataset.k;
+    S.openK.has(k) ? S.openK.delete(k) : S.openK.add(k);
+    renderCands();
+  }));
+  box.querySelectorAll('.cand').forEach(el=>
+    el.addEventListener('click',()=>applyPick(S.flatCands[+el.dataset.i])));
+}
+function expandAll(on){
+  S.openK = new Set(on ? (S.groups||[]).map(g=>g.posts) : []);
+  renderCands();
+}
+function renderBays(){
+  const box=$('bayBox');
+  const opts=bayOptions(+$('maxPiece').value||2);
+  const optHTML=b=>opts.map(o=>{
+    const lab=o.pieces.length>1?`${o.len}　(${o.pieces.join('+')})`:`${o.len}`;
+    return `<option value="${o.pieces.join('+')}"${o.pieces.join('+')===b.pieces.join('+')?' selected':''}>${lab}</option>`;
+  }).join('');
+  box.innerHTML = S.bays.map((b,i)=>`
+    <div class="bay" data-i="${i}">
+      <span class="i">${i+1}</span>
+      <select class="bs">${optHTML(b)}</select>
+      <button class="brm danger" title="刪除此跨距">✕</button>
+    </div>`).join('')
+    + `<div class="grid2"><button onclick="addBay()">＋ 加跨距</button>
+       <button onclick="recalc()">↻ 重算</button></div>
+       <div class="mini">改動後上方「目前配置」的實際尺寸會即時更新。</div>`;
+  box.querySelectorAll('.bs').forEach(sl=>sl.addEventListener('change',e=>{
+    const i=+e.target.closest('.bay').dataset.i;
+    const pieces=e.target.value.split('+').map(Number);
+    S.bays[i]={len:sum(pieces), pieces};
+    S.pickSig=null; refresh();
+  }));
+  box.querySelectorAll('.brm').forEach(btn=>btn.addEventListener('click',e=>{
+    S.bays.splice(+e.target.closest('.bay').dataset.i,1); S.pickSig=null; refresh();
+  }));
+}
+function addBay(){
+  const opts=bayOptions(+$('maxPiece').value||2);
+  const d=opts.find(o=>o.len===200)||opts[opts.length-1];
+  S.bays.push({len:d.len,pieces:[...d.pieces]}); S.pickSig=null; refresh();
+}
+let bomMode='one';
+function setBomMode(m){
+  bomMode=m;
+  $('bmOne').classList.toggle('on',m==='one');
+  $('bmAll').classList.toggle('on',m==='all');
+  renderBOM();
+}
+function renderBOM(){
+  if(bomMode==='all'){ renderBOMAll(); return; }
+  const b=computeBOM();
+  $('bomBox').innerHTML=`
+    <table>
+      <tr><th>品項</th><th>規格 cm</th><th class="n">數量</th></tr>
+      ${b.beams.map(g=>`<tr><td>橫料</td><td>${g.pieces.join('+')}</td><td class="n">${g.qty} 支${b.qty>1?` <span style="color:var(--dim)">(${g.per}×${b.qty})</span>`:''}</td></tr>`).join('')}
+      ${b.depth?`<tr><td>深度料</td><td>${b.depth.pieces.join('+')}</td><td class="n">${b.depth.qty} 支${b.qty>1?` <span style="color:var(--dim)">(${b.depth.per}×${b.qty})</span>`:''}</td></tr>`:''}
+      <tr><td>立柱</td><td>${S.postHPieces.join('+')}</td><td class="n">${b.seats} 座 / ${b.posts.bars} 支</td></tr>
+    </table>
+    ${b.qty>1?`<div class="mini">本表 ${b.qty} 套，括號內為單套用量。</div>`:''}
+    <h3>實際切料統計</h3>
+    <table>
+      <tr><th>標準料</th><th class="n">總支數</th><th class="n">總長 m</th></tr>
+      ${b.cut.map(x=>`<tr><td>${x.len} cm</td><td class="n">${x.qty}</td><td class="n">${(x.len*x.qty/100).toFixed(1)}</td></tr>`).join('')}
+      <tr class="tot"><td>合計</td><td class="n">${sum(b.cut.map(x=>x.qty))}</td>
+        <td class="n">${(sum(b.cut.map(x=>x.len*x.qty))/100).toFixed(1)}</td></tr>
+    </table>`;
+}
+function renderBOMAll(){
+  const m=mergedBOM();
+  $('bomBox').innerHTML=`
+    <div class="mini" style="margin-bottom:6px">全案 ${DOC.sheets.length} 張說明表加總</div>
+    <table>
+      <tr><th>品項</th><th>規格 cm</th><th class="n">數量</th></tr>
+      ${m.beams.map(g=>`<tr><td>橫料</td><td>${g.pieces.join('+')}</td><td class="n">${g.qty} 支</td></tr>`).join('')}
+      ${m.depths.map(g=>`<tr><td>深度料</td><td>${g.pieces.join('+')}</td><td class="n">${g.qty} 支</td></tr>`).join('')}
+      ${m.posts.map(p=>`<tr><td>立柱</td><td>${p.pieces.join('+')}</td><td class="n">${p.seats} 座 / ${p.bars} 支</td></tr>`).join('')}
+    </table>
+    <h3>實際切料統計（全案）</h3>
+    <table>
+      <tr><th>標準料</th><th class="n">總支數</th><th class="n">總長 m</th></tr>
+      ${m.cut.map(x=>`<tr><td>${x.len} cm</td><td class="n">${x.qty}</td><td class="n">${(x.len*x.qty/100).toFixed(1)}</td></tr>`).join('')}
+      <tr class="tot"><td>合計</td><td class="n">${sum(m.cut.map(x=>x.qty))}</td>
+        <td class="n">${(sum(m.cut.map(x=>x.len*x.qty))/100).toFixed(1)}</td></tr>
+    </table>`;
+}
+
+/* =========================================================
+   3D
+   ========================================================= */
+function start3D(){
+  if(typeof THREE==='undefined'){ $('glErr').style.display='block'; return; }
+  if(!three) init3D();
+  if(!three) return;
+  build3D(); resize3D(); if(!raf) loop();
+}
+function init3D(){
+  let r; try{ r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true}); }
+  catch(e){ $('glErr').style.display='block'; return; }
+  r.setPixelRatio(Math.min(2,devicePixelRatio||1));
+  r.shadowMap.enabled=true; r.shadowMap.type=THREE.PCFSoftShadowMap;
+  $('gl').appendChild(r.domElement);
+  const scene=new THREE.Scene(); scene.background=new THREE.Color(0x272c34);
+  const cam=new THREE.PerspectiveCamera(45,1,1,100000);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x556070,0.95));
+  const sun=new THREE.DirectionalLight(0xffffff,0.6);
+  sun.castShadow=true; sun.shadow.mapSize.set(2048,2048);
+  scene.add(sun,sun.target);
+  const g=new THREE.Group(); scene.add(g);
+  three={renderer:r,scene,camera:cam,sun,group:g,
+    orbit:{tx:0,ty:100,tz:0,dist:700,theta:-2.35,phi:1.05}};
+  const dom=r.domElement;
+  dom.addEventListener('contextmenu',e=>e.preventDefault());
+  dom.addEventListener('mousedown',e=>{three.drag={b:e.button,x:e.clientX,y:e.clientY,o:{...three.orbit}};e.preventDefault();});
+  window.addEventListener('mousemove',e=>{
+    const d=three&&three.drag; if(!d) return;
+    const dx=e.clientX-d.x, dy=e.clientY-d.y, o=three.orbit;
+    if(d.b===0){ o.theta=d.o.theta+dx*0.006; o.phi=Math.max(0.02,Math.min(Math.PI-0.02,d.o.phi-dy*0.006)); }
+    else{ const k=d.o.dist*0.0015, ct=Math.cos(d.o.theta), st=Math.sin(d.o.theta);
+      o.tx=d.o.tx-st*dx*k+ct*dy*k*Math.cos(d.o.phi);
+      o.tz=d.o.tz+ct*dx*k+st*dy*k*Math.cos(d.o.phi);
+      o.ty=d.o.ty+dy*k*Math.sin(d.o.phi); }
+  });
+  window.addEventListener('mouseup',()=>{ if(three) three.drag=null; });
+  dom.addEventListener('wheel',e=>{e.preventDefault();
+    three.orbit.dist=Math.max(40,Math.min(20000,three.orbit.dist*(e.deltaY<0?0.88:1/0.88)));},{passive:false});
+}
+function label3(t,col){
+  const c=document.createElement('canvas'),g=c.getContext('2d');
+  g.font='bold 46px sans-serif';
+  const w=Math.ceil(g.measureText(t).width)+34; c.width=w; c.height=64;
+  const g2=c.getContext('2d');
+  g2.fillStyle='rgba(20,24,30,.8)'; g2.fillRect(0,0,w,64);
+  g2.font='bold 46px sans-serif'; g2.fillStyle=col||'#fff';
+  g2.textAlign='center'; g2.textBaseline='middle'; g2.fillText(t,w/2,33);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
+  sp.scale.set(w*0.16,64*0.16,1); sp.renderOrder=999; return sp;
+}
+function build3D(){
+  if(!three) return;
+  const {group,sun}=three;
+  group.traverse(n=>{ if(n.material){(Array.isArray(n.material)?n.material:[n.material]).forEach(m=>{if(m.map)m.map.dispose();m.dispose();});} });
+  while(group.children.length) group.remove(group.children[0]);
+  const shadow=$('sShadow').checked;
+  three.renderer.shadowMap.enabled=shadow;
+
+  const P=PS(), W=actualW(), D=actualD(), H=actualH();
+  const matP=new THREE.MeshLambertMaterial({color:0x9aa3ad});
+  const matB=new THREE.MeshLambertMaterial({color:0xc2c8cf});
+  const box=(w,h,d,x,y,z,mat)=>{
+    const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+    m.position.set(x,y,z); m.castShadow=shadow; m.receiveShadow=shadow; group.add(m);
+    const e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
+      new THREE.LineBasicMaterial({color:0x2b3440,transparent:true,opacity:0.5}));
+    e.position.copy(m.position); group.add(e);
+  };
+  // 地板
+  const fl=new THREE.Mesh(new THREE.PlaneGeometry(W*3+400,D*6+400),
+    new THREE.MeshLambertMaterial({color:0x2c323a}));
+  fl.rotation.x=-Math.PI/2; fl.position.set(W/2,-0.5,D/2); fl.receiveShadow=shadow; group.add(fl);
+
+  // 立柱位置（中心）
+  const xs=[]; let cx=0; xs.push(cx+P/2);
+  S.bays.forEach(b=>{ cx+=P+b.len; xs.push(cx+P/2); });
+  const zF=P/2, zB=D-P/2;
+  xs.forEach(x=>{ box(P,H,P,x,H/2,zF,matP); box(P,H,P,x,H/2,zB,matP); });
+
+  const lv=n=>{ if(n<=0) return []; if(n===1) return [P/2];
+    const o=[]; for(let i=0;i<n;i++) o.push(P/2 + (H-P)*i/(n-1)); return o; };
+  // 前後橫料
+  let bx=P;
+  S.bays.forEach(b=>{
+    const cxm=bx+b.len/2;
+    lv(LF()).forEach(y=> box(b.len,P,P,cxm,y,zF,matB));
+    lv(LB()).forEach(y=> box(b.len,P,P,cxm,y,zB,matB));
+    bx+=b.len+P;
+  });
+  // 深度料
+  lv(LD()).forEach(y=> xs.forEach(x=> box(P,P,S.depth.len,x,y,D/2,matB)));
+
+  if($('sLabel').checked){
+    const a=label3('寬 '+W,'#7dbcff'); a.position.set(W/2,-14,D+16); group.add(a);
+    const b2=label3('高 '+H,'#7dbcff'); b2.position.set(W+22,H/2,D+16); group.add(b2);
+    const c2=label3('深 '+D,'#7dbcff'); c2.position.set(W+22,-14,D/2); group.add(c2);
+  }
+  const span=Math.max(W,H,D,100);
+  sun.position.set(W*0.6+span, span*2, D+span);
+  sun.target.position.set(W/2,H/2,D/2);
+  const R=span*1.5, sc=sun.shadow.camera;
+  sc.left=-R;sc.right=R;sc.top=R;sc.bottom=-R;sc.near=1;sc.far=span*8; sc.updateProjectionMatrix();
+  if(!three.inited){ setView('iso'); three.inited=true; }
+}
+function setView(v){
+  if(!three) return;
+  const W=actualW(),D=actualD(),H=actualH(),o=three.orbit;
+  o.tx=W/2; o.ty=H/2; o.tz=D/2;
+  o.dist=Math.max(W,H,D)*1.9+120;
+  if(v==='iso'){o.theta=-2.35;o.phi=1.05;}
+  if(v==='front'){o.theta=Math.PI/2;o.phi=Math.PI/2;}
+  if(v==='side'){o.theta=0;o.phi=Math.PI/2;}
+  if(v==='top'){o.theta=-Math.PI/2;o.phi=0.03;}
+}
+function loop(){
+  raf=requestAnimationFrame(loop);
+  if(tab!=='3d'||!three) return;
+  const o=three.orbit,sp=Math.sin(o.phi),cp=Math.cos(o.phi),c=three.camera;
+  c.position.set(o.tx+o.dist*sp*Math.cos(o.theta),o.ty+o.dist*cp,o.tz+o.dist*sp*Math.sin(o.theta));
+  c.lookAt(o.tx,o.ty,o.tz);
+  three.renderer.render(three.scene,c);
+}
+function resize3D(){
+  if(!three) return;
+  const el=$('stage3d'),w=el.clientWidth||800,h=el.clientHeight||600;
+  if(w<2||h<2) return;
+  three.renderer.setSize(w,h,false);
+  three.renderer.domElement.style.width=w+'px';
+  three.renderer.domElement.style.height=h+'px';
+  three.camera.aspect=w/h; three.camera.updateProjectionMatrix();
+}
+function shot3D(){
+  if(!three) return;
+  three.renderer.render(three.scene,three.camera);
+  const blob=dataURLtoBlob(three.renderer.domElement.toDataURL('image/png'));
+  return saveBlob(blob, `3D_${safeName(fileTag())}_${safeName(S.name)}.png`, TYPE_PNG);
+}
+
+/* =========================================================
+   匯出 / 存讀
+   ========================================================= */
+// 暫時切到第 i 張、執行 fn、再切回來（不動 DOM，只換 S）
+function withSheet(i, fn){
+  const keep=S; S=DOC.sheets[i];
+  const r=fn(DOC.sheets[i], i);
+  S=keep; return r;
+}
+const fileTag = ()=> (DOC.head.no||'未命名');
+const safeName = s => String(s||'').replace(/[\\/:*?"<>|]/g,'_').trim() || '未命名';
+
+/* ---------- 存檔位置：優先用 File System Access API ---------- */
+const canSaveAs = ()=> typeof window.showSaveFilePicker==='function';
+const canPickDir = ()=> typeof window.showDirectoryPicker==='function';
+const askPath = ()=> $('askPath') && $('askPath').checked;
+let fsWarned=false;
+function fsFallbackNote(e){
+  if(fsWarned) return; fsWarned=true;
+  console.warn('File System Access 不可用：',e);
+  alert('這個瀏覽器（或以檔案方式開啟的網頁）不支援直接指定路徑，已改用一般下載。\n\n'
+       +'若想每次都選位置，可到 Chrome 設定 →「下載內容」→ 開啟「下載前詢問每個檔案的儲存位置」。');
+}
+// dataURL → Blob（同步，避免 await 吃掉使用者手勢）
+function dataURLtoBlob(u){
+  const [h,b]=u.split(','); const mime=h.match(/:(.*?);/)[1];
+  const bin=atob(b), arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type:mime});
+}
+const TYPE_PNG =[{description:'PNG 圖檔',accept:{'image/png':['.png']}}];
+const TYPE_CSV =[{description:'CSV 檔',accept:{'text/csv':['.csv']}}];
+const TYPE_JSON=[{description:'JSON 檔',accept:{'application/json':['.json']}}];
+
+function downloadBlob(blob,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+async function saveBlob(blob, name, types){
+  if(askPath() && canSaveAs()){
+    try{
+      const h=await window.showSaveFilePicker({suggestedName:name, types});
+      const w=await h.createWritable(); await w.write(blob); await w.close();
+      return true;
+    }catch(e){
+      if(e && e.name==='AbortError') return false;   // 使用者取消
+      fsFallbackNote(e);
+    }
+  }
+  downloadBlob(blob,name); return true;
+}
+
+async function exportPNG(){
+  const blob=dataURLtoBlob($('sheet').toDataURL('image/png'));
+  await saveBlob(blob, `組裝說明表_${safeName(fileTag())}_${safeName(S.name)}.png`, TYPE_PNG);
+}
+async function exportAllPNG(){
+  const cv=$('sheet');
+  // 先讓使用者選一次資料夾（必須在任何 await 之前呼叫，才保有使用者手勢）
+  let dir=null;
+  if(askPath() && canPickDir()){
+    try{ dir=await window.showDirectoryPicker({mode:'readwrite'}); }
+    catch(e){ if(e && e.name==='AbortError') return; fsFallbackNote(e); }
+  }
+  const jobs=DOC.sheets.map((sh,i)=>{
+    withSheet(i,()=>drawSheet());
+    return { name:`組裝說明表_${safeName(fileTag())}_${String(i+1).padStart(2,'0')}_${safeName(sh.name)}.png`,
+             blob:dataURLtoBlob(cv.toDataURL('image/png')) };
+  });
+  drawSheet();
+  if(dir){
+    for(const j of jobs){
+      const fh=await dir.getFileHandle(j.name,{create:true});
+      const w=await fh.createWritable(); await w.write(j.blob); await w.close();
+    }
+    alert(`已存入所選資料夾，共 ${jobs.length} 個檔案。`);
+  }else{
+    jobs.forEach((j,i)=>setTimeout(()=>downloadBlob(j.blob,j.name), i*250)); // 錯開避免被擋
+  }
+}
+// 把所有說明表畫成圖塞進列印區，一張一頁
+function printAll(){
+  const cv=$('sheet'), box=$('printArea');
+  box.innerHTML='';
+  DOC.sheets.forEach((sh,i)=>{
+    withSheet(i,()=>drawSheet());
+    const img=new Image();
+    img.src=cv.toDataURL('image/png');
+    img.className='psheet';
+    box.appendChild(img);
+  });
+  drawSheet();
+  document.body.classList.add('printing');
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=>{ document.body.classList.remove('printing'); box.innerHTML=''; },500);
+  },350);
+}
+// 全案合併備料
+function mergedBOM(){
+  const beams=new Map(), cut=new Map(), posts=new Map();
+  let depthQty=new Map(), seats=0;
+  DOC.sheets.forEach((sh,i)=>withSheet(i,()=>{
+    const b=computeBOM();
+    b.beams.forEach(g=>{
+      const k=g.pieces.join('+');
+      const o=beams.get(k)||{pieces:g.pieces,len:g.len,qty:0}; o.qty+=g.qty; beams.set(k,o);
+    });
+    if(b.depth){ const k=b.depth.pieces.join('+');
+      const o=depthQty.get(k)||{pieces:b.depth.pieces,len:b.depth.len,qty:0};
+      o.qty+=b.depth.qty; depthQty.set(k,o); }
+    const pk=sh.postHPieces.join('+');
+    const po=posts.get(pk)||{pieces:sh.postHPieces,seats:0,bars:0};
+    po.seats+=b.seats; po.bars+=b.posts.bars; posts.set(pk,po);
+    seats+=b.seats;
+    b.cut.forEach(x=>cut.set(x.len,(cut.get(x.len)||0)+x.qty));
+  }));
+  return {beams:[...beams.values()], depths:[...depthQty.values()],
+    posts:[...posts.values()], seats,
+    cut:[...cut.entries()].map(([len,qty])=>({len,qty})).sort((a,b)=>b.len-a.len)};
+}
+function exportCSV(){
+  const rows=[['客戶單號',DOC.head.no],['案件名稱',DOC.head.name],['進場日期',DOC.head.date],
+    ['說明表張數',DOC.sheets.length],[]];
+  DOC.sheets.forEach((sh,i)=>withSheet(i,()=>{
+    const b=computeBOM();
+    rows.push([`【${i+1}/${DOC.sheets.length}】${sh.name}`,'套數',b.qty]);
+    rows.push(['系統尺寸',`寬 ${sh.req.w}(${actualW()}) 高 ${sh.req.h}(${actualH()}) 深 ${sh.req.d}(${actualD()})`]);
+    rows.push(['展開式',expr()]);
+    rows.push(['品項','規格cm','單套','套數','總數量','單位']);
+    b.beams.forEach(g=>rows.push(['橫料',g.pieces.join('+'),g.per,b.qty,g.qty,'支']));
+    if(b.depth) rows.push(['深度料',b.depth.pieces.join('+'),b.depth.per,b.qty,b.depth.qty,'支']);
+    rows.push(['立柱',sh.postHPieces.join('+'),b.posts.seatsPer,b.qty,b.seats,'座']);
+    rows.push([]);
+  }));
+  const m=mergedBOM();
+  rows.push(['【全案合計】']);
+  rows.push(['品項','規格cm','數量','單位']);
+  m.beams.forEach(g=>rows.push(['橫料',g.pieces.join('+'),g.qty,'支']));
+  m.depths.forEach(g=>rows.push(['深度料',g.pieces.join('+'),g.qty,'支']));
+  m.posts.forEach(p=>rows.push(['立柱',p.pieces.join('+'),p.seats,'座（'+p.bars+' 支）']));
+  rows.push([]); rows.push(['標準料','總支數','總長m']);
+  m.cut.forEach(x=>rows.push([x.len,x.qty,(x.len*x.qty/100).toFixed(1)]));
+  rows.push(['合計',sum(m.cut.map(x=>x.qty)),(sum(m.cut.map(x=>x.len*x.qty))/100).toFixed(1)]);
+  const csv='﻿'+rows.map(r=>r.map(v=>`"${String(v==null?'':v).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  return saveBlob(new Blob([csv],{type:'text/csv'}), '備料明細_'+safeName(fileTag())+'.csv', TYPE_CSV);
+}
+function projData(){
+  syncFromDOM();
+  return {v:2, head:DOC.head, cur:DOC.cur, beamOK, postOK,
+    sheets:DOC.sheets.map(sh=>({name:sh.name,qty:sh.qty||1,req:sh.req,ps:sh.ps,lv:sh.lv,
+      bays:sh.bays,postH:sh.postH,postHPieces:sh.postHPieces,depth:sh.depth}))};
+}
+function saveJSON(){
+  return saveBlob(new Blob([JSON.stringify(projData())],{type:'application/json'}),
+                  '組裝系統_'+safeName(fileTag())+'.json', TYPE_JSON);
+}
+
+/* =========================================================
+   匯出給「空間平面規劃器」的交換格式
+   帶著完整結構（立柱中心線、跨距、各層高度），
+   平面圖那端要畫成方塊或畫出立柱分格都可以
+   ========================================================= */
+function levelsOf(n, H, ps){                  // 橫料各層的中心高度（由下往上）
+  if(n<=0) return [];
+  if(n===1) return [ps/2];
+  const out=[];
+  for(let i=0;i<n;i++) out.push(Math.round((ps/2 + (H-ps)*i/(n-1))*10)/10);
+  return out;
+}
+function exchangeData(){
+  const systems = DOC.sheets.map((sh,i)=>withSheet(i,()=>{
+    const ps=+sh.ps||4, H=sh.postH;
+    const xs=[]; let cx=0; xs.push(cx+ps/2);
+    sh.bays.forEach(b=>{ cx+=ps+b.len; xs.push(cx+ps/2); });
+    const b=computeBOM();
+    return {
+      name: sh.name, qty: Math.max(1,+sh.qty||1),
+      w: wOf(sh), h: H, d: dOf(sh),          // 實際外框（寬 / 高 / 深）
+      ps,
+      req: {...sh.req},
+      expr: expr(),
+      seats: sh.bays.length+1,
+      bays: sh.bays.map(x=>({len:x.len, pieces:[...x.pieces]})),
+      postXs: xs,                             // 立柱中心線 X（從左緣 0 起算）
+      postH: H, postPieces:[...sh.postHPieces],
+      depth: {len:sh.depth.len, pieces:[...sh.depth.pieces]},
+      levels: {                               // 橫料各層中心高度
+        front: levelsOf(+sh.lv.f||0, H, ps),
+        back:  levelsOf(+sh.lv.b||0, H, ps),
+        depth: levelsOf(+sh.lv.d||0, H, ps)
+      },
+      lv: {...sh.lv},
+      bom: {
+        beams: b.beams.map(g=>({pieces:g.pieces, len:g.len, per:g.per, qty:g.qty})),
+        depth: b.depth ? {pieces:b.depth.pieces, len:b.depth.len, per:b.depth.per, qty:b.depth.qty} : null,
+        posts: {pieces:sh.postHPieces, seatsPer:b.posts.seatsPer, seats:b.seats, bars:b.posts.bars}
+      }
+    };
+  }));
+  return { type:'assembly-system', v:1, unit:'cm',
+           head:{...DOC.head}, exportedAt:new Date().toISOString(), systems };
+}
+function exportForPlanner(){
+  syncFromDOM();
+  const d=exchangeData();
+  const n=d.systems.reduce((a,s)=>a+s.qty,0);
+  return saveBlob(new Blob([JSON.stringify(d,null,1)],{type:'application/json'}),
+    `平面圖用_${safeName(fileTag())}_${d.systems.length}系統${n}套.json`, TYPE_JSON);
+}
+function loadDoc(d){
+  if(d.v===2 && d.sheets){
+    DOC={head:d.head||{date:'',no:'',name:''}, sheets:d.sheets.map(sh=>({...newSheet(),...sh})), cur:0};
+  }else{ // 舊版單張格式
+    const sh=newSheet('系統1');
+    sh.req={w:d.req.w,h:d.req.h,d:d.req.d}; sh.ps=d.req.ps||4;
+    sh.lv={f:d.lv.f,b:d.lv.b,d:d.lv.d};
+    sh.bays=d.S.bays; sh.postH=d.S.postH; sh.postHPieces=d.S.postHPieces; sh.depth=d.S.depth;
+    DOC={head:d.head, sheets:[sh], cur:0};
+  }
+  if(d.beamOK) beamOK=d.beamOK;
+  if(d.postOK) postOK=d.postOK;
+  renderStock(); useSheet(Math.min(d.cur||0, DOC.sheets.length-1));
+}
+$('fJson').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ loadDoc(JSON.parse(r.result)); }
+    catch(err){ alert('檔案格式錯誤'); } };
+  r.readAsText(f); e.target.value='';
+});
+function autosave(){ try{ localStorage.setItem('sys_sheet',JSON.stringify(projData())); }catch(e){} }
+
+/* =========================================================
+   側欄 / 分頁
+   ========================================================= */
+function setTab(t){
+  tab=t;
+  $('tabSheet').classList.toggle('on',t==='sheet');
+  $('tab3d').classList.toggle('on',t==='3d');
+  $('stageSheet').classList.toggle('hide',t!=='sheet');
+  $('stage3d').classList.toggle('hide',t!=='3d');
+  $('barSheet').style.display=t==='sheet'?'':'none';
+  $('bar3d').style.display=t==='3d'?'':'none';
+  if(t==='3d'){ start3D(); resize3D(); }
+}
+const PD={left:264,right:352}, PMIN=190, PMAX=680;
+function setPanelW(s,px){ $(s).style.width=Math.max(PMIN,Math.min(PMAX,Math.round(px)))+'px'; resize3D(); }
+function togglePanel(s){
+  $(s).classList.toggle('collapsed');
+  $(s==='left'?'splitL':'splitR').style.display=$(s).classList.contains('collapsed')?'none':'';
+  resize3D();
+}
+(function(){
+  let sp=null; const L=$('splitL'), R=$('splitR');
+  const st=(el,side)=>e=>{ if(e.button!==0)return;
+    sp={side,x:e.clientX,w:$(side).getBoundingClientRect().width};
+    el.classList.add('active'); document.body.classList.add('resizing'); e.preventDefault(); };
+  L.addEventListener('mousedown',st(L,'left')); R.addEventListener('mousedown',st(R,'right'));
+  L.addEventListener('dblclick',()=>setPanelW('left',PD.left));
+  R.addEventListener('dblclick',()=>setPanelW('right',PD.right));
+  window.addEventListener('mousemove',e=>{ if(!sp)return;
+    setPanelW(sp.side, sp.side==='left'?sp.w+(e.clientX-sp.x):sp.w-(e.clientX-sp.x)); });
+  window.addEventListener('mouseup',()=>{ if(!sp)return; sp=null;
+    L.classList.remove('active'); R.classList.remove('active'); document.body.classList.remove('resizing'); });
+})();
+
+/* =========================================================
+   初始化
+   ========================================================= */
+function renderStock(){
+  const mk=(host,obj,tag)=>$(host).innerHTML=STOCK.map(v=>
+    `<label class="${obj[v]?'on':''}"><input type="checkbox" data-t="${tag}" data-v="${v}"${obj[v]?' checked':''}>${v}</label>`).join('');
+  mk('stockBeam',beamOK,'b'); mk('stockPost',postOK,'p');
+  document.querySelectorAll('.stock input').forEach(i=>i.addEventListener('change',e=>{
+    const v=+e.target.dataset.v;
+    (e.target.dataset.t==='b'?beamOK:postOK)[v]=e.target.checked;
+    e.target.parentElement.classList.toggle('on',e.target.checked);
+    recalc();
+  }));
+}
+function refresh(){
+  renderSheetBar();
+  drawSheet(); renderCur(); renderCands(); renderBays(); renderBOM();
+  if(three && tab==='3d') build3D();
+  autosave();
+}
+['rW','rH','rD','pS','lF','lB','lD','shName','shQty','hNo','hName','hDate','maxPost','maxPiece','tolW','topN'].forEach(id=>
+  $(id).addEventListener('change',()=>{
+    syncFromDOM();
+    if(['rW','maxPost','maxPiece','pS','tolW','topN'].includes(id)){ recalc(); return; }
+    if(['rH','rD'].includes(id)){
+      const mp=+$('maxPiece').value||2;
+      const ph=bestPost(+S.req.h||0,mp); if(ph){S.postH=ph.len;S.postHPieces=ph.pieces;}
+      const d=bestFit(+S.req.d||0,PS()*2,mp); if(d) S.depth=d;
+    }
+    refresh();
+  }));
+
+// 不支援 File System Access（例如舊瀏覽器）就把選項關掉並停用
+if(!canSaveAs()){
+  $('askPath').checked=false; $('askPath').disabled=true;
+  $('askPath').parentElement.title='此瀏覽器不支援直接指定路徑，將使用一般下載';
+  $('askPath').parentElement.style.opacity=.5;
+}
+renderStock();
+let booted=false;
+try{
+  const s=localStorage.getItem('sys_sheet');
+  if(s){
+    const d=JSON.parse(s);
+    const hasData = (d.v===2 && d.sheets && d.sheets.some(x=>x.bays&&x.bays.length))
+                 || (d.S && d.S.bays && d.S.bays.length);
+    if(hasData && confirm('偵測到上次的資料，要載入嗎？')){ loadDoc(d); booted=true; }
+  }
+}catch(e){}
+if(!booted){
+  DOC.head={date:new Date().toISOString().slice(0,10), no:'ABA-0107', name:'意霏-UQ員工大會'};
+  DOC.sheets=[newSheet('系統1')]; DOC.cur=0; S=DOC.sheets[0];
+  syncToDOM(); recalc(); renderSheetBar();
+}
+new ResizeObserver(()=>resize3D()).observe($('center'));
+</script>
+</body>
+</html>

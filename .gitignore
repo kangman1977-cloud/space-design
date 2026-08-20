@@ -1,0 +1,19 @@
+# ── 平常從網頁存出來的檔案，不需要進版控 ──
+存檔/
+輸出/
+/*.json
+/*.csv
+/*.png
+/*.jpg
+/*.jpeg
+
+# ── 暫時不用的東西 ──
+XXX/
+
+# ── 系統與編輯器產生的雜檔 ──
+Thumbs.db
+desktop.ini
+.DS_Store
+~$*
+*.tmp
+*.bak
