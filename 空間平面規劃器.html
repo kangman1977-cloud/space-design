@@ -2,8 +2,16 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>空間平面規劃器 v2（含 3D 預覽）</title>
+<!-- 加到主畫面：iPad / Android 會變成全螢幕 App，省掉瀏覽器的網址列 -->
+<link rel="manifest" href="manifest-planner.webmanifest">
+<meta name="theme-color" content="#1e2127">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="平面規劃">
+<link rel="apple-touch-icon" href="icons/planner-180.png">
 <style>
   :root{
     --bg:#1e2127; --panel:#272b33; --panel2:#2f343d; --line:#3a4049;
@@ -255,7 +263,9 @@
       <div id="crosshair"></div>
       <div class="float" id="hint3" style="left:12px;bottom:10px"></div>
       <div id="glErr">
-        無法啟動 3D。<br>請確認瀏覽器有網路（需載入 three.js）且已開啟硬體加速。
+        無法啟動 3D。<br>
+        請確認 <code>lib/three.min.js</code> 存在（與本檔同一層的 lib 資料夾），<br>
+        且瀏覽器已開啟硬體加速。
       </div>
     </div>
   </div>
@@ -284,7 +294,9 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- three.js 改用本機副本（lib/three.min.js），不再依賴 CDN。
+     兩個網頁共用同一份；沒有網路也能用 3D。 -->
+<script src="lib/three.min.js"></script>
 <script>
 "use strict";
 /* =========================================================

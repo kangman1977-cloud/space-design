@@ -1,0 +1,17 @@
+{
+  "name": "組裝系統結構說明表",
+  "short_name": "說明表",
+  "description": "40 系列鋁擠型排料、備料明細與組裝說明表，單位 cm",
+  "start_url": "./組裝系統結構說明表.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1e2127",
+  "theme_color": "#1e2127",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icons/sheet-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/sheet-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/sheet-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

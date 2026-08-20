@@ -2,8 +2,16 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>組裝系統結構說明表</title>
+<!-- 加到主畫面：iPad / Android 會變成全螢幕 App，省掉瀏覽器的網址列 -->
+<link rel="manifest" href="manifest-sheet.webmanifest">
+<meta name="theme-color" content="#1e2127">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="說明表">
+<link rel="apple-touch-icon" href="icons/sheet-180.png">
 <style>
   :root{
     --bg:#1e2127; --panel:#272b33; --panel2:#2f343d; --line:#3a4049;
@@ -317,7 +325,8 @@
     <div class="stage hide" id="stage3d">
       <div id="gl"></div>
       <div class="float" style="left:12px;bottom:10px">左鍵 = 旋轉　·　右鍵 = 平移　·　滾輪 = 遠近</div>
-      <div class="float" id="glErr" style="display:none;left:50%;top:50%">3D 需要網路載入 three.js</div>
+      <div class="float" id="glErr" style="display:none;left:50%;top:50%">
+        找不到 lib/three.min.js，或瀏覽器未開啟硬體加速</div>
     </div>
   </div>
 
@@ -345,7 +354,9 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- three.js 改用本機副本（lib/three.min.js），不再依賴 CDN。
+     兩個網頁共用同一份；沒有網路也能用 3D。 -->
+<script src="lib/three.min.js"></script>
 <script>
 "use strict";
 /* =========================================================

@@ -1,0 +1,17 @@
+{
+  "name": "空間平面規劃器",
+  "short_name": "平面規劃",
+  "description": "廠房與辦公室平面配置，2D 編輯與 3D 預覽，單位 cm",
+  "start_url": "./空間平面規劃器.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1e2127",
+  "theme_color": "#1e2127",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icons/planner-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/planner-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/planner-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
