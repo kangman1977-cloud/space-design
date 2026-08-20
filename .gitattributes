@@ -1,0 +1,7 @@
+# .bat 必須是 CRLF，否則 Windows cmd 的 goto 標籤會失效
+*.bat text eol=crlf
+
+# 網頁與文件維持原樣，避免 git 自作主張換行
+*.html -text
+*.md   -text
+*.txt  -text

@@ -12,7 +12,14 @@
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;overflow:hidden;
     font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
-    background:var(--bg);color:var(--txt);font-size:13px;}
+    background:var(--bg);color:var(--txt);font-size:13px;
+    /* 平板：擋掉下拉重新整理、雙擊縮放、長按選字，避免搶走操作 */
+    overscroll-behavior:none;
+    -webkit-text-size-adjust:100%;
+    -webkit-tap-highlight-color:transparent;}
+  #gl,#gl canvas{touch-action:none;}          /* 3D 由程式自己處理手勢 */
+  .splitter{touch-action:none;}
+  button,.tab,.shtab,.grp,label.ck{touch-action:manipulation;}
   #app{display:flex;height:100vh;}
   #left{width:264px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
   #right{width:352px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
@@ -45,7 +52,13 @@
   .stage{flex:1;position:relative;overflow:auto;}
   .stage.hide{display:none;}
   #sheetWrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;}
-  #sheet{background:#fff;max-width:100%;max-height:100%;box-shadow:0 6px 30px rgba(0,0,0,.5);}
+  #sheet{background:#fff;max-width:100%;max-height:100%;box-shadow:0 6px 30px rgba(0,0,0,.5);
+    transform-origin:center center;}
+  @media (pointer:coarse){ #stageSheet{touch-action:none;} }
+  #sheetZoom{position:absolute;right:12px;bottom:12px;z-index:8;display:none;gap:6px;}
+  @media (pointer:coarse){ #sheetZoom{display:flex;} }
+  #sheetZoom button{min-width:44px;min-height:44px;font-size:16px;
+    background:rgba(39,43,51,.92);border:1px solid var(--line);}
   #gl{position:absolute;inset:0;}
   #gl canvas{display:block;}
   .float{position:absolute;color:var(--dim);font-size:11px;background:rgba(30,33,39,.85);
@@ -114,12 +127,54 @@
   /* 列印區 */
   #printArea{display:none;}
   #printArea .psheet{display:block;width:100%;}
+  /* ============ 觸控裝置：加大點擊目標 ============
+     只在「粗指標」(手指) 生效，用滑鼠的桌機完全不受影響 */
+  @media (pointer:coarse){
+    button,select,input[type=text],input[type=number],input[type=date]{
+      min-height:40px;padding:8px 12px;font-size:13px;}
+    label.ck{min-height:40px;padding:0 4px;}
+    label.ck input[type=checkbox]{width:20px;height:20px;}
+    .stock label{min-height:38px;padding:6px 10px;font-size:12.5px;}
+    .stock input[type=checkbox]{width:18px;height:18px;}
+    .tab{padding:0 22px;min-height:44px;}
+    .shtab{min-height:48px;padding:6px 14px;}
+    .grp{min-height:44px;}
+    .cand{padding:10px 11px;}
+    .splitter{width:14px;}
+    .splitter:after{left:6px;}
+    .row label{width:82px;}
+    .grid3 .row label,.grid2 .row label{width:32px;}
+    #tabs{height:46px;}
+    .toolbar{height:54px;}
+    .mrow,.bay{min-height:40px;}
+  }
+
+  /* ============ 窄螢幕：側欄改成可滑出的抽屜 ============
+     1100px 以上維持原本的桌機版面，一個字都沒動 */
+  #drawerMask{display:none;}
+  #panelBtns .dbadge{display:none;}
+  @media (max-width:1100px){
+    #left,#right{
+      position:fixed;top:0;bottom:0;z-index:60;width:min(86vw,380px);
+      box-shadow:0 0 40px rgba(0,0,0,.55);transition:transform .22s ease;}
+    #left{left:0;transform:translateX(-102%);}
+    #right{right:0;transform:translateX(102%);}
+    #left.open,#right.open{transform:translateX(0);}
+    #left.collapsed,#right.collapsed{display:flex;}   /* 窄螢幕改由抽屜控制 */
+    .splitter{display:none!important;}
+    #drawerMask{display:block;position:fixed;inset:0;z-index:55;
+      background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .22s;}
+    #drawerMask.on{opacity:1;pointer-events:auto;}
+    #panelBtns .dbadge{display:inline;}
+  }
+
+  /* ============ 列印 ============ */
   @media print{
     @page{ size:A4 landscape; margin:8mm; }
-    #left,#right,#tabs,.toolbar,.splitter,.float,#shBar{display:none!important;}
+    #left,#right,#tabs,.toolbar,.splitter,.float,#shBar,#sheetZoom,#drawerMask{display:none!important;}
     html,body,#app,#center,.stage{height:auto;overflow:visible;background:#fff;}
     #sheetWrap{position:static;padding:0;}
-    #sheet{box-shadow:none;max-width:100%;width:100%;}
+    #sheet{box-shadow:none;max-width:100%;width:100%;transform:none!important;}
     #stage3d{display:none!important;}
     body.printing #stageSheet{display:none!important;}
     body.printing #printArea{display:block!important;}
@@ -129,6 +184,7 @@
 </style>
 </head>
 <body>
+<div id="drawerMask" onclick="closeDrawers()"></div>
 <div id="app">
 
   <!-- ================= 左：需求輸入 ================= -->
@@ -201,9 +257,9 @@
     <div id="tabs">
       <div class="tab on" id="tabSheet" onclick="setTab('sheet')">▤ 說明表</div>
       <div class="tab" id="tab3d" onclick="setTab('3d')">◈ 3D 預覽</div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px">
-        <button onclick="togglePanel('left')">◧ 需求</button>
-        <button onclick="togglePanel('right')">◨ 排料</button>
+      <div id="panelBtns" style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px">
+        <button onclick="togglePanel('left')">◧ 需求<span class="dbadge"></span></button>
+        <button onclick="togglePanel('right')">◨ 排料<span class="dbadge"></span></button>
       </div>
     </div>
 
@@ -242,6 +298,11 @@
 
     <div class="stage" id="stageSheet">
       <div id="sheetWrap"><canvas id="sheet" width="1600" height="1120"></canvas></div>
+      <div id="sheetZoom">
+        <button onclick="sheetZoom(1/1.4)">−</button>
+        <button onclick="sheetZoomReset()">⤢</button>
+        <button onclick="sheetZoom(1.4)">＋</button>
+      </div>
     </div>
     <div id="printArea"></div>
 
@@ -912,20 +973,132 @@ function init3D(){
   three={renderer:r,scene,camera:cam,sun,group:g,
     orbit:{tx:0,ty:100,tz:0,dist:700,theta:-2.35,phi:1.05}};
   const dom=r.domElement;
+
+  /* ===========================================================
+     3D 視角操作
+     動作邏輯（orbitBegin/Move/End/Zoom/PanBy）為滑鼠與觸控共用，
+     底下再分別接上「滑鼠入口」與「觸控入口」，兩條路互不干擾。
+     =========================================================== */
   dom.addEventListener('contextmenu',e=>e.preventDefault());
-  dom.addEventListener('mousedown',e=>{three.drag={b:e.button,x:e.clientX,y:e.clientY,o:{...three.orbit}};e.preventDefault();});
-  window.addEventListener('mousemove',e=>{
-    const d=three&&three.drag; if(!d) return;
-    const dx=e.clientX-d.x, dy=e.clientY-d.y, o=three.orbit;
-    if(d.b===0){ o.theta=d.o.theta+dx*0.006; o.phi=Math.max(0.02,Math.min(Math.PI-0.02,d.o.phi-dy*0.006)); }
-    else{ const k=d.o.dist*0.0015, ct=Math.cos(d.o.theta), st=Math.sin(d.o.theta);
-      o.tx=d.o.tx-st*dx*k+ct*dy*k*Math.cos(d.o.phi);
-      o.tz=d.o.tz+ct*dx*k+st*dy*k*Math.cos(d.o.phi);
-      o.ty=d.o.ty+dy*k*Math.sin(d.o.phi); }
+
+  // ---- 滑鼠入口（行為與原本完全相同）----
+  dom.addEventListener('mousedown',e=>{
+    orbitBegin(e.button===0?'rotate':'pan', e.clientX, e.clientY); e.preventDefault();
   });
-  window.addEventListener('mouseup',()=>{ if(three) three.drag=null; });
-  dom.addEventListener('wheel',e=>{e.preventDefault();
-    three.orbit.dist=Math.max(40,Math.min(20000,three.orbit.dist*(e.deltaY<0?0.88:1/0.88)));},{passive:false});
+  window.addEventListener('mousemove',e=>orbitMove(e.clientX,e.clientY));
+  window.addEventListener('mouseup',orbitEnd);
+  dom.addEventListener('wheel',e=>{
+    e.preventDefault(); orbitZoom(e.deltaY<0?0.88:1/0.88);
+  },{passive:false});
+
+  // ---- 觸控入口：單指旋轉、雙指縮放＋平移 ----
+  let pinch=null;
+  const mid = t => ({x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2});
+  const dist= t => Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  dom.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length===1){ pinch=null; orbitBegin('rotate', t[0].clientX, t[0].clientY); }
+    else if(t.length>=2){ orbitEnd(); pinch={d:dist(t), m:mid(t)}; }
+  },{passive:false});
+  dom.addEventListener('touchmove',e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length===1 && !pinch){ orbitMove(t[0].clientX, t[0].clientY); }
+    else if(t.length>=2 && pinch){
+      const d=dist(t), m=mid(t);
+      if(pinch.d>0) orbitZoom(pinch.d/d);            // 手指張開＝拉近
+      orbitPanBy(m.x-pinch.m.x, m.y-pinch.m.y);      // 雙指同步移動＝平移
+      pinch={d, m};
+    }
+  },{passive:false});
+  const tEnd=e=>{
+    if(e.touches.length===0){ orbitEnd(); pinch=null; }
+    else if(e.touches.length===1){ pinch=null; orbitBegin('rotate', e.touches[0].clientX, e.touches[0].clientY); }
+  };
+  dom.addEventListener('touchend',tEnd);
+  dom.addEventListener('touchcancel',tEnd);
+}
+
+/* =========================================================
+   說明表預覽的縮放／平移（平板用；桌機維持原本靠視窗檢視）
+   ========================================================= */
+let SV={z:1,x:0,y:0};
+function applySV(){
+  $('sheet').style.transform=`translate(${SV.x}px,${SV.y}px) scale(${SV.z})`;
+}
+function sheetZoom(f, cx, cy){
+  const nz=Math.max(1, Math.min(6, SV.z*f));
+  if(cx!=null){                       // 以手指中心為基準縮放
+    const r=$('stageSheet').getBoundingClientRect();
+    const ox=cx-r.left-r.width/2, oy=cy-r.top-r.height/2;
+    SV.x = ox - (ox-SV.x)*(nz/SV.z);
+    SV.y = oy - (oy-SV.y)*(nz/SV.z);
+  }
+  SV.z=nz;
+  if(SV.z===1){ SV.x=0; SV.y=0; }
+  applySV();
+}
+function sheetZoomReset(){ SV={z:1,x:0,y:0}; applySV(); }
+(function(){
+  const el=$('stageSheet');
+  let mode=null, last=null, pd=0, pm=null;
+  const mid=t=>({x:(t[0].clientX+t[1].clientX)/2,y:(t[0].clientY+t[1].clientY)/2});
+  const dst=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
+  el.addEventListener('touchstart',e=>{
+    const t=e.touches;
+    if(t.length===2){ mode='pinch'; pd=dst(t); pm=mid(t); e.preventDefault(); }
+    else if(t.length===1 && SV.z>1){ mode='pan'; last={x:t[0].clientX,y:t[0].clientY}; e.preventDefault(); }
+    else mode=null;
+  },{passive:false});
+  el.addEventListener('touchmove',e=>{
+    const t=e.touches;
+    if(mode==='pinch' && t.length>=2){
+      e.preventDefault();
+      const d=dst(t), m=mid(t);
+      if(pd>0) sheetZoom(d/pd, m.x, m.y);
+      SV.x += m.x-pm.x; SV.y += m.y-pm.y; applySV();
+      pd=d; pm=m;
+    }else if(mode==='pan' && t.length===1){
+      e.preventDefault();
+      SV.x += t[0].clientX-last.x; SV.y += t[0].clientY-last.y;
+      last={x:t[0].clientX,y:t[0].clientY}; applySV();
+    }
+  },{passive:false});
+  el.addEventListener('touchend',e=>{ if(e.touches.length===0) mode=null; });
+  el.addEventListener('touchcancel',()=>{ mode=null; });
+})();
+
+/* ---- 共用動作 ---- */
+function orbitBegin(mode,x,y){
+  if(!three) return;
+  three.drag={mode, x, y, o:{...three.orbit}};
+}
+function orbitMove(x,y){
+  const d=three&&three.drag; if(!d) return;
+  const dx=x-d.x, dy=y-d.y, o=three.orbit;
+  if(d.mode==='rotate'){
+    o.theta=d.o.theta+dx*0.006;
+    o.phi=Math.max(0.02,Math.min(Math.PI-0.02,d.o.phi-dy*0.006));
+  }else{
+    const k=d.o.dist*0.0015, ct=Math.cos(d.o.theta), st=Math.sin(d.o.theta);
+    o.tx=d.o.tx-st*dx*k+ct*dy*k*Math.cos(d.o.phi);
+    o.tz=d.o.tz+ct*dx*k+st*dy*k*Math.cos(d.o.phi);
+    o.ty=d.o.ty+dy*k*Math.sin(d.o.phi);
+  }
+}
+function orbitEnd(){ if(three) three.drag=null; }
+function orbitZoom(f){
+  if(!three) return;
+  three.orbit.dist=Math.max(40,Math.min(20000,three.orbit.dist*f));
+}
+// 依畫面位移量直接平移視點（雙指用，不依賴 drag 起點）
+function orbitPanBy(dx,dy){
+  if(!three) return;
+  const o=three.orbit, k=o.dist*0.0015, ct=Math.cos(o.theta), st=Math.sin(o.theta);
+  o.tx += -st*dx*k + ct*dy*k*Math.cos(o.phi);
+  o.tz +=  ct*dx*k + st*dy*k*Math.cos(o.phi);
+  o.ty +=  dy*k*Math.sin(o.phi);
 }
 function label3(t,col){
   const c=document.createElement('canvas'),g=c.getContext('2d');
@@ -1275,23 +1448,58 @@ function setTab(t){
 }
 const PD={left:264,right:352}, PMIN=190, PMAX=680;
 function setPanelW(s,px){ $(s).style.width=Math.max(PMIN,Math.min(PMAX,Math.round(px)))+'px'; resize3D(); }
-function togglePanel(s){
-  $(s).classList.toggle('collapsed');
-  $(s==='left'?'splitL':'splitR').style.display=$(s).classList.contains('collapsed')?'none':'';
+// 窄螢幕（平板直向、小視窗）走抽屜模式；寬螢幕維持原本的收合行為
+const isNarrow = ()=> window.matchMedia('(max-width:1100px)').matches;
+function closeDrawers(){
+  $('left').classList.remove('open'); $('right').classList.remove('open');
+  $('drawerMask').classList.remove('on');
   resize3D();
 }
+function togglePanel(s){
+  const el=$(s);
+  if(isNarrow()){
+    const wasOpen=el.classList.contains('open');
+    $('left').classList.remove('open'); $('right').classList.remove('open');
+    if(!wasOpen) el.classList.add('open');
+    $('drawerMask').classList.toggle('on', !wasOpen);
+    return;
+  }
+  el.classList.toggle('collapsed');
+  $(s==='left'?'splitL':'splitR').style.display=el.classList.contains('collapsed')?'none':'';
+  resize3D();
+}
+// 視窗跨過斷點時清掉抽屜狀態，避免版面殘留
+window.matchMedia('(max-width:1100px)').addEventListener('change',()=>{
+  closeDrawers(); resize3D();
+});
 (function(){
   let sp=null; const L=$('splitL'), R=$('splitR');
-  const st=(el,side)=>e=>{ if(e.button!==0)return;
-    sp={side,x:e.clientX,w:$(side).getBoundingClientRect().width};
-    el.classList.add('active'); document.body.classList.add('resizing'); e.preventDefault(); };
+  // 共用動作
+  const grabStart=(el,side,x)=>{
+    sp={side,x,w:$(side).getBoundingClientRect().width};
+    el.classList.add('active'); document.body.classList.add('resizing');
+  };
+  const grabMove=x=>{ if(!sp)return;
+    setPanelW(sp.side, sp.side==='left'?sp.w+(x-sp.x):sp.w-(x-sp.x)); };
+  const grabEnd=()=>{ if(!sp)return; sp=null;
+    L.classList.remove('active'); R.classList.remove('active');
+    document.body.classList.remove('resizing'); };
+  // 滑鼠入口
+  const st=(el,side)=>e=>{ if(e.button!==0)return; grabStart(el,side,e.clientX); e.preventDefault(); };
   L.addEventListener('mousedown',st(L,'left')); R.addEventListener('mousedown',st(R,'right'));
   L.addEventListener('dblclick',()=>setPanelW('left',PD.left));
   R.addEventListener('dblclick',()=>setPanelW('right',PD.right));
-  window.addEventListener('mousemove',e=>{ if(!sp)return;
-    setPanelW(sp.side, sp.side==='left'?sp.w+(e.clientX-sp.x):sp.w-(e.clientX-sp.x)); });
-  window.addEventListener('mouseup',()=>{ if(!sp)return; sp=null;
-    L.classList.remove('active'); R.classList.remove('active'); document.body.classList.remove('resizing'); });
+  // 觸控入口
+  const tst=(el,side)=>e=>{ if(e.touches.length!==1)return;
+    grabStart(el,side,e.touches[0].clientX); e.preventDefault(); };
+  L.addEventListener('touchstart',tst(L,'left'),{passive:false});
+  R.addEventListener('touchstart',tst(R,'right'),{passive:false});
+  window.addEventListener('touchmove',e=>{ if(!sp)return;
+    grabMove(e.touches[0].clientX); e.preventDefault(); },{passive:false});
+  window.addEventListener('touchend',grabEnd);
+  window.addEventListener('touchcancel',grabEnd);
+  window.addEventListener('mousemove',e=>grabMove(e.clientX));
+  window.addEventListener('mouseup',grabEnd);
 })();
 
 /* =========================================================
