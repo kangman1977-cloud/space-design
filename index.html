@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>網頁空間設計程式</title>
+<meta name="theme-color" content="#1e2127">
+<link rel="apple-touch-icon" href="icons/planner-180.png">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;min-height:100%;
+    font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+    background:#1e2127;color:#e6e8ec;-webkit-text-size-adjust:100%;}
+  body{padding:calc(32px + env(safe-area-inset-top)) 20px calc(32px + env(safe-area-inset-bottom));}
+  .wrap{max-width:760px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 6px;font-weight:600;}
+  .sub{color:#9aa3ae;font-size:13px;margin-bottom:28px;line-height:1.8;}
+  .apps{display:grid;gap:14px;grid-template-columns:1fr;}
+  @media (min-width:620px){ .apps{grid-template-columns:1fr 1fr;} }
+  a.app{display:flex;gap:16px;align-items:center;text-decoration:none;color:inherit;
+    background:#272b33;border:1px solid #3a4049;border-radius:14px;padding:18px;
+    transition:border-color .15s, transform .1s;}
+  a.app:hover{border-color:#4a9eff;}
+  a.app:active{transform:scale(.985);}
+  a.app img{width:64px;height:64px;flex:none;border-radius:14px;}
+  .t{font-size:16px;font-weight:600;margin-bottom:4px;}
+  .d{font-size:12px;color:#9aa3ae;line-height:1.7;}
+  .tips{margin-top:32px;background:#23272e;border:1px solid #3a4049;border-radius:12px;
+    padding:16px 18px;font-size:12.5px;color:#9aa3ae;line-height:2;}
+  .tips b{color:#e6e8ec;}
+  .tips code{background:#2f343d;padding:1px 6px;border-radius:4px;font-size:12px;}
+  .foot{margin-top:22px;font-size:11px;color:#6b737d;line-height:1.9;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>網頁空間設計程式</h1>
+  <div class="sub">彩藝通 · 空間配置與鋁擠型排料工具</div>
+
+  <div class="apps">
+    <a class="app" href="空間平面規劃器.html">
+      <img src="icons/planner-512.png" alt="">
+      <div>
+        <div class="t">空間平面規劃器</div>
+        <div class="d">廠房與辦公室平面配置<br>2D 編輯 + 3D 預覽 · 單位 cm</div>
+      </div>
+    </a>
+    <a class="app" href="組裝系統結構說明表.html">
+      <img src="icons/sheet-512.png" alt="">
+      <div>
+        <div class="t">組裝系統結構說明表</div>
+        <div class="d">40 系列鋁擠型排料與備料<br>說明表輸出 · 單位 cm</div>
+      </div>
+    </a>
+  </div>
+
+  <div class="tips">
+    <b>平板使用建議</b><br>
+    開啟其中一個工具後，按瀏覽器的分享鍵 →「加入主畫面」，
+    之後從主畫面點進去會是全螢幕，沒有網址列，畫面比較大。<br><br>
+    <b>資料存在哪裡</b><br>
+    設計內容存在你自己的裝置上，不會上傳。要給別人看就用工具裡的
+    <code>存檔</code> 匯出 JSON，對方用 <code>讀檔</code> 匯入即可。
+  </div>
+
+  <div class="foot">
+    兩個工具可互通：說明表按「⇪ 匯出給平面圖」，
+    平面規劃器按「⇩ 匯入組裝系統」即可把排好的系統放進平面圖。
+  </div>
+</div>
+</body>
+</html>
