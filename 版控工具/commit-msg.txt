@@ -1,34 +1,22 @@
-空間平面規劃器：加入觸控支援（事件入口分開、動作邏輯共用）
+修正平板上工具列文字擠成直排的問題（兩個網頁）
 
-沿用說明表驗證過的原則：桌機 mouse 路徑行為不變，觸控是另外新增的入口，
-兩者最後呼叫同一組動作函式。
+症狀：iPad 上「量測」變成上下兩個字、「校正比例」折成兩行、
+「符合視窗」擠成一團，整排按鈕都被壓扁。
 
-【2D 畫布】抽出 canvasBegin / canvasMove / canvasEnd / canvasZoomAt / canvasPanBy
-canvasBegin(sx,sy,opt) 的 opt：pan 強制平移、shift 加選、marquee 強制框選
+原因：flex 項目預設 flex-shrink:1，工具列空間不足時按鈕被壓到比文字還窄，
+文字只好折行。工具列雖有 overflow-x:auto，但因為子項可壓縮所以永遠不會觸發捲動。
 
-- 滑鼠：中鍵/右鍵/空白鍵平移、左鍵拖曳、Shift 加選、滾輪縮放（與原本相同）
-- 觸控：
-  - 單指按在物件或把手上 = 移動 / 縮放 / 旋轉
-  - 單指按在空白處       = 平移畫布
-  - 空白處按住約 0.45 秒 = 轉為框選模式（跳出提示，移動超過 10px 則取消）
-  - 雙指                 = 捏合縮放 + 同步平移
+修正：
+- 基礎樣式（桌機平板共用）：
+  .toolbar>*{flex:none;}                    按鈕不可被壓縮
+  .toolbar button/select/label/span 加 white-space:nowrap   文字不可折行
+- @media (pointer:coarse)：
+  工具列改 flex-wrap:wrap、height:auto，塞不下就排到第二列
+  按鈕左右內距由 12px 收成 10px，一列多塞幾顆
+  分隔線高度配合加大到 28px
 
-解決的衝突：桌機上「空白處拖曳」是框選，但在平板上那個手勢更該是平移。
-改成長按才進框選，兩種需求都保留。
+為什麼選換行而不是橫向捲動：捲動會把後面的按鈕藏起來，
+使用者不會知道還有東西；換行則是全部可見，只多佔一列高度。
 
-【3D】抽出 orb3Begin / orb3Move / orb3Zoom / orb3PanBy
-滑鼠維持左鍵轉、右鍵平移、滾輪縮放；觸控加單指轉、雙指捏合縮放與平移。
-第一人稱漫遊需要滑鼠鎖定，iPad 不支援，因此在 pointer:coarse 隱藏該按鈕。
-
-【側欄分隔線】抽出 grabStart / grabMove / grabEnd，滑鼠與觸控各接一組入口
-
-【版面】
-- @media (pointer:coarse) 加大按鈕、物件庫項目、分隔線；把手 HS 由 7px 改 12px、
-  命中寬容值 HGRAB 由 2px 改 14px（手指才點得到四角把手）
-- @media (max-width:1100px) 側欄改抽屜（含遮罩、點擊關閉），1100px 以上版面不變
-- touch-action 只設在 2D/3D 畫布與分隔線，其餘保留瀏覽器預設
-- 新增 #toast 短暫提示，用於告知已進入框選模式
-
-【檢查】CSS 大括號平衡、兩個 media query 皆正確閉合、
-display:none!important 兩處都確實包在 media query 內、
-JS 語法通過、onclick 函式與 DOM 元素皆存在。
+桌機影響：目前工具列本來就放得下，加上 nowrap 與 flex:none 後外觀不變；
+視窗縮很窄時改為橫向捲動而非壓扁，屬於改善。

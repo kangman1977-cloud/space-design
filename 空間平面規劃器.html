@@ -69,6 +69,9 @@
   select{width:auto;}
   input[type=range]{width:100%;}
   .sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none;}
+  /* 工具列的按鈕不可被壓縮、文字不可折行，否則空間不夠時會擠成直排 */
+  .toolbar>*{flex:none;}
+  .toolbar button,.toolbar select,.toolbar label.ck,.toolbar span{white-space:nowrap;}
   label.ck{display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;}
   .stage{flex:1;position:relative;overflow:hidden;}
   .stage.hide{display:none;}
@@ -104,6 +107,11 @@
   /* ============ 觸控裝置：加大點擊目標 ============
      只在「粗指標」(手指) 生效，用滑鼠的桌機完全不受影響 */
   @media (pointer:coarse){
+    /* 工具列改成可換行，塞不下就排第二列，不藏起來也不擠成直排 */
+    .toolbar{height:auto;min-height:54px;flex-wrap:wrap;
+      padding:6px 10px;row-gap:6px;overflow:visible;}
+    .toolbar button{padding:8px 10px;}
+    .toolbar .sep{height:28px;}
     button,select,input[type=text],input[type=number]{
       min-height:40px;padding:8px 12px;font-size:13px;}
     label.ck{min-height:40px;padding:0 4px;}
