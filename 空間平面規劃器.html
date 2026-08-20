@@ -445,18 +445,43 @@ function dupSel(){ if(!sel.length) return; snapshot();
 /* =========================================================
    命中測試
    ========================================================= */
+const COARSE = window.matchMedia('(pointer:coarse)').matches;
+
+// 把手的視覺半徑；觸控裝置畫得大一點，手指才點得到
+const HS = COARSE ? 12 : 7;
+const HGRAB = COARSE ? 14 : 2;            // 命中判定的額外寬容值
+// 點選容許誤差（螢幕 px）。小物件在縮小的畫面上只有幾像素，
+// 手指或滑鼠不可能點得那麼準，允許「差一點」也算選到。
+const PICK_TOL = COARSE ? 24 : 10;
+// 物件在畫面上小於這個尺寸時，不提供四角縮放把手——
+// 否則把手會整個蓋住物件本身，一拖就變成改尺寸而不是移動。
+const HANDLE_MIN = COARSE ? 48 : 28;
+const tooSmallForHandles = o =>
+  Math.min(o.w*view.zoom, o.h*view.zoom) < HANDLE_MIN;
+
 function localOf(o,wx,wy){ return rot(wx-o.x, wy-o.y, -o.rot); }
+// 到物件邊界的距離（cm）；0 表示點在物件內
+function distToObj(o,wx,wy){
+  const l=localOf(o,wx,wy);
+  const dx=Math.max(0, Math.abs(l.x)-o.w/2);
+  const dy=Math.max(0, Math.abs(l.y)-o.h/2);
+  return Math.hypot(dx,dy);
+}
 function hitObj(wx,wy){
+  // 1) 精準命中：點確實落在物件內（行為與原本完全相同）
   for(let i=objects.length-1;i>=0;i--){
     const o=objects[i], l=localOf(o,wx,wy);
     if(Math.abs(l.x)<=o.w/2 && Math.abs(l.y)<=o.h/2) return o;
   }
-  return null;
+  // 2) 沒命中 → 在容許誤差內找最接近的（小物件救援）
+  const tol = PICK_TOL/view.zoom;         // 螢幕 px 換算成 cm
+  let best=null, bestD=Infinity;
+  for(let i=objects.length-1;i>=0;i--){
+    const d=distToObj(objects[i],wx,wy);
+    if(d<=tol && d<bestD){ bestD=d; best=objects[i]; }
+  }
+  return best;
 }
-// 把手的視覺半徑；觸控裝置畫得大一點，手指才點得到
-const COARSE = window.matchMedia('(pointer:coarse)').matches;
-const HS = COARSE ? 12 : 7;
-const HGRAB = COARSE ? 14 : 2;            // 命中判定的額外寬容值
 function hitHandle(sx,sy){
   if(sel.length!==1) return null;
   const o=byId(sel[0]); if(!o) return null;
@@ -464,6 +489,7 @@ function hitHandle(sx,sy){
   const p=rot(sx-c.x, sy-c.y, -o.rot);
   if(Math.hypot(p.x, p.y+hh+26) <= HS+HGRAB+1) return {type:'rot'};
   if(o.kind==='system') return null;      // 匯入的系統尺寸鎖定，不給拉伸
+  if(tooSmallForHandles(o)) return null;  // 太小就不給縮放把手，讓拖曳＝移動
   for(const hx of [-1,1]) for(const hy of [-1,1])
     if(Math.hypot(p.x-hx*hw, p.y-hy*hh)<=HS+HGRAB) return {type:'size', hx, hy};
   return null;
@@ -605,12 +631,21 @@ function render(c, v, W, H, ui, dpr){
     if(ui && sel.includes(o.id)){
       c.save(); c.translate(p.x,p.y); c.rotate(o.rot*Math.PI/180);
       c.strokeStyle='#4a9eff'; c.lineWidth=2; c.strokeRect(-w/2,-h/2,w,h);
+      // 物件在畫面上很小時，額外畫一圈，才看得出選到的是哪一個
+      if(Math.min(w,h)<22){
+        c.strokeStyle='rgba(74,158,255,.9)'; c.lineWidth=2;
+        c.beginPath(); c.arc(0,0,Math.max(16,Math.max(w,h)/2+9),0,7); c.stroke();
+      }
       if(sel.length===1){
         c.beginPath(); c.moveTo(0,-h/2); c.lineTo(0,-h/2-26); c.stroke();
         c.fillStyle='#4a9eff'; c.beginPath(); c.arc(0,-h/2-26,HS,0,7); c.fill();
-        for(const hx of [-1,1]) for(const hy of [-1,1]){
-          c.fillStyle='#fff'; c.strokeStyle='#4a9eff'; c.lineWidth=2;
-          c.beginPath(); c.arc(hx*w/2,hy*h/2,HS,0,7); c.fill(); c.stroke();
+        // 物件太小時不畫縮放把手（把手會蓋住物件，一拖就變成改尺寸）
+        // 此處的判斷必須與 hitHandle() 一致，畫面才不會騙人
+        if(o.kind!=='system' && !tooSmallForHandles(o)){
+          for(const hx of [-1,1]) for(const hy of [-1,1]){
+            c.fillStyle='#fff'; c.strokeStyle='#4a9eff'; c.lineWidth=2;
+            c.beginPath(); c.arc(hx*w/2,hy*h/2,HS,0,7); c.fill(); c.stroke();
+          }
         }
       }
       c.restore();
