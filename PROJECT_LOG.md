@@ -238,7 +238,21 @@ ABA-0125 程式給的方案客觀上更好（差 0 且不需接料），公司�
   - `touch-action` 只設在 3D 畫布、分隔線、說明表預覽，其餘保留瀏覽器預設
   - `overscroll-behavior:none` 擋掉下拉重新整理搶走拖曳
 
-**尚未完成**：three.js 內嵌（離線）、PWA、套用到空間平面規劃器。
+**iPad 實測（2026-08-20）**：單指旋轉、雙指縮放平移、說明表放大讀字、
+抽屜側欄開關、iOS 鍵盤不擋輸入框 — 全部正常。
+
+### 空間平面規劃器的觸控（同一套原則）
+- 2D 畫布共用 `canvasBegin / canvasMove / canvasEnd / canvasZoomAt / canvasPanBy`
+  - `canvasBegin(sx,sy,opt)` 的 opt：`pan`（強制平移）／`shift`（加選）／`marquee`（強制框選）
+  - 滑鼠：中鍵右鍵空白鍵平移、左鍵拖曳、Shift 加選、滾輪縮放（與原本相同）
+  - 觸控：**單指在物件／把手上＝移動縮放旋轉；單指在空白處＝平移畫布；
+    空白處按住約 0.45 秒＝轉為框選（會跳提示）；雙指＝捏合縮放＋平移**
+- 3D 共用 `orb3Begin / orb3Move / orb3Zoom / orb3PanBy`
+- **第一人稱漫遊在觸控裝置隱藏**（`#mWalk` 於 `pointer:coarse` 設 display:none），
+  因為需要滑鼠鎖定，iPad 不支援
+- 把手尺寸依裝置調整：`HS` 桌機 7px／觸控 12px，命中寬容值 `HGRAB` 2px／14px
+
+**尚未完成**：three.js 內嵌（離線）、PWA。
 
 ## 待辦 / 可延伸
 - [ ] 確認並加入其他排料偏好規則（例如背板分割、單跨最大容許跨距）

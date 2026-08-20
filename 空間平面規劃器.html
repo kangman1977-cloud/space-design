@@ -12,7 +12,20 @@
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;overflow:hidden;
     font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
-    background:var(--bg);color:var(--txt);font-size:13px;}
+    background:var(--bg);color:var(--txt);font-size:13px;
+    /* 平板：擋掉下拉重新整理、雙擊縮放、長按選字，避免搶走操作 */
+    overscroll-behavior:none;
+    -webkit-text-size-adjust:100%;
+    -webkit-tap-highlight-color:transparent;}
+  #cv,#gl,#gl canvas{touch-action:none;}   /* 畫布手勢由程式自己處理 */
+  .splitter{touch-action:none;}
+  button,.tab,.lib-item,label.ck{touch-action:manipulation;}
+  /* 觸控操作的短暫提示 */
+  #toast{position:absolute;left:50%;top:16px;transform:translateX(-50%);
+    background:rgba(20,24,30,.92);color:#fff;border:1px solid var(--line);
+    padding:8px 16px;border-radius:20px;font-size:13px;z-index:70;
+    opacity:0;pointer-events:none;transition:opacity .18s;}
+  #toast.on{opacity:1;}
   #app{display:flex;height:100vh;}
   #left{width:210px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
   #right{width:290px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;}
@@ -87,9 +100,46 @@
   #crosshair:after{top:6px;left:0;height:2px;width:14px;}
   #glErr{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     color:var(--dim);text-align:center;line-height:2;padding:40px;}
+
+  /* ============ 觸控裝置：加大點擊目標 ============
+     只在「粗指標」(手指) 生效，用滑鼠的桌機完全不受影響 */
+  @media (pointer:coarse){
+    button,select,input[type=text],input[type=number]{
+      min-height:40px;padding:8px 12px;font-size:13px;}
+    label.ck{min-height:40px;padding:0 4px;}
+    label.ck input[type=checkbox]{width:20px;height:20px;}
+    .tab{padding:0 22px;min-height:44px;}
+    .lib-item{min-height:46px;padding:10px 10px;}
+    .splitter{width:14px;}
+    .splitter:after{left:6px;}
+    .row label{width:64px;}
+    .grid2 .row label,.grid3 .row label{width:34px;}
+    #tabs{height:46px;}
+    .toolbar{height:54px;}
+    /* 漫遊模式需要滑鼠鎖定，觸控裝置不提供 */
+    #mWalk{display:none!important;}
+  }
+
+  /* ============ 窄螢幕：側欄改成可滑出的抽屜 ============
+     1100px 以上維持原本的桌機版面，一個字都沒動 */
+  #drawerMask{display:none;}
+  @media (max-width:1100px){
+    #left,#right{
+      position:fixed;top:0;bottom:0;z-index:60;width:min(86vw,360px);
+      box-shadow:0 0 40px rgba(0,0,0,.55);transition:transform .22s ease;}
+    #left{left:0;transform:translateX(-102%);}
+    #right{right:0;transform:translateX(102%);}
+    #left.open,#right.open{transform:translateX(0);}
+    #left.collapsed,#right.collapsed{display:flex;}   /* 窄螢幕改由抽屜控制 */
+    .splitter{display:none!important;}
+    #drawerMask{display:block;position:fixed;inset:0;z-index:55;
+      background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .22s;}
+    #drawerMask.on{opacity:1;pointer-events:auto;}
+  }
 </style>
 </head>
 <body>
+<div id="drawerMask" onclick="closeDrawers()"></div>
 <div id="app">
 
   <!-- ============ 左：物件庫 ============ -->
@@ -183,6 +233,7 @@
     <!-- 2D 舞台 -->
     <div class="stage" id="stage2d">
       <canvas id="cv"></canvas>
+      <div id="toast"></div>
       <div class="float" id="readout" style="right:12px;top:10px">—</div>
       <div class="float" style="left:12px;bottom:10px">
         滑鼠中鍵 / 空白鍵+拖曳 = 平移　·　滾輪 = 縮放<br>
@@ -394,16 +445,19 @@ function hitObj(wx,wy){
   }
   return null;
 }
-const HS = 7;
+// 把手的視覺半徑；觸控裝置畫得大一點，手指才點得到
+const COARSE = window.matchMedia('(pointer:coarse)').matches;
+const HS = COARSE ? 12 : 7;
+const HGRAB = COARSE ? 14 : 2;            // 命中判定的額外寬容值
 function hitHandle(sx,sy){
   if(sel.length!==1) return null;
   const o=byId(sel[0]); if(!o) return null;
   const c=w2s(o.x,o.y), hw=o.w*view.zoom/2, hh=o.h*view.zoom/2;
   const p=rot(sx-c.x, sy-c.y, -o.rot);
-  if(Math.hypot(p.x, p.y+hh+26) <= HS+3) return {type:'rot'};
+  if(Math.hypot(p.x, p.y+hh+26) <= HS+HGRAB+1) return {type:'rot'};
   if(o.kind==='system') return null;      // 匯入的系統尺寸鎖定，不給拉伸
   for(const hx of [-1,1]) for(const hy of [-1,1])
-    if(Math.hypot(p.x-hx*hw, p.y-hy*hh)<=HS+2) return {type:'size', hx, hy};
+    if(Math.hypot(p.x-hx*hw, p.y-hy*hh)<=HS+HGRAB) return {type:'size', hx, hy};
   return null;
 }
 
@@ -578,17 +632,24 @@ let drag=null, spaceDown=false;
 const evPt = e => { const r=cv.getBoundingClientRect();
   return {sx:e.clientX-r.left, sy:e.clientY-r.top}; };
 
-cv.addEventListener('mousedown', e=>{
-  const {sx,sy}=evPt(e), w=s2w(sx,sy);
-  if(e.button===1||e.button===2||spaceDown){
-    drag={mode:'pan',sx,sy,ox:view.ox,oy:view.oy}; e.preventDefault(); return; }
-  if(e.button!==0) return;
+/* ===========================================================
+   2D 畫布的共用動作
+   canvasBegin / canvasMove / canvasEnd / canvasZoomAt / canvasPanBy
+   滑鼠與觸控各自接入口，最後都呼叫這一組，行為保證一致。
+   opt.pan     ＝ 強制平移（中鍵／右鍵／空白鍵／觸控雙指）
+   opt.shift   ＝ 加選（滑鼠 Shift）
+   opt.marquee ＝ 強制框選（觸控長按空白）
+   =========================================================== */
+function canvasBegin(sx,sy,opt){
+  opt=opt||{};
+  const w=s2w(sx,sy);
+  if(opt.pan){ drag={mode:'pan',sx,sy,ox:view.ox,oy:view.oy}; return; }
   if(tool==='measure'||tool==='calibrate'){
     const l={a:{x:w.x,y:w.y},b:{x:w.x,y:w.y}};
     if(tool==='measure'){measure=l;calLine=null;}else{calLine=l;measure=null;}
     drag={mode:'line'}; draw(); return;
   }
-  const h=hitHandle(sx,sy);
+  const h=opt.marquee?null:hitHandle(sx,sy);
   if(h){
     snapshot(); const o=byId(sel[0]);
     if(h.type==='rot') drag={mode:'rot',o};
@@ -598,28 +659,27 @@ cv.addEventListener('mousedown', e=>{
     }
     return;
   }
-  const o=hitObj(w.x,w.y);
+  const o=opt.marquee?null:hitObj(w.x,w.y);
   if(o){
-    if(e.shiftKey){ if(sel.includes(o.id)) sel=sel.filter(i=>i!==o.id); else sel.push(o.id); }
+    if(opt.shift){ if(sel.includes(o.id)) sel=sel.filter(i=>i!==o.id); else sel.push(o.id); }
     else if(!sel.includes(o.id)) sel=[o.id];
     snapshot();
     drag={mode:'move',gx:w.x,gy:w.y,orig:selObjs().map(s=>({id:s.id,x:s.x,y:s.y}))};
   }else{
-    if(!e.shiftKey) sel=[];
+    if(!opt.shift) sel=[];
     drag={mode:'marquee',a:{x:w.x,y:w.y}};
   }
   refresh();
-});
-
-window.addEventListener('mousemove', e=>{
-  if(tab!=='2d') return;
-  const {sx,sy}=evPt(e), w=s2w(sx,sy);
+}
+function canvasMove(sx,sy,opt){
+  opt=opt||{};
+  const w=s2w(sx,sy);
   $('readout').textContent = `X ${Math.round(w.x)} · Y ${Math.round(w.y)} cm　|　1cm≈${view.zoom.toFixed(3)}px`;
   if(!drag) return;
   if(drag.mode==='pan'){ view.ox=drag.ox+(sx-drag.sx); view.oy=drag.oy+(sy-drag.sy); draw(); return; }
   if(drag.mode==='line'){
     const l=measure||calLine;
-    l.b = e.shiftKey
+    l.b = opt.shift
       ? (Math.abs(w.x-l.a.x)>Math.abs(w.y-l.a.y)?{x:w.x,y:l.a.y}:{x:l.a.x,y:w.y})
       : {x:w.x,y:w.y};
     draw(); return;
@@ -632,13 +692,13 @@ window.addEventListener('mousemove', e=>{
   if(drag.mode==='rot'){
     const o=drag.o;
     let a=Math.atan2(w.y-o.y,w.x-o.x)*180/Math.PI+90;
-    if(e.shiftKey) a=Math.round(a/15)*15;
+    if(opt.shift) a=Math.round(a/15)*15;
     o.rot=Math.round(a*10)/10; draw(); refreshProps(); return;
   }
   if(drag.mode==='size'){
     const o=drag.o, v=rot(w.x-drag.anchor.x, w.y-drag.anchor.y, -o.rot);
     let nw=Math.max(5,snapV(Math.abs(v.x*drag.hx))), nh=Math.max(5,snapV(Math.abs(v.y*drag.hy)));
-    if(e.shiftKey){ const k=Math.max(nw/o.w,nh/o.h); nw=o.w*k; nh=o.h*k; }
+    if(opt.shift){ const k=Math.max(nw/o.w,nh/o.h); nw=o.w*k; nh=o.h*k; }
     setObjSize(o,nw,nh);
     const c=rot(drag.hx*nw/2, drag.hy*nh/2, o.rot);
     o.x=drag.anchor.x+c.x; o.y=drag.anchor.y+c.y;
@@ -655,9 +715,8 @@ window.addEventListener('mousemove', e=>{
     ctx.strokeRect(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.abs(b.x-a.x),Math.abs(b.y-a.y));
     ctx.setLineDash([]); refreshProps();
   }
-});
-
-window.addEventListener('mouseup', ()=>{
+}
+function canvasEnd(){
   if(drag && drag.mode==='line' && calLine){
     const px=Math.hypot(calLine.b.x-calLine.a.x, calLine.b.y-calLine.a.y);
     if(px>1){
@@ -673,17 +732,107 @@ window.addEventListener('mouseup', ()=>{
   }
   if(drag) refresh();
   drag=null;
-});
-
-cv.addEventListener('contextmenu', e=>e.preventDefault());
-cv.addEventListener('wheel', e=>{
-  e.preventDefault();
-  const {sx,sy}=evPt(e), before=s2w(sx,sy);
-  view.zoom = Math.max(0.005, Math.min(8, view.zoom*(e.deltaY<0?1.12:1/1.12)));
+}
+// 以畫布上某一點為基準縮放（滾輪與雙指捏合共用）
+function canvasZoomAt(sx,sy,f){
+  const before=s2w(sx,sy);
+  view.zoom = Math.max(0.005, Math.min(8, view.zoom*f));
   const after=s2w(sx,sy);
   view.ox+=(after.x-before.x)*view.zoom; view.oy+=(after.y-before.y)*view.zoom;
   draw();
+}
+function canvasPanBy(dx,dy){ view.ox+=dx; view.oy+=dy; draw(); }
+
+/* ---- 滑鼠入口（行為與原本完全相同）---- */
+cv.addEventListener('mousedown', e=>{
+  const {sx,sy}=evPt(e);
+  if(e.button===1||e.button===2||spaceDown){
+    canvasBegin(sx,sy,{pan:true}); e.preventDefault(); return; }
+  if(e.button!==0) return;
+  canvasBegin(sx,sy,{shift:e.shiftKey});
+});
+window.addEventListener('mousemove', e=>{
+  if(tab!=='2d') return;
+  const {sx,sy}=evPt(e);
+  canvasMove(sx,sy,{shift:e.shiftKey});
+});
+window.addEventListener('mouseup', canvasEnd);
+cv.addEventListener('contextmenu', e=>e.preventDefault());
+cv.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const {sx,sy}=evPt(e);
+  canvasZoomAt(sx,sy, e.deltaY<0?1.12:1/1.12);
 },{passive:false});
+
+/* ---- 觸控入口 ----
+   單指按在物件／把手上 → 移動／縮放／旋轉
+   單指按在空白處      → 平移畫布；按住約半秒不動則轉為框選
+   雙指                → 捏合縮放 ＋ 同步平移
+*/
+(function(){
+  let pinch=null, lp=null, start=null;
+  const mid = t => ({x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2});
+  const dst = t => Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  const rel = p => { const r=cv.getBoundingClientRect(); return {sx:p.x-r.left, sy:p.y-r.top}; };
+  const killLP = ()=>{ if(lp){ clearTimeout(lp); lp=null; } };
+
+  cv.addEventListener('touchstart', e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length===1){
+      pinch=null;
+      const {sx,sy}=rel({x:t[0].clientX,y:t[0].clientY});
+      start={sx,sy};
+      const w=s2w(sx,sy);
+      const onThing = tool!=='select' || hitHandle(sx,sy) || hitObj(w.x,w.y);
+      if(onThing){ canvasBegin(sx,sy,{}); return; }
+      canvasBegin(sx,sy,{pan:true});          // 空白處先當平移
+      killLP();
+      lp=setTimeout(()=>{                      // 按住不動 → 轉框選
+        lp=null; drag=null;
+        canvasBegin(sx,sy,{marquee:true});
+        toast('框選模式：拖曳選取範圍');
+      },450);
+    }else if(t.length>=2){
+      killLP(); drag=null;
+      pinch={d:dst(t), m:mid(t)};
+    }
+  },{passive:false});
+
+  cv.addEventListener('touchmove', e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length>=2 && pinch){
+      const d=dst(t), m=mid(t), r=rel(m);
+      if(pinch.d>0) canvasZoomAt(r.sx, r.sy, d/pinch.d);
+      canvasPanBy(m.x-pinch.m.x, m.y-pinch.m.y);
+      pinch={d,m};
+      return;
+    }
+    if(t.length===1 && !pinch){
+      const {sx,sy}=rel({x:t[0].clientX,y:t[0].clientY});
+      if(lp && start && Math.hypot(sx-start.sx, sy-start.sy)>10) killLP();  // 移動就取消長按
+      canvasMove(sx,sy,{});
+    }
+  },{passive:false});
+
+  const end = e=>{
+    killLP();
+    if(e.touches.length===0){ canvasEnd(); pinch=null; start=null; }
+    else if(e.touches.length===1){ pinch=null; drag=null; }
+  };
+  cv.addEventListener('touchend',end);
+  cv.addEventListener('touchcancel',end);
+})();
+
+// 短暫提示（觸控操作用）
+let toastT=null;
+function toast(msg){
+  const el=$('toast'); if(!el) return;
+  el.textContent=msg; el.classList.add('on');
+  clearTimeout(toastT);
+  toastT=setTimeout(()=>el.classList.remove('on'),1600);
+}
 
 /* =========================================================
    鍵盤
@@ -1112,12 +1261,69 @@ function init3D(){
     $('crosshair').style.display = three.locked?'block':'none';
     updateHint3();
   });
+
+  /* ---- 觸控入口：單指旋轉、雙指捏合縮放＋平移 ----
+     漫遊模式在觸控裝置上不提供（沒有滑鼠鎖定），按鈕已隱藏 */
+  let p3=null;
+  const mid = t => ({x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2});
+  const dst = t => Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  dom.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length===1){ p3=null; orb3Begin('rotate', t[0].clientX, t[0].clientY); }
+    else if(t.length>=2){ three.drag=null; p3={d:dst(t), m:mid(t)}; }
+  },{passive:false});
+  dom.addEventListener('touchmove',e=>{
+    e.preventDefault();
+    const t=e.touches;
+    if(t.length===1 && !p3){ orb3Move(t[0].clientX, t[0].clientY); }
+    else if(t.length>=2 && p3){
+      const d=dst(t), m=mid(t);
+      if(p3.d>0) orb3Zoom(p3.d/d);
+      orb3PanBy(m.x-p3.m.x, m.y-p3.m.y);
+      p3={d,m};
+    }
+  },{passive:false});
+  const t3end=e=>{
+    if(e.touches.length===0){ three.drag=null; p3=null; }
+    else if(e.touches.length===1){ p3=null; orb3Begin('rotate', e.touches[0].clientX, e.touches[0].clientY); }
+  };
+  dom.addEventListener('touchend',t3end);
+  dom.addEventListener('touchcancel',t3end);
+}
+
+/* ---- 3D 環繞視角的共用動作（滑鼠與觸控都呼叫這一組）---- */
+function orb3Begin(mode,x,y){
+  if(!three||mode3!=='orbit') return;
+  three.drag={ mode, x, y, o:{...three.orbit} };
+}
+function orb3Move(x,y){
+  const d=three&&three.drag; if(!d) return;
+  const dx=x-d.x, dy=y-d.y, o=three.orbit;
+  if(d.mode==='rotate'){
+    o.theta = d.o.theta + dx*0.006;
+    o.phi   = Math.max(0.05, Math.min(Math.PI/2-0.02, d.o.phi - dy*0.006));
+  }else{
+    const k=d.o.dist*0.0016, ct=Math.cos(d.o.theta), st=Math.sin(d.o.theta);
+    o.tx = d.o.tx - st*dx*k + ct*dy*k;
+    o.tz = d.o.tz + ct*dx*k + st*dy*k;
+  }
+}
+function orb3Zoom(f){
+  if(!three) return;
+  three.orbit.dist=Math.max(80,Math.min(40000,three.orbit.dist*f));
+}
+function orb3PanBy(dx,dy){
+  if(!three) return;
+  const o=three.orbit, k=o.dist*0.0016, ct=Math.cos(o.theta), st=Math.sin(o.theta);
+  o.tx += -st*dx*k + ct*dy*k;
+  o.tz +=  ct*dx*k + st*dy*k;
 }
 
 function on3Down(e){
   if(!three) return;
   if(mode3==='orbit'){
-    three.drag={ b:e.button, x:e.clientX, y:e.clientY, o:{...three.orbit} };
+    orb3Begin(e.button===0?'rotate':'pan', e.clientX, e.clientY);
     e.preventDefault();
   }
 }
@@ -1129,16 +1335,7 @@ function on3Move(e){
     three.walk.pitch = Math.max(-1.45,Math.min(1.45,three.walk.pitch));
     return;
   }
-  const d=three.drag; if(!d) return;
-  const dx=e.clientX-d.x, dy=e.clientY-d.y, o=three.orbit;
-  if(d.b===0){
-    o.theta = d.o.theta + dx*0.006;
-    o.phi   = Math.max(0.05, Math.min(Math.PI/2-0.02, d.o.phi - dy*0.006));
-  }else{
-    const k=d.o.dist*0.0016, ct=Math.cos(d.o.theta), st=Math.sin(d.o.theta);
-    o.tx = d.o.tx - st*dx*k + ct*dy*k;
-    o.tz = d.o.tz + ct*dx*k + st*dy*k;
-  }
+  orb3Move(e.clientX, e.clientY);
 }
 
 // 簡易人形（腿／身／手臂／頭），依身高 o.z 與肩寬 o.w 縮放
@@ -1448,12 +1645,28 @@ function setPanelW(side, px){
   resize();
   return w;
 }
+// 窄螢幕（平板直向、小視窗）走抽屜模式；寬螢幕維持原本的收合行為
+const isNarrow = ()=> window.matchMedia('(max-width:1100px)').matches;
+function closeDrawers(){
+  $('left').classList.remove('open'); $('right').classList.remove('open');
+  $('drawerMask').classList.remove('on');
+  resize();
+}
 function togglePanel(side){
-  $(side).classList.toggle('collapsed');
+  const el=$(side);
+  if(isNarrow()){
+    const wasOpen=el.classList.contains('open');
+    $('left').classList.remove('open'); $('right').classList.remove('open');
+    if(!wasOpen) el.classList.add('open');
+    $('drawerMask').classList.toggle('on', !wasOpen);
+    return;
+  }
+  el.classList.toggle('collapsed');
   $(side==='left'?'splitL':'splitR').style.display =
-    $(side).classList.contains('collapsed') ? 'none' : '';
+    el.classList.contains('collapsed') ? 'none' : '';
   savePanels(); resize();
 }
+window.matchMedia('(max-width:1100px)').addEventListener('change',()=>{ closeDrawers(); resize(); });
 function savePanels(){
   try{ localStorage.setItem('floorplan_panels', JSON.stringify({
     l:parseInt($('left').style.width)||PANEL_DEF.left,
@@ -1475,27 +1688,46 @@ function loadPanels(){
 
 (function initSplitters(){
   let sp=null;
+  const L=$('splitL'), R=$('splitR');
+  // 共用動作
+  const grabStart=(el,side,x)=>{
+    sp={ side, x, w:$(side).getBoundingClientRect().width };
+    el.classList.add('active'); document.body.classList.add('resizing');
+  };
+  const grabMove=x=>{
+    if(!sp) return;
+    const d = x - sp.x;
+    setPanelW(sp.side, sp.side==='left' ? sp.w + d : sp.w - d);
+  };
+  const grabEnd=()=>{
+    if(!sp) return;
+    sp=null; L.classList.remove('active'); R.classList.remove('active');
+    document.body.classList.remove('resizing'); savePanels();
+  };
+  // 滑鼠入口
   const start=(el,side)=>e=>{
     if(e.button!==0) return;
-    sp={ side, x:e.clientX, w:$(side).getBoundingClientRect().width };
-    el.classList.add('active'); document.body.classList.add('resizing');
-    e.preventDefault();
+    grabStart(el,side,e.clientX); e.preventDefault();
   };
-  const L=$('splitL'), R=$('splitR');
   L.addEventListener('mousedown', start(L,'left'));
   R.addEventListener('mousedown', start(R,'right'));
   L.addEventListener('dblclick', ()=>{ setPanelW('left', PANEL_DEF.left); savePanels(); });
   R.addEventListener('dblclick', ()=>{ setPanelW('right', PANEL_DEF.right); savePanels(); });
-  window.addEventListener('mousemove', e=>{
+  window.addEventListener('mousemove', e=>grabMove(e.clientX));
+  window.addEventListener('mouseup', grabEnd);
+  // 觸控入口
+  const tstart=(el,side)=>e=>{
+    if(e.touches.length!==1) return;
+    grabStart(el,side,e.touches[0].clientX); e.preventDefault();
+  };
+  L.addEventListener('touchstart', tstart(L,'left'), {passive:false});
+  R.addEventListener('touchstart', tstart(R,'right'), {passive:false});
+  window.addEventListener('touchmove', e=>{
     if(!sp) return;
-    const d = e.clientX - sp.x;
-    setPanelW(sp.side, sp.side==='left' ? sp.w + d : sp.w - d);
-  });
-  window.addEventListener('mouseup', ()=>{
-    if(!sp) return;
-    sp=null; L.classList.remove('active'); R.classList.remove('active');
-    document.body.classList.remove('resizing'); savePanels();
-  });
+    grabMove(e.touches[0].clientX); e.preventDefault();
+  },{passive:false});
+  window.addEventListener('touchend', grabEnd);
+  window.addEventListener('touchcancel', grabEnd);
 })();
 
 /* =========================================================
