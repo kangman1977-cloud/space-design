@@ -1,32 +1,22 @@
-three.js 本地化，並加入「加到主畫面」支援
+修正 iPad 全螢幕時內容被狀態列蓋住的問題
 
-【three.js 改用本機副本】
-兩個網頁原本從 cdnjs 載入 three.js r128，改成共用 lib/three.min.js（603KB）。
-- 去掉對外部 CDN 的依賴，沒有網路也能用 3D
-- 兩個網頁共用同一份，不是各塞一份
-- 保持獨立檔案而非內嵌，git diff 才不會被 60 萬字的壓縮程式碼淹掉
-- 3D 啟動失敗時的訊息改成指向 lib/three.min.js，不再說「需要網路」
+症狀：加到主畫面後變成全螢幕，但最上面那排按鈕（分頁列、需求／排料）
+跑到 iPad 狀態列（時間、電量、Wi-Fi）底下，很難點到。
 
-已確認該檔含我們用到的全部 20 個類別（WebGLRenderer、ExtrudeGeometry、
-Raycaster、CanvasTexture、Shape/Path 等），MIT 授權。
+原因：apple-mobile-web-app-status-bar-style 設為 black-translucent，
+這會讓網頁內容延伸到狀態列底下，必須自己讓開那塊區域。
 
-【加到主畫面】
-新增 manifest-planner.webmanifest 與 manifest-sheet.webmanifest，
-以及 icons/ 下六個 PNG（各 180/192/512）。
+修正：用 iOS 的安全區域變數把內容推開
+- #app 四邊加上 padding: env(safe-area-inset-*)
+- 窄螢幕的抽屜側欄（position:fixed）原本 top:0 / bottom:0，
+  改成 top / bottom 也吃 safe-area-inset，否則抽屜一樣會鑽到狀態列底下
 
-兩個網頁的 head 加入 manifest 連結、theme-color、
-apple-mobile-web-app-* 系列 meta 與 apple-touch-icon。
+為什麼不改成 black（不透明狀態列）：那樣最上面會出現一條黑帶，
+和深色主題之間有明顯接縫。用安全區域則是網頁自己的背景色一路延伸上去，
+狀態列文字直接疊在上面，視覺連續。
 
-效果：iPad 按分享→加入主畫面後會變成全螢幕 App，省掉 Safari 網址列，
-畫布多約 100px 高度；Android Chrome 會出現安裝提示。
+桌機與一般瀏覽器不受影響：這些 inset 值在沒有瀏海／狀態列疊層的環境一律是 0，
+padding 等於沒加。
 
-【刻意不做 Service Worker】
-原本規劃整套 PWA 含離線快取，但那是建立在「經常沒有網路」的假設上。
-確認實際情境是「平板就算沒 SIM 也會接熱點」之後，離線快取的價值下降，
-而它會帶來版本陳舊的風險（改版後裝置仍開到舊版）。
-全螢幕的好處不需要 Service Worker 就拿得到，因此只做 manifest。
-日後若確實需要離線，再單獨加入並採用「網路優先、失敗才用快取」策略。
-
-【驗證】
-兩個網頁 CSS 大括號平衡、JS 語法通過、CDN 參照已完全移除、
-manifest JSON 格式正確、start_url 與六個圖示路徑皆存在。
+檢查：兩個網頁 CSS 大括號平衡、所有 media query 正確閉合、JS 語法通過、
+抽屜的 top:0 已完全替換。
