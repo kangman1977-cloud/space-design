@@ -48,6 +48,9 @@ const { buildPrim } = await import('../js/build/prim.js');
 const { initCSG, csgError, BOOL_OPS } = await import('../js/build/bool.js');
 const io = await import('../js/core/io.js');
 const THREE = await import('three');
+// toolbar.js 只在 Panel 的建構子裡碰 DOM，模組層級沒有，所以匯入得進來。
+// topologyCheck 是刻意抽出來的純函式，就是為了能在這裡測。
+const { topologyCheck } = await import('../js/ui/toolbar.js');
 
 // ═══════════════════════════════════════════════════════
 //  小小的測試框架
@@ -413,6 +416,86 @@ if (csgOK) {
     for (let i = 0; i < 20; i++) io.buildSrc(tree);
     const ms = (performance.now() - t0) / 20;
     ok(`單次布林耗時 ${ms.toFixed(1)} ms（門檻 50ms）`, ms < 50);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  面板的拓撲判定（2026-08-21 誤報過，所以特別測）
+// ═══════════════════════════════════════════════════════
+
+section('面板拓撲判定');
+
+if (csgOK) {
+  const item = (src, pos = [0, 0, 0], rot = [0, 0, 0]) =>
+    ({ src, pos, rot, scale: [1, 1, 1], name: src.type });
+
+  const check = m => {
+    const v = m.validate();
+    return { v, s: summarize(m), t: topologyCheck(v, summarize(m).totalDefect) };
+  };
+
+  // 沒有洞的方塊：χ=2、一塊、0 個孔、角虧 4π
+  {
+    const { v, t } = check(buildPrim('box', { w: 60, h: 45, d: 40 }));
+    eq('方塊 元件數', v.components, 1);
+    eq('方塊 貫穿孔數', t.genus, 0);
+    ok('方塊 尤拉數判定為正確', t.eulerOK);
+    near('方塊 角虧理論值（＝4π）', t.defectExpect, 4 * Math.PI, 1e-9);
+    ok('方塊 角虧判定為正確', t.defectOK);
+  }
+
+  // 貫穿孔：χ=0、一塊、1 個孔、角虧 0
+  // ← 這就是舊版面板誤報成兩個紅叉的情況
+  {
+    const { v, t } = check(io.buildSrc({
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [
+        item({ type: 'box', w: 60, h: 45, d: 40 }),
+        item({ type: 'cylinder', r: 10, h: 60, seg: 32 }, [0, 0, 0], [Math.PI / 2, 0, 0])
+      ]
+    }));
+    eq('貫孔 元件數', v.components, 1);
+    eq('貫孔 貫穿孔數', t.genus, 1);
+    ok('貫孔 尤拉數判定為正確（不可再誤報）', t.eulerOK);
+    near('貫孔 角虧理論值（＝0）', t.defectExpect, 0, 1e-9);
+    ok('貫孔 角虧判定為正確（不可再誤報）', t.defectOK);
+    eq('貫孔 說明文字', t.eulerNote, '＝2−2×1');
+  }
+
+  // 兩個分開的實體：χ=4、兩塊、0 個孔 —— 也不可以被誤報
+  {
+    const { v, t } = check(io.buildSrc({
+      type: 'bool', op: BOOL_OPS.UNION,
+      items: [
+        item({ type: 'box', w: 20, h: 20, d: 20 }),
+        item({ type: 'box', w: 20, h: 20, d: 20 }, [100, 0, 0])
+      ]
+    }));
+    eq('分開兩塊 元件數', v.components, 2);
+    eq('分開兩塊 貫穿孔數', t.genus, 0);
+    ok('分開兩塊 尤拉數判定為正確', t.eulerOK);
+    eq('分開兩塊 說明文字', t.eulerNote, '＝2×2−2×0');
+    ok('分開兩塊 角虧判定為正確', t.defectOK);
+  }
+
+  // 開放的板件：χ=1，不做角虧判定
+  {
+    const { t } = check(buildPrim('plate', { w: 100, d: 60 }));
+    eq('板件 貫穿孔數（不適用）', t.genus, null);
+    ok('板件 尤拉數判定為正確', t.eulerOK);
+    eq('板件 不對角虧下判斷', t.defectExpect, null);
+  }
+
+  // 結構真的接錯（χ 是奇數）時必須抓出來
+  {
+    const t = topologyCheck({ closed: true, euler: 3, components: 1 }, 0);
+    ok('尤拉數是奇數 → 判定為錯誤', t.eulerOK === false);
+    eq('尤拉數是奇數 → 不推算孔數', t.genus, null);
+  }
+  // χ 比元件數容許的最大值還大，也是不可能的
+  {
+    const t = topologyCheck({ closed: true, euler: 6, components: 1 }, 0);
+    ok('χ 大於 2×元件數 → 判定為錯誤', t.eulerOK === false);
   }
 }
 

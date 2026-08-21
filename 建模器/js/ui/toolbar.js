@@ -468,16 +468,26 @@ export class Panel {
 
   _renderAnalysis(d) {
     const { v, s } = d;
-    const eulerExpect = v.closed ? 2 : 1;
-    const eulerOK = v.euler === eulerExpect;
+    const t = topologyCheck(v, s.totalDefect);
+
+    // 極小的負值（-1e-16 之類）顯示成 -0.0000 很難看也容易被誤會，先歸零
+    const defect = Math.abs(s.totalDefect) < 5e-5 ? 0 : s.totalDefect;
 
     this.anaBody.className = '';
     this.anaBody.innerHTML = `
       <table class="ana">
         <tr><th colspan="2" class="grp">拓 撲</th></tr>
         <tr><td>頂點 / 邊 / 面</td><td>${v.V} / ${v.E} / ${v.F}</td></tr>
-        <tr><td title="封閉網格 V−E+F 應該等於 2，開放的殼是 1。對不上就表示結構接錯了">尤拉數 V−E+F</td>
-            <td>${v.euler} ${mark(eulerOK)}<span class="dim"> 應為 ${eulerExpect}</span></td></tr>
+        <tr><td title="封閉網格的尤拉數 χ ＝ 2×分開的實體數 − 2×貫穿孔數。一個沒有洞的實體是 2，挖穿一個孔變 0，兩塊分開的實體是 4。開放的殼是 1。χ 一定是偶數，出現奇數就表示結構接錯了">尤拉數 V−E+F</td>
+            <td>${v.euler} ${mark(t.eulerOK)}<span class="dim"> ${t.eulerNote}</span></td></tr>
+        ${t.genus !== null
+          ? `<tr><td title="貫穿的洞有幾個。挖穿一個孔＝1，甜甜圈也是 1。沒挖穿的盲孔不算">貫穿孔數</td>
+                 <td>${t.genus}</td></tr>`
+          : ''}
+        ${v.components > 1
+          ? `<tr><td title="這個物件其實是幾塊彼此分開、沒有相連的實體。聯集兩個沒碰到的東西就會這樣">分開的實體</td>
+                 <td>${v.components} 塊</td></tr>`
+          : ''}
         <tr><td>是否封閉</td><td>${v.closed ? '封閉' : '開放（有邊界）'}</td></tr>
         <tr><td>結構檢查</td><td>${v.ok ? '無誤 ✓' : `<span class="bad">${v.errors.length} 項問題</span>`}</td></tr>
 
@@ -487,9 +497,9 @@ export class Panel {
             <td>${s.regions} 片<span class="dim"> ← ${v.F} 個三角形合併而來</span></td></tr>
         <tr><td title="用高斯曲率判定。可展開的才有精確解，不可展的必須切分近似">曲面判定</td>
             <td>${SURFACE_TEXT[s.surface] || s.surface}</td></tr>
-        <tr><td title="360度減去頂點周圍所有夾角。封閉曲面的總和恆等於 4π ≈ 12.566">角虧總和</td>
-            <td>${s.totalDefect.toFixed(4)}${v.closed
-              ? `<span class="dim"> 理論 4π = 12.5664</span> ${mark(Math.abs(s.totalDefect - 4 * Math.PI) < 1e-4)}`
+        <tr><td title="360度減去頂點周圍所有夾角。高斯–博內定理：封閉曲面的總和恆等於 2π×尤拉數。沒有洞時就是常見的 4π">角虧總和</td>
+            <td>${defect.toFixed(4)}${t.defectExpect !== null
+              ? `<span class="dim"> 理論 2πχ = ${t.defectExpect.toFixed(4)}</span> ${mark(t.defectOK)}`
               : ''}</td></tr>
         <tr><td>攤不平的頂點</td><td>${s.curvedVerts} / ${v.V}</td></tr>
         <tr><td>折線 / 切割線</td><td>${s.folds} / ${s.cuts}</td></tr>
@@ -501,6 +511,72 @@ export class Panel {
       </table>
       <div class="anaFoot">計算耗時 ${d.ms} ms</div>`;
   }
+}
+
+// ═══════════════════════════════════════════════════════
+//  拓撲判定
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 由拓撲數字推出「理論上應該是多少」，並判斷對不對。
+ *
+ * ── 這個函式為什麼要獨立出來 ────────────────────────
+ * 第 1 期把「封閉 → 尤拉數 2、角虧總和 4π」直接寫死在畫面上。
+ * 那時只有基本體，沒有東西挖得出洞，所以從沒出事。
+ * 第 2 期一有布林運算，挖一個貫穿孔就變成 χ=0、角虧總和=0，
+ * 寫死的判定把完全正確的結果打了兩個紅叉（2026-08-21 實際發生）。
+ *
+ * 所以改用正確的公式，而且抽成**不碰 DOM 的純函式**，
+ * 這樣 tests/run.mjs 可以直接測它 —— 判定邏輯一旦寫錯，
+ * 症狀是「數字明明對卻說錯」，那是最容易讓人失去信任的一種 bug。
+ *
+ * ── 用到的兩個定理 ──────────────────────────────────
+ * 封閉可定向曲面：χ ＝ V−E+F ＝ 2c − 2g
+ *   c ＝ 有幾個彼此分開的實體，g ＝ 貫穿孔總數（虧格）
+ *   一個沒有洞的方塊 → χ=2；挖穿一個孔（等價於甜甜圈）→ χ=0；
+ *   兩個分開的方塊（布林聯集很容易做出來）→ χ=4。
+ *   所以「χ 應為 2」是錯的，正確的鐵律只有「χ 必為偶數」。
+ * 高斯–博內定理：封閉曲面的角虧總和恆等於 2πχ。
+ *   χ=2 時就是常見的 4π ≈ 12.5664。
+ *
+ * @param {object} v          mesh.validate() 的回傳（要有 components）
+ * @param {number} totalDefect summarize() 算出的角虧總和
+ */
+export function topologyCheck(v, totalDefect) {
+  if (!v.closed) {
+    // 開放的殼（板件）：一片沒有洞的板子是 1。
+    // 角虧總和的高斯–博內版本含邊界積分項，這裡不做判定，
+    // 免得給出似是而非的數字。
+    return {
+      genus: null,
+      eulerOK: v.euler === 1,
+      eulerNote: '開放的殼應為 1',
+      defectExpect: null,
+      defectOK: null
+    };
+  }
+
+  const c = v.components ?? 1;
+  const even = v.euler % 2 === 0;
+  // χ = 2c − 2g 反推 g。g 為負數表示拓撲上不可能，一定是結構接錯了。
+  const g = (2 * c - v.euler) / 2;
+  const valid = even && Number.isInteger(g) && g >= 0;
+  const defectExpect = 2 * Math.PI * v.euler;
+
+  let note;
+  if (!valid) note = '封閉曲面不可能是這個值';
+  else if (c === 1) note = g === 0 ? '＝2，沒有貫穿孔' : `＝2−2×${g}`;
+  else note = `＝2×${c}−2×${g}`;
+
+  return {
+    genus: valid ? g : null,
+    components: c,
+    eulerOK: valid,
+    eulerNote: note,
+    defectExpect,
+    // 容許 1e-4：座標是 32 位元浮點數，上萬個頂點累加會有這個量級的尾差
+    defectOK: Math.abs(totalDefect - defectExpect) < 1e-4
+  };
 }
 
 // ═══════════════════════════════════════════════════════

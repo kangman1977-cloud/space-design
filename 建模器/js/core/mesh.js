@@ -226,9 +226,36 @@ export class Mesh {
   // ── 拓撲檢查 ──────────────────────────────────────
 
   /**
-   * 自我檢查。回傳 { ok, euler, closed, errors[] }
-   * 尤拉公式 V − E + F = 2 對「封閉且沒有洞」的網格成立，
-   * 是驗證結構有沒有接錯最快的方法。
+   * 連通元件個數 —— 這個網格其實是幾個彼此分開的殼。
+   *
+   * 封閉曲面的尤拉數是 χ ＝ 2c − 2g（c 是元件數，g 是貫穿孔總數）。
+   * 沒有這個數字就沒辦法分辨「兩個分開的方塊（χ=4）」和「結構接錯了」，
+   * 布林聯集很容易做出前者。走一遍所有面，成本 O(面數)。
+   */
+  componentCount() {
+    const seen = new Set();
+    let n = 0;
+    for (const f of this.faces) {
+      if (seen.has(f.id)) continue;
+      n++;
+      const stack = [f];
+      seen.add(f.id);
+      while (stack.length) {
+        for (const he of this.faceLoop(stack.pop())) {
+          const nb = he.twin && he.twin.face;
+          if (nb && !seen.has(nb.id)) { seen.add(nb.id); stack.push(nb); }
+        }
+      }
+    }
+    return n;
+  }
+
+  /**
+   * 自我檢查。回傳 { ok, V, E, F, euler, closed, components, errors[] }
+   *
+   * 尤拉公式是驗證結構有沒有接錯最快的方法。封閉網格的
+   * χ ＝ V−E+F ＝ 2×元件數 − 2×貫穿孔數，所以 χ 必為偶數；
+   * 開放的殼（一片板子）是 1。
    */
   validate() {
     const errors = [...this.issues];
@@ -261,6 +288,7 @@ export class Mesh {
       V, E, F,
       euler: V - E + F,
       closed,
+      components: this.componentCount(),
       boundaryHalfEdges: boundary,
       errors
     };
