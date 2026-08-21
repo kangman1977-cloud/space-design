@@ -35,9 +35,42 @@ export const PRIM_DEFAULTS = {
     w: 60,           // 板寬（沿 Z）
     first: 40,       // 第一段長度
     arcSeg: 4,       // 每個折彎圓弧分幾段
-    bends: [{ angle: 90, r: 2, len: 30 }]   // 一道折彎 ＝ L 型
+    k: 0.4,          // K 因子（中性層位置比例，見 neutralRadius）
+    bends: [{ angle: 90, ri: 2, len: 30 }]   // 一道折彎 ＝ L 型
   }
 };
+
+/**
+ * 中性層半徑 —— 折彎件所有長度計算的根。
+ *
+ * ── 為什麼不是直接用使用者填的半徑 ──────────────────
+ * 折鐵板時外側被拉長、內側被壓縮，中間有一層長度剛好不變，
+ * 這一層叫**中性層**，下料長度必須照它算。
+ *
+ * 但現場沒有人量得到中性層在哪 —— 師傅講「折 R3」指的是
+ * **模具的內側圓角**，圖面標的也是內側 R。所以參數存內側 R，
+ * 中性層由公式推出來：
+ *
+ *     rn = ri + K × t
+ *
+ * K 是中性層落在板厚的幾成（從內側量起），典型值 0.35～0.45，
+ * 是**材料屬性**，所以預設值放在 unfold/rules.js 的材料表裡，
+ * 幾何這邊只負責照公式算。
+ *
+ * ── 差多少 ──────────────────────────────────────────
+ * 3mm 鐵板、內 R3、折 90°：
+ *   照內側 R 算 → 4.71mm，照中性層算 → 6.60mm，每道差 1.9mm。
+ * 折四道就差 7.6mm，折完裝不上去。
+ *
+ * @param {number} ri 內側圓角半徑 cm
+ * @param {number} k  K 因子
+ * @param {number} t  板厚 cm
+ */
+export function neutralRadius(ri, k, t) {
+  const r = Math.max(0, num(ri, 0));
+  if (r < 1e-9) return 0;            // 尖角折就是尖角折，不補
+  return r + Math.max(0, num(k, 0.4)) * Math.max(0, num(t, 0));
+}
 
 /** 給介面用的清單：標籤、可調欄位、範圍 */
 export const PRIM_SPECS = {
@@ -116,7 +149,12 @@ export const PRIM_SPECS = {
     fields: [
       { key: 'w',      label: '板寬 Z',   min: 0.1, step: 1 },
       { key: 'first',  label: '第一段長', min: 0.1, step: 1 },
-      { key: 'arcSeg', label: '圓弧分段', min: 1, max: 24, step: 1, int: true }
+      { key: 'arcSeg', label: '圓弧分段', min: 2, max: 24, step: 1, int: true,
+        hint: '折彎圓弧切成幾段。至少 2 段 —— 只切 1 段的話，網格上跟一個倒角'
+            + '長得完全一樣，展開時分不出是圓弧還是倒角，長度會少算' },
+      { key: 'k',      label: 'K 因子',   min: 0, max: 0.5, step: 0.05,
+        hint: '中性層落在板厚的幾成（從內側量起）。軟鋼 0.4、不鏽鋼 0.45、鋁 0.35。'
+            + '下料長度就是照這個算出來的' }
     ],
     hasBends: true
   }
@@ -276,11 +314,14 @@ const BUILDERS = {
    * autoMarkFolds() 會把它們標成折線（fold）。
    * 這是半邊結構的「邊角色」欄位第一次真正派上用場。
    */
-  bend(p) {
+  bend(p, t = 0) {
     const D = PRIM_DEFAULTS.bend;
     const w = num(p.w, D.w);
     const first = num(p.first, D.first);
-    const arcSeg = int(p.arcSeg, D.arcSeg, 1);
+    // 下限 2：切一段的圓弧在網格上跟倒角完全一樣，展開時認不出來。
+    // 這不是保守，是資訊真的不存在（見 unfold/flatten.js 檔頭）。
+    const arcSeg = int(p.arcSeg, D.arcSeg, 2);
+    const k = num(p.k, D.k);
     const bends = Array.isArray(p.bends) && p.bends.length ? p.bends : D.bends;
 
     // ── 先在 XY 平面走出斷面折線 ──
@@ -298,7 +339,8 @@ const BUILDERS = {
     for (const b of bends) {
       const deg = num(b && b.angle, 90);
       const rad = THREE.MathUtils.degToRad(deg);
-      const r = Math.max(0, num(b && b.r, 0));
+      // 面上畫的是中性面，所以用中性層半徑；使用者填的是內側 R
+      const r = neutralRadius(b && b.ri, k, t);
       const len = Math.max(0, num(b && b.len, 0));
 
       if (r > 1e-9 && Math.abs(rad) > 1e-9) {
@@ -406,10 +448,10 @@ function extrudeProfile(profile, h) {
  * @param {object} params
  * @returns {Mesh}
  */
-export function buildPrim(type, params = {}) {
+export function buildPrim(type, params = {}, thickness = 0) {
   const fn = BUILDERS[type];
   if (!fn) throw new Error(`不認得的基本體類型：${type}`);
-  return fn(params);
+  return fn(params, thickness);
 }
 
 /** 產生一組帶預設值的參數（含 type，可直接當 src 用） */
@@ -421,11 +463,24 @@ export function defaultSrc(type) {
 
 /** 折板預設的一道折彎，介面按「加一道」時用 */
 export function defaultBend() {
-  return { angle: 90, r: 2, len: 30 };
+  return { angle: 90, ri: 2, len: 30 };
 }
 
 /**
- * 折板的展開總長（沿中性面量），單位 cm。
+ * 一道折彎的展開長（bend allowance），單位 cm。
+ *
+ *     BA = θ × (ri + K × t)
+ *
+ * 這就是鈑金教科書的公式，也是第 3 期出圖與 DXF 用的數字。
+ * 半徑 0（尖角折）時 BA ＝ 0。
+ */
+export function bendAllowance(b, k, t) {
+  const rad = Math.abs(THREE.MathUtils.degToRad(num(b && b.angle, 90)));
+  return neutralRadius(b && b.ri, k, t) * rad;
+}
+
+/**
+ * 折板的展開總長（沿中性層量），單位 cm。
  *
  * ── 一定要用真正的弧長 ──────────────────────────────
  * 圓弧在網格上被切成 arcSeg 段直線，**弦長比弧長短**。
@@ -433,19 +488,22 @@ export function defaultBend() {
  * 拿網格去量展開長度，每道折彎都會少算一點，
  * 折三道就差到零點幾公分 —— 雷切下去才發現就來不及了。
  *
- * 所以展開長度一律用 r × θ 算，這也是第 3 期出圖要用的數字。
- * （目前 r 指的是中性面半徑；等第 3 期做 K 因子時，
- *   中性面位置會改由板厚與 K 值決定，那時只要改這一個函式。）
+ * 所以展開長度一律用 θ × rn 算（rn 見 neutralRadius）。
+ * 這個函式是展開長度的**唯一權威來源**：
+ * unfold/flatten.js 從網格辨識出來的結果會拿它對答案，
+ * 對不上就表示辨識錯了。
+ *
+ * @param {object} p 折板參數
+ * @param {number} t 板厚 cm
  */
-export function bendDevelopedLength(p) {
+export function bendDevelopedLength(p, t = 0) {
   const D = PRIM_DEFAULTS.bend;
   const bends = Array.isArray(p.bends) && p.bends.length ? p.bends : D.bends;
+  const k = num(p.k, D.k);
   let len = num(p.first, D.first);
 
   for (const b of bends) {
-    const rad = Math.abs(THREE.MathUtils.degToRad(num(b && b.angle, 90)));
-    const r = Math.max(0, num(b && b.r, 0));
-    len += r * rad + Math.max(0, num(b && b.len, 0));
+    len += bendAllowance(b, k, t) + Math.max(0, num(b && b.len, 0));
   }
   return len;
 }

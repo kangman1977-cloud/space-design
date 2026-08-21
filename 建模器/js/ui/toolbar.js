@@ -7,8 +7,8 @@
  * 也順便預告了展開引擎將來會依據什麼做判斷。
  */
 
-import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength }
-  from '../build/prim.js';
+import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
+         bendAllowance, neutralRadius } from '../build/prim.js';
 import { KIND } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
@@ -97,9 +97,14 @@ export class Panel {
     }, '板件是要拿去展開的東西（有厚度、可折彎）；實體是有體積的量體');
 
     if (obj.kind === KIND.SHEET) {
+      // 板厚會改變折彎的中性層位置，也就會改變形狀與展開長度，
+      // 所以一定要 invalidate() 讓網格重生，不能只改數字。
       this._rowNum('板厚 cm', obj.thickness, { min: 0.01, step: 0.1 }, v => {
-        obj.thickness = v; this._edit('改板厚');
-      }, '展開時算折彎補償要用');
+        obj.thickness = v;
+        obj.invalidate();
+        this.analysisCache.delete(obj.id);
+        this._edit('改板厚');
+      }, '折彎補償與展開長度都要用它算：中性層半徑 ＝ 內側R ＋ K×板厚');
     }
 
     // ── 參數（可回頭改的才有）──
@@ -128,7 +133,7 @@ export class Panel {
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + f.label);
-          });
+          }, f.hint);
         }
         if (spec.hasBends) this._bendList(obj);
         this._rowBtn('轉成可編輯網格', '不可逆。轉了之後就不能再改上面的參數，但可以做面編輯', () => {
@@ -249,12 +254,13 @@ export class Panel {
     this.form.appendChild(head('折彎序列'));
 
     // 展開總長是這個功能最關鍵的產出：下料要照這個長度剪
+    const t = obj.thickness || 0;
     const dev = document.createElement('div');
     dev.className = 'note';
-    dev.title = '沿中性面量的總長度，用真正的弧長算（不是網格上的直線段），'
-      + '第 3 期出展開圖時就是這個數字';
-    dev.textContent = `展開總長 ${round(bendDevelopedLength(src))} cm`
-      + `　板寬 ${round(src.w)} cm`;
+    dev.title = '沿中性層量的總長度，用真正的弧長算（不是網格上的直線段）。'
+      + '這就是下料要剪的長度';
+    dev.textContent = `展開總長 ${round(bendDevelopedLength(src, t))} cm`
+      + `　板寬 ${round(src.w)} cm　板厚 ${round(t)} cm　K ${round(src.k ?? 0.4)}`;
     this.form.appendChild(dev);
 
     const wrap = document.createElement('div');
@@ -277,7 +283,7 @@ export class Panel {
       nm.textContent = `第 ${i + 1} 道`;
       const dims = document.createElement('span');
       dims.className = 'dims';
-      dims.textContent = `${round(b.angle)}° R${round(b.r)} → ${round(b.len)}`;
+      dims.textContent = `${round(b.angle)}° R${round(b.ri)} → ${round(b.len)}`;
       headEl.append(sym, nm, dims);
       box.appendChild(headEl);
 
@@ -289,12 +295,22 @@ export class Panel {
       this._rowNum('角度 度', b.angle, { step: 15 }, v => {
         b.angle = v; this._rebuild(obj, '改折彎角度');
       }, '正負決定往哪邊折。兩道同向＝U 型，一正一負＝Z 型');
-      this._rowNum('折彎半徑', b.r, { min: 0, step: 0.5 }, v => {
-        b.r = Math.max(0, v); this._rebuild(obj, '改折彎半徑');
-      }, '中性面的半徑。填 0 就是不帶圓角的尖角折');
+      this._rowNum('內側圓角 R', b.ri, { min: 0, step: 0.5 }, v => {
+        b.ri = Math.max(0, v); this._rebuild(obj, '改折彎半徑');
+      }, '模具的內側圓角，也就是圖面上標的那個 R。填 0 就是不帶圓角的尖角折。'
+       + '下料用的中性層半徑由程式算：內側R ＋ K×板厚');
       this._rowNum('之後長度', b.len, { min: 0, step: 1 }, v => {
         b.len = Math.max(0, v); this._rebuild(obj, '改折後長度');
       }, '折完之後那一段的長度');
+
+      // 把「內側R、K、板厚、算出來的展開弧長」四個數字一起攤出來，
+      // 才看得出換算是怎麼來的 —— 這是結構分析面板同一套想法。
+      const ba = document.createElement('div');
+      ba.className = 'note';
+      ba.title = '這一道折彎在展開圖上佔的長度：θ ×（內側R ＋ K×板厚）';
+      ba.textContent = `這道展開弧長 ${round(bendAllowance(b, src.k ?? 0.4, t))} cm`
+        + `　（中性層 R${round(neutralRadius(b.ri, src.k ?? 0.4, t))}）`;
+      body.appendChild(ba);
 
       if (src.bends.length > 1) {
         this._rowBtn('移除這一道', '', () => {

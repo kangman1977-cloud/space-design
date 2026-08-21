@@ -28,7 +28,7 @@ import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 
 export const DOC_TYPE = 'model-doc';
-export const DOC_VERSION = 3;
+export const DOC_VERSION = 4;
 export const UNIT = 'cm';
 
 /** 物件種類。sheet 是要拿去展開的板件，solid 是有體積的量體。 */
@@ -61,19 +61,28 @@ export function cloneSrc(src) {
  * 「挖好孔的板子排成一排」與「一排孔拿去挖穿板子」都做得到，
  * 而且 bool.js / array.js 都不必認識 box、cylinder 是什麼，
  * io.js 也不必認識 Manifold —— 各做各的，不互相 import。
+ *
+ * ── 板厚為什麼要傳進來 ──────────────────────────────
+ * 折板的中性面半徑 ＝ 內側 R ＋ K × 板厚，所以生成幾何要知道板厚。
+ * 板厚是 ModelObject 的屬性，不是 src 的一部分（同一份參數換個板厚
+ * 就是另一件事，不該有兩份各自為政的板厚）。
+ * 遞迴時用閉包把它帶下去，bool.js 與 array.js 完全不必知道有這回事。
+ *
+ * @param {object} src
+ * @param {number} t 板厚 cm，只有折板用得到
  */
-export function buildSrc(src) {
+export function buildSrc(src, t = 0) {
   if (!src || !src.type) throw new Error('物件沒有來源資料');
 
-  if (isBoolSrc(src)) return evalBoolTree(src, buildSrc);
-  if (isArraySrc(src)) return evalArrayTree(src, buildSrc);
+  if (isBoolSrc(src)) return evalBoolTree(src, s => buildSrc(s, t));
+  if (isArraySrc(src)) return evalArrayTree(src, s => buildSrc(s, t));
 
   if (src.type === 'mesh') {
     if (src.mesh) return Mesh.fromJSON(src.mesh);
     throw new Error('這個網格物件沒有幾何資料');
   }
 
-  return buildPrim(src.type, src);
+  return buildPrim(src.type, src, t);
 }
 
 /** 出事時的替身：一個小方塊，讓畫面不會整個掛掉 */
@@ -145,7 +154,7 @@ export class ModelObject {
     if (this._mesh) return this._mesh;
 
     try {
-      this._mesh = buildSrc(this.src);
+      this._mesh = buildSrc(this.src, this.thickness);
       this.error = null;
     } catch (e) {
       this.error = e.message || String(e);
@@ -164,13 +173,14 @@ export class ModelObject {
     if (this.isBool && this.src.items && this.src.items.length) {
       try {
         const it = this.src.items[0];
-        return buildSrc(it.src).transformed(itemMatrix(it));
+        return buildSrc(it.src, this.thickness).transformed(itemMatrix(it));
       } catch (e) { /* 往下退 */ }
     }
     // 陣列 → 退回單獨一份，至少看得出原件長什麼樣
     if (this.isArray && this.src.child) {
       try {
-        return buildSrc(this.src.child.src).transformed(itemMatrix(this.src.child));
+        return buildSrc(this.src.child.src, this.thickness)
+          .transformed(itemMatrix(this.src.child));
       } catch (e) { /* 往下退 */ }
     }
     try { return placeholderMesh(); }
@@ -428,13 +438,46 @@ function today() {
 // ═══════════════════════════════════════════════════════
 
 /**
+ * 折板：v3 的 `r`（中性面半徑）→ v4 的 `ri`（內側圓角）＋ `k`（K 因子）
+ *
+ * ── 為什麼要換 ──────────────────────────────────────
+ * 中性層是算出來的，現場量不到；師傅講「折 R3」、圖面標的、
+ * 模具標的，全部都是**內側圓角**。存內側 R 才對得上現實。
+ *
+ * ── 幾何完全不變 ────────────────────────────────────
+ * 換算走 ri ＝ r − K×t，生成時再算回 rn ＝ ri + K×t ＝ r，
+ * 所以舊檔開起來形狀跟以前一模一樣，展開長度也一樣。
+ * （測試裡有一項專門盯這件事。）
+ *
+ * ri 會被夾在 0 以上：板很厚而原本的 r 很小時算出負數，
+ * 那代表這個舊檔的 r 本來就不可能是中性層半徑，當成尖角折最安全。
+ */
+function migrateBendSrc(src, t, k) {
+  if (!src || typeof src !== 'object') return;
+
+  if (src.type === 'bend' && Array.isArray(src.bends)) {
+    if (src.k === undefined) src.k = k;
+    for (const b of src.bends) {
+      if (!b || b.ri !== undefined) continue;
+      const r = Number(b.r) || 0;
+      b.ri = r < 1e-9 ? 0 : Math.max(0, r - src.k * t);
+      delete b.r;
+    }
+  }
+  // 折板可能藏在布林運算樹或陣列裡
+  if (Array.isArray(src.items)) for (const it of src.items) migrateBendSrc(it.src, t, k);
+  if (src.child) migrateBendSrc(src.child.src, t, k);
+}
+
+/**
  * 把任何版本的檔案轉成目前版本。
  *
  * v1（第 1 期）→ v2（布林運算樹）→ v3（陣列與鏡射）
  * 這兩步都不用做任何事：舊版本的年代還沒有那些功能，
  * 檔案裡不可能出現 type:'bool' 或 type:'array'，
  * 其餘欄位的意義完全相同。
- * 之後若有真的要補欄位的版本，就寫在下面標示的地方。
+ *
+ * v3 → v4（展開與 K 因子）是第一個真的要動資料的版本，見 migrateBendSrc。
  */
 export function migrate(d) {
   if (!d || typeof d !== 'object') {
@@ -459,9 +502,18 @@ export function migrate(d) {
     throw new Error(`檔案單位是 ${d.unit}，這個程式只接受 ${UNIT}`);
   }
 
+  // v1 → v2 → v3 不需要補任何欄位（見上方說明）
+
+  if (v < 4) {
+    const K = PRIM_DEFAULTS.bend.k;
+    for (const o of (d.objects || [])) {
+      // 板厚沒寫的用 ModelObject 的預設值，跟不轉換時看到的形狀一致
+      migrateBendSrc(o.src, Number(o.thickness) || 0.2, K);
+    }
+  }
+
   // ── 未來的轉換寫在這裡 ──
-  // v1 → v2 → v3 都不需要補任何欄位（見上方說明）
-  // if (v < 4) { ...把 v3 補成 v4... }
+  // if (v < 5) { ...把 v4 補成 v5... }
 
   return d;
 }
