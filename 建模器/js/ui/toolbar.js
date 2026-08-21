@@ -7,7 +7,8 @@
  * 也順便預告了展開引擎將來會依據什麼做判斷。
  */
 
-import { PRIM_SPECS, defaultSrc, PRIM_TYPES } from '../build/prim.js';
+import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength }
+  from '../build/prim.js';
 import { KIND } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
@@ -129,6 +130,7 @@ export class Panel {
             this._edit('改' + f.label);
           });
         }
+        if (spec.hasBends) this._bendList(obj);
         this._rowBtn('轉成可編輯網格', '不可逆。轉了之後就不能再改上面的參數，但可以做面編輯', () => {
           obj.bake();
           this._edit('轉成網格');
@@ -228,6 +230,86 @@ export class Panel {
         fallbackName: `運算元 ${i + 1}`,
         posHint: i === 0 ? '這是母體，位置固定在原點' : '相對於母體的位置'
       });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  折板的折彎序列
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 一道折彎 ＝ 轉幾度、內圓角多大、轉完之後再走多長。
+   * 想折幾道就加幾道：一道是 L 型，兩道同向是 U 型，
+   * 兩道一正一負是 Z 型。
+   */
+  _bendList(obj) {
+    const src = obj.src;
+    if (!Array.isArray(src.bends)) src.bends = [defaultBend()];
+
+    this.form.appendChild(head('折彎序列'));
+
+    // 展開總長是這個功能最關鍵的產出：下料要照這個長度剪
+    const dev = document.createElement('div');
+    dev.className = 'note';
+    dev.title = '沿中性面量的總長度，用真正的弧長算（不是網格上的直線段），'
+      + '第 3 期出展開圖時就是這個數字';
+    dev.textContent = `展開總長 ${round(bendDevelopedLength(src))} cm`
+      + `　板寬 ${round(src.w)} cm`;
+    this.form.appendChild(dev);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'tree';
+    this.form.appendChild(wrap);
+
+    const prev = this._target;
+
+    src.bends.forEach((b, i) => {
+      const box = document.createElement('div');
+      box.className = 'item';
+
+      const headEl = document.createElement('div');
+      headEl.className = 'itemHead';
+      const sym = document.createElement('span');
+      sym.className = 'sym';
+      sym.textContent = String(i + 1);
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = `第 ${i + 1} 道`;
+      const dims = document.createElement('span');
+      dims.className = 'dims';
+      dims.textContent = `${round(b.angle)}° R${round(b.r)} → ${round(b.len)}`;
+      headEl.append(sym, nm, dims);
+      box.appendChild(headEl);
+
+      const body = document.createElement('div');
+      body.className = 'itemBody';
+      box.appendChild(body);
+      this._target = body;
+
+      this._rowNum('角度 度', b.angle, { step: 15 }, v => {
+        b.angle = v; this._rebuild(obj, '改折彎角度');
+      }, '正負決定往哪邊折。兩道同向＝U 型，一正一負＝Z 型');
+      this._rowNum('折彎半徑', b.r, { min: 0, step: 0.5 }, v => {
+        b.r = Math.max(0, v); this._rebuild(obj, '改折彎半徑');
+      }, '中性面的半徑。填 0 就是不帶圓角的尖角折');
+      this._rowNum('之後長度', b.len, { min: 0, step: 1 }, v => {
+        b.len = Math.max(0, v); this._rebuild(obj, '改折後長度');
+      }, '折完之後那一段的長度');
+
+      if (src.bends.length > 1) {
+        this._rowBtn('移除這一道', '', () => {
+          src.bends.splice(i, 1);
+          this._rebuild(obj, '移除一道折彎');
+        });
+      }
+
+      this._target = prev;
+      wrap.appendChild(box);
+    });
+
+    this._rowBtn('＋ 加一道折彎', '折在最後面。想折幾道就加幾道', () => {
+      src.bends.push(defaultBend());
+      this._rebuild(obj, '加一道折彎');
     });
   }
 
@@ -808,6 +890,9 @@ function describeSrc(src) {
     case 'cone':     return `⌀${n(src.rBottom * 2)}→⌀${n(src.rTop * 2)}×${n(src.h)}`;
     case 'sphere':   return `⌀${n(src.r * 2)}`;
     case 'prism':    return `${n(src.sides)}角 ⌀${n(src.r * 2)}×${n(src.h)}`;
+    case 'tube':     return `⌀${n(src.rOuter * 2)}/⌀${n(src.rInner * 2)}×${n(src.h)}`;
+    case 'roundBox': return `${n(src.w)}×${n(src.h)}×${n(src.d)} R${n(src.r)}`;
+    case 'bend':     return `${(src.bends || []).length} 道折　展開 ${round(bendDevelopedLength(src))}`;
     default:         return PRIM_SPECS[src.type] ? PRIM_SPECS[src.type].label : src.type;
   }
 }

@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          download, openFile, autosave, loadAutosave }
   from './core/io.js';
-import { defaultSrc, PRIM_SPECS } from './build/prim.js';
+import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
   from './build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
@@ -78,7 +78,8 @@ function addPrim(type) {
   const obj = new ModelObject({
     name: (spec ? spec.label : type) + ' ' + (doc.objects.length + 1),
     src: defaultSrc(type),
-    kind: type === 'plate' ? KIND.SHEET : KIND.SOLID,
+    // 平板與折板天生就是要拿去展開的板件
+    kind: isSheetPrim(type) ? KIND.SHEET : KIND.SOLID,
     color: PALETTE[doc.objects.length % PALETTE.length]
   });
 
@@ -187,7 +188,8 @@ function shortName(list, op) {
 function arrayOp(mode) {
   const obj = sel.active;
   if (!obj) { toast('先選一個物件', true); return; }
-  if (!csgReady()) { toast('布林運算函式庫還沒載入完成', true); return; }
+  // 板件的陣列只是把副本拼在一起，用不到布林函式庫，所以不在這裡擋；
+  // 真的需要而沒載到時，evalArrayTree 會給出明確的訊息
 
   const made = new ModelObject({
     name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
@@ -365,8 +367,8 @@ function updateBar() {
   const canDoBool = sel.count >= 2 && csgReady();
   for (const id of ['bUnion', 'bSub', 'bInt']) $(id).disabled = !canDoBool;
 
-  const canDoArray = sel.count >= 1 && csgReady();
-  for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = !canDoArray;
+  // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
+  for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = sel.count < 1;
 
   const act = sel.active;
   $('sInfo').textContent = act

@@ -41,6 +41,7 @@
  */
 
 import * as THREE from 'three';
+import { Mesh } from '../core/mesh.js';
 import { unionMeshes, itemMatrix } from './bool.js';
 
 export const ARRAY_MODES = {
@@ -211,6 +212,19 @@ export function evalArrayTree(node, buildChild) {
 
   const label = node.child.name || '原件';
   const copies = mats.map(m => base.transformed(m));
+
+  /**
+   * 實體與板件要分開處理，而且不是為了遷就函式庫，是因為**語意不同**：
+   *
+   *   實體 → 布林聯集。兩份重疊的地方只能算一次，接縫也要真的縫起來。
+   *   板件 → 直接拼在一起，不合併。12 片一樣的側板就是 12 片，
+   *          展開時要分開出圖；黏成一體反而讓第 3 期分不出來。
+   *          板件是開放的面，本來也就沒有內外之分可以做布林。
+   *
+   * 判斷依據就是網格封不封閉，不是物件的 kind ——
+   * kind 是使用者可以改的標籤，封閉與否才是幾何事實。
+   */
+  if (!base.validate().closed) return Mesh.merge(copies);
 
   return unionMeshes(copies, copies.map((_, i) => `${label} 第 ${i + 1} 份`));
 }

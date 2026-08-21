@@ -44,7 +44,8 @@ const ROOT = join(HERE, '..');
 
 const { Mesh } = await import('../js/core/mesh.js');
 const { summarize, SURFACE } = await import('../js/core/region.js');
-const { buildPrim } = await import('../js/build/prim.js');
+const { buildPrim, bendDevelopedLength, isSheetPrim, defaultSrc }
+  = await import('../js/build/prim.js');
 const { initCSG, csgError, BOOL_OPS } = await import('../js/build/bool.js');
 const { arrayMatrices, ARRAY_MODES } = await import('../js/build/array.js');
 const io = await import('../js/core/io.js');
@@ -146,6 +147,142 @@ section('第 1 期基準：拓撲');
   eq('平板 尤拉數（開放的殼＝1）', v.euler, 1);
   ok('平板 是開放的', !v.closed);
   near('平板 面積 cm²', plate.area(), 100 * 60, 1e-6);
+}
+
+// ═══════════════════════════════════════════════════════
+//  第 2 期：新的參數體
+// ═══════════════════════════════════════════════════════
+
+section('第 2 期：管、圓角方塊、折板');
+
+/** n 邊形（外接圓半徑 r）的面積。圓柱不是真的圓，對答案要用這個。 */
+const polyArea = (r, n) => 0.5 * n * r * r * Math.sin(2 * Math.PI / n);
+
+{
+  const m = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 });
+  const v = m.validate();
+  near('管 體積', m.volume(), (polyArea(25, 32) - polyArea(20, 32)) * 70, 1e-6);
+  ok('管 封閉', v.closed);
+  eq('管 尤拉數（中間通了，所以是 0）', v.euler, 0);
+  ok('管 結構無誤', v.ok, v.errors[0] || '');
+  eq('管 合併後片數（32外＋32內＋上下環）', summarize(m).regions, 66);
+
+  const solid = buildPrim('tube', { rOuter: 25, rInner: 0, h: 70, seg: 32 });
+  eq('管 內半徑 0 → 退化成實心（尤拉數 2）', solid.validate().euler, 2);
+}
+
+{
+  const w = 60, h = 45, d = 40, r = 6, segR = 4;
+  const m = buildPrim('roundBox', { w, h, d, r, segR });
+  const v = m.validate();
+  // 斷面積 ＝ 矩形 − 四個直角 ＋ 四個圓角（用多邊形近似，不是真圓）
+  const area = w * d - 4 * r * r + 2 * segR * r * r * Math.sin(Math.PI / (2 * segR));
+  near('圓角方塊 體積', m.volume(), area * h, 1e-6);
+  eq('圓角方塊 尤拉數', v.euler, 2);
+  ok('圓角方塊 結構無誤', v.ok);
+  eq('圓角方塊 合併後片數（4直邊＋16圓角＋上下）', summarize(m).regions, 22);
+
+  const sharp = buildPrim('roundBox', { w, h, d, r: 0, segR });
+  near('圓角半徑 0 → 就是普通方塊', sharp.volume(), w * h * d, 1e-6);
+  eq('圓角半徑 0 → 片數 6', summarize(sharp).regions, 6);
+}
+
+{
+  const p = { w: 60, first: 40, arcSeg: 4, bends: [{ angle: 90, r: 2, len: 30 }] };
+  const m = buildPrim('bend', p);
+  const v = m.validate();
+  const s = summarize(m);
+
+  ok('折板 是開放的面（板件，不是實體）', !v.closed);
+  eq('折板 尤拉數（一整片）', v.euler, 1);
+  ok('折板 結構無誤', v.ok, v.errors[0] || '');
+  eq('折板 折線數（圓弧切 4 段 → 5 條）', s.folds, 5);
+  eq('折板 切割線數（外圍邊界）', s.cuts, 14);
+
+  // 網格面積要用「弦長」算，因為圓弧在網格上是折線
+  const chord = 2 * 2 * Math.sin(Math.PI / 2 / (2 * 4)) * 4;
+  near('折板 網格面積（弦長版）', m.area(), (40 + chord + 30) * 60, 1e-4);
+
+  // 展開長度則要用「真弧長」——這兩個數字不一樣，是實際會下料錯的地方
+  near('折板 展開總長（真弧長版）', bendDevelopedLength(p), 40 + 2 * (Math.PI / 2) + 30, 1e-9);
+  ok('展開長度必須大於網格量到的長度', bendDevelopedLength(p) > 40 + chord + 30);
+
+  // 分段愈多，網格愈接近真值
+  const fine = { ...p, arcSeg: 64 };
+  const err = a => Math.abs(buildPrim('bend', { ...p, arcSeg: a }).area() / 60
+    - bendDevelopedLength(p));
+  ok('圓弧分段加密後誤差變小', err(64) < err(4) / 100, `4段 ${err(4).toFixed(4)} → 64段 ${err(64).toFixed(6)}`);
+  void fine;
+}
+
+{
+  // U 型：兩道同向；Z 型：兩道反向。長度與折線數都要對得上
+  const u = { w: 50, first: 30, arcSeg: 3, bends: [
+    { angle: 90, r: 1, len: 50 }, { angle: 90, r: 1, len: 30 }] };
+  const z = { w: 50, first: 30, arcSeg: 3, bends: [
+    { angle: 90, r: 1, len: 20 }, { angle: -90, r: 1, len: 30 }] };
+
+  near('U 型 展開總長', bendDevelopedLength(u), 30 + Math.PI / 2 + 50 + Math.PI / 2 + 30, 1e-9);
+  near('Z 型 展開總長', bendDevelopedLength(z), 30 + Math.PI / 2 + 20 + Math.PI / 2 + 30, 1e-9);
+
+  const mu = buildPrim('bend', u);
+  eq('U 型 尤拉數', mu.validate().euler, 1);
+  eq('U 型 折線數（兩道 × 3 段 → 8 條）', summarize(mu).folds, 8);
+  ok('U 型 結構無誤', mu.validate().ok);
+
+  const mz = buildPrim('bend', z);
+  ok('Z 型 結構無誤', mz.validate().ok);
+  // Z 型折回來，最後一段的方向應該跟第一段相同
+  const b = mz.bounds();
+  ok('Z 型 高度等於中間那段（20＋兩個半徑）', Math.abs(b.max.y - b.min.y - 22) < 1e-6,
+    `實得 ${(b.max.y - b.min.y).toFixed(3)}`);
+
+  // 半徑 0 ＝ 尖角折，展開長度就沒有圓弧那一段
+  const sharp = { w: 50, first: 30, arcSeg: 3, bends: [{ angle: 90, r: 0, len: 20 }] };
+  near('尖角折 展開總長', bendDevelopedLength(sharp), 50, 1e-9);
+  eq('尖角折 折線數（只有轉角那一條）', summarize(buildPrim('bend', sharp)).folds, 1);
+}
+
+// ═══════════════════════════════════════════════════════
+//  第 2 期：板件加厚（顯示用，但要能用數學驗）
+// ═══════════════════════════════════════════════════════
+
+section('第 2 期：板件加厚');
+
+{
+  const p = buildPrim('plate', { w: 100, d: 60 });
+  for (const t of [0.2, 1, 5]) {
+    const s = p.shell(t);
+    const v = s.validate();
+    near(`平板加厚 ${t}cm 體積（＝面積×厚度）`, s.volume(), 100 * 60 * t, 1e-6);
+    ok(`平板加厚 ${t}cm 封閉且無誤`, v.closed && v.ok, v.errors[0] || '');
+    eq(`平板加厚 ${t}cm 尤拉數`, v.euler, 2);
+  }
+}
+
+{
+  // 折彎處也要精確。這裡曾經差了 0.076%，原因是沿角平分線只推 t/2，
+  // 折角會被削薄成 t×cos(半夾角)；正確做法是除以那個餘弦（尖角接合）。
+  // 各種角度與分段數都要成立，不能只有 90 度剛好對。
+  for (const [seg, ang] of [[1, 90], [3, 90], [8, 90], [4, 45], [4, 135]]) {
+    const m = buildPrim('bend', { w: 60, first: 40, arcSeg: seg, bends: [{ angle: ang, r: 2, len: 30 }] });
+    const t = 0.3;
+    const s = m.shell(t);
+    const v = s.validate();
+    near(`折板加厚 ${seg} 段 ${ang}° 體積（＝面積×厚度）`, s.volume(), m.area() * t, 1e-6);
+    ok(`折板加厚 ${seg} 段 ${ang}° 封閉且無誤`, v.closed && v.ok, v.errors[0] || '');
+    eq(`折板加厚 ${seg} 段 ${ang}° 尤拉數`, v.euler, 2);
+  }
+}
+
+{
+  // 加厚不可以動到原本的網格（畫面是文件的投影，不能反過來改文件）
+  const p = buildPrim('plate', { w: 100, d: 60 });
+  const beforeV = p.verts.length, beforeF = p.faces.length, beforeArea = p.area();
+  p.shell(0.5);
+  eq('加厚後 原網格頂點數不變', p.verts.length, beforeV);
+  eq('加厚後 原網格面數不變', p.faces.length, beforeF);
+  near('加厚後 原網格面積不變', p.area(), beforeArea, 1e-9);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -663,6 +800,65 @@ if (csgOK) {
     eq('打散鏡射 個數', parts.length, 2);
     ok('打散鏡射 第 2 份是鏡像（X 縮放為負）', parts[1].scale.x < 0);
     near('打散鏡射 第 2 份位置 X', parts[1].pos.x, 60, 1e-6);
+  }
+
+  // ── 板件的陣列：直接拼接，不做布林聯集 ──
+  // 2026-08-21 實測時發現板件陣列整個失敗（被布林擋下）。
+  // 修法不是「想辦法讓布林吃下去」，而是認清語意不同：
+  // 12 片一樣的側板就是 12 片，本來就不該黏成一體。
+  {
+    const bendSrc = { type: 'bend', w: 60, first: 40, arcSeg: 4, bends: [{ angle: 90, r: 2, len: 30 }] };
+    const one = buildPrim('bend', bendSrc);
+    const folds1 = summarize(one).folds;
+
+    for (const [label, node, n] of [
+      ['線性', { type: 'array', mode: 'linear', count: 5, step: [0, 0, 80], count2: 1, child: item(bendSrc) }, 5],
+      ['環形', { type: 'array', mode: 'radial', count: 8, axis: 'y', angle: 360, center: [0, 0, 0], child: item(bendSrc, [100, 0, 0]) }, 8],
+      ['鏡射', { type: 'array', mode: 'mirror', axis: 'x', offset: 50, child: item(bendSrc) }, 2]
+    ]) {
+      const m = io.buildSrc(node);
+      const v = m.validate();
+      near(`板件${label}陣列 面積（＝${n}×單片）`, m.area(), one.area() * n, 1e-4);
+      eq(`板件${label}陣列 元件數`, v.components, n);
+      ok(`板件${label}陣列 仍是開放的面`, !v.closed);
+      ok(`板件${label}陣列 結構無誤`, v.ok, v.errors[0] || '');
+      // 折線一定要保住 —— 掉了折線，第 3 期就展不開
+      eq(`板件${label}陣列 折線數（＝${n}×${folds1}）`, summarize(m).folds, folds1 * n);
+      // 加厚後仍然是乾淨的封閉實體
+      const sh = m.shell(0.3);
+      near(`板件${label}陣列 加厚後體積`, sh.volume(), m.area() * 0.3, 1e-4);
+      ok(`板件${label}陣列 加厚後封閉`, sh.validate().closed);
+    }
+  }
+
+  // ── 布林仍然要擋下板件（那個限制是對的，不能一起放寬）──
+  {
+    const o = new io.ModelObject({
+      src: {
+        type: 'bool', op: BOOL_OPS.SUBTRACT,
+        items: [item({ type: 'plate', w: 100, d: 60 }), item({ type: 'box', w: 10, h: 10, d: 10 })]
+      }
+    });
+    o.mesh();
+    ok('板件做布林仍然被擋下（布林需要實體）', !!o.error, o.error || '沒有擋');
+  }
+
+  // ── 交叉驗證：參數體「管」 vs 布林「大圓柱減小圓柱」──
+  // 兩條完全獨立的路徑：一條是自己接半邊結構，一條走 Manifold。
+  // 算出同一個數字，等於互相背書；哪天有一邊改壞了，這裡會先叫。
+  {
+    const tube = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 });
+    const cut = io.buildSrc({
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [
+        item({ type: 'prism', sides: 32, r: 25, h: 70 }),
+        item({ type: 'prism', sides: 32, r: 20, h: 80 })
+      ]
+    });
+    // 容許 0.01 cm³：布林引擎內部是 32 位元浮點數，相對誤差約 1e-7
+    near('交叉驗證 管 vs 布林 體積相同', tube.volume(), cut.volume(), 1e-2);
+    eq('交叉驗證 兩者尤拉數相同', tube.validate().euler, cut.validate().euler);
+    eq('交叉驗證 兩者都是貫穿的（χ=0）', cut.validate().euler, 0);
   }
 
   // ── 效能：散熱孔這種份數多的情況不能卡 ──

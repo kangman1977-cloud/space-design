@@ -352,6 +352,112 @@ export class Mesh {
   }
 
   /**
+   * 每個頂點的法向 ＝ 圍繞它的面法向的平均。
+   * 加厚時要靠它決定往哪邊偏移；折彎處自然會取到兩面的中間方向。
+   */
+  vertexNormals() {
+    const acc = new Map();
+    for (const v of this.verts) acc.set(v.id, new THREE.Vector3());
+    for (const f of this.faces) {
+      for (const v of this.faceVerts(f)) acc.get(v.id).add(f.normal);
+    }
+    for (const n of acc.values()) {
+      if (n.lengthSq() > 1e-20) n.normalize();
+    }
+    return acc;
+  }
+
+  /**
+   * 把一片開放的面加上厚度，變成封閉的實體。
+   *
+   * ── 為什麼需要它 ────────────────────────────────────
+   * 日誌第 3 個關鍵決定：板件用「面 ＋ 厚度屬性」描述，展開才算得對。
+   * 但畫面上一張沒有厚度的面看起來就是一張紙，使用者沒辦法確認
+   * 板厚有沒有設對、折彎處長什麼樣。
+   *
+   * 所以**資料仍然是面，只有畫的時候才加厚**——
+   * 這符合「畫面是文件的投影，自己不存狀態」的單向資料流。
+   *
+   * ── 做法與精度 ──────────────────────────────────────
+   * 以原本的面當中性面，每個頂點沿自己的法向往兩側各偏移半個板厚，
+   * 邊界再補上側壁。
+   *
+   * 中面偏移有個好性質：**體積精確等於「面積 × 厚度」**，
+   * 平面與圓柱面都成立（圓柱面外側多出來的剛好補掉內側少掉的）。
+   * 所以這個函式可以用數學對答案，不必靠眼睛看。
+   *
+   * 板厚遠大於曲率半徑時（例如 1cm 厚的板折 R0.2 的彎）會自交，
+   * 那在真實世界也折不出來，不特別處理。
+   *
+   * @param {number} t 板厚，單位 cm
+   * @returns {Mesh} 封閉的實體網格
+   */
+  shell(t) {
+    const half = Math.abs(t) / 2;
+    if (half < 1e-9) return this.clone();
+
+    const vi = this._vertIndex();
+    const vn = this.vertexNormals();
+    const n = this.verts.length;
+
+    /**
+     * 折彎處要多推一點，否則板會被削薄。
+     *
+     * 頂點法向是兩個面法向的角平分線。若只沿它推 t/2，
+     * 兩側的面在折角處會往內縮，量到的厚度變成 t×cos(半夾角) ——
+     * 90 度折彎就只剩 0.71t。實測 0.3cm 的折板體積少了 0.076%。
+     *
+     * 正確的推法是除以 cos(半夾角)，也就是除以「頂點法向 ·
+     * 相鄰面法向」。這就是鈑金與繪圖裡講的「尖角接合（miter）」。
+     *
+     * 夾角接近 180 度（板對折貼合）時餘弦趨近 0，推距會爆掉，
+     * 所以設上限 5 倍。那種形狀實際上也折不出來。
+     */
+    const miter = new Map();
+    for (const v of this.verts) miter.set(v.id, { sum: 0, n: 0 });
+    for (const f of this.faces) {
+      for (const v of this.faceVerts(f)) {
+        const acc = miter.get(v.id);
+        acc.sum += vn.get(v.id).dot(f.normal);
+        acc.n++;
+      }
+    }
+    const push = new Map();
+    for (const v of this.verts) {
+      const acc = miter.get(v.id);
+      const cos = acc.n ? acc.sum / acc.n : 1;
+      push.set(v.id, half * Math.min(5, 1 / Math.max(cos, 1e-6)));
+    }
+
+    // 前 n 個是外側，後 n 個是內側
+    const points = [];
+    for (const v of this.verts) {
+      points.push(v.p.clone().addScaledVector(vn.get(v.id), push.get(v.id)));
+    }
+    for (const v of this.verts) {
+      points.push(v.p.clone().addScaledVector(vn.get(v.id), -push.get(v.id)));
+    }
+
+    const faces = [];
+    for (const f of this.faces) {
+      const idx = this.faceVerts(f).map(v => vi.get(v.id));
+      faces.push(idx);                                        // 外側：原繞向
+      faces.push(idx.slice().reverse().map(i => i + n));       // 內側：反繞向
+    }
+
+    // 邊界補側壁。邊界半邊的 face 是 null，沿著它走一圈就是輪廓。
+    for (const he of this.halfEdges) {
+      if (he.face !== null) continue;
+      const a = vi.get(he.v.id);
+      const b = vi.get(he.to.id);
+      if (a === undefined || b === undefined) continue;
+      faces.push([a, b, b + n, a + n]);
+    }
+
+    return Mesh.fromFaceList(points, faces);
+  }
+
+  /**
    * 把邊的角色搬到另一個「頂點索引相同」的網格上。
    * 用兩端點的索引配對，所以繞向翻轉過也對得上。
    */
@@ -375,6 +481,57 @@ export class Mesh {
   // ═════════════════════════════════════════════════════
   //  建構
   // ═════════════════════════════════════════════════════
+
+  /**
+   * 把多個網格併成一個，但**不做任何合併運算** ——
+   * 只是放在同一份資料裡，各自仍是獨立的殼。
+   *
+   * ── 什麼時候該用它，什麼時候該用布林聯集 ────────────
+   * 實體要用布林聯集，否則兩份重疊的地方會被算兩次，
+   * 而且接縫沒有真正縫起來（就是當初換掉 three-bvh-csg 的問題）。
+   *
+   * **板件則相反，本來就不該合併。**
+   * 12 片一樣的側板就是 12 片，展開時要分開出圖；
+   * 硬把它們黏成一體，反而讓第 3 期沒辦法分辨。
+   * 而且板件是開放的面，布林引擎本來就吃不下（沒有內外之分）。
+   *
+   * 位置相同的頂點不會被焊接，所以各份保持獨立，這正是要的。
+   */
+  static merge(meshes) {
+    const points = [];
+    const faces = [];
+    const roles = [];
+    let off = 0;
+
+    for (const m of meshes) {
+      const vi = m._vertIndex();
+      for (const v of m.verts) points.push(v.p.clone());
+      for (const f of m.faces) faces.push(m.faceVerts(f).map(v => vi.get(v.id) + off));
+      for (const he of m.edges()) {
+        if (he.role === EDGE_ROLE.FREE) continue;
+        roles.push([vi.get(he.v.id) + off, vi.get(he.to.id) + off, he.role]);
+      }
+      off += m.verts.length;
+    }
+
+    const out = Mesh.fromFaceList(points, faces);
+
+    // 把折線／切割線的標記搬過來。邊界的 cut 是建構時自動補的，
+    // 這裡主要是為了保住折線 —— 折板陣列如果掉了折線，第 3 期就展不開。
+    if (roles.length) {
+      const byPair = new Map();
+      const dst = out._vertIndex();
+      for (const he of out.edges()) {
+        const a = dst.get(he.v.id), b = dst.get(he.to.id);
+        byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
+      }
+      for (const [a, b, role] of roles) {
+        const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+        if (he) out.setRole(he, role);
+      }
+    }
+    return out;
+  }
 
   /**
    * 由「頂點座標 + 面的頂點索引」建立半邊結構。

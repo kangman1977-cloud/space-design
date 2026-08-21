@@ -139,18 +139,43 @@ export class SceneView {
     return node;
   }
 
+  /**
+   * 板件要不要在畫面上加厚，以及加多少。
+   *
+   * 資料裡的板件是一張**沒有厚度的中性面**（日誌第 3 個關鍵決定），
+   * 展開要靠它。但畫面上一張紙看不出板厚設對沒有、折彎處長什麼樣，
+   * 所以顯示時才依板厚把它撐開。
+   *
+   * 這仍然符合「畫面是文件的投影，自己不存狀態」——
+   * 加厚的結果只活在 GPU 上，文件一個位元組都沒動。
+   *
+   * 面數太多時放棄加厚：加厚會讓面數變成兩倍多，而且每次都要重算。
+   * 真的做到那個規模時，看不看得到板厚已經不是重點了。
+   */
+  _shellThickness(obj) {
+    if (obj.kind !== KIND.SHEET) return 0;
+    const t = Number(obj.thickness) || 0;
+    if (t <= 1e-6) return 0;
+    if (obj.mesh().faces.length > 20000) return 0;
+    return t;
+  }
+
   _updateNode(node, obj) {
-    // 只有網格真的換過才重建 geometry —— 拖曳時每幀重建會很慢
+    // 只有網格真的換過才重建 geometry —— 拖曳時每幀重建會很慢。
+    // 板厚也要一起比對，不然改了板厚畫面不會更新。
     const mesh = obj.mesh();
-    if (node.userData.geomKey !== mesh) {
+    const shellT = this._shellThickness(obj);
+
+    if (node.userData.geomKey !== mesh || node.userData.shellT !== shellT) {
       node.geometry.dispose();
-      node.geometry = mesh.toGeometry();
+      node.geometry = (shellT > 0 ? mesh.shell(shellT) : mesh).toGeometry();
 
       const edges = node.getObjectByName('edges');
       edges.geometry.dispose();
       edges.geometry = new THREE.EdgesGeometry(node.geometry, 1);
 
       node.userData.geomKey = mesh;
+      node.userData.shellT = shellT;
     }
 
     node.position.copy(obj.pos);
@@ -159,7 +184,9 @@ export class SceneView {
 
     node.material.color.setHex(obj.color);
     node.material.wireframe = this.wireframe;
-    node.material.side = obj.kind === KIND.SHEET ? THREE.DoubleSide : THREE.FrontSide;
+    // 加厚之後已經是封閉實體，不必再雙面繪製；沒加厚的面才需要
+    node.material.side = (obj.kind === KIND.SHEET && shellT === 0)
+      ? THREE.DoubleSide : THREE.FrontSide;
     node.getObjectByName('edges').visible = this.showEdges && !this.wireframe;
   }
 
