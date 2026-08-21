@@ -378,12 +378,19 @@ function updateBar() {
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
   for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = sel.count < 1;
 
-  // 展開：文件裡有板件就開放。沒選東西就展開全部，所以不看選取數量。
-  const anySheet = doc.objects.some(o => o.kind === KIND.SHEET);
-  $('unfold').disabled = !anySheet;
-  $('unfold').title = anySheet
-    ? '把板件攤平成下料圖：含尺寸標註、折線、折彎補償，可列印或輸出 DXF 送雷切'
-    : '目前沒有板件。加一個「平板」或「折板」，或把物件的種類改成板件';
+  /**
+   * 展開：**有物件就開放**。沒選東西就展開全部，所以不看選取數量。
+   *
+   * 2026-08-22 之前的條件是「文件裡有板件」，實體一律不給展開。
+   * 那是鈑金思路的殘留 —— 對切開再接合的板材（珍珠板、木板、壓克力）而言，
+   * 實體的網格就是外表面，直接展開就是正確答案。
+   * 擋著的時候使用者只能手動把種類改成板件繞過去，而得到的數字一模一樣。
+   */
+  const any = doc.objects.length > 0;
+  $('unfold').disabled = !any;
+  $('unfold').title = any
+    ? '攤平成下料圖：含尺寸標註、折線，可列印或輸出 DXF 送雷切／CNC'
+    : '目前沒有任何物件';
 
   // 3D 匯出：只要有物件就能匯出（實體、板件都可以）
   $('export3d').disabled = doc.objects.length === 0;

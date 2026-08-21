@@ -59,6 +59,8 @@ const { neutralRadius, bendAllowance } = await import('../js/build/prim.js');
 const { makeRule, MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL }
   = await import('../js/unfold/rules.js');
 const { unfoldMesh } = await import('../js/unfold/flatten.js');
+// part.js 是文件物件與展開引擎之間的轉接層，不碰 DOM，所以測得到
+const { unfoldObject } = await import('../js/unfold/part.js');
 const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/sheet.js');
 const { toDXF, UNITS } = await import('../js/out/dxf.js');
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
@@ -1425,6 +1427,164 @@ section('第 5 期(B)：捲得起來走弧長，捲不起來走弦長');
   });
   eq('「可折不可捲」目前只有珍珠板這一種', both.length, 1);
   eq('而且就是它', both[0], 'foamboard');
+}
+
+section('第 5 期(C)：實體可以直接展開，加厚改看幾何');
+
+/**
+ * ── 這一節在盯什麼 ──────────────────────────────────
+ *
+ * 2026-08-22 之前，part.js 擋著「不是板件就拒絕展開」。那是鈑金思路：
+ * 鐵板折彎時中性層長度不變，所以資料存中性面，而實體沒有中性面。
+ *
+ * 但這套工具實際的做法是**切開再接合**（珍珠板、木板、壓克力），
+ * 接縫銑 45 度斜接，板厚由斜面吸收，每一片就是切到**外緣尺寸** ——
+ * 而實體的網格本來就是外表面。直接展開它就是正確答案。
+ *
+ * 連帶把「要不要加厚」的判斷從 `kind` 這個標籤改成
+ * **網格開不開放**這個幾何事實（踩過的坑第 8 條的同一條原則）。
+ */
+{
+  const foam = makeRule('foamboard', 0.8);
+
+  // 實體方塊：展開就是十字型，尺寸走外皮
+  const solid = new io.ModelObject({
+    name: '實體方塊', kind: io.KIND.SOLID,
+    src: { type: 'box', w: 60, h: 45, d: 40 }
+  });
+  const rs = unfoldObject(solid, { material: 'foamboard' });
+  ok('實體現在展得開（不再要求先抽殼）', rs.ok === true, rs.reason || '');
+  eq('實體方塊 展開成 1 片（十字型）', rs.pieces.length, 1);
+  rel('實體方塊 面積 ＝ 六面外表面積', rs.pieces[0].area,
+    2 * (60 * 45 + 60 * 40 + 45 * 40));
+
+  /**
+   * 同一個方塊，標成板件與標成實體，展開結果必須**完全一樣**。
+   *
+   * 這條是整輪的關鍵：擋著的時候使用者只能手動把種類改成板件繞過去，
+   * 而繞過去得到的數字跟現在直接展開實體一模一樣 ——
+   * 證明當初擋的只是標籤，不是幾何。
+   */
+  const asSheet = new io.ModelObject({
+    name: '同一個方塊', kind: io.KIND.SHEET, thickness: 0.8,
+    src: { type: 'box', w: 60, h: 45, d: 40 }
+  });
+  const rh = unfoldObject(asSheet, { material: 'foamboard' });
+  eq('標成板件 片數相同', rh.pieces.length, rs.pieces.length);
+  rel('標成板件 面積相同', rh.pieces[0].area, rs.pieces[0].area);
+  rel('標成板件 展開長相同', rh.pieces[0].width, rs.pieces[0].width);
+  rel('標成板件 展開寬相同', rh.pieces[0].height, rs.pieces[0].height);
+
+  // 平板仍然照常展開，沒有被這次改動波及
+  const plate = new io.ModelObject({
+    name: '平板', kind: io.KIND.SHEET, thickness: 0.8,
+    src: { type: 'plate', w: 100, d: 60 }
+  });
+  const rp = unfoldObject(plate, { material: 'foamboard' });
+  ok('平板 仍然展得開', rp.ok === true);
+  rel('平板 展開長 100', rp.pieces[0].width, 100);
+  rel('平板 展開寬 60', rp.pieces[0].height, 60);
+  void foam;
+}
+
+{
+  /**
+   * 加厚的判斷改看網格開不開放。
+   *
+   * 用 kind 判斷實際會出錯：把封閉的方塊標成板件，加厚會得到
+   * **兩個互不相連的盒子**（內外各一個），而不是一個空心盒。
+   * 實測 shell(0.2) 後體積 2777.79 cm³、獨立塊數 2。
+   */
+  const box = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.8);
+  const plate = buildPrim('plate', { w: 100, d: 60 }, 0.8);
+
+  ok('實體方塊 網格封閉', box.isClosed() === true);
+  ok('平板 網格開放', plate.isClosed() === false);
+  ok('封閉圓柱 網格封閉', buildPrim('cylinder', { r: 25, h: 70 }, 0.8).isClosed() === true);
+  ok('開放圓柱側面 網格開放',
+    buildPrim('cylinder', { r: 25, h: 70, openEnded: true }, 0.8).isClosed() === false);
+  ok('折板 網格開放', buildPrim('bend', {}, 0.8).isClosed() === false);
+
+  // 封閉的東西加厚會裂成兩塊 —— 這正是不該對它加厚的理由
+  const shelled = box.shell(0.2);
+  eq('封閉方塊硬加厚 會變成 2 個互不相連的塊', shelled.componentCount(), 2);
+  ok('所以封閉的網格不該加厚', box.isClosed() === true);
+
+  // 開放的面加厚才是對的：體積 ＝ 面積 × 厚度
+  const thick = plate.shell(0.8);
+  eq('平板加厚後 只有 1 塊', thick.componentCount(), 1);
+  rel('平板加厚後 體積 ＝ 面積×厚度', thick.volume(), 100 * 60 * 0.8, 1e-6);
+}
+
+section('STL：四邊形面的頂點不可共用（就地平移會被減兩次）');
+
+/**
+ * ── 這一組在盯什麼 ──────────────────────────────────
+ *
+ * `triangles()` 做扇形三角化時，`p0` 是每個面算一次給所有三角形共用的。
+ * 如果那個 Vector3 物件被直接塞進三角形，一個四邊形切出來的兩個三角形
+ * 就**共用同一個物件** —— 之後任何就地平移（`dropToBed()` 就是）
+ * 都會把它減兩次，把模型整個扯開。
+ *
+ * 三角形面（方塊、圓錐）每個面只產生一個三角形，共用不到，所以一直沒事。
+ * 這個 bug 只在**有四邊形面**的東西上發作 —— 平板、折板、管、圓柱側面，
+ * 而那正是板件。2026-08-22 由 kang 在 3D 列印面板上發現
+ * （平板顯示體積 −86,600,000 mm³、外框高 439mm，判定「印不出來」）。
+ *
+ * 判準用**匯出全程走完之後**的體積與外框，不是中途的值 ——
+ * 這個 bug 剛好就是「中途對、最後錯」。
+ */
+{
+  const m4 = new THREE.Matrix4().makeTranslation(108, 44, 0);   // 刻意不在原點
+  const S = 10;                                                  // cm → mm
+
+  const cases = [
+    ['平板加厚', buildPrim('plate', { w: 100, d: 60 }, 0.2).shell(0.2)],
+    ['折板加厚', buildPrim('bend', {}, 0.2).shell(0.2)],
+    ['管', buildPrim('tube', {}, 0.2)],
+    ['圓柱', buildPrim('cylinder', {}, 0.2)],
+    ['圓角方塊', buildPrim('roundBox', {}, 0.2)],
+    ['方塊（對照：全三角形面）', buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2)]
+  ];
+
+  for (const [name, mesh] of cases) {
+    const tris = dropToBed(triangles(mesh, { matrix: m4, scale: S }));
+
+    // 體積：走完全程之後仍要等於 網格體積 × 倍率³
+    rel(`${name} 匯出後體積 ＝ 網格體積×1000`, stlVolume(tris), mesh.volume() * S ** 3, 1e-9);
+
+    // 外框：平移不該改變尺寸
+    const size = trisBounds(tris).getSize(new THREE.Vector3());
+    const raw = mesh.bounds().getSize(new THREE.Vector3());
+    rel(`${name} 匯出後外框 X`, size.x, raw.x * S, 1e-9);
+    rel(`${name} 匯出後外框 Z（原本的 Y）`, size.z, raw.y * S, 1e-9);
+
+    // 一定要貼在平台上
+    near(`${name} 貼平台 z=0`, trisBounds(tris).min.z, 0, 1e-9);
+  }
+
+  /**
+   * 根因直接測：任兩個三角形不可以共用同一個 Vector3 物件。
+   * 上面那些是「症狀」，這一條是「病因」——
+   * 病因測得到，日後有人為了省一次 clone 又把它改回去就會被擋下。
+   */
+  const tris = triangles(buildPrim('plate', { w: 100, d: 60 }, 0.2).shell(0.2));
+  const seen = new Set();
+  let shared = 0;
+  for (const t of tris) {
+    for (const p of [t.a, t.b, t.c]) {
+      if (seen.has(p)) shared++;
+      seen.add(p);
+    }
+  }
+  eq('三角形之間沒有共用的頂點物件', shared, 0);
+
+  // dropToBed 跑兩次不該把東西越推越歪（共用頂點時會）
+  const a = dropToBed(triangles(buildPrim('plate', { w: 100, d: 60 }, 0.2).shell(0.2),
+    { matrix: m4, scale: S }));
+  const v1 = stlVolume(a);
+  dropToBed(a);
+  rel('dropToBed 再跑一次 體積不變', stlVolume(a), v1, 1e-12);
 }
 
 section('第 3 期：材料規則');

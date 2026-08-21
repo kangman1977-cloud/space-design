@@ -13,7 +13,6 @@
  * 使用者不必再學一次怎麼操作。
  */
 
-import { KIND } from '../core/io.js';
 import { triangles, dropToBed, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
@@ -114,9 +113,19 @@ export class ExportPanel {
   /**
    * 每個物件算出「最終要匯出的網格」與三角形。
    *
-   * **板件一定要先加厚。** 板件在資料層是中性面（開放的曲面、零厚度），
-   * 直接丟給切片軟體會得到一個沒有體積的東西，切出來是空的。
+   * **開放的曲面一定要先加厚。** 零厚度的面直接丟給切片軟體，
+   * 會得到一個沒有體積的東西，切出來是空的。
    * 加厚用現成的 mesh.shell()，跟畫面上顯示厚度走同一個函式。
+   *
+   * ── 判斷依據是「網格開不開放」，不是物件的 kind ──────
+   * 2026-08-22 從 `kind === SHEET` 改過來。`kind` 是使用者在下拉選單裡
+   * 隨手可改的標籤，封閉與否才是幾何事實 —— 跟「板件不該做布林聯集」
+   * （踩過的坑第 8 條）是同一條原則。
+   *
+   * 用標籤判斷實際會出錯：把封閉的方塊標成板件（在「實體不能展開」
+   * 那道門還在的時候，這是繞過去的唯一辦法），加厚會得到
+   * **兩個互不相連的盒子**（內外各一個，實測體積 2777.79 cm³），
+   * 而不是一個空心盒。封閉的東西本來就有體積，不必也不該加厚。
    */
   run() {
     saveOpt(this.opt);
@@ -127,7 +136,7 @@ export class ExportPanel {
     this.items = objs.map(o => {
       let mesh = o.mesh();
       let shelled = false;
-      if (o.kind === KIND.SHEET && o.thickness > 0) {
+      if (!mesh.isClosed() && o.thickness > 0) {
         try { mesh = mesh.shell(o.thickness); shelled = true; }
         catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
       }
@@ -168,7 +177,8 @@ export class ExportPanel {
     this.body.appendChild(box('uwSkip',
       '匯出時會自動做三件事：公分換算成所選單位、'
       + '把 Y 軸向上轉成列印用的 Z 軸向上、整組落到平台 Z=0。'
-      + '板件會依板厚自動加厚，否則印出來是空的。'));
+      + '開放的面（平板、折板）會依板厚自動加厚，否則印出來是空的；'
+      + '封閉的實體本來就有體積，不會也不該加厚。'));
   }
 
   _card(it) {
@@ -192,7 +202,7 @@ export class ExportPanel {
          <div class="nm">${esc(it.obj.name)}
            <span class="exTag ${c.ok ? 'good' : 'bad'}">${c.ok ? '可以列印' : '印不出來'}</span>
          </div>
-         ${it.shelled ? '<div class="dim">板件，已依板厚 '
+         ${it.shelled ? '<div class="dim">開放的面，已依板厚 '
             + f(it.obj.thickness) + ' cm 自動加厚</div>' : ''}
        </div>
        <table class="exTab">${rows.map(r =>

@@ -11,7 +11,6 @@
  */
 
 import * as THREE from 'three';
-import { KIND } from '../core/io.js';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
 
@@ -26,15 +25,25 @@ export function unfoldObject(obj, opt = {}) {
   const material = opt.material || DEFAULT_MATERIAL;
   const rule = makeRule(material, obj.thickness, { k: opt.k });
 
-  if (obj.kind !== KIND.SHEET) {
-    return {
-      ok: false,
-      reason: '這是實體，不是板件。展開的前提是「有板厚的一張料」，'
-            + '實體要先抽殼成板件（抽殼排在待辦）。'
-            + '把種類改成「板件」也可以，但那代表你確定它本來就是一張料。',
-      pieces: [], warnings: [], stats: null, rule
-    };
-  }
+  /**
+   * ⚠ 這裡**刻意沒有**「不是板件就拒絕展開」這道門。2026-08-22 拿掉的。
+   *
+   * 原本擋著，理由是「展開的前提是有板厚的一張料，實體要先抽殼」。
+   * 那是鈑金的思路：鐵板折彎時中性層長度不變，所以資料要存中性面，
+   * 而實體沒有中性面可言。
+   *
+   * 但這套工具實際的做法是**切開再接合**（珍珠板、發泡板、木板、壓克力），
+   * 接縫銑 45 度斜接，板厚由斜面自動吸收 —— 所以每一片就是切到
+   * **外緣尺寸**，而實體的網格本來就是外表面。**直接展開它就是正確答案。**
+   *
+   * 實測佐證：60×45×40 的實體方塊，展開得到十字型 145×210、
+   * 面積 13800 ＝ 2×(60×45 + 60×40 + 45×40)，精確。
+   * 擋著的時候使用者只能手動把種類改成「板件」繞過去 ——
+   * 得到的數字一模一樣，證明擋的只是標籤，不是幾何。
+   *
+   * 至於「這一片攤不攤得平」「尺寸可不可信」，flatten.js 有自己的判斷
+   * （radialFolds、overlap），不需要靠 kind 這個標籤來猜。
+   */
 
   let mesh = obj.mesh();
   const warn = [];

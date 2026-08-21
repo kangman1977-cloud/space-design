@@ -12,7 +12,6 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { KIND } from '../core/io.js';
 
 export class SceneView {
   constructor(canvas) {
@@ -117,7 +116,8 @@ export class SceneView {
       color: obj.color,
       roughness: 0.62,
       metalness: 0.04,
-      side: obj.kind === KIND.SHEET ? THREE.DoubleSide : THREE.FrontSide,
+      // 初值；每次 _updateNode() 會依「開放且未加厚」重新決定（見下方）
+      side: THREE.FrontSide,
       wireframe: this.wireframe
     });
 
@@ -153,10 +153,23 @@ export class SceneView {
    * 真的做到那個規模時，看不看得到板厚已經不是重點了。
    */
   _shellThickness(obj) {
-    if (obj.kind !== KIND.SHEET) return 0;
+    /**
+     * 順序有意義：先擋掉便宜的條件，再問網格。
+     *
+     * `isClosed()` 對**封閉**網格必須掃完所有半邊才能確定（開放的通常第一條
+     * 就命中）。板厚 0 與面數過多這兩個條件不必碰網格就答得出來，
+     * 所以放前面 —— 這樣常見情況（實體沒填板厚）根本不會走到掃描。
+     */
     const t = Number(obj.thickness) || 0;
     if (t <= 1e-6) return 0;
-    if (obj.mesh().faces.length > 20000) return 0;
+
+    const mesh = obj.mesh();
+    if (mesh.faces.length > 20000) return 0;
+
+    // 判斷依據是網格開不開放，不是 kind 這個標籤（理由見 exportPanel.js）。
+    // 封閉的東西本來就有厚度，再加厚只會多畫一層看不見的內殼。
+    if (mesh.isClosed()) return 0;
+
     return t;
   }
 
@@ -184,8 +197,15 @@ export class SceneView {
 
     node.material.color.setHex(obj.color);
     node.material.wireframe = this.wireframe;
-    // 加厚之後已經是封閉實體，不必再雙面繪製；沒加厚的面才需要
-    node.material.side = (obj.kind === KIND.SHEET && shellT === 0)
+    /**
+     * 只有「開放而且沒加厚」的面需要雙面繪製 —— 否則從背面看會是透明的。
+     * 加厚之後已經封閉，封閉的東西也本來就不需要。
+     *
+     * 判斷用網格開不開放，不是 obj.kind（那只是標籤，見 exportPanel.js）。
+     * 用標籤判斷的話，把封閉方塊標成板件會讓它整個變雙面繪製，
+     * 多畫一倍的面又看不出差別。
+     */
+    node.material.side = (shellT === 0 && !obj.mesh().isClosed())
       ? THREE.DoubleSide : THREE.FrontSide;
     node.getObjectByName('edges').visible = this.showEdges && !this.wireframe;
   }
