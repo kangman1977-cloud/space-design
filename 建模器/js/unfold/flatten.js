@@ -83,7 +83,14 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   }
   for (const p of merged) {
     if (p.overlap) warnings.push(`「${p.name}」攤平後有重疊，需要切分（第 7 期會做自動分片）`);
-    if (p.nonDevelopable) warnings.push(`「${p.name}」含攤不平的曲面，這一片的尺寸只是近似值`);
+    if (p.nonDevelopable) warnings.push(`「${p.name}」含攤不平的曲面（角虧不為零），數學上不可能無失真展開，這一片的尺寸只是近似值`);
+    if (p.foldsNonParallel) {
+      // 訊息會被塞進 textContent（unfoldPanel.js），所以不能用 ** 那種標記，
+      // 會原樣顯示成星號。要強調就直接把話講在最前面。
+      warnings.push(`請勿據以下料 ——「${p.name}」的折線不是全部互相平行，`
+                  + `圓弧修正的前提不成立，展開長度會偏短（錐面尤其明顯，`
+                  + `分段數越少差越多）。錐面的正確展開排在第 5 期`);
+    }
   }
 
   return {
@@ -304,7 +311,16 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
   const inPatch = new Set(faces.map(f => f.id));
 
   const folds = collectFolds(mesh, faces, inPatch, pt2, isCut);
-  const bands = arcCorrection(pt2, folds, rule);
+
+  /**
+   * 折線的方向分組要在修正之前算好，而且要傳給 arcCorrection 共用一份。
+   *
+   * 分組數本身就是一個重要的事實：**一維拉伸修正只在折線互相平行時成立**
+   * （見「四、圓弧修正」開頭的說明）。只有一組 ＝ 全部平行 ＝ 修正有效；
+   * 超過一組就代表這一片有修正管不到的地方。
+   */
+  const dirGroups = groupByDirection(folds);
+  const bands = arcCorrection(pt2, folds, rule, dirGroups);
   orient(pt2, folds, mesh, faces, isCut);
 
   const loops = traceLoops(mesh, faces, inPatch, pt2, isCut);
@@ -340,13 +356,69 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
     faces: polys,
     warnings: warn.slice(),
     overlap: detectOverlap(polys),
+    /** 永遠 false —— 還沒有可靠的判定方式，理由見上面那一大段說明 */
     nonDevelopable: false,
+    /**
+     * 折線沒有全部互相平行 ＝ 圓弧修正的前提不成立，尺寸不可信。
+     * 這是**事實**，不是結論；要不要據以下料由警告訊息去講。
+     */
+    foldsNonParallel: dirGroups.length > 1,
     area: 0, width: 0, height: 0
   };
 
   measure(piece, mesh, faces);
   return piece;
 }
+
+/**
+ * ⚠ nonDevelopable 目前**沒有實作**，永遠是 false。這是刻意的，理由如下。
+ *
+ * 直覺的做法是「用角虧（離散高斯曲率）掃這一片的內部頂點，
+ * 不等於 360° 就是攤不平」。試著寫過，**它會給錯答案**，
+ * 而錯的地方全在「哪些頂點算內部」這個定義上：
+ *
+ * ── 三個互相打架的案例（都實測過）────────────────────
+ *
+ * │ 定義                        │ 圓柱側面 │ 圓錐 │ 球冠 │
+ * │ 整個網格的內部點（region.js）│ 可展 ✓  │不可展✗│不可展✓│
+ * │ 扣掉所有切割線碰到的點       │ 可展 ✓  │ 可展 ✓│ 可展 ✗│
+ *
+ * · **圓錐**：頂點的角虧確實不為零，但接縫一剪開它就攤得平 ——
+ *   圓錐側面在數學上**是可展的**。所以「整個網格」那個定義錯。
+ * · **球冠**：攤平時演算法自己補了一堆「隱含切割線」（生成樹沒走到的邊），
+ *   那些切割線把角虧「撐開」了，於是每個點看起來都攤得平。
+ *   但那張圖上其實裂了一堆縫，**根本不能下料**。所以「扣掉切割線」也錯。
+ *
+ * 差別在於**切割線是誰決定的**：圓錐的接縫是幾何上非剪不可，
+ * 球冠的裂縫是演算法沒辦法才自己補的。要分辨這兩者，
+ * 等於要先決定「這一片該切在哪」—— 那正是第 7 期的自動分片，
+ * 是整個展開引擎最重的一塊（約 70% 工作量）。
+ *
+ * ── 那現在誰擋著 ────────────────────────────────────
+ * `foldsNonParallel`。上面兩個會出事的案例（圓錐、球冠）實測都被它抓到，
+ * 而四個正確的案例（平板、折板 L／U／Z、圓柱側面）一個都沒誤報。
+ * 它問的是一個**明確而且答得出來**的問題：
+ * 「一維拉伸修正的前提（折線互相平行）成不成立？」
+ *
+ * 寧可留一個誠實的 false，也不要放一個會在圓錐上說「可以下料」的判定 ——
+ * 日誌「踩過的坑」第 5 條就是這個教訓：寫「應該是多少」的判定之前，
+ * 先問清楚這條規則的成立條件是什麼。這裡問了，答案是「現在還答不出來」。
+ */
+
+/**
+ * ⚠ 這裡**刻意沒有**「封閉實體一律拒絕展開」這個檢查。加過，被測試打回來。
+ *
+ * 理由：封閉實體遇到不能折的材料（壓克力、木板）時，每條稜線都會變成
+ * 切割線，方塊因此拆成六片各自平坦的面 —— 那正是壓克力箱體的做法，
+ * 是**完全正確而且天天在用**的用途（測試「封閉實體 拆成 3 種面」盯著它）。
+ *
+ * 真正會出事的是「封閉實體 ＋ 折得動的材料」，那種情況攤出來的圖
+ * 折線會散在各個方向。但那個情況已經被 `foldsNonParallel` 抓住了，
+ * 不需要再多一條用「封不封閉」去猜的規則 ——
+ * 封閉與否根本不是判準，用它當判準就會誤傷壓克力那條路。
+ *
+ * 至於「這是實體、不是板件」，part.js 的 unfoldObject() 已經擋在前面了。
+ */
 
 /** 這一片內部的折線（不含外輪廓）。順便記下轉折角。 */
 function collectFolds(mesh, faces, inPatch, pt2, isCut) {
@@ -397,10 +469,10 @@ function collectFolds(mesh, faces, inPatch, pt2, isCut) {
  * 沿著垂直於折線的方向做一維拉伸，折線本身不動、
  * 平行於折線的尺寸也不動 —— 這正是「捲起來的紙攤開」在做的事。
  */
-function arcCorrection(pt2, folds, rule) {
+function arcCorrection(pt2, folds, rule, groups = null) {
   if (!folds.length) return [];
 
-  const groups = groupByDirection(folds);
+  groups = groups || groupByDirection(folds);
   const bands = [];
   let arcGroups = 0;
 

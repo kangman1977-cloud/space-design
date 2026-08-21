@@ -167,6 +167,23 @@ export function makeRule(key, t = 0.2, override = {}) {
       const out = [];
       if (!piece) return out;
 
+      /**
+       * 同一種問題只講一次，帶上處數與**最嚴重的那一道**。
+       *
+       * 原本是逐道折彎各推一則。31 道折彎的錐面實測會吐出
+       * 31 行一模一樣的「折邊只有 0cm」，把真正要緊的警告整個淹掉 ——
+       * 看的人只會學會忽略這一欄，那這一欄就等於不存在。
+       *
+       * 保留最嚴重的那一道而不是平均值：師傅要知道的是最糟會糟到哪裡。
+       */
+      const worst = new Map();
+      const keep = (key, bad, msg) => {
+        const hit = worst.get(key);
+        if (!hit) { worst.set(key, { n: 1, bad, msg }); return; }
+        hit.n++;
+        if (bad < hit.bad) { hit.bad = bad; hit.msg = msg; }
+      };
+
       for (const b of (piece.bends || [])) {
         const ri = b.ri ?? 0;
 
@@ -174,16 +191,23 @@ export function makeRule(key, t = 0.2, override = {}) {
         // 一段一段慢慢彎，總角度 360° 的圓筒照樣做得出來。
         // canFold 問的是「一刀折下去」那種尖角折。
         if (!b.isArc && !this.canFold(b.angle)) {
-          out.push(`${M.label}折不了 ${fmt(b.angle)}°，這條已改成切割線`);
+          keep('fold', Math.abs(b.angle),
+            `${M.label}折不了 ${fmt(b.angle)}°，這條已改成切割線`);
           continue;
         }
         if (M.minRadius && ri > 0 && ri < M.minRadius(thick) - 1e-9) {
-          out.push(`內側 R${fmt(ri)} 小於建議的 R${fmt(M.minRadius(thick))}（${M.label}折太小會裂）`);
+          keep('radius', ri,
+            `內側 R${fmt(ri)} 小於建議的 R${fmt(M.minRadius(thick))}（${M.label}折太小會裂）`);
         }
         const need = M.minFlange(ri, thick);
         if (b.flange !== undefined && need > 0 && b.flange < need - 1e-9) {
-          out.push(`折邊只有 ${fmt(b.flange)}cm，短於建議的 ${fmt(need)}cm，可能夾不住`);
+          keep('flange', b.flange,
+            `折邊只有 ${fmt(b.flange)}cm，短於建議的 ${fmt(need)}cm，可能夾不住`);
         }
+      }
+
+      for (const h of worst.values()) {
+        out.push(h.n > 1 ? `${h.msg}（共 ${h.n} 道，這是最嚴重的一道）` : h.msg);
       }
 
       if (thick <= 0) out.push('板厚是 0，折彎補償會全部算成 0');

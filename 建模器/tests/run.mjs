@@ -1131,6 +1131,104 @@ section('第 3 期：其他形狀');
   ok('封閉實體 相同的面合併成 ×2', r.pieces.every(p => p.qty === 2));
 }
 
+section('第 5 期(A)：算不準的展開一定要講出來');
+
+/**
+ * ── 這一節在盯什麼 ──────────────────────────────────
+ * 第 3 期的圓弧修正是**沿垂直於折線方向的一維拉伸**，
+ * 這個做法只在「同一片裡的折線互相平行」時成立（見 flatten.js 檔頭）。
+ * 圓錐的折線指向頂點，彼此不平行，修正整個不會觸發，
+ * 於是展開長度退回**弦長**，而弦長永遠比弧長短（踩過的坑第 6 條）。
+ *
+ * 在第 5 期(B) 的極座標展開做完之前，這種片一定要標出來。
+ * 標錯邊（誤報）比不標更糟，所以正反兩面都要測。
+ */
+{
+  // ── 反面：會出事的，一個都不能漏 ──
+  for (const seg of [8, 16, 32]) {
+    const cone = buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg, openEnded: true }, 0.3);
+    const r = unfoldMesh(cone, makeRule('steel', 0.3));
+    const p = r.pieces[0];
+    ok(`圓錐 ${seg} 段 標示折線不平行`, p.foldsNonParallel === true);
+    ok(`圓錐 ${seg} 段 有「請勿據以下料」的警告`,
+      r.warnings.some(w => w.includes('請勿據以下料')));
+
+    /**
+     * 短少的幅度也要釘住，第 5 期(B) 修好之後這幾條會變成
+     * 「差 0」，届時直接改成對真弧長，就知道確實修好了。
+     * 分段數越少錯越多 —— 而鈑金正好會把 seg 調小（seg ＝ 實際要滾的稜線數）。
+     */
+    const chord = seg * 2 * 30 * Math.sin(Math.PI / seg);
+    const arc = 2 * Math.PI * 30;
+    ok(`圓錐 ${seg} 段 底緣目前是弦長（比真弧長短）`, chord < arc - 1e-9);
+    near(`圓錐 ${seg} 段 短少幅度`, (arc - chord) / arc,
+      1 - Math.sin(Math.PI / seg) / (Math.PI / seg), 1e-12);
+  }
+
+  // 開放但數學上攤不平的曲面（球冠）也要被抓到。
+  // 注意它的 overlap 是 false —— 攤平時演算法自己補的隱含切割線把它撐開了，
+  // 所以重疊偵測救不了這一種，只有 foldsNonParallel 抓得到。
+  const cap = Mesh.fromGeometry(
+    new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3));
+  const rc = unfoldMesh(cap, makeRule('steel', 0.3));
+  ok('球冠 標示折線不平行', rc.pieces[0].foldsNonParallel === true);
+  ok('球冠 重疊偵測抓不到它（所以更需要上面那條）', rc.pieces[0].overlap === false);
+}
+
+{
+  // ── 正面：本來就算得準的，一個都不能誤報 ──
+  const steel = makeRule('steel', 0.3);
+  const clean = [
+    ['平板', buildPrim('plate', { w: 100, d: 60 }, 0.3)],
+    ['折板 L', buildPrim('bend', { bends: [{ angle: 90, ri: 2, len: 30 }] }, 0.3)],
+    ['折板 U', buildPrim('bend',
+      { bends: [{ angle: 90, ri: 2, len: 30 }, { angle: 90, ri: 2, len: 30 }] }, 0.3)],
+    ['折板 Z', buildPrim('bend',
+      { bends: [{ angle: 90, ri: 2, len: 30 }, { angle: -90, ri: 2, len: 30 }] }, 0.3)],
+    ['圓柱側面 8 段', buildPrim('cylinder', { r: 25, h: 70, seg: 8, openEnded: true }, 0.3)],
+    ['圓柱側面 64 段', buildPrim('cylinder', { r: 25, h: 70, seg: 64, openEnded: true }, 0.3)]
+  ];
+  for (const [name, m] of clean) {
+    const r = unfoldMesh(m, steel);
+    ok(`${name} 不該誤報折線不平行`, r.pieces.every(p => p.foldsNonParallel === false));
+    ok(`${name} 不該出現「請勿據以下料」`,
+      !r.warnings.some(w => w.includes('請勿據以下料')));
+  }
+
+  /**
+   * 壓克力封閉方塊 —— 這條是**迴歸保護**。
+   *
+   * 開發這一節時一度加了「封閉實體一律拒絕展開」，把這個用途整個打死。
+   * 但壓克力箱體就是六片分開下料再黏起來，是天天在用的正確做法。
+   * 封不封閉根本不是判準，拿它當判準就會誤傷這條路。
+   */
+  const box = unfoldMesh(buildPrim('box', { w: 60, h: 45, d: 40 }), makeRule('acrylic', 0.3));
+  eq('壓克力封閉方塊 仍然拆得出 3 種面', box.pieces.length, 3);
+  ok('壓克力封閉方塊 六片都不該被誤報',
+    box.pieces.every(p => p.foldsNonParallel === false));
+}
+
+{
+  /**
+   * 警告洗版 —— 同一種問題只講一次。
+   *
+   * 原本是逐道折彎各推一則，31 道折彎的錐面會吐出 31 行一模一樣的
+   * 「折邊只有 0cm」，把真正要緊的警告整個淹掉。
+   * 看的人只會學會忽略這一欄，那這一欄就等於不存在。
+   */
+  const cone = buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg: 32, openEnded: true }, 0.3);
+  const p = unfoldMesh(cone, makeRule('steel', 0.3)).pieces[0];
+  const flange = p.warnings.filter(w => w.includes('折邊只有'));
+  eq('31 道折彎的錐面 折邊警告只講一則', flange.length, 1);
+  ok('折邊警告要講出總共幾道', flange[0].includes('共') && flange[0].includes('道'));
+
+  // 只有一道時不要畫蛇添足加上「共 1 道」
+  const short = buildPrim('bend', { first: 0.1, arcSeg: 4, bends: [{ angle: 90, ri: 2, len: 0.1 }] }, 0.3);
+  const sp = unfoldMesh(short, makeRule('steel', 0.3)).pieces[0];
+  const one = sp.warnings.filter(w => w.includes('折邊只有'));
+  ok('只有一道時不加「共 N 道」', one.length === 0 || !one[0].includes('共'));
+}
+
 section('第 3 期：材料規則');
 
 {
