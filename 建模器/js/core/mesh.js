@@ -287,11 +287,61 @@ export class Mesh {
     return g;
   }
 
+  /**
+   * 頂點 id → 陣列索引。faceList 形式的輸出都要用它。
+   * 不建這張表就得用 verts.indexOf()，那是「對每個頂點查一次全部頂點」，
+   * 面數一多就是 O(V×F) —— 跟第 1 期曲率計算踩過的是同一個坑。
+   */
+  _vertIndex() {
+    return new Map(this.verts.map((v, i) => [v.id, i]));
+  }
+
+  /** 這個網格的面清單形式（頂點索引） */
+  _faceList(vi = this._vertIndex()) {
+    return this.faces.map(f => this.faceVerts(f).map(v => vi.get(v.id)));
+  }
+
   clone() {
-    return Mesh.fromFaceList(
-      this.verts.map(v => v.p.clone()),
-      this.faces.map(f => this.faceVerts(f).map(v => this.verts.indexOf(v)))
-    );
+    const m = Mesh.fromFaceList(this.verts.map(v => v.p.clone()), this._faceList());
+    this._copyRolesTo(m);
+    return m;
+  }
+
+  /**
+   * 套用一個 4×4 變換，回傳新的網格（原本的不動）。
+   *
+   * 行列式為負（例如鏡射、某一軸縮放 -1）時，面的繞向會整個翻過來，
+   * 法向量就會朝內、體積變負數。所以偵測到就把每個面的頂點順序倒過來。
+   * 第 2 期的布林要用它把子物件擺到正確位置，鏡射也靠它。
+   */
+  transformed(m4) {
+    const points = this.verts.map(v => v.p.clone().applyMatrix4(m4));
+    const flip = new THREE.Matrix3().setFromMatrix4(m4).determinant() < 0;
+    const faces = this._faceList();
+    const m = Mesh.fromFaceList(points, flip ? faces.map(f => f.slice().reverse()) : faces);
+    this._copyRolesTo(m);
+    return m;
+  }
+
+  /**
+   * 把邊的角色搬到另一個「頂點索引相同」的網格上。
+   * 用兩端點的索引配對，所以繞向翻轉過也對得上。
+   */
+  _copyRolesTo(other) {
+    const src = this._vertIndex(), dst = other._vertIndex();
+    const pairs = new Map();
+    for (const he of this.edges()) {
+      if (he.role === EDGE_ROLE.FREE) continue;
+      const a = src.get(he.v.id), b = src.get(he.to.id);
+      pairs.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he.role);
+    }
+    if (!pairs.size) return other;
+    for (const he of other.edges()) {
+      const a = dst.get(he.v.id), b = dst.get(he.to.id);
+      const role = pairs.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+      if (role) other.setRole(he, role);
+    }
+    return other;
   }
 
   // ═════════════════════════════════════════════════════

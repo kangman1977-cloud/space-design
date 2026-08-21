@@ -11,9 +11,11 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, download, openFile, autosave, loadAutosave }
+import { Doc, ModelObject, KIND, boolSrcFrom, download, openFile, autosave, loadAutosave }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS } from './build/prim.js';
+import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
+  from './build/bool.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch } from './view/select.js';
@@ -127,6 +129,51 @@ function duplicateSelected() {
   commit(`複製 ${made.length} 個物件`);
 }
 
+/**
+ * 布林運算。第一個選取的物件是母體，其餘是拿來挖／併／交的。
+ *
+ * 產生的新物件存的是「運算樹」而不是算完的三角形，
+ * 所以事後還能在面板上改孔徑、改孔的位置。
+ */
+function boolOp(op) {
+  const list = sel.objects;
+
+  const chk = canBool(list.map(o => o.mesh()), list.map(o => o.name));
+  if (!chk.ok) { toast(chk.reason, true); return; }
+
+  const base = list[0];
+  const obj = new ModelObject({
+    name: shortName(list, op),
+    kind: base.kind,
+    src: boolSrcFrom(list, op),
+    pos: base.pos.clone(),
+    rot: base.rot.clone(),
+    scale: base.scale.clone(),
+    color: base.color,
+    thickness: base.thickness,
+    lockScale: base.lockScale
+  });
+
+  // 先試算一次。算不出來就整個放棄，不要在文件裡留下一個壞掉的物件。
+  obj.mesh();
+  if (obj.error) { toast('布林運算失敗：' + obj.error, true); return; }
+
+  for (const o of list) doc.remove(o);
+  doc.add(obj);
+  view.sync(doc);
+  sel.set([obj.id]);
+  panel.analysisCache.clear();
+  commit(BOOL_LABEL[op]);
+  toast(`${BOOL_LABEL[op]}完成：${list.length} 個物件 → 1 個`);
+}
+
+/** 名稱用符號串起來，太長就截短，不然狀態列會被撐爆 */
+function shortName(list, op) {
+  const s = ` ${BOOL_SYMBOL[op]} `;
+  const full = list.map(o => o.name).join(s);
+  return full.length <= 28 ? full : `${list[0].name}${s}…（${list.length} 個）`;
+}
+
 function newDoc() {
   doc.clear();
   doc.head.name = '未命名';
@@ -167,6 +214,10 @@ fillPrimMenu($('primType'));
 $('add').onclick = () => addPrim($('primType').value);
 $('del').onclick = deleteSelected;
 $('dup').onclick = duplicateSelected;
+
+$('bUnion').onclick = () => boolOp(BOOL_OPS.UNION);
+$('bSub').onclick   = () => boolOp(BOOL_OPS.SUBTRACT);
+$('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
 
 $('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };
 $('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l); updateBar(); };
@@ -254,6 +305,10 @@ function updateBar() {
   $('del').disabled = sel.count === 0;
   $('dup').disabled = sel.count === 0;
 
+  // 布林要兩個以上的物件，而且函式庫要已經載好
+  const canDoBool = sel.count >= 2 && csgReady();
+  for (const id of ['bUnion', 'bSub', 'bInt']) $(id).disabled = !canDoBool;
+
   const act = sel.active;
   $('sInfo').textContent = act
     ? `${act.name}　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
@@ -278,7 +333,14 @@ function toast(msg, bad = false) {
 //  啟動
 // ═══════════════════════════════════════════════════════
 
-function boot() {
+async function boot() {
+  // ── 先把布林函式庫載起來，再碰文件 ──────────────────
+  // 它是 WebAssembly，一定是非同步的。但整個建模器的資料流是同步的，
+  // 所以在這裡一次等完，之後 mesh() 就能維持同步、不必改寫每一處呼叫。
+  // 而且暫存檔裡可能就有布林物件，沒載好就還原會變成一堆替身方塊。
+  $('sInfo').textContent = '載入布林運算函式庫…';
+  const csgOK = await initCSG();
+
   const saved = loadAutosave();
   let restored = false;
 
@@ -305,7 +367,15 @@ function boot() {
   view.frameAll(doc);
   updateBar();
 
-  if (restored) toast(`接續上次的 ${doc.objects.length} 個物件`);
+  if (!csgOK) {
+    // 載不到就只是不能做布林，其餘功能照常。這種時候最怕的是
+    // 整個介面掛掉卻不說為什麼，所以訊息要留久一點、講清楚怎麼辦。
+    const why = csgError() ? csgError().message : '原因不明';
+    toast('布林運算無法使用（' + why + '）。請確認是用伺服器開啟，不是雙擊檔案', true);
+  } else if (restored) {
+    toast(`接續上次的 ${doc.objects.length} 個物件`);
+  }
+
   if (isTouch()) setTimeout(() => toast('單指轉視角　雙指縮放平移　點物件選取'), 900);
 }
 
@@ -321,9 +391,9 @@ function loop() {
 
 window.addEventListener('resize', () => view.resize());
 view.resize();
-boot();
 setMode('translate');
 loop();
+boot();   // 非同步：要先等布林函式庫載完才碰文件
 
 // 開發時方便在主控台看東西
 window.APP = app;

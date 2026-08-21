@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>建模器 — 第 1 期</title>
+<title>建模器 — 第 2 期</title>
 <style>
 /* ══ 基本 ══════════════════════════════════════════ */
 * { box-sizing: border-box; }
@@ -109,7 +109,50 @@ button.mini {
   background: rgba(47,111,208,.12); border: 1px solid #2c4a75;
   font-size: 11.5px; color: #a8c0e0; line-height: 1.6;
 }
+#pForm .badNote {
+  margin: 8px 0; padding: 7px 10px; border-radius: 6px;
+  background: rgba(178,70,70,.14); border: 1px solid #7a4040;
+  font-size: 11.5px; color: #f0b8b8; line-height: 1.6;
+}
 button.wide { width: 100%; margin-top: 10px; }
+
+/* ══ 布林運算樹 ════════════════════════════════════ */
+.tree { margin: 4px 0 2px; }
+.tree .op {
+  display: flex; align-items: center; gap: 8px; margin: 8px 0 6px;
+}
+.tree .op > label { flex: none; width: 78px; font-size: 12px; color: #a8b0bd; }
+.tree .op > select { flex: 1 1 auto; min-width: 0;
+  padding: 5px 8px; border-radius: 5px;
+  border: 1px solid #3f4550; background: #191c21; color: #e8eaed;
+}
+.tree .item {
+  margin: 5px 0; border: 1px solid #333944; border-radius: 6px;
+  background: #1c1f25; overflow: hidden;
+}
+.tree .itemHead {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 9px; cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+.tree .itemHead:hover { background: #232830; }
+.tree .sym {
+  flex: none; width: 20px; text-align: center;
+  font-size: 13px; color: #7fb0f0; font-variant-numeric: tabular-nums;
+}
+.tree .nm {
+  flex: 1 1 auto; min-width: 0; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tree .dims { flex: none; font-size: 10.5px; color: #6f7681; }
+.tree .caret { flex: none; font-size: 10px; color: #6f7681; width: 12px; }
+.tree .itemBody {
+  padding: 2px 9px 9px; border-top: 1px solid #2a2f38;
+}
+.tree .itemBody .row > label { width: 66px; font-size: 11.5px; }
+.tree .roleTag {
+  flex: none; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; color: #9fb4cf; background: #262c36; border: 1px solid #333944;
+}
 
 /* ══ 結構分析表 ════════════════════════════════════ */
 #anaBody { padding: 6px 14px 14px; }
@@ -211,6 +254,13 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
       <button id="redo" disabled>重做</button>
       <button id="dup" disabled>複製</button>
       <button id="del" class="warn" disabled>刪除</button>
+    </div>
+
+    <div class="grp" id="gBool">
+      <span class="lbl">布林</span>
+      <button id="bUnion" disabled title="聯集：把選取的物件合成一個">∪ 聯集</button>
+      <button id="bSub" disabled title="差集：從第一個選取的物件挖掉其餘的">− 差集</button>
+      <button id="bInt" disabled title="交集：只留下互相重疊的部分">∩ 交集</button>
     </div>
 
     <div class="grp">

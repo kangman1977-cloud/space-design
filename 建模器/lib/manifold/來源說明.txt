@@ -1,0 +1,54 @@
+Manifold —— 布林運算函式庫（本地存放，不靠網路）
+===============================================================
+
+版本      manifold-3d 3.5.1
+授權      Apache-2.0（見同資料夾的 LICENSE，永久授權、不可撤回）
+來源      https://github.com/elalish/manifold
+npm       https://www.npmjs.com/package/manifold-3d
+作者      Emmett Lalish
+
+檔案
+  manifold.js     74 KB   進入點（ES 模組）
+  manifold.wasm  529 KB   實際的運算核心
+
+  兩個檔案必須放在同一個資料夾。manifold.js 是用
+  new URL("manifold.wasm", import.meta.url) 找 wasm 的，
+  改了相對位置就會載入失敗。
+
+校驗和（SHA-256，日後更新版本時可比對有沒有動過）
+  manifold.js    860b5c9702a807d1f93b9eb5b4fce15dd1de1af35c508301791986bc4e70c552
+  manifold.wasm  73e3b419ad31294f6b1cc478173944e50efc4a34bfdeeff0107bdfc12975f11c
+
+
+為什麼選它
+---------------------------------------------------------------
+原本規劃用 three-bvh-csg。實測同一題（方塊 60x45x40 挖 ⌀20 貫孔）：
+
+                        three-bvh-csg      Manifold
+  耗時                      40 ms            0 ms
+  三角形                     376             144
+  尤拉數（應為 0）           -113  X            0  OK
+  網格封閉                    否              是
+  結構問題                  244 項            0 項
+  角虧總和（應為 0）           --         0.000000  OK
+
+three-bvh-csg 的輸出有 506 條邊沒有鄰居 —— 畫面看不出來，
+但第 3 期展開引擎第一件事就是問「這條邊隔壁是哪個面」，
+接不起來的網格會讓展開直接失效。
+
+Manifold 的設計目標就是「保證輸出是封閉可接的網格」，
+使用者包含 OpenSCAD、Blender、Godot Engine、BRL-CAD、
+Babylon.js、trimesh 等。
+
+
+日後要更新版本
+---------------------------------------------------------------
+  npm pack manifold-3d@<版本>
+  解開後把 manifold.js 與 manifold.wasm 換掉即可。
+  換完務必跑一次 建模器/tests/run.mjs 對答案。
+
+日後要換掉整個函式庫
+---------------------------------------------------------------
+  它只被 js/build/bool.js 這一個檔案使用，其他程式碼一律
+  透過我們自己的介面呼叫。換庫只要改那一個檔，
+  運算樹格式、面板、Undo、存讀檔都不用動。

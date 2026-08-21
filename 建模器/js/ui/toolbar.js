@@ -10,6 +10,7 @@
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES } from '../build/prim.js';
 import { KIND } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
+import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -25,6 +26,11 @@ export class Panel {
     this.app = app;
     this.root = document.getElementById('panel');
     this.analysisCache = new Map();   // ModelObject.id → 分析結果
+    /**
+     * 布林運算樹裡哪些運算元是展開的。key 是「物件id:0.1.2」這種路徑。
+     * 面板每次改動都整個重建，不記著的話一改參數就全部收合，很難用。
+     */
+    this.openItems = new Set();
     this._build();
   }
 
@@ -66,6 +72,12 @@ export class Panel {
     this.empty.hidden = true;
     this.form.hidden = false;
     this.form.innerHTML = '';
+    this._target = this.form;      // 表單元件預設加到這裡；巢狀區塊會暫時換掉
+
+    // 網格生成失敗（多半是布林算不出來）先講清楚，再讓人去改參數
+    if (obj.error) {
+      this.form.appendChild(bad('這個物件目前算不出來：' + obj.error));
+    }
 
     if (many) {
       this.form.appendChild(note(`已選 ${this.app.sel.count} 個，以下編輯最後選的「${obj.name}」`));
@@ -88,7 +100,17 @@ export class Panel {
     }
 
     // ── 參數（可回頭改的才有）──
-    if (obj.isParametric) {
+    if (obj.isBool) {
+      this._boolSection(obj);
+      this._rowBtn('凍結成網格',
+        '把目前算出來的形狀固定下來。之後開檔不用再算一次布林（快很多），' +
+        '但就不能再回頭改孔徑或位置了。確定不會再改的模型才凍結。', () => {
+          if (!confirm('凍結之後就不能再改運算元的參數了，確定嗎？')) return;
+          obj.bake();
+          this._edit('凍結成網格');
+        });
+
+    } else if (obj.isParametric) {
       const spec = PRIM_SPECS[obj.src.type];
       if (spec) {
         this.form.appendChild(head(spec.label + ' 參數'));
@@ -133,6 +155,141 @@ export class Panel {
     this.refresh();
   }
 
+  // ═══════════════════════════════════════════════════
+  //  布林運算樹
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 顯示「這個形狀是怎麼算出來的」，並讓每個運算元都能就地改參數。
+   *
+   * 這是「存運算樹而不是存三角形」真正的價值所在 ——
+   * 挖完孔之後老闆說孔要改大，在這裡把半徑一改就好，不必重做。
+   */
+  _boolSection(obj) {
+    const src = obj.src;
+    this.form.appendChild(head('布林運算'));
+
+    const wrap = document.createElement('div');
+    wrap.className = 'tree';
+    this.form.appendChild(wrap);
+
+    // 運算方式可以事後改：挖錯了想改成合併，不用重來
+    const opRow = document.createElement('div');
+    opRow.className = 'op';
+    const lab = document.createElement('label');
+    lab.textContent = '運算方式';
+    lab.title = '差集＝從第一個挖掉其餘的；聯集＝合成一個；交集＝只留重疊處';
+    const sel = document.createElement('select');
+    for (const v of [BOOL_OPS.SUBTRACT, BOOL_OPS.UNION, BOOL_OPS.INTERSECT]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = `${BOOL_SYMBOL[v]}　${BOOL_LABEL[v]}`;
+      if (v === src.op) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      src.op = sel.value;
+      this._rebuild(obj, '改成' + BOOL_LABEL[sel.value]);
+    };
+    opRow.append(lab, sel);
+    wrap.appendChild(opRow);
+
+    this._boolItems(obj, src, wrap, String(obj.id));
+  }
+
+  /**
+   * 列出一層的運算元。item.src 本身也可能是布林，所以這裡是遞迴的 ——
+   * 「先挖孔再跟別的合併」這種巢狀結構才能一路改到底。
+   *
+   * @param {string} path 展開狀態的記憶用鍵，形如 "12:0:1"
+   */
+  _boolItems(obj, node, parent, path) {
+    const items = node.items || [];
+
+    items.forEach((it, i) => {
+      const key = `${path}:${i}`;
+      const open = this.openItems.has(key);
+
+      const box = document.createElement('div');
+      box.className = 'item';
+
+      // ── 標頭：第一個是母體，其餘掛上運算符號 ──
+      const headEl = document.createElement('div');
+      headEl.className = 'itemHead';
+
+      const sym = document.createElement('span');
+      sym.className = 'sym';
+      sym.textContent = i === 0 ? '' : BOOL_SYMBOL[node.op] || '?';
+
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = it.name || `運算元 ${i + 1}`;
+
+      const dims = document.createElement('span');
+      dims.className = 'dims';
+      dims.textContent = describeSrc(it.src);
+
+      const caret = document.createElement('span');
+      caret.className = 'caret';
+      caret.textContent = open ? '▾' : '▸';
+
+      headEl.append(sym, nm, dims, caret);
+      headEl.onclick = () => {
+        if (open) this.openItems.delete(key); else this.openItems.add(key);
+        this.refresh();
+      };
+      box.appendChild(headEl);
+
+      // ── 展開後的內容 ──
+      if (open) {
+        const body = document.createElement('div');
+        body.className = 'itemBody';
+        box.appendChild(body);
+
+        const prev = this._target;
+        this._target = body;
+
+        if (isBoolSrc(it.src)) {
+          body.appendChild(note(`巢狀布林（${BOOL_LABEL[it.src.op] || it.src.op}，`
+            + `${(it.src.items || []).length} 個運算元）`));
+          this._boolItems(obj, it.src, body, key);
+
+        } else if (it.src.type === 'mesh') {
+          body.appendChild(note('這個運算元已經是網格，沒有參數可以改'));
+
+        } else {
+          const spec = PRIM_SPECS[it.src.type];
+          if (spec) {
+            for (const f of spec.fields) {
+              this._rowNum(f.label, it.src[f.key], f, v => {
+                it.src[f.key] = f.int ? Math.round(v) : v;
+                this._rebuild(obj, '改' + f.label);
+              });
+            }
+          }
+        }
+
+        // 位置與角度是相對於第一個運算元（母體）的，所以孔會跟著母體一起走
+        this._rowArr3('位置 cm', it.pos, ['X', 'Y', 'Z'], false,
+          () => this._rebuild(obj, '改運算元位置'),
+          i === 0 ? '這是母體，位置固定在原點' : '相對於母體的位置');
+        this._rowArr3('旋轉 度', it.rot, ['X', 'Y', 'Z'], true,
+          () => this._rebuild(obj, '改運算元角度'));
+
+        this._target = prev;
+      }
+
+      parent.appendChild(box);
+    });
+  }
+
+  /** 運算樹被改過 → 清掉快取重算，然後照一般編輯流程走 */
+  _rebuild(obj, label) {
+    obj.invalidate();
+    this.analysisCache.delete(obj.id);
+    this._edit(label);
+  }
+
   // ── 表單元件 ──────────────────────────────────────
 
   _row(label, hint) {
@@ -142,7 +299,7 @@ export class Panel {
     l.textContent = label;
     if (hint) l.title = hint;
     r.appendChild(l);
-    this.form.appendChild(r);
+    (this._target || this.form).appendChild(r);
     return r;
   }
 
@@ -192,7 +349,43 @@ export class Panel {
       wrap.append(s, i);
       r.appendChild(wrap);
     }
-    this.form.appendChild(r);
+    (this._target || this.form).appendChild(r);
+  }
+
+  /**
+   * 跟 _rowVec3 一樣，但資料是純陣列 [x,y,z]（運算樹裡存的就是陣列，
+   * 不是 THREE.Vector3，因為它要能直接寫進 JSON）。
+   */
+  _rowArr3(label, arr, labels, degrees, on, hint) {
+    if (!Array.isArray(arr)) return;
+    if (label) {
+      const cap = document.createElement('div');
+      cap.className = 'sub';
+      cap.textContent = label;
+      if (hint) cap.title = hint;
+      (this._target || this.form).appendChild(cap);
+    }
+    const r = document.createElement('div');
+    r.className = 'row vec';
+    if (hint) r.title = hint;
+    for (let k = 0; k < 3; k++) {
+      const wrap = document.createElement('div');
+      const s = document.createElement('span');
+      s.textContent = labels[k];
+      const i = document.createElement('input');
+      i.type = 'number';
+      i.step = degrees ? 5 : 1;
+      i.value = round(degrees ? arr[k] * 180 / Math.PI : arr[k]);
+      i.onchange = () => {
+        const v = parseFloat(i.value);
+        if (!Number.isFinite(v)) return;
+        arr[k] = degrees ? v * Math.PI / 180 : v;
+        on();
+      };
+      wrap.append(s, i);
+      r.appendChild(wrap);
+    }
+    (this._target || this.form).appendChild(r);
   }
 
   _rowSelect(label, val, opts, on, hint) {
@@ -232,7 +425,7 @@ export class Panel {
     b.textContent = label;
     b.title = hint || '';
     b.onclick = on;
-    this.form.appendChild(b);
+    (this._target || this.form).appendChild(b);
   }
 
   // ═══════════════════════════════════════════════════
@@ -340,6 +533,35 @@ function note(text) {
   n.className = 'note';
   n.textContent = text;
   return n;
+}
+
+/** 紅色的提示，用在算不出來這種需要處理的狀況 */
+function bad(text) {
+  const n = document.createElement('div');
+  n.className = 'badNote';
+  n.textContent = text;
+  return n;
+}
+
+/**
+ * 運算元的一行摘要，例如「⌀20 × 60」。
+ * 展開之前就看得出誰是誰，不用一個個點開找。
+ */
+function describeSrc(src) {
+  if (!src) return '';
+  if (isBoolSrc(src)) return BOOL_LABEL[src.op] || '布林';
+  if (src.type === 'mesh') return '網格';
+
+  const n = v => round(v);
+  switch (src.type) {
+    case 'box':      return `${n(src.w)}×${n(src.h)}×${n(src.d)}`;
+    case 'plate':    return `${n(src.w)}×${n(src.d)}`;
+    case 'cylinder': return `⌀${n(src.r * 2)}×${n(src.h)}`;
+    case 'cone':     return `⌀${n(src.rBottom * 2)}→⌀${n(src.rTop * 2)}×${n(src.h)}`;
+    case 'sphere':   return `⌀${n(src.r * 2)}`;
+    case 'prism':    return `${n(src.sides)}角 ⌀${n(src.r * 2)}×${n(src.h)}`;
+    default:         return PRIM_SPECS[src.type] ? PRIM_SPECS[src.type].label : src.type;
+  }
 }
 
 function mark(ok) {

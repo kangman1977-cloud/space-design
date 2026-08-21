@@ -5,3 +5,6 @@
 *.html -text
 *.md   -text
 *.txt  -text
+
+# WebAssembly 是二進位檔。萬一被當成文字做換行轉換，檔案會直接壞掉
+*.wasm binary
