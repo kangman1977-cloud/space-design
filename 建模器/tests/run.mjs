@@ -46,6 +46,7 @@ const { Mesh } = await import('../js/core/mesh.js');
 const { summarize, SURFACE } = await import('../js/core/region.js');
 const { buildPrim } = await import('../js/build/prim.js');
 const { initCSG, csgError, BOOL_OPS } = await import('../js/build/bool.js');
+const { arrayMatrices, ARRAY_MODES } = await import('../js/build/array.js');
 const io = await import('../js/core/io.js');
 const THREE = await import('three');
 // toolbar.js 只在 Panel 的建構子裡碰 DOM，模組層級沒有，所以匯入得進來。
@@ -416,6 +417,270 @@ if (csgOK) {
     for (let i = 0; i < 20; i++) io.buildSrc(tree);
     const ms = (performance.now() - t0) / 20;
     ok(`單次布林耗時 ${ms.toFixed(1)} ms（門檻 50ms）`, ms < 50);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  第 2 期：陣列與鏡射
+// ═══════════════════════════════════════════════════════
+
+section('第 2 期：陣列的排列位置（純數學，不需要函式庫）');
+
+{
+  const at = m => m.elements.slice(12, 15).map(x => +x.toFixed(6));   // 平移量
+
+  // ── 線性：單方向 ──
+  {
+    const ms = arrayMatrices({ mode: 'linear', count: 4, step: [30, 0, 0], count2: 1 });
+    eq('線性 4 份 → 份數', ms.length, 4);
+    eq('線性 第 1 份在原點', JSON.stringify(at(ms[0])), '[0,0,0]');
+    eq('線性 第 4 份位移', JSON.stringify(at(ms[3])), '[90,0,0]');
+  }
+
+  // ── 線性：兩個方向（散熱孔網格）──
+  {
+    const ms = arrayMatrices({
+      mode: 'linear', count: 8, step: [22, 0, 0], count2: 4, step2: [0, 0, 22]
+    });
+    eq('網格 8×4 → 份數', ms.length, 32);
+    eq('網格 最後一份位移', JSON.stringify(at(ms[31])), '[154,0,66]');
+  }
+
+  // ── 環形：整圈平均分佈 ──
+  {
+    const ms = arrayMatrices({ mode: 'radial', count: 8, axis: 'y', angle: 360 });
+    eq('環形 8 份 → 份數', ms.length, 8);
+    // 繞 Y 轉 90 度（第 3 份）：(100,0,0) 應該跑到 (0,0,-100)
+    const p = new THREE.Vector3(100, 0, 0).applyMatrix4(ms[2]);
+    near('環形 轉 90 度後的 X', p.x, 0, 1e-6);
+    near('環形 轉 90 度後的 Z', p.z, -100, 1e-6);
+    // 整圈時最後一份不可以跟第一份重疊（否則會少一個位置）
+    const last = new THREE.Vector3(100, 0, 0).applyMatrix4(ms[7]);
+    ok('環形 整圈時最後一份不與第一份重疊', last.distanceTo(new THREE.Vector3(100, 0, 0)) > 1);
+  }
+
+  // ── 環形：不足一圈，頭尾都要放 ──
+  {
+    const ms = arrayMatrices({ mode: 'radial', count: 5, axis: 'y', angle: 180 });
+    const first = new THREE.Vector3(100, 0, 0).applyMatrix4(ms[0]);
+    const last = new THREE.Vector3(100, 0, 0).applyMatrix4(ms[4]);
+    near('環形 180 度 第一份 X', first.x, 100, 1e-6);
+    near('環形 180 度 第五份 X（應轉到對面）', last.x, -100, 1e-6);
+  }
+
+  // ── 環形：繞非原點的中心 ──
+  {
+    const ms = arrayMatrices({ mode: 'radial', count: 4, axis: 'y', angle: 360, center: [50, 0, 0] });
+    const p = new THREE.Vector3(50, 0, 0).applyMatrix4(ms[1]);
+    near('環形 旋轉中心上的點不會動 X', p.x, 50, 1e-6);
+    near('環形 旋轉中心上的點不會動 Z', p.z, 0, 1e-6);
+  }
+
+  // ── 鏡射 ──
+  {
+    const ms = arrayMatrices({ mode: 'mirror', axis: 'x', offset: 30 });
+    eq('鏡射 → 份數（原件＋鏡像）', ms.length, 2);
+    const p = new THREE.Vector3(10, 7, 3).applyMatrix4(ms[1]);
+    // 對稱面在 x=30：x' = 2×30 − 10 = 50，其餘不變
+    near('鏡射 X 對稱', p.x, 50, 1e-9);
+    near('鏡射 Y 不變', p.y, 7, 1e-9);
+    near('鏡射 Z 不變', p.z, 3, 1e-9);
+    ok('鏡射矩陣的行列式為負（繞向會翻）', ms[1].determinant() < 0);
+
+    const only = arrayMatrices({ mode: 'mirror', axis: 'x', offset: 30, keepOriginal: false });
+    eq('鏡射 不保留原件 → 份數', only.length, 1);
+  }
+}
+
+if (csgOK) {
+  section('第 2 期：陣列的實際網格');
+
+  const item = (src, pos = [0, 0, 0], rot = [0, 0, 0]) =>
+    ({ src, pos, rot, scale: [1, 1, 1], name: src.type });
+  const cube = (a = 10) => item({ type: 'box', w: a, h: a, d: a });
+
+  // ── 線性：不重疊 ──
+  {
+    const m = io.buildSrc({
+      type: 'array', mode: 'linear', count: 5, step: [30, 0, 0], count2: 1, child: cube()
+    });
+    const v = m.validate();
+    near('線性 5 份 體積（＝5×1000）', m.volume(), 5000, 1e-4);
+    eq('線性 5 份 元件數', v.components, 5);
+    eq('線性 5 份 尤拉數（＝2×5）', v.euler, 10);
+    ok('線性 5 份 結構無誤', v.ok);
+  }
+
+  // ── 線性：故意重疊，重疊處只能算一次 ──
+  {
+    const m = io.buildSrc({
+      type: 'array', mode: 'linear', count: 3, step: [5, 0, 0], count2: 1, child: cube()
+    });
+    // 三個 10cm 方塊每隔 5cm → 連成一條 20×10×10
+    near('線性 重疊 體積（＝20×10×10）', m.volume(), 2000, 1e-4);
+    eq('線性 重疊 元件數（黏成一塊）', m.validate().components, 1);
+  }
+
+  // ── 二維網格 ──
+  {
+    const m = io.buildSrc({
+      type: 'array', mode: 'linear', count: 3, step: [30, 0, 0],
+      count2: 4, step2: [0, 0, 30], child: cube()
+    });
+    near('網格 3×4 體積', m.volume(), 12000, 1e-4);
+    eq('網格 3×4 元件數', m.validate().components, 12);
+  }
+
+  // ── 環形 ──
+  {
+    const m = io.buildSrc({
+      type: 'array', mode: 'radial', count: 8, axis: 'y', angle: 360,
+      center: [0, 0, 0], child: item({ type: 'box', w: 10, h: 10, d: 10 }, [100, 0, 0])
+    });
+    near('環形 8 份 體積', m.volume(), 8000, 1e-3);
+    eq('環形 8 份 元件數', m.validate().components, 8);
+  }
+
+  // ── 鏡射：體積必須為正 ──
+  // 鏡射矩陣行列式為負，繞向若沒翻回來，體積會變負數、法向量朝內
+  {
+    const m = io.buildSrc({
+      type: 'array', mode: 'mirror', axis: 'x', offset: 30, child: cube()
+    });
+    const v = m.validate();
+    near('鏡射 體積為正（＝2×1000）', m.volume(), 2000, 1e-4);
+    eq('鏡射 元件數', v.components, 2);
+    ok('鏡射 結構無誤', v.ok);
+    const b = m.bounds();
+    near('鏡射 邊界最小 X', b.min.x, -5, 1e-4);
+    near('鏡射 邊界最大 X（＝2×30+5）', b.max.x, 65, 1e-4);
+  }
+
+  // ── 陣列套布林：挖好孔的板子排成一排 ──
+  {
+    const holed = {
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [
+        item({ type: 'box', w: 40, h: 20, d: 40 }),
+        item({ type: 'cylinder', r: 5, h: 40, seg: 32 })
+      ]
+    };
+    const m = io.buildSrc({
+      type: 'array', mode: 'linear', count: 3, step: [60, 0, 0], count2: 1,
+      child: item(holed)
+    });
+    const v = m.validate();
+    const one = 40 * 20 * 40 - 0.5 * 32 * 25 * Math.sin(2 * Math.PI / 32) * 20;
+    near('陣列套布林 體積（＝3×單件）', m.volume(), one * 3, 1e-2);
+    eq('陣列套布林 元件數', v.components, 3);
+    // 三塊、每塊一個貫穿孔 → chi = 2×3 − 2×3 = 0
+    eq('陣列套布林 尤拉數（＝2×3−2×3）', v.euler, 0);
+    eq('陣列套布林 貫穿孔數', topologyCheck(v, summarize(m).totalDefect).genus, 3);
+  }
+
+  // ── 布林套陣列：散熱孔板（8×4 個孔一次挖穿）──
+  {
+    const holes = {
+      type: 'array', mode: 'linear', count: 8, step: [22, 0, 0],
+      count2: 4, step2: [0, 0, 22],
+      child: item({ type: 'cylinder', r: 6, h: 40, seg: 24 }, [-77, 0, -33])
+    };
+    const m = io.buildSrc({
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [item({ type: 'box', w: 200, h: 10, d: 100 }), item(holes)]
+    });
+    const v = m.validate();
+    const t = topologyCheck(v, summarize(m).totalDefect);
+    const hole = 0.5 * 24 * 36 * Math.sin(2 * Math.PI / 24) * 10;
+
+    eq('散熱板 元件數', v.components, 1);
+    eq('散熱板 貫穿孔數（應為 32）', t.genus, 32);
+    eq('散熱板 尤拉數（＝2−2×32）', v.euler, -62);
+    ok('散熱板 尤拉數判定為正確', t.eulerOK);
+    near('散熱板 體積（＝板 − 32 個孔）', m.volume(), 200 * 10 * 100 - hole * 32, 1e-1);
+    ok('散熱板 結構無誤', v.ok);
+  }
+
+  // ── 存讀檔往返 ──
+  {
+    const doc = new io.Doc();
+    doc.add(new io.ModelObject({
+      name: '排一排',
+      src: {
+        type: 'array', mode: 'linear', count: 4, step: [30, 0, 0], count2: 1, child: cube()
+      },
+      pos: new THREE.Vector3(5, 10, 15)
+    }));
+    const before = doc.objects[0].mesh().volume();
+    const json = JSON.parse(JSON.stringify(doc.toJSON()));
+
+    eq('存檔版本號', json.v, io.DOC_VERSION);
+    eq('陣列物件不存三角形', json.objects[0].mesh, undefined);
+
+    const back = io.Doc.fromJSON(json);
+    near('讀回來 體積相同', back.objects[0].mesh().volume(), before, 1e-6);
+    eq('讀回來 份數', back.objects[0].copies, 4);
+
+    back.objects[0].src.count = 9;
+    eq('存檔是深拷貝', doc.objects[0].src.count, 4);
+  }
+
+  // ── 改份數要即時反映 ──
+  {
+    const o = new io.ModelObject({
+      src: { type: 'array', mode: 'linear', count: 3, step: [30, 0, 0], count2: 1, child: cube() }
+    });
+    near('改份數前 體積', o.mesh().volume(), 3000, 1e-4);
+    eq('改份數前 copies', o.copies, 3);
+    o.src.count = 7;
+    o.invalidate();
+    near('份數 3 改 7 後 體積', o.mesh().volume(), 7000, 1e-4);
+    eq('份數 3 改 7 後 copies', o.copies, 7);
+  }
+
+  // ── 打散：位置與數量都要對 ──
+  {
+    const o = new io.ModelObject({
+      name: '橫料',
+      src: { type: 'array', mode: 'linear', count: 4, step: [30, 0, 0], count2: 1, child: cube() },
+      pos: new THREE.Vector3(100, 0, 0)
+    });
+    const parts = io.explodeArray(o);
+    eq('打散 個數', parts.length, 4);
+    eq('打散 第 1 個名稱', parts[0].name, '橫料 #1');
+    near('打散 第 1 個 X（＝物件位置）', parts[0].pos.x, 100, 1e-6);
+    near('打散 第 4 個 X（＝100+90）', parts[3].pos.x, 190, 1e-6);
+    near('打散 後單件體積', parts[0].mesh().volume(), 1000, 1e-6);
+    ok('打散 後不再是陣列', !parts[0].isArray);
+  }
+
+  // ── 打散鏡射件：鏡像那份的縮放要是負的 ──
+  {
+    const o = new io.ModelObject({
+      src: { type: 'array', mode: 'mirror', axis: 'x', offset: 30, child: cube() }
+    });
+    const parts = io.explodeArray(o);
+    eq('打散鏡射 個數', parts.length, 2);
+    ok('打散鏡射 第 2 份是鏡像（X 縮放為負）', parts[1].scale.x < 0);
+    near('打散鏡射 第 2 份位置 X', parts[1].pos.x, 60, 1e-6);
+  }
+
+  // ── 效能：散熱孔這種份數多的情況不能卡 ──
+  {
+    const holes = {
+      type: 'array', mode: 'linear', count: 16, step: [22, 0, 0],
+      count2: 8, step2: [0, 0, 22],
+      child: item({ type: 'cylinder', r: 6, h: 40, seg: 24 }, [-165, 0, -77])
+    };
+    const tree = {
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [item({ type: 'box', w: 400, h: 10, d: 200 }), item(holes)]
+    };
+    const t0 = performance.now();
+    const m = io.buildSrc(tree);
+    const ms = performance.now() - t0;
+    eq('128 個孔 貫穿孔數', topologyCheck(m.validate(), summarize(m).totalDefect).genus, 128);
+    ok(`128 個孔的散熱板耗時 ${ms.toFixed(0)} ms（門檻 400ms）`, ms < 400);
   }
 }
 

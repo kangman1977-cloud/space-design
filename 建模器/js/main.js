@@ -11,11 +11,13 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, boolSrcFrom, download, openFile, autosave, loadAutosave }
+import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
+         download, openFile, autosave, loadAutosave }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
   from './build/bool.js';
+import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch } from './view/select.js';
@@ -53,7 +55,8 @@ const hist = new History({
 
 const app = {
   doc, view, sel, hist,
-  onEdit: label => { view.sync(doc); commit(label); }
+  onEdit: label => { view.sync(doc); commit(label); },
+  onExplode: obj => explodeSelected(obj)
 };
 
 const panel = new Panel(app);
@@ -174,6 +177,55 @@ function shortName(list, op) {
   return full.length <= 28 ? full : `${list[0].name}${s}…（${list.length} 個）`;
 }
 
+/**
+ * 把選取的物件變成陣列／鏡射。
+ *
+ * 存的是「排列方式」而不是排完的結果，所以事後改份數、改間距
+ * 都是動一個數字的事。也因為數量這個資訊留著，第 3 期展開時
+ * 才有辦法出「一張圖 ×N」而不是 N 張一樣的圖。
+ */
+function arrayOp(mode) {
+  const obj = sel.active;
+  if (!obj) { toast('先選一個物件', true); return; }
+  if (!csgReady()) { toast('布林運算函式庫還沒載入完成', true); return; }
+
+  const made = new ModelObject({
+    name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
+    kind: obj.kind,
+    src: arraySrcFrom(obj, mode),
+    pos: obj.pos.clone(),
+    rot: obj.rot.clone(),
+    scale: obj.scale.clone(),
+    color: obj.color,
+    thickness: obj.thickness,
+    lockScale: obj.lockScale
+  });
+
+  // 先試算一次，算不出來就整個放棄，不要在文件裡留下壞掉的物件
+  made.mesh();
+  if (made.error) { toast(ARRAY_LABEL[mode] + '失敗：' + made.error, true); return; }
+
+  doc.remove(obj);
+  doc.add(made);
+  view.sync(doc);
+  sel.set([made.id]);
+  panel.analysisCache.clear();
+  commit(ARRAY_LABEL[mode]);
+  toast(`${ARRAY_LABEL[mode]}完成：${made.copies} 份。份數與間距可在右側面板調整`);
+}
+
+/** 把陣列打散成一個個獨立物件 */
+function explodeSelected(obj) {
+  const made = explodeArray(obj);
+  doc.remove(obj);
+  for (const o of made) doc.add(o);
+  view.sync(doc);
+  sel.set(made.map(o => o.id));
+  panel.analysisCache.clear();
+  commit(`打散成 ${made.length} 個物件`);
+  toast(`已打散成 ${made.length} 個獨立物件`);
+}
+
 function newDoc() {
   doc.clear();
   doc.head.name = '未命名';
@@ -218,6 +270,10 @@ $('dup').onclick = duplicateSelected;
 $('bUnion').onclick = () => boolOp(BOOL_OPS.UNION);
 $('bSub').onclick   = () => boolOp(BOOL_OPS.SUBTRACT);
 $('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
+
+$('aLinear').onclick = () => arrayOp(ARRAY_MODES.LINEAR);
+$('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
+$('aMirror').onclick = () => arrayOp(ARRAY_MODES.MIRROR);
 
 $('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };
 $('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l); updateBar(); };
@@ -305,13 +361,17 @@ function updateBar() {
   $('del').disabled = sel.count === 0;
   $('dup').disabled = sel.count === 0;
 
-  // 布林要兩個以上的物件，而且函式庫要已經載好
+  // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
   for (const id of ['bUnion', 'bSub', 'bInt']) $(id).disabled = !canDoBool;
 
+  const canDoArray = sel.count >= 1 && csgReady();
+  for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = !canDoArray;
+
   const act = sel.active;
   $('sInfo').textContent = act
-    ? `${act.name}　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
+    ? `${act.name}${act.copies > 1 ? ` ×${act.copies}` : ''}`
+      + `　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
     : (hist.undoLabel ? '上一步：' + hist.undoLabel : '點一下物件選取它');
 }
 

@@ -14,8 +14,9 @@
  *
  * ── 版本相容 ────────────────────────────────────────
  * 每個檔案都帶 v 版本號，讀檔一律走 migrate()。
- * v1（第 1 期）→ v2（第 2 期，加入布林運算樹）。
- * v2 的程式讀得動 v1 的舊檔，因為 v1 不可能有布林物件，沒有東西要補。
+ * v1（第 1 期）→ v2（布林運算樹）→ v3（陣列與鏡射）。
+ * 新版讀得動所有舊檔：舊版本的年代還沒有那些功能，
+ * 檔案裡不可能出現對應的 type，沒有東西要補。
  */
 
 import * as THREE from 'three';
@@ -23,9 +24,11 @@ import { Mesh } from './mesh.js';
 import { buildPrim, PRIM_DEFAULTS } from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
   from '../build/bool.js';
+import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
+         ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 
 export const DOC_TYPE = 'model-doc';
-export const DOC_VERSION = 2;
+export const DOC_VERSION = 3;
 export const UNIT = 'cm';
 
 /** 物件種類。sheet 是要拿去展開的板件，solid 是有體積的量體。 */
@@ -48,19 +51,22 @@ export function cloneSrc(src) {
 /**
  * 一個 src → 一個半邊網格。這是唯一的生成入口。
  *
- * 三種 src：
- *   {type:'box', w,h,d}          參數體 → prim.js
- *   {type:'bool', op, items}     運算樹 → bool.js（會遞迴回來，所以能巢狀）
- *   {type:'mesh', mesh:{...}}    已烘好的網格，照原樣還原
+ * 四種 src：
+ *   {type:'box', w,h,d}            參數體 → prim.js
+ *   {type:'bool', op, items}       布林運算樹 → bool.js
+ *   {type:'array', mode, child}    陣列／鏡射 → array.js
+ *   {type:'mesh', mesh:{...}}      已烘好的網格，照原樣還原
  *
- * 遞迴是把 buildSrc 自己當參數傳給 evalBoolTree 完成的。
- * 這樣 bool.js 不必認識 box / cylinder 是什麼，io.js 也不必認識 Manifold，
- * 兩邊各做各的，不互相 import。
+ * 遞迴是把 buildSrc 自己當參數傳下去完成的。所以
+ * 「挖好孔的板子排成一排」與「一排孔拿去挖穿板子」都做得到，
+ * 而且 bool.js / array.js 都不必認識 box、cylinder 是什麼，
+ * io.js 也不必認識 Manifold —— 各做各的，不互相 import。
  */
 export function buildSrc(src) {
   if (!src || !src.type) throw new Error('物件沒有來源資料');
 
   if (isBoolSrc(src)) return evalBoolTree(src, buildSrc);
+  if (isArraySrc(src)) return evalArrayTree(src, buildSrc);
 
   if (src.type === 'mesh') {
     if (src.mesh) return Mesh.fromJSON(src.mesh);
@@ -119,6 +125,15 @@ export class ModelObject {
   /** 這個物件是不是布林運算的結果 */
   get isBool() { return isBoolSrc(this.src); }
 
+  /** 這個物件是不是陣列／鏡射 */
+  get isArray() { return isArraySrc(this.src); }
+
+  /**
+   * 這個物件由幾份相同的東西組成。不是陣列就是 1。
+   * 第 3 期展開要靠它出「一張圖 ×N」，第 8 期匯出備料也用得到。
+   */
+  get copies() { return this.isArray ? copyCount(this.src) : 1; }
+
   /**
    * 取得半邊網格。參數物件與布林物件會在第一次要用時才生成，
    * 生成完存在 _mesh 快取，改參數時由 invalidate() 清掉。
@@ -145,10 +160,17 @@ export class ModelObject {
    * 連它都失敗才退到小方塊。
    */
   _fallbackMesh() {
+    // 布林 → 退回第一個運算元（通常就是被挖孔的母體）
     if (this.isBool && this.src.items && this.src.items.length) {
       try {
         const it = this.src.items[0];
         return buildSrc(it.src).transformed(itemMatrix(it));
+      } catch (e) { /* 往下退 */ }
+    }
+    // 陣列 → 退回單獨一份，至少看得出原件長什麼樣
+    if (this.isArray && this.src.child) {
+      try {
+        return buildSrc(this.src.child.src).transformed(itemMatrix(this.src.child));
       } catch (e) { /* 往下退 */ }
     }
     try { return placeholderMesh(); }
@@ -269,6 +291,91 @@ export function boolSrcFrom(objects, op) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  組陣列
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 把一個物件變成陣列／鏡射。
+ *
+ * ── 預設值為什麼要看物件的大小 ──────────────────────
+ * 如果間距寫死成 50cm，做一個 200cm 的橫料時三份會整個疊在一起，
+ * 使用者第一眼看到的是「怎麼沒反應」。所以預設間距取
+ * 「物件本身的尺寸 ＋ 10cm 空隙」，一按下去就看得出排開來了，
+ * 再自己調成實際要的距離。
+ *
+ * 鏡射同理：對稱面預設放在物件的邊緣（offset ＝ 半個寬），
+ * 所以鏡出來的那一份剛好貼著原件，一眼就懂鏡射在做什麼。
+ * 要把對稱面移到機箱中心線之類的地方，改 offset 即可。
+ *
+ * @param {ModelObject} obj
+ * @param {string} mode ARRAY_MODES 之一
+ */
+export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR) {
+  const size = obj.mesh().bounds().getSize(new THREE.Vector3());
+  const gap = 10;
+  const span = a => Math.max(a, 1) + gap;
+
+  const node = {
+    type: 'array',
+    mode,
+    ...cloneSrc(ARRAY_DEFAULTS[mode]),
+    child: makeItem(srcForItem(obj), null, null, null, obj.name)
+  };
+
+  if (mode === ARRAY_MODES.LINEAR) {
+    node.step = [+span(size.x).toFixed(3), 0, 0];
+    node.step2 = [0, 0, +span(size.z).toFixed(3)];
+  } else if (mode === ARRAY_MODES.MIRROR) {
+    node.offset = +(size.x / 2).toFixed(3);
+  } else if (mode === ARRAY_MODES.RADIAL) {
+    // 繞物件自己的中心轉整圈，預設 8 份
+    node.center = [0, 0, 0];
+  }
+
+  return node;
+}
+
+/**
+ * 把陣列打散成一個個獨立物件。
+ *
+ * 資訊只能往下走：修飾器可以打散成獨立物件，獨立物件收不回修飾器。
+ * 所以預設留在資訊多的那一端，需要各自微調時才打散。
+ *
+ * @returns {ModelObject[]} 尚未加進文件，由呼叫端決定怎麼放
+ */
+export function explodeArray(obj) {
+  if (!obj.isArray) throw new Error('這個物件不是陣列');
+
+  const node = obj.src;
+  const mats = arrayMatrices(node);
+  const childM = itemMatrix(node.child);
+  const world = obj.matrix();
+
+  return mats.map((m, i) => {
+    // 世界變換 ＝ 物件本身 × 這一份的排列 × 子物件自己的擺放
+    const full = new THREE.Matrix4()
+      .multiplyMatrices(world, new THREE.Matrix4().multiplyMatrices(m, childM));
+
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const s = new THREE.Vector3();
+    full.decompose(p, q, s);
+
+    return new ModelObject({
+      name: `${obj.name} #${i + 1}`,
+      kind: obj.kind,
+      src: cloneSrc(node.child.src),
+      pos: p,
+      rot: new THREE.Euler().setFromQuaternion(q),
+      scale: s,
+      color: obj.color,
+      thickness: obj.thickness,
+      lockScale: obj.lockScale
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 //  整份文件
 // ═══════════════════════════════════════════════════════
 
@@ -323,9 +430,10 @@ function today() {
 /**
  * 把任何版本的檔案轉成目前版本。
  *
- * v1（第 1 期）→ v2（第 2 期，加入布林運算樹）
- * 這一步不用做任何事：v1 的年代還沒有布林運算，
- * 舊檔裡不可能出現 type:'bool'，所有欄位在 v2 的意義完全相同。
+ * v1（第 1 期）→ v2（布林運算樹）→ v3（陣列與鏡射）
+ * 這兩步都不用做任何事：舊版本的年代還沒有那些功能，
+ * 檔案裡不可能出現 type:'bool' 或 type:'array'，
+ * 其餘欄位的意義完全相同。
  * 之後若有真的要補欄位的版本，就寫在下面標示的地方。
  */
 export function migrate(d) {
@@ -352,8 +460,8 @@ export function migrate(d) {
   }
 
   // ── 未來的轉換寫在這裡 ──
-  // v1 → v2 不需要補任何欄位（見上方說明）
-  // if (v < 3) { ...把 v2 補成 v3... }
+  // v1 → v2 → v3 都不需要補任何欄位（見上方說明）
+  // if (v < 4) { ...把 v3 補成 v4... }
 
   return d;
 }

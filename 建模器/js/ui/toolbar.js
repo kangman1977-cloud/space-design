@@ -11,6 +11,8 @@ import { PRIM_SPECS, defaultSrc, PRIM_TYPES } from '../build/prim.js';
 import { KIND } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
+import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
+  from '../build/array.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -102,13 +104,18 @@ export class Panel {
     // ── 參數（可回頭改的才有）──
     if (obj.isBool) {
       this._boolSection(obj);
-      this._rowBtn('凍結成網格',
-        '把目前算出來的形狀固定下來。之後開檔不用再算一次布林（快很多），' +
-        '但就不能再回頭改孔徑或位置了。確定不會再改的模型才凍結。', () => {
-          if (!confirm('凍結之後就不能再改運算元的參數了，確定嗎？')) return;
-          obj.bake();
-          this._edit('凍結成網格');
+      this._freezeBtn(obj, '運算元的參數');
+
+    } else if (obj.isArray) {
+      this._arraySection(obj);
+      this._rowBtn(`打散成 ${obj.copies} 個獨立物件`,
+        '每一份變成可以各自搬動、各自改參數的物件。' +
+        '但打散之後就不再是「同一件 ×N」了，備料時會被當成不同的件。' +
+        '資訊只能往下走，所以能不打散就不要打散。', () => {
+          if (!confirm(`會變成 ${obj.copies} 個獨立物件，而且收不回來，確定嗎？`)) return;
+          this.app.onExplode(obj);
         });
+      this._freezeBtn(obj, '排列方式與份數');
 
     } else if (obj.isParametric) {
       const spec = PRIM_SPECS[obj.src.type];
@@ -155,6 +162,17 @@ export class Panel {
     this.refresh();
   }
 
+  /** 布林與陣列共用的「凍結成網格」 */
+  _freezeBtn(obj, whatYouLose) {
+    this._rowBtn('凍結成網格',
+      '把目前算出來的形狀固定下來。之後開檔不用再算一次（快很多），' +
+      `但就不能再回頭改${whatYouLose}了。確定不會再改的模型才凍結。`, () => {
+        if (!confirm(`凍結之後就不能再改${whatYouLose}了，確定嗎？`)) return;
+        obj.bake();
+        this._edit('凍結成網格');
+      });
+  }
+
   // ═══════════════════════════════════════════════════
   //  布林運算樹
   // ═══════════════════════════════════════════════════
@@ -198,89 +216,242 @@ export class Panel {
   }
 
   /**
-   * 列出一層的運算元。item.src 本身也可能是布林，所以這裡是遞迴的 ——
-   * 「先挖孔再跟別的合併」這種巢狀結構才能一路改到底。
+   * 列出一層的運算元。第一個是母體，其餘掛上運算符號。
    *
    * @param {string} path 展開狀態的記憶用鍵，形如 "12:0:1"
    */
   _boolItems(obj, node, parent, path) {
     const items = node.items || [];
-
     items.forEach((it, i) => {
-      const key = `${path}:${i}`;
-      const open = this.openItems.has(key);
-
-      const box = document.createElement('div');
-      box.className = 'item';
-
-      // ── 標頭：第一個是母體，其餘掛上運算符號 ──
-      const headEl = document.createElement('div');
-      headEl.className = 'itemHead';
-
-      const sym = document.createElement('span');
-      sym.className = 'sym';
-      sym.textContent = i === 0 ? '' : BOOL_SYMBOL[node.op] || '?';
-
-      const nm = document.createElement('span');
-      nm.className = 'nm';
-      nm.textContent = it.name || `運算元 ${i + 1}`;
-
-      const dims = document.createElement('span');
-      dims.className = 'dims';
-      dims.textContent = describeSrc(it.src);
-
-      const caret = document.createElement('span');
-      caret.className = 'caret';
-      caret.textContent = open ? '▾' : '▸';
-
-      headEl.append(sym, nm, dims, caret);
-      headEl.onclick = () => {
-        if (open) this.openItems.delete(key); else this.openItems.add(key);
-        this.refresh();
-      };
-      box.appendChild(headEl);
-
-      // ── 展開後的內容 ──
-      if (open) {
-        const body = document.createElement('div');
-        body.className = 'itemBody';
-        box.appendChild(body);
-
-        const prev = this._target;
-        this._target = body;
-
-        if (isBoolSrc(it.src)) {
-          body.appendChild(note(`巢狀布林（${BOOL_LABEL[it.src.op] || it.src.op}，`
-            + `${(it.src.items || []).length} 個運算元）`));
-          this._boolItems(obj, it.src, body, key);
-
-        } else if (it.src.type === 'mesh') {
-          body.appendChild(note('這個運算元已經是網格，沒有參數可以改'));
-
-        } else {
-          const spec = PRIM_SPECS[it.src.type];
-          if (spec) {
-            for (const f of spec.fields) {
-              this._rowNum(f.label, it.src[f.key], f, v => {
-                it.src[f.key] = f.int ? Math.round(v) : v;
-                this._rebuild(obj, '改' + f.label);
-              });
-            }
-          }
-        }
-
-        // 位置與角度是相對於第一個運算元（母體）的，所以孔會跟著母體一起走
-        this._rowArr3('位置 cm', it.pos, ['X', 'Y', 'Z'], false,
-          () => this._rebuild(obj, '改運算元位置'),
-          i === 0 ? '這是母體，位置固定在原點' : '相對於母體的位置');
-        this._rowArr3('旋轉 度', it.rot, ['X', 'Y', 'Z'], true,
-          () => this._rebuild(obj, '改運算元角度'));
-
-        this._target = prev;
-      }
-
-      parent.appendChild(box);
+      this._itemBox(obj, it, parent, `${path}:${i}`, {
+        symbol: i === 0 ? '' : (BOOL_SYMBOL[node.op] || '?'),
+        fallbackName: `運算元 ${i + 1}`,
+        posHint: i === 0 ? '這是母體，位置固定在原點' : '相對於母體的位置'
+      });
     });
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  陣列與鏡射
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 陣列面板。
+   *
+   * 特別把「總份數」放在最上面，因為那是這個功能真正的產出 ——
+   * 第 3 期展開時會據此出「一張圖 ×N」，而不是 N 張一樣的圖。
+   */
+  _arraySection(obj) {
+    const src = obj.src;
+    this.form.appendChild(head('陣列'));
+
+    const wrap = document.createElement('div');
+    wrap.className = 'tree';
+    this.form.appendChild(wrap);
+
+    // ── 模式 ──
+    const opRow = document.createElement('div');
+    opRow.className = 'op';
+    const lab = document.createElement('label');
+    lab.textContent = '排列方式';
+    lab.title = '線性＝沿方向等距排開；環形＝繞一個軸轉一圈；鏡射＝對稱複製';
+    const sel = document.createElement('select');
+    for (const v of [ARRAY_MODES.LINEAR, ARRAY_MODES.RADIAL, ARRAY_MODES.MIRROR]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = ARRAY_LABEL[v];
+      if (v === src.mode) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      // withMode 會補上新模式缺少的欄位，已有的（例如份數）保留下來
+      obj.src = withMode(src, sel.value);
+      this._rebuild(obj, '改成' + ARRAY_LABEL[sel.value]);
+    };
+    opRow.append(lab, sel);
+    wrap.appendChild(opRow);
+
+    const prev = this._target;
+    this._target = wrap;
+
+    // ── 總份數 ──
+    const total = document.createElement('div');
+    total.className = 'note';
+    total.textContent = `總共 ${obj.copies} 份`
+      + (src.mode === ARRAY_MODES.MIRROR ? '（其中一份是鏡像，展開圖要翻面）' : '');
+    wrap.appendChild(total);
+
+    // ── 各模式的參數 ──
+    if (src.mode === ARRAY_MODES.RADIAL) {
+      this._rowNum('份數', src.count, { min: 1, step: 1, int: true }, v => {
+        src.count = Math.max(1, Math.round(v));
+        this._rebuild(obj, '改份數');
+      });
+      this._rowSelect('繞哪個軸', src.axis || 'y',
+        AXES.map(a => [a, a.toUpperCase() + ' 軸']),
+        v => { src.axis = v; this._rebuild(obj, '改旋轉軸'); },
+        'Y 軸＝像轉盤一樣水平轉；X／Z 軸＝像輪子一樣立著轉');
+      this._rowNum('總角度', src.angle, { step: 15 }, v => {
+        src.angle = v; this._rebuild(obj, '改總角度');
+      }, '360＝繞滿一圈平均分佈；小於 360 時頭尾都會放一份');
+      this._rowArr3('旋轉中心 cm', src.center, ['X', 'Y', 'Z'], false,
+        () => this._rebuild(obj, '改旋轉中心'),
+        '相對於物件自己的原點。法蘭螺栓孔通常留 0，讓孔繞著中心排');
+
+    } else if (src.mode === ARRAY_MODES.MIRROR) {
+      this._rowSelect('對稱面垂直於', src.axis || 'x',
+        AXES.map(a => [a, a.toUpperCase() + ' 軸']),
+        v => { src.axis = v; this._rebuild(obj, '改對稱軸'); },
+        '選 X 軸＝左右鏡射；選 Z 軸＝前後鏡射');
+      this._rowNum('對稱面位置', src.offset, { step: 1 }, v => {
+        src.offset = v; this._rebuild(obj, '改對稱面位置');
+      }, '相對物件中心的距離。預設放在物件邊緣，所以鏡出來的那份剛好貼著；'
+       + '要以機箱中心線對稱，就把這裡改成物件中心到中心線的距離');
+      this._rowCheck('保留原件', src.keepOriginal !== false, v => {
+        src.keepOriginal = v;
+        this._rebuild(obj, v ? '保留原件' : '只留鏡像');
+      }, '取消勾選就只留下鏡像的那一份，用在「我要的是另一邊」的時候');
+
+    } else {
+      this._rowNum('份數', src.count, { min: 1, step: 1, int: true }, v => {
+        src.count = Math.max(1, Math.round(v));
+        this._rebuild(obj, '改份數');
+      });
+      this._rowArr3('間距 cm', src.step, ['X', 'Y', 'Z'], false,
+        () => this._rebuild(obj, '改間距'),
+        '每一份之間的距離。只想沿 X 排就只填 X');
+      this._spanNote(src.count, src.step);
+
+      this._rowNum('第二方向份數', src.count2, { min: 1, step: 1, int: true }, v => {
+        src.count2 = Math.max(1, Math.round(v));
+        this._rebuild(obj, '改第二方向份數');
+      }, '填 1 就是單排。填 4 會變成網格 —— 散熱孔就是這樣排的');
+      if ((src.count2 || 1) > 1) {
+        this._rowArr3('第二方向間距 cm', src.step2, ['X', 'Y', 'Z'], false,
+          () => this._rebuild(obj, '改第二方向間距'));
+        this._spanNote(src.count2, src.step2);
+      }
+    }
+
+    this._target = prev;
+
+    // ── 被複製的東西 ──
+    this.form.appendChild(head('複製的內容'));
+    const childWrap = document.createElement('div');
+    childWrap.className = 'tree';
+    this.form.appendChild(childWrap);
+    this._itemBox(obj, src.child, childWrap, `${obj.id}:child`, {
+      symbol: '⧉',
+      fallbackName: '原件',
+      posHint: '相對於陣列原點的位置'
+    });
+  }
+
+  /** 算給人看的總跨距，避免要自己心算「間距 × (份數−1)」 */
+  _spanNote(count, step) {
+    const n = Math.max(1, Math.round(count || 1)) - 1;
+    if (n < 1 || !Array.isArray(step)) return;
+    const len = Math.hypot(step[0] * n, step[1] * n, step[2] * n);
+    if (len < 1e-9) return;
+    const d = document.createElement('div');
+    d.className = 'dim';
+    d.style.margin = '-2px 0 6px';
+    d.textContent = `頭尾總跨距 ${round(len)} cm`;
+    (this._target || this.form).appendChild(d);
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  共用：一個可展開的子項
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 布林的運算元、陣列的原件，長相與行為完全一樣，所以共用這一個。
+   * 展開後依 src 的種類顯示內容，而且會遞迴 ——
+   * 「挖好孔的板子排成一排」這種巢狀結構才能一路改到底。
+   */
+  _itemBox(obj, item, parent, key, opt = {}) {
+    if (!item || !item.src) return;
+    const open = this.openItems.has(key);
+
+    const box = document.createElement('div');
+    box.className = 'item';
+
+    const headEl = document.createElement('div');
+    headEl.className = 'itemHead';
+
+    const sym = document.createElement('span');
+    sym.className = 'sym';
+    sym.textContent = opt.symbol || '';
+
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = item.name || opt.fallbackName || '內容';
+
+    const dims = document.createElement('span');
+    dims.className = 'dims';
+    dims.textContent = describeSrc(item.src);
+
+    const caret = document.createElement('span');
+    caret.className = 'caret';
+    caret.textContent = open ? '▾' : '▸';
+
+    headEl.append(sym, nm, dims, caret);
+    headEl.onclick = () => {
+      if (open) this.openItems.delete(key); else this.openItems.add(key);
+      this.refresh();
+    };
+    box.appendChild(headEl);
+
+    if (open) {
+      const body = document.createElement('div');
+      body.className = 'itemBody';
+      box.appendChild(body);
+
+      const prev = this._target;
+      this._target = body;
+
+      this._srcBody(obj, item.src, body, key);
+
+      this._rowArr3('位置 cm', item.pos, ['X', 'Y', 'Z'], false,
+        () => this._rebuild(obj, '改內容位置'), opt.posHint);
+      this._rowArr3('旋轉 度', item.rot, ['X', 'Y', 'Z'], true,
+        () => this._rebuild(obj, '改內容角度'));
+
+      this._target = prev;
+    }
+
+    parent.appendChild(box);
+  }
+
+  /** 依 src 的種類把可以改的東西列出來。會遞迴。 */
+  _srcBody(obj, src, container, key) {
+    if (isBoolSrc(src)) {
+      container.appendChild(note(`巢狀布林（${BOOL_LABEL[src.op] || src.op}，`
+        + `${(src.items || []).length} 個運算元）`));
+      this._boolItems(obj, src, container, key);
+      return;
+    }
+
+    if (isArraySrc(src)) {
+      container.appendChild(note(`巢狀陣列（${ARRAY_LABEL[src.mode] || src.mode}）`));
+      this._itemBox(obj, src.child, container, `${key}:child`,
+        { symbol: '⧉', fallbackName: '原件' });
+      return;
+    }
+
+    if (src.type === 'mesh') {
+      container.appendChild(note('這個內容已經是網格，沒有參數可以改'));
+      return;
+    }
+
+    const spec = PRIM_SPECS[src.type];
+    if (!spec) return;
+    for (const f of spec.fields) {
+      this._rowNum(f.label, src[f.key], f, v => {
+        src[f.key] = f.int ? Math.round(v) : v;
+        this._rebuild(obj, '改' + f.label);
+      });
+    }
   }
 
   /** 運算樹被改過 → 清掉快取重算，然後照一般編輯流程走 */
@@ -626,6 +797,7 @@ function bad(text) {
 function describeSrc(src) {
   if (!src) return '';
   if (isBoolSrc(src)) return BOOL_LABEL[src.op] || '布林';
+  if (isArraySrc(src)) return ARRAY_LABEL[src.mode] || '陣列';
   if (src.type === 'mesh') return '網格';
 
   const n = v => round(v);

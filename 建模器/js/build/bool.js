@@ -305,6 +305,50 @@ export function evalBoolTree(node, buildChild) {
 }
 
 /**
+ * 把一堆網格聯集成一個。
+ *
+ * 陣列與鏡射（array.js）需要把 N 份副本併起來，但**只有這個檔案
+ * 可以碰 Manifold**（見日誌「四個關鍵決定」第 4 條），所以把能力
+ * 從這裡開出去，而不是讓 array.js 自己去 import 函式庫。
+ *
+ * 為什麼一定要走布林聯集，不能只是把網格堆在一起：
+ * 堆疊很快，但副本一旦互相碰到，結果就是「兩件衣服疊著沒縫線」——
+ * 正是當初換掉 three-bvh-csg 的同一個問題。
+ *
+ * @param {Mesh[]} meshes
+ * @param {string[]} [labels] 出錯時用來指出是哪一份
+ * @returns {Mesh}
+ */
+export function unionMeshes(meshes, labels = []) {
+  if (!meshes || !meshes.length) throw new Error('沒有東西可以聯集');
+  if (meshes.length === 1) return meshes[0];
+
+  const { Manifold } = need();
+  const made = [];
+
+  try {
+    const mans = meshes.map((m, i) => {
+      const man = toManifold(m, labels[i] || `第 ${i + 1} 份`);
+      made.push(man);
+      return man;
+    });
+
+    // 批次版比兩兩相加快，數值也比較穩（實測 50 份 3ms，
+    // 而且體積剛好是 50000 而不是 49999.999…）
+    const acc = Manifold.union(mans);
+    made.push(acc);
+
+    if (acc.isEmpty()) throw new Error('聯集結果是空的');
+    return fromManifold(acc);
+
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 只做結構檢查，不真的運算。介面在按鈕按下去之前先問一次，
  * 才能給「板件不能布林」這種看得懂的提示，而不是跳一堆英文。
  *
