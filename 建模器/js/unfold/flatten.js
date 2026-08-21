@@ -84,12 +84,24 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   for (const p of merged) {
     if (p.overlap) warnings.push(`「${p.name}」攤平後有重疊，需要切分（第 7 期會做自動分片）`);
     if (p.nonDevelopable) warnings.push(`「${p.name}」含攤不平的曲面（角虧不為零），數學上不可能無失真展開，這一片的尺寸只是近似值`);
-    if (p.foldsNonParallel) {
+    /**
+     * 錐面警告**只對捲得起來的材料成立**。
+     *
+     * 捲得起來的材料（紙、帆布）：網格上的小面是離散化的產物，
+     * 真實長度是弧長，而錐面的圓弧修正做不到 → 偏短 → 要警告。
+     *
+     * 捲不起來的材料（珍珠板、木板、壓克力）：那些小面**就是實際要切的平板**，
+     * 弦長就是正確答案，什麼都不必修 → **不能警告**。
+     * 對板材跳這則警告，是在叫人不要用一個正確的數字 ——
+     * 誤報比漏報更糟，會讓人學會忽略整個警告欄。
+     */
+    if (p.radialFolds && rule.canRoll !== false) {
       // 訊息會被塞進 textContent（unfoldPanel.js），所以不能用 ** 那種標記，
       // 會原樣顯示成星號。要強調就直接把話講在最前面。
-      warnings.push(`請勿據以下料 ——「${p.name}」的折線不是全部互相平行，`
-                  + `圓弧修正的前提不成立，展開長度會偏短（錐面尤其明顯，`
-                  + `分段數越少差越多）。錐面的正確展開排在第 5 期`);
+      warnings.push(`請勿據以下料 ——「${p.name}」是錐面（折線放射狀匯聚到頂點），`
+                  + `${rule.label}捲得起來，所以展開長度應該走弧長，`
+                  + `但圓弧修正的前提是折線互相平行，在錐面上不成立 → 目前偏短`
+                  + `（分段數越少差越多）。錐面的正確展開排在第 5 期`);
     }
   }
 
@@ -205,29 +217,72 @@ function flattenPatch(mesh, faces, rule, tolDeg) {
     placed.add(seed.id);
   }
 
-  // ── 廣度優先攤開其餘的面 ──
-  /** 真正用來攤平的那些邊（生成樹）。沒被用到的內部邊就是隱含切割線。 */
+  /**
+   * ── 攤開其餘的面：**先走最平的邊** ──────────────────
+   *
+   * 這裡刻意不是單純的廣度優先。生成樹要**優先跨過轉折角最小的邊**，
+   * 理由是「共面的鄰居其實是同一片板子」，要讓它們黏在一起。
+   *
+   * 不這樣做會發生什麼（實測，圓錐加底蓋）：
+   * 底蓋由 32 個共面三角形組成，側面是 32 片斜面。先進先出的佇列
+   * 會讓每個底蓋三角形各自從**它旁邊那片側面**跨輪圈接上去，
+   * 而不是接到隔壁的底蓋三角形 —— 底蓋因此被拆散、散落在扇形四周，
+   * 攤出來就是一張星芒狀的廢圖（kang 2026-08-22 實際看到的那張）。
+   *
+   * 改成先走最平的邊之後，底蓋三角形彼此的轉折角是 0，一定先被走完，
+   * 整片底蓋保持完整；輪圈（113°）最後才走，而且只會走其中一條，
+   * 其餘 31 條自動變成隱含切割線。扇形 ＋ 圓盤，跟實際下料一致。
+   *
+   * 這不改變任何「哪些邊可以折」的規則，只改變**先攤哪一條**。
+   * 攤平是剛體運動，走的順序不影響每一片自己的形狀與尺寸 ——
+   * 只影響它們在圖面上被擺到哪裡，以及哪些邊變成隱含切割線。
+   */
   const tree = new Set();
-  const queue = [seed];
+  /**
+   * 待處理的邊界半邊，隨時取轉折角絕對值最小的那一條。
+   *
+   * 用堆積而不是每次線性掃一遍找最小值。理由是**演算法性質**，不是實測數字：
+   * 線性版是 O(邊界大小²)，而邊界會隨著面數成長。
+   *
+   * ── 老實說：實測兩者一樣快 ──────────────────────────
+   * 暖機後 128 段圓柱 1.2ms、16,128 面的球 112ms，兩種寫法量不出差別。
+   * 一開始以為線性版慢了五倍，那是 **Node JIT 冷啟動的假象**
+   * （前幾次執行還沒最佳化就拿去計時）。
+   * 留堆積是因為 O(n log n) 對「攤平一片很大的曲面」比較安全，
+   * 不是因為它現在比較快 —— 別把這段當成效能修正的案例。
+   *
+   * → 教訓：**計時一定要先暖機再取多次最小值**，
+   *   拿冷啟動的單次數字當根據，會做出沒必要的最佳化。
+   */
+  const frontier = new MinHeap();
 
-  while (queue.length) {
-    const f = queue.shift();
+  const pushFrontier = (f) => {
     for (const he of mesh.faceLoop(f)) {
       const th = he.twin;
       if (!th || !th.face || !inPatch.has(th.face.id)) continue;
       if (placed.has(th.face.id)) continue;
       if (edgeIsCut(mesh, he, rule, tolDeg)) continue;
-
-      // 共用邊：he 從 a 走到 b，孿生的 th 從 b 走到 a
-      const A2 = pt2.get(he.id);
-      const B2 = pt2.get(he.next.id);
-      if (!A2 || !B2) continue;
-
-      placeFace(mesh, th, B2, A2, pt2);
-      placed.add(th.face.id);
-      tree.add(he.id); tree.add(th.id);
-      queue.push(th.face);
+      const d = mesh.dihedral(he);
+      frontier.push(he, d === null ? Infinity : Math.abs(d));
     }
+  };
+
+  pushFrontier(seed);
+
+  while (frontier.size) {
+    const he = frontier.pop();
+    const th = he.twin;
+    if (!th || !th.face || placed.has(th.face.id)) continue;
+
+    // 共用邊：he 從 a 走到 b，孿生的 th 從 b 走到 a
+    const A2 = pt2.get(he.id);
+    const B2 = pt2.get(he.next.id);
+    if (!A2 || !B2) continue;
+
+    placeFace(mesh, th, B2, A2, pt2);
+    placed.add(th.face.id);
+    tree.add(he.id); tree.add(th.id);
+    pushFrontier(th.face);
   }
 
   // 走不到的面（理論上不會發生，除非結構壞掉）先丟掉並記一筆
@@ -265,6 +320,50 @@ function flattenPatch(mesh, faces, rule, tolDeg) {
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
     used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : []);
   return { piece };
+}
+
+/**
+ * 最小堆積 —— 攤平時用來「每次取轉折角最小的邊」。
+ *
+ * 刻意寫得很小：只要 push / pop / size 三件事，不需要泛用的優先佇列。
+ * 存成兩個平行陣列（值與成本），比存物件少一次配置。
+ */
+class MinHeap {
+  constructor() { this.v = []; this.c = []; }
+  get size() { return this.v.length; }
+
+  push(val, cost) {
+    this.v.push(val); this.c.push(cost);
+    let i = this.v.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.c[p] <= this.c[i]) break;
+      this._swap(p, i); i = p;
+    }
+  }
+
+  pop() {
+    const top = this.v[0];
+    const lastV = this.v.pop(), lastC = this.c.pop();
+    if (this.v.length) {
+      this.v[0] = lastV; this.c[0] = lastC;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < this.c.length && this.c[l] < this.c[m]) m = l;
+        if (r < this.c.length && this.c[r] < this.c[m]) m = r;
+        if (m === i) break;
+        this._swap(m, i); i = m;
+      }
+    }
+    return top;
+  }
+
+  _swap(a, b) {
+    const tv = this.v[a]; this.v[a] = this.v[b]; this.v[b] = tv;
+    const tc = this.c[a]; this.c[a] = this.c[b]; this.c[b] = tc;
+  }
 }
 
 /**
@@ -359,15 +458,82 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
     /** 永遠 false —— 還沒有可靠的判定方式，理由見上面那一大段說明 */
     nonDevelopable: false,
     /**
-     * 折線沒有全部互相平行 ＝ 圓弧修正的前提不成立，尺寸不可信。
+     * 折線呈放射狀匯聚到同一點 ＝ 這是**錐面**，一維拉伸修正不適用。
      * 這是**事實**，不是結論；要不要據以下料由警告訊息去講。
      */
-    foldsNonParallel: dirGroups.length > 1,
+    radialFolds: radialFan(folds),
     area: 0, width: 0, height: 0
   };
 
   measure(piece, mesh, faces);
   return piece;
+}
+
+/**
+ * 折線是不是「放射狀匯聚到同一點」—— 也就是這一片其實是個**錐面**。
+ *
+ * ── 為什麼要問這個 ──────────────────────────────────
+ * 圓弧修正是沿垂直於折線的方向做一維拉伸，前提是同一段圓弧的折線**互相平行**。
+ * 圓錐的折線指向頂點，彼此不平行，`groupByDirection()` 會把它們拆成
+ * 一條一條各自成群，於是每一條都被當成尖角折，弧長修正整個不觸發，
+ * 展開長度退回弦長（偏短）。
+ *
+ * ── 為什麼不是直接問「折線平不平行」──────────────────
+ * 試過，**會在最常見的件上誤報**：鋼板方塊攤成十字型，5 道折線分兩個方向，
+ * 「不平行」成立 —— 可是方塊根本沒有圓弧，沒有東西需要修正，那張圖完全正確。
+ * （kang 2026-08-22 實測抓到，測試當時漏了「鋼板方塊」這一項，
+ * 因為壓克力方塊的折線全被切開、等於沒折線，矇混過關。）
+ *
+ * 匯聚才是錐面**獨有**的特徵。實測的分離度很寬，不是勉強調出來的門檻：
+ *
+ *   圓錐（seg 4～64、rTop 0 與 15）  匯聚比例一律 **100%**
+ *   方塊 2/5、圓角方塊 2/21、角柱 2/7、管 5/65、球 127/511、折板 0/10
+ *   → 非錐面最高只到 25%
+ *
+ * ── 沒被這條抓到的 ──────────────────────────────────
+ * 球冠（45/127）。它由另一條既有的警告負責：攤平後真的重疊（overlap）。
+ * 兩條警告講的是不同的事，一條是「算不準」，一條是「這張圖本身不能用」。
+ *
+ * @param {Array} folds 攤平後的折線（2D 線段）
+ * @returns {boolean}
+ */
+function radialFan(folds) {
+  const L = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+
+  for (const f of folds) {
+    const dx = f.b.x - f.a.x, dy = f.b.y - f.a.y;
+    if (Math.hypot(dx, dy) < 1e-9) continue;
+    L.push({ x: f.a.x, y: f.a.y, dx, dy, len: Math.hypot(dx, dy) });
+    x0 = Math.min(x0, f.a.x, f.b.x); x1 = Math.max(x1, f.a.x, f.b.x);
+    y0 = Math.min(y0, f.a.y, f.b.y); y1 = Math.max(y1, f.a.y, f.b.y);
+  }
+  if (L.length < 3) return false;
+
+  // 容許值取整片尺度的 1%：太嚴會被浮點誤差刷掉，太鬆會讓平行線也算匯聚
+  const tol = Math.max(x1 - x0, y1 - y0, 1e-9) * 0.01;
+  const need = Math.max(3, L.length / 2);
+
+  // 只拿前 12 條互相配對求交點當候選圓心 —— 錐面的每一條都通過頂點，
+  // 所以隨便取兩條就找得到，不必窮舉 O(n²) 個配對
+  const cap = Math.min(L.length, 12);
+  for (let i = 0; i < cap; i++) {
+    for (let j = i + 1; j < cap; j++) {
+      const A = L[i], B = L[j];
+      const den = A.dx * B.dy - A.dy * B.dx;
+      if (Math.abs(den) < 1e-9) continue;                   // 平行，沒有交點
+      const t = ((B.x - A.x) * B.dy - (B.y - A.y) * B.dx) / den;
+      const px = A.x + t * A.dx, py = A.y + t * A.dy;
+
+      let n = 0;
+      for (const l of L) {
+        // 點到直線的距離（用外積算，不必先正規化方向）
+        if (Math.abs((px - l.x) * l.dy - (py - l.y) * l.dx) / l.len < tol) n++;
+      }
+      if (n >= need) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -395,10 +561,11 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
  * 是整個展開引擎最重的一塊（約 70% 工作量）。
  *
  * ── 那現在誰擋著 ────────────────────────────────────
- * `foldsNonParallel`。上面兩個會出事的案例（圓錐、球冠）實測都被它抓到，
- * 而四個正確的案例（平板、折板 L／U／Z、圓柱側面）一個都沒誤報。
- * 它問的是一個**明確而且答得出來**的問題：
- * 「一維拉伸修正的前提（折線互相平行）成不成立？」
+ * 兩條各司其職，都問**明確而且答得出來**的問題：
+ *   · `radialFolds`（見上）—— 折線放射狀匯聚 ＝ 這是錐面，抓圓錐
+ *   · `overlap`            —— 攤平後真的疊在一起，抓球冠
+ *
+ * 一條是「算不準」，一條是「這張圖本身就不能用」。
  *
  * 寧可留一個誠實的 false，也不要放一個會在圓錐上說「可以下料」的判定 ——
  * 日誌「踩過的坑」第 5 條就是這個教訓：寫「應該是多少」的判定之前，
@@ -412,10 +579,9 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
  * 切割線，方塊因此拆成六片各自平坦的面 —— 那正是壓克力箱體的做法，
  * 是**完全正確而且天天在用**的用途（測試「封閉實體 拆成 3 種面」盯著它）。
  *
- * 真正會出事的是「封閉實體 ＋ 折得動的材料」，那種情況攤出來的圖
- * 折線會散在各個方向。但那個情況已經被 `foldsNonParallel` 抓住了，
- * 不需要再多一條用「封不封閉」去猜的規則 ——
- * 封閉與否根本不是判準，用它當判準就會誤傷壓克力那條路。
+ * 而且「封閉實體 ＋ 折得動的材料」也不見得會出事：鋼板方塊是封閉實體，
+ * 攤出來就是標準的十字型下料圖，完全正確（測試「鋼板方塊 十字型面積」盯著它）。
+ * 封閉與否根本不是判準，用它當判準就會同時誤傷壓克力箱體與鋼板方塊兩條路。
  *
  * 至於「這是實體、不是板件」，part.js 的 unfoldObject() 已經擋在前面了。
  */
@@ -487,7 +653,26 @@ function arcCorrection(pt2, folds, rule, groups = null) {
 
     const found = bandsInGroup(g, rule, lo, hi);
     if (found.some(b => b.isArc)) arcGroups++;
-    applyStretch(pt2, g.dir, found);
+
+    /**
+     * 捲不起來的材料**不做圓弧修正** —— 弦長就是答案。
+     *
+     * 網格上的一段「圓弧」是一圈平面小面。它到底代表
+     * 「真的被捲圓的曲面」還是「一圈平板拼出來的多邊形」，
+     * 幾何分不出來（坑第 10 條），只有材料分得出來：
+     *   紙、帆布 → 捲得起來，小面是離散化的產物，真長度是弧長
+     *   板材     → 捲不起來，小面**就是實際要切的平板**，長度就是弦長
+     *
+     * 拉伸是這個檔案裡唯一會破壞精確性的一步 —— 攤平本身是剛體運動，
+     * 尺寸完全不變。所以對板材而言，**不拉伸 ＝ 精確**。
+     * 拉了會往多的錯：4 角柱 +11.07%、8 段圓柱 +2.62%。
+     */
+    if (rule.canRoll !== false) {
+      applyStretch(pt2, g.dir, found);
+    } else {
+      // 不拉伸時，帶的寬度也要改回弦長，否則標註與圖面對不起來
+      for (const b of found) if (b.isArc) b.arcW = b.chordW;
+    }
     for (const b of found) bands.push(b);
   }
 

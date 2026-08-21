@@ -56,7 +56,8 @@ const { topologyCheck } = await import('../js/ui/toolbar.js');
 // 第 3 期。展開核心與規則同樣不碰 DOM，畫圖也刻意拆成
 // 「決定畫什麼」與「怎麼畫出來」，前者是純資料，測得到。
 const { neutralRadius, bendAllowance } = await import('../js/build/prim.js');
-const { makeRule, MATERIALS, MATERIAL_KEYS } = await import('../js/unfold/rules.js');
+const { makeRule, MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL }
+  = await import('../js/unfold/rules.js');
 const { unfoldMesh } = await import('../js/unfold/flatten.js');
 const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/sheet.js');
 const { toDXF, UNITS } = await import('../js/out/dxf.js');
@@ -83,6 +84,22 @@ function eq(name, got, want) {
 function near(name, got, want, tol = 1e-6) {
   const ok = Number.isFinite(got) && Math.abs(got - want) <= tol;
   report(ok, name, fmt(got), fmt(want) + ` ±${tol}`);
+}
+
+/**
+ * 相對誤差比較。量「應該精確相等」的幾何量時用這個，不要用 near()。
+ *
+ * 理由：攤平是剛體運動，理論上完全精確，但實際會累積浮點誤差，
+ * 而誤差大小跟數值本身成比例 —— 量 180 跟量 18000 的絕對誤差差兩個數量級。
+ * 拿固定的絕對容許值去套，不是太鬆就是太緊。
+ *
+ * 預設 1e-7 是浮點雜訊的量級（實測落在 1e-8 ~ 1e-16），
+ * 而且遠比任何加工公差嚴格 —— 1e-7 的相對誤差在 1 公尺上是 0.1 微米。
+ */
+function rel(name, got, want, tol = 1e-7) {
+  const scale = Math.max(Math.abs(want), 1e-12);
+  const err = Math.abs(got - want) / scale;
+  report(Number.isFinite(got) && err <= tol, name, fmt(got), fmt(want) + ` (相對 ±${tol})`);
 }
 
 function ok(name, cond, detail = '') {
@@ -1149,7 +1166,7 @@ section('第 5 期(A)：算不準的展開一定要講出來');
     const cone = buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg, openEnded: true }, 0.3);
     const r = unfoldMesh(cone, makeRule('steel', 0.3));
     const p = r.pieces[0];
-    ok(`圓錐 ${seg} 段 標示折線不平行`, p.foldsNonParallel === true);
+    ok(`圓錐 ${seg} 段 認出是錐面（折線放射狀）`, p.radialFolds === true);
     ok(`圓錐 ${seg} 段 有「請勿據以下料」的警告`,
       r.warnings.some(w => w.includes('請勿據以下料')));
 
@@ -1165,14 +1182,64 @@ section('第 5 期(A)：算不準的展開一定要講出來');
       1 - Math.sin(Math.PI / seg) / (Math.PI / seg), 1e-12);
   }
 
-  // 開放但數學上攤不平的曲面（球冠）也要被抓到。
-  // 注意它的 overlap 是 false —— 攤平時演算法自己補的隱含切割線把它撐開了，
-  // 所以重疊偵測救不了這一種，只有 foldsNonParallel 抓得到。
+  /**
+   * 開放但數學上攤不平的曲面（球冠）也要被抓到。
+   *
+   * 球冠**不是**錐面（折線不匯聚，實測 45/127），所以 radialFolds 抓不到它。
+   * 它由另一條既有的警告負責：攤平後真的重疊。
+   * 兩條講的是不同的事 —— 一條是「算不準」，一條是「這張圖本身就不能用」。
+   *
+   * 重疊這一條在「先走最平的邊」之前是 false（生成樹亂走，
+   * 把該疊的地方撐成裂縫），改成優先走平邊之後才抓得到。
+   */
   const cap = Mesh.fromGeometry(
     new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3));
   const rc = unfoldMesh(cap, makeRule('steel', 0.3));
-  ok('球冠 標示折線不平行', rc.pieces[0].foldsNonParallel === true);
-  ok('球冠 重疊偵測抓不到它（所以更需要上面那條）', rc.pieces[0].overlap === false);
+  ok('球冠 不是錐面，不該被 radialFolds 抓', rc.pieces[0].radialFolds === false);
+  ok('球冠 改由重疊偵測負責（生成樹改良後才抓得到）', rc.pieces[0].overlap === true);
+  ok('球冠 仍然有警告（換一條，但沒有漏掉）',
+    rc.warnings.some(w => w.includes('重疊')));
+}
+
+{
+  /**
+   * ── 攤平時「先走最平的邊」──────────────────────────
+   *
+   * 生成樹要優先跨過轉折角最小的邊，讓共面的鄰居黏在一起。
+   * 先進先出的版本會讓圓錐底蓋的 32 個三角形各自從旁邊的側面
+   * 跨輪圈接上去，底蓋被拆散、散落在扇形四周，攤出來是一張星芒狀的廢圖。
+   */
+  const rule = makeRule('steel', 0.2);
+
+  // 開放錐面：攤平後必須是一個乾淨的扇形 ——
+  // 外圈每一點到頂點的距離都等於斜高。這是剛體展開的精確解，
+  // 跟弦長偏短是兩回事（那個是外弧本身的長度，不是形狀跑掉）。
+  const side = buildPrim('cone', { rBottom: 30, rTop: 0, h: 70, seg: 32, openEnded: true }, 0.2);
+  const sp = unfoldMesh(side, rule).pieces[0];
+  const cnt = new Map();
+  const key = q => q.x.toFixed(3) + ',' + q.y.toFixed(3);
+  for (const f of sp.faces) for (const q of f) cnt.set(key(q), (cnt.get(key(q)) || 0) + 1);
+  const [ax, ay] = [...cnt.entries()].sort((a, b) => b[1] - a[1])[0][0].split(',').map(Number);
+  const slant = Math.hypot(30, 70);
+  const outer = sp.outline.map(q => Math.hypot(q.x - ax, q.y - ay)).filter(d => d > 1);
+  eq('開放錐面 外圈點數', outer.length, 33);
+  ok('開放錐面 外圈每一點都落在斜高上（是乾淨的扇形）',
+    outer.every(d => Math.abs(d - slant) < 1e-3), `斜高 ${slant.toFixed(4)}`);
+
+  /**
+   * 封閉錐（側面 ＋ 底蓋）——星芒的迴歸保護。
+   *
+   * 星芒版的外框是 220.56 × 182.05，遠大於實際需要的料。
+   * 改良後底蓋保持完整，整張圖收斂到 150 cm 以內。
+   * 這裡用外框當指標：星芒一旦回來，外框一定會再度膨脹。
+   */
+  const solid = buildPrim('cone', { rBottom: 30, rTop: 0, h: 70, seg: 32, openEnded: false }, 0.2);
+  const cp = unfoldMesh(solid, rule).pieces[0];
+  ok('封閉錐 外框沒有膨脹成星芒', cp.width < 150 && cp.height < 150,
+    `${cp.width.toFixed(2)} × ${cp.height.toFixed(2)}（星芒版是 220.56 × 182.05）`);
+
+  // 面積是 3D 真值，攤平方式不影響它 —— 拿它確認沒有掉面
+  near('封閉錐 面積不受攤平順序影響', cp.area, 9970.15, 0.01);
 }
 
 {
@@ -1186,14 +1253,36 @@ section('第 5 期(A)：算不準的展開一定要講出來');
     ['折板 Z', buildPrim('bend',
       { bends: [{ angle: 90, ri: 2, len: 30 }, { angle: -90, ri: 2, len: 30 }] }, 0.3)],
     ['圓柱側面 8 段', buildPrim('cylinder', { r: 25, h: 70, seg: 8, openEnded: true }, 0.3)],
-    ['圓柱側面 64 段', buildPrim('cylinder', { r: 25, h: 70, seg: 64, openEnded: true }, 0.3)]
+    ['圓柱側面 64 段', buildPrim('cylinder', { r: 25, h: 70, seg: 64, openEnded: true }, 0.3)],
+    /**
+     * ★ 鋼板方塊 —— **這一項是補漏的**。
+     *
+     * 第一版判準是「折線沒有全部互相平行就報」，鋼板方塊攤成十字型時
+     * 5 道折線分兩個方向，於是在**最常見的件**上跳出「請勿據以下料」。
+     * 但方塊根本沒有圓弧（圓弧 0、尖角 5），那張圖完全正確。
+     *
+     * 當初這一節寫了六個正面案例卻漏掉它，是因為只測了壓克力方塊 ——
+     * 壓克力的折線全被切開、等於沒有折線，所以矇混過關。
+     * kang 2026-08-22 在瀏覽器實測抓到。
+     */
+    ['鋼板方塊（十字型）', buildPrim('box', { w: 60, h: 45, d: 40 }, 0.3)],
+    ['角柱', buildPrim('prism', { sides: 6, r: 30, h: 60 }, 0.3)],
+    ['圓角方塊 segR4', buildPrim('roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 4 }, 0.3)],
+    ['圓角方塊 segR8', buildPrim('roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 8 }, 0.3)]
   ];
   for (const [name, m] of clean) {
     const r = unfoldMesh(m, steel);
-    ok(`${name} 不該誤報折線不平行`, r.pieces.every(p => p.foldsNonParallel === false));
+    ok(`${name} 不該被誤判成錐面`, r.pieces.every(p => p.radialFolds === false));
     ok(`${name} 不該出現「請勿據以下料」`,
       !r.warnings.some(w => w.includes('請勿據以下料')));
   }
+
+  // 方塊十字型的面積必須精確 —— 誤報修掉了，但圖不能跟著壞
+  const cross = unfoldMesh(buildPrim('box', { w: 60, h: 45, d: 40 }, 0.3), steel).pieces[0];
+  near('鋼板方塊 十字型面積 ＝ 六面總和', cross.area, 13800, 1e-6);
+  eq('鋼板方塊 五道折彎', cross.bends.length, 5);
+  ok('鋼板方塊 五道全是尖角折（沒有圓弧要修）',
+    cross.bends.every(b => !b.isArc));
 
   /**
    * 壓克力封閉方塊 —— 這條是**迴歸保護**。
@@ -1205,7 +1294,7 @@ section('第 5 期(A)：算不準的展開一定要講出來');
   const box = unfoldMesh(buildPrim('box', { w: 60, h: 45, d: 40 }), makeRule('acrylic', 0.3));
   eq('壓克力封閉方塊 仍然拆得出 3 種面', box.pieces.length, 3);
   ok('壓克力封閉方塊 六片都不該被誤報',
-    box.pieces.every(p => p.foldsNonParallel === false));
+    box.pieces.every(p => p.radialFolds === false));
 }
 
 {
@@ -1227,6 +1316,115 @@ section('第 5 期(A)：算不準的展開一定要講出來');
   const sp = unfoldMesh(short, makeRule('steel', 0.3)).pieces[0];
   const one = sp.warnings.filter(w => w.includes('折邊只有'));
   ok('只有一道時不加「共 N 道」', one.length === 0 || !one[0].includes('共'));
+}
+
+section('第 5 期(B)：捲得起來走弧長，捲不起來走弦長');
+
+/**
+ * ── 這一節在盯什麼 ──────────────────────────────────
+ *
+ * 網格上的一段「圓弧」是一圈平面小面。這些面到底代表
+ * 「一個真的被捲圓的曲面」還是「一圈平板拼出來的多邊形」，
+ * **幾何本身分不出來**（踩過的坑第 10 條）。分得出來的是材料。
+ *
+ *   紙、帆布   捲得起來 → 小面是離散化的產物，真長度是**弧長**
+ *   板材       捲不起來 → 小面就是實際要切的平板，長度是**弦長**
+ *
+ * 這條在 2026-08-22 之前是寫死「一律弧長」，也就是對板材一律算錯，
+ * 而且往多的錯：4 角柱 +11.07%、6 角柱 +4.72%、8 段圓柱 +2.62%。
+ * kang 說明他們用紙材、發泡板、珍珠板、木板、壓克力，一種金屬都不用。
+ *
+ * 容許值用相對誤差 1e-7：攤平是剛體運動，理論上精確，
+ * 實際差在 1e-8～1e-16 之間，那是浮點雜訊。
+ * 這個檔案開頭就寫過「寫死 1e-6 只是自欺欺人」—— 這裡同一個道理，
+ * 不要用比浮點精度還嚴的門檻去假裝嚴謹。
+ */
+{
+  const board = makeRule('foamboard', 0.8);   // 捲不起來
+  const soft  = makeRule('paper', 0.05);      // 捲得起來
+  const r = 30, h = 60;
+
+  for (const seg of [4, 6, 8, 12, 16, 32, 64]) {
+    const chord = seg * 2 * r * Math.sin(Math.PI / seg);   // 正 n 邊形周長
+    const arc = 2 * Math.PI * r;                           // 圓周長
+
+    const pb = unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.8), board).pieces[0];
+    const pp = unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.05), soft).pieces[0];
+
+    rel(`板材 ${seg} 段 展開長 ＝ 弦長（各面外緣相加）`, pb.width, chord);
+    rel(`紙材 ${seg} 段 展開長 ＝ 弧長（2πr）`, pp.width, arc, 1e-6);
+
+    // 板材一定比紙材短（除非段數趨近無限）—— 方向錯了比大小錯了更嚴重
+    ok(`${seg} 段 板材必定短於紙材`, pb.width < pp.width);
+  }
+
+  /**
+   * 交叉檢查：矩形片的 展開長 × 展開寬 必須等於面積。
+   *
+   * 這是最硬的一條 —— 面積是從 **3D 真實網格**算的，
+   * 寬高是從**攤平後的 2D 圖**量的，兩條完全獨立的路。
+   * 圓弧修正只拉伸 2D、不動 3D，所以錯誤修正一定會讓這兩個數字打架。
+   * 2026-08-22 之前板材確實對不上（8 段：11309.73 vs 11021.28）。
+   */
+  for (const seg of [4, 8, 32]) {
+    const p = unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.8), board).pieces[0];
+    rel(`板材 ${seg} 段 展開長×展開寬 ＝ 面積`, p.width * p.height, p.area);
+  }
+
+  /**
+   * 角柱：定義上就是平板拼出來的，弦長是唯一正解。
+   *
+   * 這裡量**總面積**而不是某一片的寬度 —— `prism` 是封閉的（含上下蓋），
+   * 展開後哪一片是側板帶要靠猜，而 `orient()` 還可能把寬高對調。
+   * 面積不受擺法影響，是比較誠實的量法。
+   * （第一版寫成「挑最寬的那片」，結果挑到蓋子，4／6／12 邊全部失敗。）
+   */
+  for (const sides of [4, 6, 8, 12]) {
+    const R = 30, H = 60;
+    const side = sides * (2 * R * Math.sin(Math.PI / sides)) * H;    // 側面：弦長×高
+    const cap = 2 * (sides / 2 * R * R * Math.sin(2 * Math.PI / sides));
+    const r2 = unfoldMesh(buildPrim('prism', { sides, r: R, h: H }, 0.8), board);
+    const total = r2.pieces.reduce((a, p) => a + p.area * p.qty, 0);
+    rel(`${sides} 角柱 展開總面積 ＝ 側面(弦長×高) ＋ 上下蓋`, total, side + cap);
+  }
+}
+
+{
+  /**
+   * 錐面警告只對捲得起來的材料成立。
+   * 對板材而言錐面的弦長是**對的**，跳警告等於叫人不要用正確的數字。
+   */
+  const cone = () => buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg: 32, openEnded: true }, 0.3);
+  const hasWarn = rule => unfoldMesh(cone(), rule).warnings.some(w => w.includes('請勿據以下料'));
+
+  ok('紙材 錐面要警告（弧長修不到，偏短）', hasWarn(makeRule('paper', 0.05)) === true);
+  ok('帆布 錐面要警告', hasWarn(makeRule('canvas', 0.1)) === true);
+  ok('珍珠板 錐面不該警告（弦長就是答案）', hasWarn(makeRule('foamboard', 0.8)) === false);
+  ok('壓克力 錐面不該警告', hasWarn(makeRule('acrylic', 0.3)) === false);
+
+  // 但「認出這是錐面」這個事實不受材料影響 —— 事實歸事實，結論歸結論
+  ok('錐面判定本身與材料無關',
+    unfoldMesh(cone(), makeRule('foamboard', 0.8)).pieces[0].radialFolds === true);
+}
+
+{
+  // 新材料與預設值
+  ok('材料表有珍珠板／發泡板', MATERIAL_KEYS.includes('foamboard'));
+  eq('預設材質改成珍珠板（他們不用金屬）', DEFAULT_MATERIAL, 'foamboard');
+  ok('珍珠板：折得起來（V 溝）', makeRule('foamboard', 0.8).foldable === true);
+  ok('珍珠板：捲不起來', makeRule('foamboard', 0.8).canRoll === false);
+
+  /**
+   * 「折得起來但捲不起來」是前五種材料都表達不出來的組合 ——
+   * 金屬與帆布兩者皆可，壓克力／木板兩者皆否。少了它就沒有東西
+   * 能描述「銑 45 度 V 溝折起來的珍珠板」。
+   */
+  const both = MATERIAL_KEYS.filter(k => {
+    const R = makeRule(k, 0.5);
+    return R.foldable === true && R.canRoll === false;
+  });
+  eq('「可折不可捲」目前只有珍珠板這一種', both.length, 1);
+  eq('而且就是它', both[0], 'foamboard');
 }
 
 section('第 3 期：材料規則');
