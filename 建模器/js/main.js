@@ -23,6 +23,7 @@ import { SceneView } from './view/scene.js';
 import { Selection, isTouch } from './view/select.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
+import { ExportPanel } from './ui/exportPanel.js';
 
 const $ = id => document.getElementById(id);
 
@@ -63,6 +64,7 @@ const app = {
 
 const panel = new Panel(app);
 const unfoldWin = new UnfoldPanel(app);
+const exportWin = new ExportPanel(app);
 
 // ═══════════════════════════════════════════════════════
 //  動作
@@ -281,6 +283,7 @@ $('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
 $('aMirror').onclick = () => arrayOp(ARRAY_MODES.MIRROR);
 
 $('unfold').onclick = () => unfoldWin.open();
+$('export3d').onclick = () => exportWin.open();
 
 $('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };
 $('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l); updateBar(); };
@@ -382,8 +385,12 @@ function updateBar() {
     ? '把板件攤平成下料圖：含尺寸標註、折線、折彎補償，可列印或輸出 DXF 送雷切'
     : '目前沒有板件。加一個「平板」或「折板」，或把物件的種類改成板件';
 
+  // 3D 匯出：只要有物件就能匯出（實體、板件都可以）
+  $('export3d').disabled = doc.objects.length === 0;
+
   // 開著的時候跟著文件一起更新，改個板厚就能看到展開長跟著變
   if (unfoldWin.isOpen) unfoldWin.run();
+  if (exportWin.isOpen) exportWin.run();
 
   const act = sel.active;
   $('sInfo').textContent = act

@@ -40,6 +40,7 @@ export class UnfoldPanel {
   _build() {
     const el = document.createElement('div');
     el.id = 'unfoldWin';
+    el.className = 'uwWin';        // 樣式與 3D 匯出視窗共用
     el.hidden = true;
     el.innerHTML = `
       <div class="uwBack"></div>

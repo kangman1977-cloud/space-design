@@ -53,6 +53,7 @@ export function safeName(s, dflt = '未命名') {
 export const TYPES = {
   dxf:  [{ description: 'DXF 圖檔',  accept: { 'application/dxf': ['.dxf'] } }],
   svg:  [{ description: 'SVG 向量圖', accept: { 'image/svg+xml': ['.svg'] } }],
+  stl:  [{ description: 'STL 3D 模型', accept: { 'model/stl': ['.stl'] } }],
   csv:  [{ description: 'CSV 檔',    accept: { 'text/csv': ['.csv'] } }],
   json: [{ description: 'JSON 檔',   accept: { 'application/json': ['.json'] } }],
   png:  [{ description: 'PNG 圖檔',  accept: { 'image/png': ['.png'] } }]
@@ -172,4 +173,12 @@ function guessTypes(name) {
 /** 文字 → Blob。UTF-8 一律寫進 type，中文才不會被當成系統編碼。 */
 export function textBlob(text, mime) {
   return new Blob([text], { type: `${mime};charset=utf-8` });
+}
+
+/**
+ * 位元組 → Blob。二進位檔（例如二進位 STL）用這個。
+ * **不可以加 charset** —— 那是文字才有的東西，加上去會讓某些工具誤判。
+ */
+export function binaryBlob(bytes, mime) {
+  return new Blob([bytes], { type: mime });
 }

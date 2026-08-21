@@ -62,6 +62,8 @@ const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/s
 const { toDXF, UNITS } = await import('../js/out/dxf.js');
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
 const { safeName, TYPES, canChoosePath } = await import('../js/out/save.js');
+const { triangles, stlVolume, trisBounds, dropToBed, toSTLBinary, toSTLAscii,
+        printCheck, STL_UNITS } = await import('../js/out/stl.js');
 
 // ═══════════════════════════════════════════════════════
 //  小小的測試框架
@@ -1424,6 +1426,194 @@ section('第 3 期：標註不可以疊在一起');
   // 字寬估算：中文一個字約一個字高，數字約 0.55
   ok('字寬估算 中文比數字寬', labelWidth('折彎', 1) > labelWidth('12', 1));
   ok('字寬估算 字多的比較寬', labelWidth('12345', 1) > labelWidth('12', 1));
+}
+
+// ═══════════════════════════════════════════════════════
+//  STL 匯出（3D 列印與 CAM）
+// ═══════════════════════════════════════════════════════
+
+section('STL：體積交叉驗證');
+
+{
+  /**
+   * **這一組是 STL 最重要的驗證。**
+   *
+   * 從匯出的三角形用散度定理反算體積，必須等於 mesh.volume() × 倍率³。
+   * 這一條式子同時抓三種錯：
+   *   · 扇形三角化接錯 → 體積不對
+   *   · 法向反了       → 體積變負
+   *   · 單位換算錯     → 差一個 10³
+   * 跟第 2 期「管 vs 布林」、第 3 期「網格辨識 vs 參數公式」同一招。
+   */
+  const shapes = [
+    ['方塊', 'box', { w: 60, h: 45, d: 40 }],
+    ['圓柱', 'cylinder', { r: 25, h: 70, seg: 32 }],
+    ['球', 'sphere', { r: 30, segW: 32, segH: 16 }],
+    ['角柱', 'prism', { sides: 6, r: 30, h: 60 }],
+    ['管', 'tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }],
+    ['圓角方塊', 'roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 4 }]
+  ];
+
+  for (const [name, type, p] of shapes) {
+    const m = buildPrim(type, p, 0.2);
+    for (const u of ['mm', 'cm']) {
+      const s = STL_UNITS[u].scale;
+      const tris = triangles(m, { scale: s });
+      const want = m.volume() * s ** 3;
+      near(`${name} ${u} STL 體積 ＝ 網格體積×倍率³`,
+        stlVolume(tris) / want, 1, 1e-9);
+    }
+    // 三角形數 ＝ 扇形三角化的預期數量（n 邊形切成 n−2 個）
+    let want = 0;
+    for (const f of m.faces) want += m.faceVerts(f).length - 2;
+    eq(`${name} 三角形數 ＝ Σ(邊數−2)`, triangles(m, { scale: 10 }).length, want);
+  }
+}
+
+{
+  // 布林過的模型也要對得上 —— 那是實際會拿去列印的東西
+  if (!csgError()) {
+    const src = {
+      type: 'bool', op: BOOL_OPS.SUBTRACT,
+      items: [
+        { src: { type: 'box', w: 60, h: 45, d: 40 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] },
+        { src: { type: 'cylinder', r: 10, h: 60, seg: 32 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] }
+      ]
+    };
+    const m = io.buildSrc(src, 0.2);
+    const tris = triangles(m, { scale: 10 });
+    near('貫孔件 STL 體積 ＝ 網格體積×1000', stlVolume(tris) / (m.volume() * 1000), 1, 1e-9);
+    ok('貫孔件 體積為正（法向朝外）', stlVolume(tris) > 0);
+  }
+}
+
+section('STL：座標轉換');
+
+{
+  /**
+   * 建模器沿用 three.js 的 Y 軸向上，但列印平台是 XY 平面、Z 軸向上。
+   * 不轉的話模型會躺著進切片軟體。
+   */
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const tris = dropToBed(triangles(m, { scale: 10 }));
+  const b = trisBounds(tris);
+  const size = b.max.clone().sub(b.min);
+
+  near('轉 Z 軸向上後 高度在 Z（45cm → 450mm）', size.z, 450, 1e-6);
+  near('轉 Z 軸向上後 寬度在 X（60cm → 600mm）', size.x, 600, 1e-6);
+  near('轉 Z 軸向上後 深度在 Y（40cm → 400mm）', size.y, 400, 1e-6);
+  near('落到列印平台 Z=0', b.min.z, 0, 1e-9);
+
+  // 座標轉換是右手系旋轉，體積不變、法向仍朝外
+  ok('轉換後體積仍為正', stlVolume(tris) > 0);
+  near('轉換不改變體積', stlVolume(tris), m.volume() * 1000, 1e-3);
+
+  // 沒開 zUp 時高度應該還在 Y
+  const raw = triangles(m, { scale: 10, zUp: false });
+  const rb = trisBounds(raw).max.clone().sub(trisBounds(raw).min);
+  near('關掉 zUp 時 高度回到 Y', rb.y, 450, 1e-6);
+}
+
+section('STL：檔案格式');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const tris = triangles(m, { scale: 10 });
+  const bin = toSTLBinary(tris, { header: 'test unit=mm' });
+  const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+
+  eq('二進位 檔案大小 ＝ 84＋50×三角形數', bin.length, 84 + 50 * tris.length);
+  eq('二進位 檔頭宣告的三角形數', dv.getUint32(80, true), tris.length);
+  // 以 "solid" 開頭會被某些軟體誤判成 ASCII 格式，那是很常見的匯出 bug
+  ok('二進位 檔頭不以 solid 開頭',
+    String.fromCharCode(...bin.slice(0, 5)) !== 'solid');
+  ok('二進位 檔頭只有 ASCII', ![...bin.slice(0, 80)].some(b => b > 126));
+
+  const asc = toSTLAscii(tris, { name: 'test' });
+  ok('ASCII 以 solid 開頭', asc.startsWith('solid '));
+  ok('ASCII 以 endsolid 結尾', asc.trim().endsWith('endsolid test'));
+  eq('ASCII facet 數', (asc.match(/facet normal/g) || []).length, tris.length);
+  eq('ASCII vertex 數 ＝ 三角形數×3', (asc.match(/vertex /g) || []).length, tris.length * 3);
+  eq('ASCII outer loop 與 endloop 成對',
+    (asc.match(/outer loop/g) || []).length, (asc.match(/endloop/g) || []).length);
+
+  // 兩種格式必須是同一個模型
+  const back = [...asc.matchAll(/vertex (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)/g)]
+    .map(x => [+x[1], +x[2], +x[3]]);
+  let v = 0;
+  for (let i = 0; i < back.length; i += 3) {
+    const [a, b, c] = [back[i], back[i + 1], back[i + 2]];
+    v += a[0] * (b[1] * c[2] - b[2] * c[1])
+       - a[1] * (b[0] * c[2] - b[2] * c[0])
+       + a[2] * (b[0] * c[1] - b[1] * c[0]);
+  }
+  near('ASCII 讀回來的體積與網格一致', v / 6, m.volume() * 1000, 1);
+}
+
+section('STL：列印前檢查');
+
+{
+  const box3 = buildPrim('box', { w: 6, h: 4.5, d: 4 }, 0.2);
+  const c = printCheck(box3, triangles(box3, { scale: 10 }));
+  ok('封閉實體 可以列印', c.ok);
+  eq('封閉實體 封閉', c.closed, true);
+  eq('封閉實體 一塊', c.components, 1);
+  eq('封閉實體 沒有問題', c.issues.length, 0);
+
+  // 板件是開放的面（中性面），直接匯出會印出空的
+  const plate = buildPrim('plate', { w: 10, d: 6 }, 0.2);
+  const cp = printCheck(plate, triangles(plate, { scale: 10 }));
+  ok('板件未加厚 判定為印不出來', !cp.ok);
+  ok('板件未加厚 講得出是不封閉', cp.issues.some(i => i.level === 'bad' && i.text.includes('封閉')));
+
+  // 加厚之後就印得出來，而且體積 ＝ 面積×厚度
+  const solid = plate.shell(0.2);
+  const cs = printCheck(solid, triangles(solid, { scale: 10 }));
+  ok('板件加厚後 可以列印', cs.ok);
+  near('板件加厚後 體積 ＝ 面積×厚度×1000', cs.volume, 10 * 6 * 0.2 * 1000, 1e-6);
+
+  // 分成兩塊要提醒，但不擋
+  if (!csgError()) {
+    const two = io.buildSrc({
+      type: 'bool', op: BOOL_OPS.UNION,
+      items: [
+        { src: { type: 'box', w: 4, h: 4, d: 4 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] },
+        { src: { type: 'box', w: 4, h: 4, d: 4 }, pos: [20, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] }
+      ]
+    }, 0.2);
+    const ct = printCheck(two, triangles(two, { scale: 10 }));
+    eq('分開兩塊 元件數', ct.components, 2);
+    ok('分開兩塊 仍然可以列印', ct.ok);
+    ok('分開兩塊 有提醒', ct.issues.some(i => i.level === 'warn' && i.text.includes('塊')));
+  }
+
+  // 超過成型範圍要提醒
+  const big = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const cb = printCheck(big, triangles(big, { scale: 10 }), { buildMM: 250 });
+  ok('超過成型範圍 有提醒', cb.issues.some(i => i.text.includes('成型範圍')));
+  ok('超過成型範圍 仍然可以列印', cb.ok);
+
+  // 單位選錯（cm 送出去）會讓模型只有十分之一大
+  const cSmall = printCheck(box3, triangles(box3, { scale: 1 }));
+  ok('模型太小 提醒單位可能選錯', cSmall.issues.some(i => i.text.includes('單位')));
+
+  eq('存檔類型 stl 的副檔名', JSON.stringify(TYPES.stl).includes('.stl'), true);
+}
+
+{
+  // 退化三角形要在匯出時就丟掉，留著會被切片軟體判成非流形。
+  // 圓錐的頂點半徑是 1e-4（不是 0），所以本來就不該有退化面。
+  const cone = buildPrim('cone', { rTop: 0, rBottom: 30, h: 70, seg: 32 }, 0.2);
+  const tris = triangles(cone, { scale: 10 });
+  let zero = 0;
+  for (const t of tris) {
+    const ux = t.b.x - t.a.x, uy = t.b.y - t.a.y, uz = t.b.z - t.a.z;
+    const vx = t.c.x - t.a.x, vy = t.c.y - t.a.y, vz = t.c.z - t.a.z;
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    if (Math.hypot(cx, cy, cz) < 1e-9) zero++;
+  }
+  eq('匯出的三角形沒有退化的', zero, 0);
+  near('錐體 STL 體積 ＝ 網格體積×1000', stlVolume(tris) / (cone.volume() * 1000), 1, 1e-9);
 }
 
 section('第 3 期：效能');
