@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>建模器 — 第 1 期</title>
+<style>
+/* ══ 基本 ══════════════════════════════════════════ */
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: #1b1e23; color: #e8eaed;
+  font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  font-size: 14px; overscroll-behavior: none;
+}
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+/* ══ 工具列 ════════════════════════════════════════ */
+#bar {
+  flex: none; z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: #24272e; border-bottom: 1px solid #3a3f48;
+}
+.grp {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px 3px 6px; border: 1px solid #3a3f48; border-radius: 8px;
+}
+.grp > .lbl {
+  flex: none; white-space: nowrap;
+  font-size: 11px; color: #8b93a1; margin-right: 2px;
+}
+button, select, input {
+  font-family: inherit; font-size: 13px;
+}
+button {
+  flex: none; white-space: nowrap;
+  padding: 6px 11px; border-radius: 6px;
+  border: 1px solid #454b56; background: #2f333c; color: #e8eaed;
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+button:hover:not(:disabled) { background: #3a3f4a; }
+button:active:not(:disabled) { background: #4a5160; }
+button.on { background: #2f6fd0; border-color: #4d8ae8; color: #fff; }
+button.warn { border-color: #7a4040; }
+button:disabled { opacity: .35; cursor: default; }
+select {
+  padding: 6px 8px; border-radius: 6px;
+  border: 1px solid #454b56; background: #2f333c; color: #e8eaed;
+}
+
+/* ══ 主體 ══════════════════════════════════════════ */
+#main { flex: 1 1 auto; display: flex; min-height: 0; }
+#stage { flex: 1 1 auto; position: relative; min-width: 0; }
+#cv { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* ══ 右側面板 ══════════════════════════════════════ */
+#panel {
+  flex: none; width: 300px; overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #20232a; border-left: 1px solid #3a3f48;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+#panel section { border-bottom: 1px solid #2c313a; }
+#panel h2 {
+  margin: 0; padding: 10px 14px; font-size: 12px; font-weight: 600;
+  color: #8b93a1; letter-spacing: .5px; background: #24272e;
+  display: flex; justify-content: space-between; align-items: center;
+}
+button.mini {
+  padding: 3px 9px; font-size: 11px; border-radius: 5px;
+}
+#panel .empty {
+  padding: 22px 14px; text-align: center; color: #6f7681;
+  font-size: 12.5px; line-height: 1.7;
+}
+#panel .empty span { font-size: 11.5px; color: #565c66; }
+#pForm { padding: 8px 14px 14px; }
+.row {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0;
+}
+.row > label {
+  flex: none; width: 78px; font-size: 12px; color: #a8b0bd;
+}
+.row > input, .row > select { flex: 1 1 auto; min-width: 0; }
+.row input[type=text], .row input[type=number], .row select {
+  padding: 5px 8px; border-radius: 5px;
+  border: 1px solid #3f4550; background: #191c21; color: #e8eaed;
+  font-variant-numeric: tabular-nums;
+}
+.row input[type=checkbox] { width: 17px; height: 17px; flex: none; }
+.row input[type=color] {
+  flex: none; width: 46px; height: 28px; padding: 0;
+  border: 1px solid #3f4550; border-radius: 5px; background: #191c21;
+}
+.row input:disabled { opacity: .4; }
+.row.vec { gap: 6px; }
+.row.vec > div { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.row.vec span { flex: none; font-size: 11px; color: #6f7681; width: 10px; }
+.row.vec input { width: 100%; min-width: 0; }
+#pForm .sub {
+  margin: 14px 0 6px; padding-top: 10px; border-top: 1px solid #2c313a;
+  font-size: 11px; color: #8b93a1; font-weight: 600; letter-spacing: .4px;
+}
+#pForm .note {
+  margin: 8px 0; padding: 7px 10px; border-radius: 6px;
+  background: rgba(47,111,208,.12); border: 1px solid #2c4a75;
+  font-size: 11.5px; color: #a8c0e0; line-height: 1.6;
+}
+button.wide { width: 100%; margin-top: 10px; }
+
+/* ══ 結構分析表 ════════════════════════════════════ */
+#anaBody { padding: 6px 14px 14px; }
+table.ana { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.ana td {
+  padding: 4px 0; vertical-align: top; line-height: 1.5;
+}
+table.ana td:first-child { color: #8b93a1; width: 48%; }
+table.ana td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; }
+/* 分節標題。要一眼看得出是標題，不能像可以填字的欄位。 */
+table.ana th.grp {
+  text-align: left;
+  padding: 6px 0 5px;
+  font-size: 10.5px; font-weight: 700;
+  color: #7c8695; letter-spacing: 1.4px;
+  border: none; border-bottom: 1px solid #333944;
+  background: none;
+}
+table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
+.dim { color: #5f6672; font-size: 11px; }
+.ok  { color: #7fd7a5; }
+.bad { color: #e88f8f; }
+.anaFoot { margin-top: 10px; font-size: 11px; color: #565c66; }
+
+/* ══ 狀態列 ════════════════════════════════════════ */
+#status {
+  position: absolute;
+  left: calc(10px + env(safe-area-inset-left));
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  padding: 8px 12px; border-radius: 8px;
+  background: rgba(20,23,28,.85); border: 1px solid #3a3f48;
+  font-size: 12px; line-height: 1.65; pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+#status b { color: #7fd7a5; font-weight: 600; }
+#status .dim2 { color: #8b93a1; }
+
+/* ══ 提示條 ════════════════════════════════════════ */
+#toast {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  top: 12px; padding: 7px 14px; border-radius: 999px;
+  background: rgba(47,111,208,.94); color: #fff;
+  font-size: 13px; white-space: nowrap;
+  opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 5;
+}
+#toast.show { opacity: 1; }
+#toast.bad { background: rgba(178,70,70,.95); }
+
+/* ══ 手指裝置 ══════════════════════════════════════ */
+@media (pointer: coarse) {
+  button { padding: 10px 13px; font-size: 14px; }
+  button.mini { padding: 5px 10px; font-size: 12px; }
+  .row input[type=text], .row input[type=number], .row select { padding: 8px; }
+  .row input[type=checkbox] { width: 20px; height: 20px; }
+}
+
+/* ══ 窄螢幕：面板改成底部抽屜 ══════════════════════ */
+@media (max-width: 900px) {
+  #main { flex-direction: column; }
+  #panel {
+    width: 100%; flex: none; max-height: 42%;
+    border-left: none; border-top: 1px solid #3a3f48;
+  }
+  #bar { gap: 5px; padding: 6px; }
+  .grp { padding: 2px 6px; }
+}
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./lib/three/three.module.min.js",
+    "three/addons/": "./lib/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="app">
+
+  <div id="bar">
+    <div class="grp">
+      <span class="lbl">檔案</span>
+      <button id="newDoc">新建</button>
+      <button id="load">讀檔</button>
+      <button id="save">存檔</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">新增</span>
+      <select id="primType"></select>
+      <button id="add">加入</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">編輯</span>
+      <button id="undo" disabled>復原</button>
+      <button id="redo" disabled>重做</button>
+      <button id="dup" disabled>複製</button>
+      <button id="del" class="warn" disabled>刪除</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">模式</span>
+      <button id="mMove" class="on">移動</button>
+      <button id="mRot">旋轉</button>
+      <button id="mScale">縮放</button>
+      <button id="multi">加選</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">吸附</span>
+      <button class="snapBtn" data-s="0">關</button>
+      <button class="snapBtn on" data-s="1">1cm</button>
+      <button class="snapBtn" data-s="5">5cm</button>
+      <button class="snapBtn" data-s="10">10cm</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">檢視</span>
+      <button id="edges" class="on">稜線</button>
+      <button id="wire">線框</button>
+      <button id="frame">全部入鏡</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="stage">
+      <canvas id="cv"></canvas>
+      <div id="toast"></div>
+      <div id="status">
+        <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
+        <div><span class="dim2">物件</span> <b id="sObj">0</b>　<span class="dim2">已選</span> <b id="sSel">0</b></div>
+        <div class="dim2" id="sInfo">點一下物件選取它</div>
+      </div>
+    </div>
+
+    <div id="panel"></div>
+  </div>
+
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
