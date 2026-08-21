@@ -1,0 +1,17 @@
+{
+  "name": "建模器",
+  "short_name": "建模器",
+  "description": "3D 建模與展開：折彎件出下料圖、DXF 送雷切，單位 cm",
+  "start_url": "./建模器/",
+  "scope": "./建模器/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1b1e23",
+  "theme_color": "#1b1e23",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icons/modeler-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/modeler-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/modeler-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

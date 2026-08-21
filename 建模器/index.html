@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>建模器 — 第 3 期</title>
+<!-- 加到主畫面（跟另外兩個工具同一套做法）。
+     manifest 放在上一層跟另外兩份並排，裡面的路徑是相對於 manifest 自己的位置。
+     black-translucent 會讓內容跑到 iOS 狀態列底下，所以版面一律靠
+     env(safe-area-inset-*) 讓開 —— 這是專案踩過的坑第 7 條。 -->
+<link rel="manifest" href="../manifest-modeler.webmanifest">
+<meta name="theme-color" content="#1b1e23">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="建模器">
+<link rel="apple-touch-icon" href="../icons/modeler-180.png">
 <style>
 /* ══ 基本 ══════════════════════════════════════════ */
 * { box-sizing: border-box; }
