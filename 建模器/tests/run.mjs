@@ -63,7 +63,11 @@ const { unfoldMesh } = await import('../js/unfold/flatten.js');
 const { unfoldObject } = await import('../js/unfold/part.js');
 const seam = await import('../js/unfold/seam.js');
 const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/sheet.js');
-const { toDXF, UNITS } = await import('../js/out/dxf.js');
+const { sliceProgram, sliceTitleLines, progSVG } = await import('../js/out/sheet.js');
+const { toDXF, UNITS, sliceDXF, cutLayer } = await import('../js/out/dxf.js');
+// 剖面分切。切片是純幾何、定位孔是純幾何，兩個都不碰 DOM，所以整條路測得到。
+const sect = await import('../js/slice/section.js');
+const pegsMod = await import('../js/slice/pegs.js');
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
 const { safeName, TYPES, canChoosePath } = await import('../js/out/save.js');
 const { triangles, stlVolume, trisBounds, dropToBed, toSTLBinary, toSTLAscii,
@@ -2729,6 +2733,429 @@ section('第 3 期：效能');
   const ms = Date.now() - t0;
   near('128 段圓柱 展開長仍精確', r.pieces[0].width, 2 * Math.PI * 25, 1e-6);
   ok(`128 段圓柱 展開耗時 ${ms}ms（< 2 秒）`, ms < 2000, `${ms}ms`);
+}
+
+// ═══════════════════════════════════════════════════════
+//  剖面分切（第三條生產路徑）
+// ═══════════════════════════════════════════════════════
+
+section('剖面分切：分段');
+
+{
+  // kang 給的例子：1cm×5 ＋ 2cm×7 ＋ 1cm×剩下，模型高 27
+  const p = sect.planSlabs(27, [{ t: 1, n: 5 }, { t: 2, n: 7 }, { t: 1, n: 'rest' }]);
+  eq('分段 總片數', p.slabs.length, 20);
+  near('分段 疊到的高度 ＝ 模型高', p.used, 27);
+  near('分段 差額 0', p.diff, 0);
+  eq('分段 第 2 段的片號是 6~12',
+     `${p.bands[1].from}~${p.bands[1].to}`, '6~12');
+  eq('分段 第 3 段「剩下」自動算出 8 片', p.bands[2].n, 8);
+  near('分段 第 6 片的中央高度', p.slabs[5].mid, 6);   // 5 + 2/2
+
+  /**
+   * 湊不滿時**如實回報，不四捨五入湊滿**。
+   * 偷偷湊滿的後果是圖看起來剛好、東西矮一截，而且要疊完才發現。
+   */
+  const q = sect.planSlabs(27, [{ t: 2, n: 'rest' }]);
+  eq('湊不滿 片數', q.slabs.length, 13);
+  near('湊不滿 差額如實回報', q.diff, 1);
+
+  const over = sect.planSlabs(27, [{ t: 10, n: 4 }]);
+  near('疊過頭 差額是負的', over.diff, -13);
+
+  /**
+   * ⚠ 2026-08-22 kang 實測抓到的：布林聯集出來的物件，
+   * Manifold 的座標帶著 1e-4 等級的精度殘留，高度不是剛好 60 而是 60.0001。
+   *
+   * 兩個後果都要擋住：
+   *   一、面板跳出「還差 0 cm 沒疊到」——自相矛盾，看的人只能猜
+   *   二、殘留是負的時候，「剩下」會少算一整片，差 5cm 卻不知道為什麼
+   *
+   * 判準必須挑**有物理意義的量**（0.1mm），不是浮點數的 1e-6。
+   */
+  const bands = [{ t: 5, n: 3 }, { t: 10, n: 3 }, { t: 5, n: 'rest' }];
+  const hi = sect.planSlabs(60.0001, bands);
+  const lo = sect.planSlabs(59.9999, bands);
+  eq('高度有正殘留時 片數不變', hi.slabs.length, 9);
+  eq('高度有負殘留時 也不會少算一片', lo.slabs.length, 9);
+  ok('殘留造成的差額小於容許值（不該跳警告）',
+     Math.abs(hi.diff) < sect.FIT_TOL && Math.abs(lo.diff) < sect.FIT_TOL,
+     `${fmt(hi.diff)} / ${fmt(lo.diff)}`);
+  ok('真的差半片時還是要跳（容許值沒有寬到蓋掉真問題）',
+     Math.abs(sect.planSlabs(62.5, bands).diff) > sect.FIT_TOL);
+}
+
+section('剖面分切：切一疊');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 1, n: 'rest' }] });
+
+  eq('方塊 片數', r.slices.length, 45);
+  near('方塊 每片面積 ＝ 60×40', r.slices[0].area, 2400);
+  near('方塊 中間那片也一樣', r.slices[22].area, 2400);
+  eq('方塊 一片只有一圈輪廓', r.slices[0].loops.length, 1);
+  eq('方塊 沒有內孔', r.slices[0].loops[0].isHole, false);
+
+  /**
+   * 共線的多餘頂點要清掉。方塊的側面在網格上是兩個三角形，
+   * 不清的話一片會有 8 個點，其中 4 個是三角化的產物 ——
+   * DXF 會多一倍的線，進 Illustrator 還多出可以被拖走的錨點。
+   */
+  eq('方塊 一片 4 個點（三角化的中間點已清掉）', r.slices[0].loops[0].pts.length, 4);
+
+  /**
+   * ⚠ 這一項盯的是**鏡射**。
+   * 2D 座標的 (u,v) 順序排錯的話，每一片都會左右翻過來 ——
+   * 面積、片數、孔位全部算得對，圖看起來也完全正常，
+   * 但做出來是鏡像的，疊不回原形。而且要切完料才會發現。
+   * 外輪廓是逆時針（正面積）就表示手性沒錯。
+   */
+  ok('方塊 外輪廓是逆時針（沒有鏡射）', r.slices[0].loops[0].area > 0);
+
+  /**
+   * 三個軸切出來的體積都必須等於真正的體積。
+   * 這是這一整套最強的一項交叉驗證：切片方向、(u,v) 的配對、
+   * 面積正負號、片厚累加，任何一個弄錯，這三個數字就對不起來。
+   */
+  for (const ax of ['x', 'y', 'z']) {
+    const rr = sect.sliceMesh(buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2),
+      { axis: ax, bands: [{ t: 1, n: 'rest' }] });
+    near(`${ax} 軸 Σ(片面積×片厚) ＝ 體積 108000`,
+      rr.slices.reduce((a, s) => a + s.area * s.t, 0), 108000, 1e-6);
+  }
+
+  // 混合板厚一樣要守恆 —— 片厚不再是常數，累加寫錯就會露出來
+  const mix = sect.sliceMesh(buildPrim('box', { w: 60, h: 27, d: 40 }, 0.2),
+    { axis: 'y', bands: [{ t: 1, n: 5 }, { t: 2, n: 7 }, { t: 1, n: 'rest' }] });
+  eq('混合板厚 片數', mix.slices.length, 20);
+  eq('混合板厚 兩種厚度', mix.stats.thickKinds.join(','), '1,2');
+  near('混合板厚 Σ(片面積×片厚) ＝ 體積 64800',
+    mix.slices.reduce((a, s) => a + s.area * s.t, 0), 60 * 27 * 40, 1e-6);
+}
+
+{
+  // 管：中間是通的，所以每片都是一個環 —— 外輪廓一圈、內孔一圈
+  const m = buildPrim('tube', { r: 25, ri: 20, h: 70, seg: 64 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 2, n: 'rest' }] });
+  const s = r.slices[5];
+  eq('管 一片兩圈', s.loops.length, 2);
+  eq('管 其中一圈是內孔', s.loops.filter(l => l.isHole).length, 1);
+  const poly = 64 * Math.sin(2 * Math.PI / 64) / 2;
+  near('管 片面積 ＝ 外環減內環', s.area, poly * (25 * 25 - 20 * 20), 1e-9);
+  ok('管 內孔是順時針（負面積）', s.loops.find(l => l.isHole).area < 0);
+}
+
+{
+  /**
+   * 截面不變的東西（圓柱）Σ(片面積×片厚) 必須**精確等於**網格體積。
+   * 切片本身沒有近似，會有誤差的只有「截面隨高度變」這件事。
+   */
+  const c = buildPrim('cylinder', { r: 25, h: 70, seg: 64 }, 0.2);
+  const rc = sect.sliceMesh(c, { axis: 'y', bands: [{ t: 2, n: 'rest' }] });
+  rel('圓柱 Σ(片面積×片厚) 精確等於網格體積',
+      rc.slices.reduce((a, s) => a + s.area * s.t, 0), c.volume(), 1e-12);
+}
+
+{
+  /**
+   * 球：不可展曲面。展開那條路只能近似，剖面分切照樣切得開 ——
+   * 這正是原訂第 7 期大概可以取消的理由。
+   *
+   * ── 對答案要對「網格的體積」，不是理想球的體積 ──────────
+   * 這個網格是內接的多面體，它自己就比真球小 1.6%（rings 48），
+   * 那是建模的離散化，跟切片一點關係也沒有。
+   * 拿理想球當基準的話，測到的是球體怎麼建的，不是切片準不準。
+   *
+   * 切片自己的誤差來自「用中央那一刀代表整段」，
+   * 所以片越薄越準 —— 下面直接把收斂測出來。
+   */
+  const m = buildPrim('sphere', { r: 30, seg: 64, rings: 48 }, 0.2);
+  const V = m.volume();
+  const vol = t => sect.sliceMesh(m, { axis: 'y', bands: [{ t, n: 'rest' }] })
+    .slices.reduce((a, s) => a + s.area * s.t, 0);
+
+  const e2 = Math.abs(vol(2) / V - 1);
+  const e05 = Math.abs(vol(0.5) / V - 1);
+  ok(`球 片厚 0.5 時逼近網格體積到 ${(e05 * 100).toFixed(3)}%`, e05 < 0.001);
+  ok('球 片越薄越準（切片誤差是可收斂的，不是算錯）', e05 < e2 / 5,
+     `2cm:${(e2 * 100).toFixed(3)}%　0.5cm:${(e05 * 100).toFixed(3)}%`);
+}
+
+{
+  /**
+   * 疊過頭的片會切到空的地方，而且一定要講出來。
+   *
+   * 注意第 5 片（40~50，中央剛好 45）**不是空的** ——
+   * 模型頂面就在 45，那一刀切到的是頂面本身，得到完整的截面。
+   * 數學上沒錯（封閉體在邊界上的截面就是整個面），
+   * 但它代表的那一段有一半在空氣裡 —— 講出這件事的是「差額 −15」那一行，
+   * 不是空片偵測。兩個訊息各管一半，缺一個使用者就會漏看。
+   */
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 10, n: 6 }] });
+  eq('疊過頭 片數照樣是 6', r.slices.length, 6);
+  near('疊過頭 差額是負的 −15（做出來會超出模型）', r.stats.diff, -15);
+  eq('疊過頭 完全落在模型外的是第 6 片',
+     r.slices.filter(s => !s.loops.length).map(s => s.index).join(','), '6');
+  ok('疊過頭 有講出是哪幾片空的',
+     r.warnings.some(w => w.includes('空的')), r.warnings.join('|'));
+}
+
+section('剖面分切：定位孔');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 1, n: 'rest' }] });
+
+  // 點在不在料上、離邊界多遠 —— 手算得出來的數字
+  const loops = r.slices[0].loops;
+  near('方塊 正中心離邊界 ＝ 短邊的一半', sect.insideDepth(loops, 0, 0), 20);
+  ok('方塊 外面的點是負的', sect.insideDepth(loops, 100, 0) < 0);
+
+  const g = pegsMod.findPegs(r.slices, {});
+  const P = g.bands[0].pegs;
+  ok('方塊 找得到定位孔', g.ok, g.reason || '');
+  eq('方塊 兩個孔（一個孔鎖不住旋轉）', P.length, 2);
+
+  /**
+   * 孔①刻意**不寫死在外框中心**，而是取「所有片都最安全的那一點」。
+   * 對方塊來說那算出來就是中心，但規則不是「中心」——
+   * 管狀件的中心是空的，寫死會讓孔落在洞裡。
+   */
+  ok('方塊 孔① 落在正中心', g.base.x === 0 && g.base.y === 0, JSON.stringify(g.base));
+  ok('方塊 孔① 沒有 −0 這種東西', !Object.is(g.base.x, -0) && !Object.is(g.base.y, -0));
+
+  /**
+   * 第一版把第 2 孔放在「最遠」的地方，結果被推到角落，
+   * 離邊只剩 1.47cm，45 片全部變成快裂了 —— 而那塊料明明寬得很。
+   * 現在的規則是「安全度至少要有使用者設的淨距的兩倍」。
+   */
+  ok('方塊 第 2 孔的安全度 ≥ 淨距的兩倍', g.margin >= g.need * 2,
+     `margin ${fmt(g.margin)}　need ${fmt(g.need)}`);
+  ok('方塊 兩孔離得夠遠（鎖得住旋轉）', g.bands[0].spread > 20,
+     `spread ${fmt(g.bands[0].spread)}`);
+  eq('方塊 安全的件不該跳任何警告', g.warnings.length, 0);
+
+  const chk = pegsMod.checkPegs(r.slices, s => pegsMod.pegsForSlice(g, s), {});
+  ok('方塊 每一片都串得起來', chk.ok, `壞掉的片：${chk.bad.join(',')}`);
+  near('方塊 檢查回報的最糟距離 ＝ 找孔時算的 margin', chk.worst, g.margin, 1e-9);
+
+  // 孔徑大到塞不下時要**明講不行**，不能靜靜給一組會切壞的孔
+  const huge = pegsMod.findPegs(r.slices, { d: 80, gap: 5 });
+  ok('孔徑塞不下時老實說不行', !huge.ok);
+  ok('而且講得出為什麼', !!huge.reason && huge.reason.length > 10, huge.reason);
+}
+
+{
+  /**
+   * ⚠ 2026-08-22 kang 實測球體抓到的：
+   * 球切 15 片，頭尾是直徑只有 10cm 的小圓片。第一版所有孔都要求
+   * 「每一片都成立」，於是兩個孔被擠進那個小圓裡，**只距離 2.66cm**
+   * —— 在一個 60cm 的球上等於白放第二個孔。**被全場最小的那一片綁死了。**
+   *
+   * 現在孔①才是全域的（通到底的那根桿子），其餘的孔各段自己求解，
+   * 只需要在那一段的片上成立。
+   */
+  const m = buildPrim('sphere', { r: 30, seg: 48, rings: 32 }, 0.2);
+  const bands = [{ t: 1, n: 5 }, { t: 10, n: 5 }, { t: 1, n: 5 }];
+  const r = sect.sliceMesh(m, { axis: 'x', bands });
+  eq('球 分三段共 15 片', r.slices.length, 15);
+
+  const all2 = pegsMod.findPegs(r.slices, { d: 0.5, gap: 0.8, counts: [2, 2, 2] });
+  const mid = all2.bands[1];
+  const cap = all2.bands[0];
+  ok('球 中段兩孔拉得開（不再被最小的那一片綁死）', mid.spread > 15,
+     `中段 ${fmt(mid.spread)} cm　頭段 ${fmt(cap.spread)} cm`);
+  ok('球 頭尾小片的孔本來就拉不開', cap.spread < 5);
+  ok('球 兩孔太近時會講出來（不是只報離邊緣多遠）',
+     all2.warnings.some(w => w.includes('鎖不住旋轉')), all2.warnings.join('|'));
+
+  // kang 的用法：頭尾給 1 孔，中段給 2 孔
+  const g = pegsMod.findPegs(r.slices, { d: 0.5, gap: 0.8, counts: [1, 2, 1] });
+  eq('球 段1 依指定只給 1 孔', g.bands[0].pegs.length, 1);
+  eq('球 段2 依指定給 2 孔', g.bands[1].pegs.length, 2);
+  eq('球 段3 依指定只給 1 孔', g.bands[2].pegs.length, 1);
+
+  /**
+   * 孔①必須在**每一段都是同一個座標** —— 它是通到底的那根桿子，
+   * 各段各算一個的話桿子就穿不過去了。
+   */
+  const b0 = g.bands.map(b => `${b.pegs[0].x},${b.pegs[0].y}`);
+  eq('球 孔① 三段完全同一個座標', new Set(b0).size, 1);
+  eq('球 孔① 就是回傳的 base', b0[0], `${g.base.x},${g.base.y}`);
+
+  ok('球 每一片都串得起來',
+     pegsMod.checkPegs(r.slices, s => pegsMod.pegsForSlice(g, s),
+       { d: 0.5, gap: 0.8 }).ok);
+  /**
+   * ⚠ 自己選的東西不能當成錯誤。
+   * 使用者刻意把頭尾設成 1 孔，第一版跳出兩個紅色警告唸同一件事 ——
+   * 紅色一旦用在「你自己選的後果」上就失去意義了（坑第 18 條的軟性版）。
+   * 後果還是要講，但講一次、而且是說明不是警告。
+   */
+  eq('球 使用者自己選 1 孔 不算警告', g.warnings.length, 0);
+  eq('球 單孔的說明只講一次（不是每段一次）', g.notes.length, 1);
+  ok('球 說明裡講得出「可以繞著孔轉」與是哪幾片',
+     g.notes[0].includes('繞著孔轉') && g.notes[0].includes('1~5')
+     && g.notes[0].includes('11~15'), g.notes.join('|'));
+
+  // 加到 3 孔，間距要更大（第 3 孔不是隨便塞在旁邊）
+  const g3 = pegsMod.findPegs(r.slices, { d: 0.5, gap: 0.8, counts: [1, 3, 1] });
+  eq('球 段2 給得了 3 孔', g3.bands[1].pegs.length, 3);
+  ok('球 3 孔的散開程度大於 2 孔', g3.bands[1].spread > g.bands[1].spread);
+
+  // 每一片拿到的孔 ＝ 它那一段的孔
+  eq('第 3 片拿到段1的孔',
+     pegsMod.pegsForSlice(g, r.slices[2]).length, 1);
+  eq('第 8 片拿到段2的孔',
+     pegsMod.pegsForSlice(g, r.slices[7]).length, 2);
+}
+
+{
+  // 管：中間是洞，孔一定要落在環上，不能落在中空的地方
+  const m = buildPrim('tube', { r: 25, ri: 20, h: 70, seg: 64 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 2, n: 'rest' }] });
+  const g = pegsMod.findPegs(r.slices, { d: 0.4, gap: 0.5 });
+  ok('管 找得到定位孔', g.ok, g.reason || '');
+
+  /**
+   * ⚠ 這一項就是「孔①不能寫死在外框中心」的理由。
+   * 管的中心是空的，硬放中心那個孔會落在洞裡，整疊全部串不起來。
+   */
+  ok('管 孔① 沒有落在中間的洞裡',
+     Math.hypot(g.base.x, g.base.y) > 20, JSON.stringify(g.base));
+  for (const p of g.bands[0].pegs) {
+    const rad = Math.hypot(p.x, p.y);
+    ok(`管 孔落在環上（半徑 ${fmt(rad)}，應在 20~25 之間）`, rad > 20 && rad < 25);
+  }
+  ok('管 兩孔幾乎在對面（環形件最好的鎖法）', g.bands[0].spread > 40,
+     `spread ${fmt(g.bands[0].spread)}`);
+  ok('管 每一片都串得起來',
+     pegsMod.checkPegs(r.slices, s => pegsMod.pegsForSlice(g, s),
+       { d: 0.4, gap: 0.5 }).ok);
+}
+
+section('剖面分切：出圖與 DXF');
+
+{
+  const m = buildPrim('box', { w: 60, h: 27, d: 40 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y',
+    bands: [{ t: 1, n: 5 }, { t: 2, n: 7 }, { t: 1, n: 'rest' }] });
+  // 段1、段3 給 1 孔，段2 給 2 孔 —— 每片孔數不一樣才測得到出圖有沒有搞混
+  const g = pegsMod.findPegs(r.slices, { counts: [1, 2, 1] });
+  const pegsOf = s => pegsMod.pegsForSlice(g, s);
+  const fr = sect.stackBounds(r.slices);
+  const popt = {
+    origin: { x: fr.minX, y: fr.minY }, frame: { w: fr.w, h: fr.h },
+    pegD: 0.5, total: r.slices.length
+  };
+
+  /**
+   * 每一片都用同一個座標框，所以孔在每張圖上都落在同一個位置。
+   * 各自貼齊自己的外框也畫得出圖，但那樣人就沒辦法把圖排開、
+   * 用眼睛掃一遍確認孔位真的對齊。
+   */
+  const p1 = sliceProgram(r.slices[0], { ...popt, pegs: pegsOf(r.slices[0]) });
+  const p2 = sliceProgram(r.slices[6], { ...popt, pegs: pegsOf(r.slices[6]) });
+  eq('所有片共用同一個外框', `${p1.box.w},${p1.box.h}`, `${p2.box.w},${p2.box.h}`);
+  const c1 = p1.items.filter(i => i.t === 'circle');
+  const c2 = p2.items.filter(i => i.t === 'circle');
+  eq('段1 的片 1 個孔', c1.length, 1);
+  eq('段2 的片 2 個孔', c2.length, 2);
+  eq('孔① 在每片的同一個位置', `${c1[0].x},${c1[0].y}`, `${c2[0].x},${c2[0].y}`);
+
+  /**
+   * 層號一律掛在孔①旁邊，不是掛在這一段的其他孔旁邊 ——
+   * 只有孔①在每一片上都在同一個地方，它同時也是朝向記號。
+   */
+  const n1 = p1.items.find(i => i.style === 'num');
+  const n2 = p2.items.find(i => i.style === 'num');
+  eq('層號有標上片號與板厚', n2.s, '#07 t2');
+  eq('層號的水平位置在每片都一樣（＝孔①正下方）', n1.x, n2.x);
+
+  const tl = sliceTitleLines(r.slices[6], { ...popt, pegs: pegsOf(r.slices[6]) });
+  ok('標題欄講得出第幾片、板厚', tl[0].includes('第 7 片') && tl[0].includes('2 cm'), tl[0]);
+  /**
+   * 「只有孔①通到底」一定要寫在圖上。
+   * 不寫的話現場會拿一根長桿子想穿過全部，穿到一半才發現穿不過去。
+   */
+  ok('標題欄講清楚只有孔①通到底',
+     tl.join('|').includes('通到底'), tl.join('|'));
+
+  const svg = progSVG(p1, tl);
+  ok('SVG 有 XML 宣告（沒有的話 Illustrator 當純文字開）', svg.startsWith('<?xml'));
+  ok('SVG 畫得出圓孔', svg.includes('<circle'));
+  ok('SVG 不用 dominant-baseline（Illustrator 不支援）',
+     !svg.includes('dominant-baseline'));
+
+  // ── DXF ──
+  const dxf = sliceDXF(r.slices, {
+    unit: 'mm', origin: popt.origin, frame: popt.frame,
+    pegsOf, pegD: 0.5, axis: 'y', head: { name: '測試' }
+  });
+
+  const sections = [...dxf.matchAll(/(?:^|\r\n)0\r\nSECTION\r\n2\r\n(\w+)\r\n/g)]
+    .map(x => x[1]);
+  eq('剖面 DXF 四個區段齊全且順序正確',
+     sections.join('>'), 'HEADER>TABLES>BLOCKS>ENTITIES');
+  const tbls = [...dxf.matchAll(/\r\n0\r\nTABLE\r\n2\r\n(\w+)\r\n/g)].map(x => x[1]);
+  eq('剖面 DXF 表格齊全，LTYPE 在 LAYER 前',
+     tbls.join('>'), 'LTYPE>LAYER>STYLE');
+
+  const layers = [...dxf.matchAll(/\r\n0\r\nLAYER\r\n2\r\n([\w$-]+)\r\n/g)].map(x => x[1]);
+  eq('剖面 DXF 圖層：切割線依板厚各一層',
+     layers.join(','), '0,CUT_T10,CUT_T20,NUM,TEXT');
+
+  /**
+   * 圖層數宣告（群組碼 70）跟實際圖層數對不上，DXF「看起來」完全正常，
+   * 但有些軟體會直接判定檔案損壞。加圖層卻忘了改這個數字，
+   * 2026-08-22 做接合編號時被回歸測試擋下來過一次。
+   */
+  eq('剖面 DXF 圖層數宣告 ＝ 實際圖層數',
+     +dxf.match(/TABLE\r\n2\r\nLAYER\r\n70\r\n(\d+)/)[1], layers.length);
+
+  // 每片孔數不一樣，所以要一片一片加起來 —— 用一個固定的乘法會測不到搞混
+  eq('剖面 DXF 圓孔數 ＝ 每片各自的孔數加起來',
+     (dxf.match(/\r\n0\r\nCIRCLE\r\n/g) || []).length,
+     r.slices.reduce((n, s) => n + pegsOf(s).length, 0));
+  ok('剖面 DXF 有寫「只有孔①通到底」',
+     dxf.includes('through rod'));
+
+  /**
+   * 定位孔一定要跟輪廓在**同一個切割圖層**。
+   * 分成獨立一層的話，廠商只留切割層丟給機器時孔會漏切 ——
+   * 而漏切的後果是整疊串不起來，那批料全部報廢。
+   */
+  ok('定位孔畫在切割層（不是獨立一層，否則會漏切）',
+     !layers.includes('PEG'));
+  const cutBlock = dxf.split('\r\n0\r\nCIRCLE\r\n')[1] || '';
+  ok('每個圓孔都掛在 CUT_T** 圖層上', /^8\r\nCUT_T/.test(cutBlock), cutBlock.slice(0, 20));
+
+  eq('剖面 DXF 全部是 CRLF 換行', /[^\r]\n/.test(dxf), false);
+  eq('剖面 DXF 全部是 ASCII（中文在 R12 沒有統一編碼）',
+     /[^\x00-\x7F]/.test(dxf), false);
+  ok('剖面 DXF 以 EOF 結尾', dxf.trimEnd().endsWith('EOF'));
+  ok('剖面 DXF 有寫「一次只切一種板厚」的用法說明',
+     dxf.includes('cut one thickness at a time'));
+
+  eq('圖層命名 1.0cm', cutLayer(1.0), 'CUT_T10');
+  eq('圖層命名 2cm', cutLayer(2), 'CUT_T20');
+  eq('圖層命名 0.35cm 小數點寫成底線（R12 圖層名不能有點）',
+     cutLayer(0.35), 'CUT_T3_5');
+}
+
+section('剖面分切：效能');
+
+{
+  const t0 = Date.now();
+  const m = buildPrim('sphere', { r: 30, seg: 64, rings: 48 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 1, n: 'rest' }] });
+  const g = pegsMod.findPegs(r.slices, {});
+  const ms = Date.now() - t0;
+  ok(`球 60 片 切片＋找孔 ${ms}ms（< 5 秒）`, ms < 5000, `${ms}ms`);
+  ok('球 60 片 每片都切得出東西', r.slices.every(s => s.loops.length));
+  ok('球 找得到定位孔', g.ok, g.reason || '');
 }
 
 // ═══════════════════════════════════════════════════════

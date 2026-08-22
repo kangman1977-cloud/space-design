@@ -29,6 +29,7 @@ import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { ExportPanel } from './ui/exportPanel.js';
+import { SlicePanel } from './ui/slicePanel.js';
 
 const $ = id => document.getElementById(id);
 
@@ -79,6 +80,7 @@ const app = {
 const panel = new Panel(app);
 const unfoldWin = new UnfoldPanel(app);
 const exportWin = new ExportPanel(app);
+const sliceWin = new SlicePanel(app);
 
 // ═══════════════════════════════════════════════════════
 //  動作
@@ -326,6 +328,7 @@ function setOrtho(on) {
 $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('unfold').onclick = () => unfoldWin.open();
+$('slice').onclick = () => sliceWin.open();
 $('export3d').onclick = () => exportWin.open();
 
 $('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };
@@ -628,9 +631,20 @@ function updateBar() {
   // 3D 匯出：只要有物件就能匯出（實體、板件都可以）
   $('export3d').disabled = doc.objects.length === 0;
 
+  /**
+   * 剖面分切：跟展開同一條規矩 —— 有物件就開放，沒選就切全部。
+   * 開放曲面切下去接不成封閉輪廓，但那是視窗裡講的事，不在這裡擋：
+   * 擋在按鈕上的話使用者只看得到一顆灰掉的按鈕，不知道為什麼。
+   */
+  $('slice').disabled = !any;
+  $('slice').title = any
+    ? '切成一疊板，每片一張輪廓送 CNC，切完照號碼疊起來黏合'
+    : '目前沒有任何物件';
+
   // 開著的時候跟著文件一起更新，改個板厚就能看到展開長跟著變
   if (unfoldWin.isOpen) unfoldWin.run();
   if (exportWin.isOpen) exportWin.run();
+  if (sliceWin.isOpen) sliceWin.run();
 
   const act = sel.active;
   $('sInfo').textContent = act
@@ -705,6 +719,9 @@ async function boot() {
 
 function loop() {
   requestAnimationFrame(loop);
+  // gizmo 的大小是每一幀依相機距離重算的，所以三個軸標也要每一幀跟上。
+  // 這一段是固定成本（三個 Sprite），不隨模型大小成長。
+  sel.syncGizmoLabels();
   view.render();
   const fpsEl = $('sFps');
   if (fpsEl.textContent !== String(view.fps)) {

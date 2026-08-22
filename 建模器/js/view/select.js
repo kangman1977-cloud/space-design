@@ -95,6 +95,143 @@ export class Selection {
     const helper = tc.getHelper ? tc.getHelper() : tc;
     v.scene.add(helper);
     this.helper = helper;
+
+    this._initAxisLabels();
+  }
+
+  /**
+   * gizmo 的三根拉桿旁邊標上 X / Y / Z。
+   *
+   * ── 為什麼要做 ──────────────────────────────────────
+   * 顏色本來就分得開（紅綠藍），但「哪個顏色是哪個軸」要記，
+   * 而這個建模器是 **Y 軸向上**、Z 是深度 —— 跟很多人習慣的
+   * 「Z 向上」相反，所以憑印象猜一定會猜錯。
+   * kang 實測後回報「操作上時常會搞錯 XYZ」。
+   *
+   * 標上去之後不必記也不必猜，看一眼就對得起來 ——
+   * 跟輸入欄位那三個 X／Y／Z 是同一組字，中間不用再翻譯一次。
+   *
+   * ── 為什麼用 Sprite 而不是 HTML ──────────────────────
+   * 字要跟著拉桿在 3D 裡轉。用 HTML 疊上去的話每一幀都要投影、
+   * 還要處理被物件擋住的情形；Sprite 直接活在場景裡，
+   * 而且跟 gizmo 用同一組 depthTest:false / renderOrder，
+   * **拉桿看得到的地方，字就一定看得到**，兩者不會不同步。
+   */
+  _initAxisLabels() {
+    const mk = (txt, color) => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      const g = cv.getContext('2d');
+      g.font = 'bold 92px "Noto Sans TC", Arial, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      // 先描一圈深色再填色：場景背景是深的、物件是亮的，
+      // 只填色的話總有一種底色會讓字消失
+      g.lineWidth = 10;
+      g.strokeStyle = 'rgba(0,0,0,0.85)';
+      g.strokeText(txt, 64, 68);
+      g.fillStyle = color;
+      g.fillText(txt, 64, 68);
+
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthTest: false, depthWrite: false
+      }));
+      sp.renderOrder = 100;         // 跟 gizmo 一樣畫在最上面
+      sp.visible = false;
+      sp.raycast = () => {};        // 不參與點選，否則會擋到物件
+      this.view.scene.add(sp);
+      return sp;
+    };
+
+    /**
+     * 顏色刻意跟 gizmo 的三根拉桿同色系（紅 X、綠 Y、藍 Z）。
+     * 但不用純 0000ff —— 純藍在深色背景上幾乎看不見。
+     * 取同色相亮一點的版本，關聯還在，字讀得出來。
+     */
+    this.axisLabels = {
+      x: mk('X', '#ff4d4d'),
+      y: mk('Y', '#4dff6a'),
+      z: mk('Z', '#6b8cff')
+    };
+  }
+
+  /**
+   * 每一幀把三個字擺到拉桿尖端外面。
+   *
+   * 位置與大小都乘上 gizmo 自己算出來的 factor，所以字跟拉桿
+   * **永遠等比例**，拉遠拉近、透視或正交都一樣大。
+   * 這個 factor 的算法是照抄 TransformControls 裡那一段 ——
+   * 自己另外訂一套的話，換 three.js 版本時字就會跟拉桿脫節。
+   *
+   * 這段在每一幀都跑，所以裡面只有固定次數的向量運算，
+   * 沒有任何隨模型大小成長的東西（坑第 22 條）。
+   */
+  syncGizmoLabels() {
+    const L = this.axisLabels;
+    if (!L) return;
+
+    const tc = this.tc;
+    const node = tc.object;
+    /**
+     * 判準只看一件事：**gizmo 自己看不看得見**。
+     * 不另外判斷「有沒有選取」「是不是分片模式」——
+     * 那些條件已經決定了 helper.visible（attach／detach 會設它，
+     * 分片與貼合模式也會），再抄一份到這裡，兩邊遲早會不一致，
+     * 結果就是「箭頭在但字不見」或反過來。
+     */
+    if (!node || !this.helper.visible) {
+      L.x.visible = L.y.visible = L.z.visible = false;
+      return;
+    }
+
+    const cam = this.view.camera;
+    const origin = new THREE.Vector3();
+    node.getWorldPosition(origin);
+
+    // ── 照抄 TransformControls 的縮放算法 ──
+    let factor;
+    if (cam.isOrthographicCamera) {
+      factor = (cam.top - cam.bottom) / cam.zoom;
+    } else {
+      const camPos = new THREE.Vector3();
+      cam.getWorldPosition(camPos);
+      factor = origin.distanceTo(camPos)
+        * Math.min(1.9 * Math.tan(Math.PI * cam.fov / 360) / cam.zoom, 7);
+    }
+    const unit = factor * tc.size / 4;      // gizmo 的一個本地單位有多大
+
+    /**
+     * 拉桿的箭頭本體在本地座標 0.5，錐頭再往外 0.1，所以尖端在 0.6。
+     * 字放 0.78，剛好在尖端外面一點，不會疊在箭頭上。
+     */
+    const OUT = 0.78;
+    const SIZE = 0.3;
+
+    /**
+     * 三個軸要不要跟著物件轉，判準必須跟 TransformControls 一模一樣。
+     *
+     * ⚠ **縮放模式永遠用物件的本地軸**，不管 space 設成什麼
+     * （TransformControls 裡寫死的：scale always oriented to local rotation）。
+     * 只看 space 的話，物件一旦轉過角度，縮放模式的字就會跟箭頭錯開 ——
+     * 而那正是最需要看清楚哪根是哪根的時候。
+     */
+    const q = new THREE.Quaternion();
+    if (tc.space === 'local' || tc.getMode() === 'scale') node.getWorldQuaternion(q);
+
+    const dirs = {
+      x: new THREE.Vector3(1, 0, 0),
+      y: new THREE.Vector3(0, 1, 0),
+      z: new THREE.Vector3(0, 0, 1)
+    };
+    for (const k of ['x', 'y', 'z']) {
+      const d = dirs[k].applyQuaternion(q);
+      const sp = L[k];
+      sp.visible = true;
+      sp.position.copy(origin).addScaledVector(d, unit * OUT);
+      sp.scale.setScalar(unit * SIZE);
+    }
   }
 
   /** 把 gizmo 拖出來的變換寫回文件 */

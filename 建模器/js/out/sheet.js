@@ -46,6 +46,15 @@ export const STYLE = {
    * 尺寸（灰）都分得開 —— 師傅在圖上找「號碼」時不必先分辨那是不是尺寸。
    */
   joint: { w: 0.020, minPx: 0.9, dash: null,       color: '#1e8449', label: '接合編號' },
+  /**
+   * 剖面分切用的兩個。
+   *
+   * peg 是定位孔 —— **它跟輪廓一樣是要被切掉的**，所以線寬比照切割線，
+   * 顏色另外給是為了在螢幕上一眼認出來（紫色在這張圖上沒有別的東西用）。
+   * num 是層號，只給人看。
+   */
+  peg:  { w: 0.045, minPx: 1.4, dash: null,        color: '#8e44ad', label: '定位孔' },
+  num:  { w: 0.020, minPx: 0.9, dash: null,        color: '#b9770e', label: '層號' },
   text: { w: 0.018, minPx: 0.8, dash: null,        color: '#111',  label: '文字' },
   note: { w: 0.018, minPx: 0.8, dash: null,        color: '#888',  label: '註記' }
 };
@@ -330,6 +339,13 @@ export function renderCanvas(ctx, prog, px, opt = {}) {
       ctx.moveTo(X(it.x1), Y(it.y1));
       ctx.lineTo(X(it.x2), Y(it.y2));
       ctx.stroke();
+    } else if (it.t === 'circle') {
+      ctx.beginPath();
+      ctx.strokeStyle = st.color;
+      ctx.lineWidth = Math.max(st.minPx, st.w * px);
+      ctx.setLineDash([]);
+      ctx.arc(X(it.x), Y(it.y), it.r * px, 0, Math.PI * 2);
+      ctx.stroke();
     } else if (it.t === 'text') {
       ctx.save();
       ctx.setLineDash([]);
@@ -412,10 +428,19 @@ function fitScale(prog, maxW, maxH) {
  *   「瀏覽器看起來對」不代表對。
  */
 export function toSVG(piece, opt = {}) {
-  const prog = drawProgram(piece, opt);
+  return progSVG(drawProgram(piece, opt), titleLines(piece, opt));
+}
+
+/**
+ * 把任何一份繪圖程式輸出成 SVG。
+ *
+ * 從 toSVG() 裡抽出來的，因為剖面分切也要用同一個算繪端 ——
+ * 兩條路各寫一份 SVG 輸出，遲早會有一邊漏掉 Illustrator 的那兩個地雷。
+ * 抽出來之後「怎麼畫出來」永遠只有這一份。
+ */
+export function progSVG(prog, title = []) {
   const b = prog.box;
-  const title = titleLines(piece, opt);
-  const head = 1.2 * title.length + 1.5;
+  const head = title.length ? 1.2 * title.length + 1.5 : 0;
 
   const X = x => R2(x - b.x);
   const Y = y => R2(b.y + b.h - y + head);
@@ -440,6 +465,9 @@ export function toSVG(piece, opt = {}) {
       out.push(`<line x1="${X(it.x1)}" y1="${Y(it.y1)}" x2="${X(it.x2)}" y2="${Y(it.y2)}" `
         + `stroke="${st.color}" stroke-width="${st.w}" stroke-linecap="round"`
         + (st.dash ? ` stroke-dasharray="${st.dash.join(' ')}"` : '') + '/>');
+    } else if (it.t === 'circle') {
+      out.push(`<circle cx="${X(it.x)}" cy="${Y(it.y)}" r="${R2(it.r)}" `
+        + `fill="none" stroke="${st.color}" stroke-width="${st.w}"/>`);
     } else {
       const anchor = it.anchor === 'middle' ? 'middle' : (it.anchor === 'end' ? 'end' : 'start');
       // 垂直置中自己算：基線往下挪約 0.36 個字高，不用 dominant-baseline
@@ -460,6 +488,118 @@ const esc = s => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // ═══════════════════════════════════════════════════════
+//  三之二、剖面分切的一片
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 把一片剖面轉成繪圖程式。跟 drawProgram() 是平行的兩個入口，
+ * 產出的資料格式完全一樣，所以 renderCanvas / progSVG 一行都不用改。
+ *
+ * @param {object} slice section.js 的一片 { index, t, loops, area, bounds }
+ * @param {object} opt {
+ *    origin: {x,y}   全部片共用的座標原點（一律傳整疊外框的左下角）
+ *    frame:  {w,h}   全部片共用的外框大小
+ *    pegs:   [{x,y}] 定位孔中心（世界座標，跟 origin 同一個框）
+ *    pegD:   number  孔徑
+ *    total:  number  總片數，標題欄要用
+ *    showDims, showNum
+ * }
+ */
+export function sliceProgram(slice, opt = {}) {
+  const items = [];
+  const o0 = opt.origin || { x: slice.bounds.minX, y: slice.bounds.minY };
+  const W = (opt.frame && opt.frame.w) || slice.bounds.w;
+  const H = (opt.frame && opt.frame.h) || slice.bounds.h;
+  const T = p => ({ x: p.x - o0.x, y: p.y - o0.y });
+
+  /**
+   * ── 所有片共用同一個座標框 ────────────────────────────
+   * 每一片都可以各自貼齊自己的外框（圖會小一點），但那樣**孔跟輪廓的
+   * 相對位置在每張圖上看起來都不一樣**，人就沒辦法用眼睛掃一遍
+   * 確認「這一疊的孔位是不是真的對齊」。
+   * 共用一個框的話，孔在每張圖上都落在同一個位置 —— 排開一看就知道對不對。
+   */
+
+  for (const l of slice.loops) {
+    loop(items, l.pts.map(T), l.isHole ? 'hole' : 'cut');
+  }
+
+  /**
+   * ── 定位孔畫在「切割」這一類，不另外分一層 ──────────────
+   * 孔是**真的要切掉**的東西。分成獨立圖層的話，廠商只留切割層丟給機器時
+   * 孔就漏掉了 —— 而漏掉的後果是整疊串不起來，全部報廢。
+   * 顏色另外給，是為了在螢幕上分得出來；但它在製造上就是切割線。
+   */
+  const pegs = opt.pegs || [];
+  const pr = (opt.pegD || 0) / 2;
+  for (const p of pegs) {
+    if (pr > 0) items.push({ t: 'circle', style: 'peg', ...T(p), r: pr });
+  }
+
+  /**
+   * ── 層號放在第 1 孔的正下方 ──────────────────────────
+   * 位置刻意固定，不放形心。因為它同時要當**朝向記號**：
+   * 兩個一樣大的圓孔沒辦法阻止整疊翻 180 度，而對稱的件光看輪廓也看不出來。
+   * 層號永遠在第 1 孔下面、永遠正著寫，疊的時候讓號碼朝同一邊就對了。
+   */
+  if (opt.showNum !== false) {
+    const anchor = pegs.length ? T(pegs[0]) : { x: W / 2, y: H / 2 };
+    const size = Math.max(0.9, Math.min(2.4, Math.min(W, H) * 0.08));
+    items.push({
+      t: 'text', style: 'num',
+      x: anchor.x, y: anchor.y - Math.max(pr * 2.4, size * 1.4),
+      s: `#${pad2(slice.index)} t${fmt(slice.t)}`,
+      size, anchor: 'middle'
+    });
+  }
+
+  if (opt.showDims !== false) {
+    dim(items, 0, -2.5, W, -2.5, `${fmt(W)}`, 'h');
+    dim(items, -2.5, 0, -2.5, H, `${fmt(H)}`, 'v');
+  }
+
+  const pad = { l: 5, r: 3, t: 3, b: 6 };
+  return {
+    w: W, h: H,
+    box: { x: -pad.l, y: -pad.b, w: W + pad.l + pad.r, h: H + pad.b + pad.t },
+    items
+  };
+}
+
+/** 剖面分切的標題欄。缺了「第幾片、幾 mm 板」這張圖就不能用。 */
+export function sliceTitleLines(slice, opt = {}) {
+  const out = [];
+  const holes = slice.loops.filter(l => l.isHole).length;
+
+  out.push(`第 ${slice.index} 片${opt.total ? ` / 共 ${opt.total} 片` : ''}`
+    + `　板厚 ${fmt(slice.t)} cm`);
+  out.push(`輪廓 ${slice.loops.length - holes} 圈`
+    + (holes ? `（另有內孔 ${holes} 個）` : '')
+    + `　面積 ${fmt(slice.area)} cm²`
+    + `　外框 ${fmt(slice.bounds.w)} × ${fmt(slice.bounds.h)} cm`);
+
+  if (opt.pegs && opt.pegs.length) {
+    /**
+     * 只有孔①在每一片上都在同一個位置，是通到底的那根桿子。
+     * 其餘的孔只屬於這一段 —— 這件事一定要寫出來，
+     * 不然現場會拿一根長桿子想穿過全部，穿到一半才發現穿不過去。
+     */
+    out.push(`定位孔 ${opt.pegs.length} 個　⌀${fmt(opt.pegD || 0)} cm`
+      + (opt.pegs.length > 1
+        ? '　孔① 通到底（每一片都有），其餘只穿得過同一段的片'
+        : '　孔① 通到底，每一片都有'));
+  }
+  if (opt.head && opt.head.name) {
+    out.push(`案件：${opt.head.name}${opt.head.date ? '　' + opt.head.date : ''}`);
+  }
+  if (!slice.loops.length) out.push('⚠ 這一片是空的，切不出東西');
+  if (slice.open) out.push(`⚠ 有 ${slice.open} 條線接不成封閉輪廓，這一片切不出來`);
+  return out;
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+
+// ═══════════════════════════════════════════════════════
 //  四、列印（A4 橫向，一片一頁）
 // ═══════════════════════════════════════════════════════
 
@@ -471,16 +611,25 @@ const esc = s => String(s)
  * 點陣圖放到 A4 會糊掉。
  */
 export function printPieces(pieces, opt = {}) {
+  return printSVGs(pieces.map(p => toSVG(p, opt)), '展開圖');
+}
+
+/**
+ * 一疊 SVG 一頁一張印出來。
+ * 從 printPieces() 抽出來給剖面分切共用 —— 理由跟 progSVG() 一樣：
+ * 頁面骨架（A4 橫向、分頁、把 XML 宣告拿掉）只該有一份。
+ */
+export function printSVGs(svgs, docTitle = '圖') {
   const win = window.open('', '_blank');
   if (!win) return false;
 
   // 內嵌進 HTML 時要把 XML 宣告拿掉 —— 那一行只有獨立的 .svg 檔需要，
   // 出現在 HTML 內文裡反而會被當成文字印出來
-  const pages = pieces.map(p =>
-    `<div class="page">${toSVG(p, opt).replace(/^<\?xml[^>]*\?>\s*/, '')}</div>`).join('\n');
+  const pages = svgs.map(s =>
+    `<div class="page">${s.replace(/^<\?xml[^>]*\?>\s*/, '')}</div>`).join('\n');
 
   win.document.write(`<!doctype html><html><head><meta charset="utf-8">
-<title>展開圖</title>
+<title>${esc(docTitle)}</title>
 <style>
   @page { size: A4 landscape; margin: 8mm; }
   body { margin:0; font-family:"Noto Sans TC",sans-serif; }
