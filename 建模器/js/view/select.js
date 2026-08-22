@@ -13,9 +13,18 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { nearestMarkableEdge, nearestFace, canMarkSeams } from '../unfold/seam.js';
 
 const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
+
+/**
+ * 點多近才算點到那條邊，單位 px。
+ * 觸控要放寬 —— 手指比游標粗得多，這跟平面規劃器的 HGRAB
+ * （桌機 2px／觸控 14px）是同一件事。
+ */
+const EDGE_GRAB_PX = 14;
+const EDGE_GRAB_PX_TOUCH = 26;
 
 export class Selection {
   /**
@@ -36,6 +45,12 @@ export class Selection {
     this._ndc = new THREE.Vector2();
     this._down = null;
     this._doc = null;
+
+    /**
+     * 分片模式。開著的時候，點畫面不是選物件，而是標接縫。
+     * 兩種入口共用同一組動作 —— 又是「事件入口分開，動作邏輯共用」。
+     */
+    this.seamMode = false;
 
     this._initGizmo();
     this._initPointer();
@@ -96,8 +111,82 @@ export class Selection {
       if (dist > TAP_MOVE || dt > TAP_TIME) return;
       if (this.tc.dragging) return;
 
+      if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
       this.pick(e.clientX, e.clientY, e.shiftKey || this.multi);
     });
+  }
+
+  // ── 分片模式的點選 ────────────────────────────────
+
+  /** 螢幕座標 → 畫布內的 px 座標 */
+  _toCanvasPx(clientX, clientY) {
+    const r = this.view.canvas.getBoundingClientRect();
+    return { x: clientX - r.left, y: clientY - r.top, w: r.width, h: r.height };
+  }
+
+  /** 世界座標 → 畫布 px */
+  _project(pWorld, r) {
+    const v = pWorld.clone().project(this.view.camera);
+    return { x: (v.x * 0.5 + 0.5) * r.w, y: (-v.y * 0.5 + 0.5) * r.h };
+  }
+
+  /**
+   * 分片模式下點一下畫面。
+   *
+   * 判斷順序：
+   *   1. 沒打到東西 → 什麼都不做
+   *   2. 打到的物件不能標（參數物件）→ 回報原因，讓呼叫端跳提示
+   *   3. 點得夠靠近某條可標記的邊 → 切換那條邊
+   *   4. 否則 → 當成點在面上，切換「這個面整圈切開」
+   *
+   * 第 3、4 步的先後很重要：邊比面小得多，所以要先讓邊有機會被選中，
+   * 邊搶不到才輪到面。反過來的話永遠點不到邊。
+   */
+  pickSeam(clientX, clientY) {
+    const hook = this.hooks.onSeamPick;
+    if (!hook) return;
+
+    const r = this._toCanvasPx(clientX, clientY);
+    this._ndc.x = (r.x / r.w) * 2 - 1;
+    this._ndc.y = -(r.y / r.h) * 2 + 1;
+    this._ray.setFromCamera(this._ndc, this.view.camera);
+
+    const hits = this._ray.intersectObjects(this.view.pickables, true);
+    let hit = null, id = null;
+    for (const h of hits) {
+      const mid = this.view.modelIdOf(h.object);
+      if (mid !== null) { hit = h; id = mid; break; }
+    }
+    if (!hit) return;
+
+    const obj = this._doc && this._doc.byId(id);
+    if (!obj) return;
+    if (!canMarkSeams(obj)) { hook({ obj, kind: 'blocked' }); return; }
+
+    const node = this.view.nodeOf(id);
+    if (!node) return;
+
+    /**
+     * 命中點換算到「物件本地座標」。
+     * node 帶著 obj.scale，所以 worldToLocal 之後就是網格自己的座標系，
+     * 跟 mesh.verts 裡存的是同一組數字 —— 不必再自己處理縮放。
+     */
+    const pLocal = node.worldToLocal(hit.point.clone());
+    const mesh = obj.mesh();
+
+    const near = nearestMarkableEdge(mesh, pLocal);
+    if (near) {
+      // 3D 距離只用來挑候選；**是否算點中，一律用螢幕上的 px 距離判斷**，
+      // 這樣不管拉遠拉近，手感都一樣。
+      const a = this._project(node.localToWorld(near.he.v.p.clone()), r);
+      const b = this._project(node.localToWorld(near.he.to.p.clone()), r);
+      const px = distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y);
+      const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+      if (px <= grab) { hook({ obj, kind: 'edge', he: near.he }); return; }
+    }
+
+    const nf = nearestFace(mesh, pLocal);
+    if (nf) hook({ obj, kind: 'face', face: nf.face });
   }
 
   // ── 選取 ──────────────────────────────────────────
@@ -174,7 +263,9 @@ export class Selection {
     const act = this.active;
     const node = act ? v.nodeOf(act.id) : null;
 
-    if (node) {
+    // 分片模式下不掛 gizmo。放在這裡是因為 _refresh() 會在選取變動、
+    // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
+    if (node && !this.seamMode) {
       this.tc.attach(node);
       this.tc.showX = this.tc.showY = this.tc.showZ = true;
       // 鎖定縮放的物件不給縮放把手（跟 system 物件同樣的做法）
@@ -215,8 +306,38 @@ export class Selection {
   }
 
   get dragging() { return !!this.tc.dragging; }
+
+  /**
+   * 切換分片模式。
+   *
+   * 一定要把 gizmo 收起來 —— 它的三支箭頭會擋在物件前面，
+   * 而分片模式要點的是物件表面上的邊。不收的話使用者會一直
+   * 點到箭頭然後把東西拖走，而那看起來就像「分片功能沒反應」。
+   */
+  setSeamMode(on) {
+    this.seamMode = !!on;
+    this.tc.enabled = !this.seamMode;
+    /**
+     * 一定要重跑 _refresh()，它才會依照新的模式決定掛不掛 gizmo。
+     * 少了這一行，離開分片模式後 gizmo 不會回來 —— 要等下次點選才復原，
+     * 而使用者只會覺得「東西不能拖了」。
+     */
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.seamMode;
+    return this.seamMode;
+  }
 }
 
 export function isTouch() {
   return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+}
+
+/** 2D 的點到線段距離。分片模式判斷「點得夠不夠靠近那條邊」用。 */
+function distPointSeg2(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const L2 = dx * dx + dy * dy;
+  if (L2 < 1e-9) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / L2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }

@@ -23,6 +23,9 @@ import { SceneView } from './view/scene.js';
 import { Selection, isTouch } from './view/select.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
+import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
+  from './unfold/seam.js';
+import { unfoldObject } from './unfold/part.js';
 import { ExportPanel } from './ui/exportPanel.js';
 
 const $ = id => document.getElementById(id);
@@ -40,7 +43,8 @@ const sel = new Selection(view, {
     view.sync(doc);
     if (committing) commit('變換物件');
     else updateBar();
-  }
+  },
+  onSeamPick: hit => seamPick(hit)
 });
 sel.bindDoc(doc);
 
@@ -282,6 +286,7 @@ $('aLinear').onclick = () => arrayOp(ARRAY_MODES.LINEAR);
 $('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
 $('aMirror').onclick = () => arrayOp(ARRAY_MODES.MIRROR);
 
+$('seam').onclick = () => toggleSeamMode();
 $('unfold').onclick = () => unfoldWin.open();
 $('export3d').onclick = () => exportWin.open();
 
@@ -291,6 +296,77 @@ $('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l)
 $('mMove').onclick = () => setMode('translate');
 $('mRot').onclick = () => setMode('rotate');
 $('mScale').onclick = () => setMode('scale');
+
+// ═══════════════════════════════════════════════════════
+//  分片
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 分片模式：自己決定展開圖從哪裡切開。
+ *
+ * kang 的原話：「立體造型必須做規劃，如何分配展開的區域，
+ * 能夠依序讓 CNC 切割後再組裝結合。」
+ *
+ * 一個立方體可以六面展成一片（銑 45 度 V 溝折起來）、拆成三片、
+ * 或六片全分開。**選哪一種是製造決定，不是計算結果** ——
+ * 少一片就少一道對位誤差，但要多一道銑溝工序。
+ */
+function toggleSeamMode() {
+  const on = sel.setSeamMode(!sel.seamMode);
+  $('seam').classList.toggle('on', on);
+  panel.refresh();
+  if (on) {
+    toast('分片模式：點稜線＝切開／取消，點面的中央＝整圈切開。再按一次「分片」離開');
+  } else {
+    toast('已離開分片模式');
+  }
+}
+
+/**
+ * 分片模式下點了畫面。實際的幾何判斷在 seam.js（測得到），
+ * 這裡只負責「改了文件之後要做什麼」——記一步 Undo、更新畫面、講一句話。
+ */
+function seamPick(hit) {
+  if (hit.kind === 'blocked') {
+    toast(seamBlockReason(hit.obj), true);
+    return;
+  }
+
+  const mesh = hit.obj.mesh();
+
+  if (hit.kind === 'edge') {
+    const on = !isSeam(hit.he);
+    setSeam(mesh, hit.he, on);
+    commitSeam(hit.obj, on ? '標記切割線' : '取消切割線');
+    return;
+  }
+
+  if (hit.kind === 'face') {
+    // 已經整圈切開的面再點一次就是收回來，所以這一顆是可切換的
+    const on = !faceIsCutOut(mesh, hit.face);
+    const n = cutAroundFace(mesh, hit.face, on);
+    if (!n) { toast('這個面周圍沒有可標記的邊', true); return; }
+    commitSeam(hit.obj, on ? `切出這個面（${n} 條邊）` : `收回這個面（${n} 條邊）`);
+  }
+}
+
+/**
+ * 標記完之後一定要講「現在幾片」。
+ * 因為標一條邊通常什麼都不會發生 —— 要切到能把面的鄰接關係切斷才會多一片。
+ * 不講的話使用者會以為功能壞掉（踩過的坑第 5、18 條那個病）。
+ */
+function commitSeam(obj, label) {
+  // 一定要在 commit()（裡面會 view.sync）之前講，不然這一輪畫面不會重畫接縫
+  view.markSeamsDirty();
+  commit(label);
+  panel.refresh();
+  let msg = label;
+  try {
+    const r = unfoldObject(obj, {});
+    msg += `　→ 展開 ${r.stats.total} 片`;
+  } catch (e) { /* 算不出來就只講標記本身 */ }
+  toast(msg);
+}
 
 function setMode(m) {
   if (!sel.setMode(m)) { toast('這個物件鎖定了縮放', true); return; }

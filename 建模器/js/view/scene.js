@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EDGE_ROLE } from '../core/mesh.js';
 
 export class SceneView {
   constructor(canvas) {
@@ -109,6 +110,7 @@ export class SceneView {
     }
 
     this.pickables = [...this.byId.values()];
+    this._seamsDirty = false;      // 這一輪已經全部重畫過了
   }
 
   _createNode(obj) {
@@ -135,9 +137,76 @@ export class SceneView {
     line.raycast = () => {};      // 線不要參與點選
     node.add(line);
 
+    /**
+     * 接縫：使用者標的分片切割線。
+     *
+     * 一定要跟一般稜線用不同顏色畫出來，否則使用者標了什麼完全看不見 ——
+     * 而分片的重點就是「我決定從哪裡切開」。看不見等於沒有這個功能。
+     *
+     * 直接從半邊網格的頂點座標建線段，**不經過 toGeometry()**，
+     * 所以不受三角化影響，也不受板件加厚（shell）影響 ——
+     * 畫的就是資料裡那條邊本人。
+     */
+    const seams = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xff7a1a })
+    );
+    seams.name = 'seams';
+    seams.raycast = () => {};
+    seams.renderOrder = 2;
+    node.add(seams);
+
     node.userData.geomKey = null;
+    node.userData.seamKey = null;
     return node;
   }
+
+  /**
+   * 重建接縫線。
+   *
+   * ⚠ **絕對不能每次 sync() 都走訪一遍所有的邊。**
+   *
+   * sync() 在拖曳 gizmo 時是**每一幀**都會跑的。走訪所有邊是 O(邊數)，
+   * 16,128 面的球有兩萬多條邊 —— 每幀掃一遍再組一個字串，手感直接毀掉。
+   * 這跟踩過的坑第 3 條（曲率計算 O(頂點×面) 讓上萬面卡死）是同一種錯，
+   * 差別只在這次是在畫面更新的熱路徑上。
+   *
+   * 所以只有兩種情況才重建：
+   *   1. 網格換人了（改參數、Undo、讀檔 → mesh 物件不同）
+   *   2. 有人明講「接縫改過了」（markSeamsDirty()）
+   *
+   * 標接縫本來就是使用者一次一下的動作，明講一聲的成本是零；
+   * 反過來讓畫面每幀去猜有沒有變，成本卻是所有人一起付。
+   */
+  _updateSeams(node, obj) {
+    const mesh = obj.mesh();
+    const seams = node.getObjectByName('seams');
+    const stale = node.userData.seamMesh !== mesh || this._seamsDirty;
+
+    if (stale) {
+      const pos = [];
+      let n = 0;
+      for (const he of mesh.edges()) {
+        if (he.role !== EDGE_ROLE.CUT || !he.face || !he.twin || !he.twin.face) continue;
+        pos.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
+        n++;
+      }
+      seams.geometry.dispose();
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      seams.geometry = g;
+      node.userData.seamMesh = mesh;
+      node.userData.seamCount = n;
+    }
+    seams.visible = (node.userData.seamCount || 0) > 0 && !this.wireframe;
+  }
+
+  /**
+   * 告訴畫面「接縫改過了，下次 sync() 要重畫」。
+   * 標記／取消／清除之後一定要呼叫，否則畫面會停在舊的樣子 ——
+   * 而使用者只會看到「我標了但沒反應」。
+   */
+  markSeamsDirty() { this._seamsDirty = true; }
 
   /**
    * 板件要不要在畫面上加厚，以及加多少。
@@ -208,6 +277,7 @@ export class SceneView {
     node.material.side = (shellT === 0 && !obj.mesh().isClosed())
       ? THREE.DoubleSide : THREE.FrontSide;
     node.getObjectByName('edges').visible = this.showEdges && !this.wireframe;
+    this._updateSeams(node, obj);
   }
 
   _disposeNode(node) {

@@ -39,6 +39,7 @@
  * 單位一律 cm。這個檔案不碰 DOM，所以測得到。
  */
 
+import * as THREE from 'three';
 import { EDGE_ROLE } from '../core/mesh.js';
 import { planarRegions } from '../core/region.js';
 import { FLAT_TOL_DEG } from './flatten.js';
@@ -179,4 +180,122 @@ export function cutAroundFace(mesh, face, on = true, tolDeg = FLAT_TOL_DEG) {
     }
   }
   return n;
+}
+
+/** 這個共面區域周圍是不是已經整圈切開了（用來讓「切出這個面」變成可切換） */
+export function faceIsCutOut(mesh, face, tolDeg = FLAT_TOL_DEG) {
+  if (!face) return false;
+  planarRegions(mesh, tolDeg);
+  const rid = face.region;
+  if (rid === undefined || rid < 0) return false;
+
+  let any = false;
+  for (const f of mesh.faces) {
+    if (f.region !== rid) continue;
+    for (const he of mesh.faceLoop(f)) {
+      const nb = he.twin && he.twin.face;
+      if (!nb || nb.region === rid) continue;
+      if (!isMarkable(mesh, he, tolDeg)) continue;
+      any = true;
+      if (!isSeam(he)) return false;       // 有一條沒切 → 還沒整圈切開
+    }
+  }
+  return any;
+}
+
+// ═══════════════════════════════════════════════════════
+//  點到哪一條邊、哪一個面
+// ═══════════════════════════════════════════════════════
+//
+// 這一段是「點選」的幾何部分，刻意放在這裡而不是 select.js，
+// 因為它不碰 DOM 也不碰 three.js 的場景 —— 所以**測得到**。
+// select.js 只留真正的滑鼠／觸控事件那一層。
+//
+// 又是同一條原則：要讓東西測得到，就把不碰 DOM 的那一半抽出來。
+//
+// ── 為什麼用「命中點」而不是 raycast 給的 faceIndex ──────
+// scene.js 是把網格轉成 three.js 的 BufferGeometry 才畫出來的，
+// 中間經過三角化，raycast 回傳的 faceIndex 是**三角形編號**，
+// 不是半邊網格的面。要對回去得另外維護一份對照表，而那份表
+// 一旦跟 toGeometry() 的順序脫節就會靜靜地指錯面。
+//
+// 改用「命中點的 3D 座標」就完全避開這件事：座標是幾何事實，
+// 不依賴任何編號。而且命中點必定落在**朝向鏡頭的那一面**上，
+// 所以背面的邊不會被誤選 —— 這是免費送的。
+
+/** 點到線段的最短距離 */
+export function distPointSeg(p, a, b) {
+  const ab = b.clone().sub(a);
+  const L2 = ab.lengthSq();
+  if (L2 < 1e-20) return p.distanceTo(a);
+  const t = Math.max(0, Math.min(1, p.clone().sub(a).dot(ab) / L2));
+  return p.distanceTo(a.clone().addScaledVector(ab, t));
+}
+
+/**
+ * 離這個點最近的「可標記的邊」。
+ * @param {THREE.Vector3} p 物件本地座標系的點（通常是 raycast 的命中點）
+ * @returns {{he, dist}|null}
+ */
+export function nearestMarkableEdge(mesh, p, tolDeg = FLAT_TOL_DEG) {
+  let best = null;
+  for (const he of markableEdges(mesh, tolDeg)) {
+    const d = distPointSeg(p, he.v.p, he.to.p);
+    if (!best || d < best.dist) best = { he, dist: d };
+  }
+  return best;
+}
+
+/** 點到一個面（多邊形）的最短距離。面不一定是三角形，所以直接處理多邊形。 */
+export function distPointFace(mesh, face, p) {
+  const vs = mesh.faceVerts(face).map(v => v.p);
+  if (vs.length < 3) return Infinity;
+
+  const n = face.normal;
+  // 法向可能還沒算過（computeNormals 由 planarRegions 等呼叫端負責）
+  if (!n || n.lengthSq() < 0.5) return nearestEdgeDist(vs, p);
+
+  // 投影到面的平面上
+  const q = p.clone().addScaledVector(n, -(p.clone().sub(vs[0]).dot(n)));
+
+  // 在平面上建一組基底，把多邊形與投影點都攤成 2D，做點在多邊形內判定
+  const u = new THREE.Vector3().subVectors(vs[1], vs[0]).normalize();
+  const v = new THREE.Vector3().crossVectors(n, u);
+  const to2 = w => [w.clone().sub(vs[0]).dot(u), w.clone().sub(vs[0]).dot(v)];
+  const poly = vs.map(to2);
+  const [px, py] = to2(q);
+
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) &&
+        px < ((xj - xi) * (py - yi)) / (yj - yi || 1e-20) + xi) inside = !inside;
+  }
+  if (inside) return p.distanceTo(q);
+  return nearestEdgeDist(vs, p);
+}
+
+function nearestEdgeDist(vs, p) {
+  let d = Infinity;
+  for (let i = 0; i < vs.length; i++) {
+    d = Math.min(d, distPointSeg(p, vs[i], vs[(i + 1) % vs.length]));
+  }
+  return d;
+}
+
+/**
+ * 離這個點最近的面。給「一鍵切出一個面」用。
+ *
+ * 不需要百分之百精準 —— 因為拿到面之後會立刻擴張成整個共面區域，
+ * 選到隔壁那個共面的三角形，得到的是**同一個區域**。
+ * 只有點在區域交界上才會有差別，而那時候使用者本來就點在邊界上。
+ */
+export function nearestFace(mesh, p) {
+  mesh.computeNormals();
+  let best = null;
+  for (const f of mesh.faces) {
+    const d = distPointFace(mesh, f, p);
+    if (!best || d < best.dist) best = { face: f, dist: d };
+  }
+  return best;
 }

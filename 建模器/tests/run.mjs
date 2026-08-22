@@ -2195,6 +2195,66 @@ section('指定分片（seam.js）');
   eq('平板 清除標記 動到 0 條', seam.clearSeams(plate.mesh()), 0);
 }
 
+/**
+ * 點選的幾何部分。
+ *
+ * 這一段刻意放在 seam.js 而不是 select.js，就是為了能在這裡測 ——
+ * select.js 只留真正的滑鼠／觸控事件那一層。
+ *
+ * 用「命中點的 3D 座標」而不是 raycast 給的 faceIndex，是因為後者是
+ * 三角化之後的三角形編號，要對回半邊網格得另外維護一份對照表，
+ * 而那份表一旦跟 toGeometry() 的順序脫節就會靜靜地指錯面。
+ * 座標是幾何事實，不依賴任何編號。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  near('點到線段距離 垂直落在中間', seam.distPointSeg(V(0, 5, 0), V(-10, 0, 0), V(10, 0, 0)), 5);
+  near('點到線段距離 落在端點外', seam.distPointSeg(V(20, 0, 0), V(-10, 0, 0), V(10, 0, 0)), 10);
+
+  const o = new io.ModelObject({ src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid' });
+  o.bake();
+  const m = o.mesh();
+  m.computeNormals();
+
+  /**
+   * 方塊中心在原點，所以頂面在 y=22.5、右面在 x=30、前面在 z=20。
+   * 從面的正中央量到最近的稜線，就是另外兩個方向的一半 ——
+   * 這些數字是硬的，算錯一眼就看得出來。
+   */
+  near('頂面中央 到最近稜線', seam.nearestMarkableEdge(m, V(0, 22.5, 0)).dist, 20);
+  near('右面中央 到最近稜線', seam.nearestMarkableEdge(m, V(30, 0, 0)).dist, 20);
+  near('前面中央 到最近稜線', seam.nearestMarkableEdge(m, V(0, 0, 20)).dist, 22.5);
+  near('稜線上 到最近稜線 ＝ 0', seam.nearestMarkableEdge(m, V(30, 22.5, 0)).dist, 0);
+
+  const top = seam.nearestFace(m, V(0, 22.5, 0));
+  near('頂面中央 到最近面 ＝ 0', top.dist, 0);
+  near('而且那個面的法向朝上', top.face.normal.y, 1, 1e-6);
+  near('右面中央 命中的面法向朝右', seam.nearestFace(m, V(30, 0, 0)).face.normal.x, 1, 1e-6);
+
+  /**
+   * 六個面依序整圈切開。片數 1→2→3→4→6 ——
+   * 切到第四個面時會一次跳兩片，因為剩下的兩面本來就只透過
+   * 已經切掉的那幾面相鄰，切開第四面時它們同時斷開。
+   * 這個「跳號」是對的，寫死在測試裡免得日後有人以為是 bug 去「修」它。
+   */
+  const pts = [V(0, 22.5, 0), V(0, -22.5, 0), V(30, 0, 0), V(-30, 0, 0), V(0, 0, 20), V(0, 0, -20)];
+  const got = [];
+  for (const p of pts) {
+    seam.cutAroundFace(m, seam.nearestFace(m, p).face, true);
+    got.push(unfoldObject(o, { material: 'foamboard' }).stats.total);
+  }
+  eq('六面依序切開 片數變化', got.join('→'), '2→3→4→6→6→6');
+  eq('六面全切開後 標記 ＝ 全部 12 條', seam.seamCount(m), 12);
+  near('六面全切開後 面積仍然守恆',
+       unfoldObject(o, { material: 'foamboard' }).stats.area, 13800, 1e-9);
+
+  const ftop = seam.nearestFace(m, V(0, 22.5, 0)).face;
+  ok('切完之後 faceIsCutOut 認得出來', seam.faceIsCutOut(m, ftop));
+  eq('再點一次 收回頂面', seam.cutAroundFace(m, ftop, false), 4);
+  ok('收回之後 faceIsCutOut 變回 false', !seam.faceIsCutOut(m, ftop));
+}
+
 section('第 3 期：效能');
 
 {

@@ -14,6 +14,8 @@ import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
+import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
+import { unfoldObject } from '../unfold/part.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -107,6 +109,9 @@ export class Panel {
       }, '折彎補償與展開長度都要用它算：中性層半徑 ＝ 內側R ＋ K×板厚');
     }
 
+    // ── 分片（只有分片模式開著才顯示）──
+    if (this.app.sel.seamMode) this._seamBox(obj);
+
     // ── 參數（可回頭改的才有）──
     if (obj.isBool) {
       this._boolSection(obj);
@@ -167,6 +172,73 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  分片
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 分片區塊。
+   *
+   * ── 為什麼一定要顯示「目前幾片」──────────────────────
+   * 因為**標一條邊通常什麼都不會發生**。實測：60×45×40 的方塊標 1 條邊，
+   * 片數仍然是 1 —— 要切到足以把面的鄰接關係切斷才會多一片。
+   *
+   * 這在數學上完全正確，但使用者標了一條邊、畫面毫無反應，第一個念頭
+   * 一定是「壞了」。而「讓人不敢相信工具給的東西」是這個專案踩過最多次
+   * 的坑（第 5、18 條）。所以片數必須即時看得到。
+   *
+   * ── 顯示的是「片數」不是「張數」──────────────────────
+   * 展開引擎會把一樣的片合併成一張圖加一個 qty（「12 支一樣的橫料出
+   * 一張圖 ×12」）。所以 pieces.length 是張數，stats.total 才是片數。
+   * 壓克力方塊：張數 3、片數 6。這裡顯示 stats.total ——
+   * 顯示 3 而實際要切 6 片，是「正確的數字，錯誤的意思」。
+   */
+  _seamBox(obj) {
+    this.form.appendChild(head('分片'));
+
+    const why = seamBlockReason(obj);
+    if (why) {
+      this.form.appendChild(bad(why));
+      return;
+    }
+
+    const mesh = obj.mesh();
+    const n = seamCount(mesh);
+    const total = markableEdges(mesh).length;
+
+    /**
+     * 展開一次拿片數。128 段圓柱展開只要 2ms，所以即時算不會卡；
+     * 真的算不出來也不能讓面板整個爆掉 —— 面板是使用者唯一的回饋管道。
+     */
+    let pieces = null;
+    try {
+      pieces = unfoldObject(obj, {}).stats.total;
+    } catch (e) {
+      pieces = null;
+    }
+
+    const box = document.createElement('div');
+    box.className = 'note';
+    box.innerHTML = pieces === null
+      ? `已標記 <b>${n}</b> / ${total} 條邊　（片數算不出來）`
+      : `展開後 <b>${pieces}</b> 片　已標記 <b>${n}</b> / ${total} 條邊`;
+    this.form.appendChild(box);
+
+    this.form.appendChild(note(
+      '點稜線＝從那裡切開／取消；點面的中央＝把那個面整圈切開。'
+      + '標了片數沒變是正常的 —— 要切到能把面分開才會多一片。'
+    ));
+
+    if (n > 0) {
+      this._rowBtn(`清除全部標記（${n} 條）`,
+        '回到自動判斷。取消標記是把決定交還給材料規則，不是強迫它折起來', () => {
+          clearSeams(obj.mesh());
+          this.app.view.markSeamsDirty();
+          this._edit('清除分片標記');
+        });
+    }
   }
 
   /** 布林與陣列共用的「凍結成網格」 */
