@@ -210,6 +210,61 @@ export function cornerIdx(pts) {
   return out;
 }
 
+/**
+ * 一個擠出形狀的外框與中心（只看外輪廓 —— 內孔本來就在裡面）。
+ * 形狀是扁平陣列 { out:[x,y,…], holes:[[x,y,…],…] }。
+ */
+export function shapeBounds(shape) {
+  const a = (shape && shape.out) || [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i + 1 < a.length; i += 2) {
+    if (a[i] < minX) minX = a[i];
+    if (a[i] > maxX) maxX = a[i];
+    if (a[i + 1] < minY) minY = a[i + 1];
+    if (a[i + 1] > maxY) maxY = a[i + 1];
+  }
+  if (minX > maxX) return { minX: 0, minY: 0, maxX: 0, maxY: 0, cx: 0, cy: 0 };
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/** 一組形狀合起來的外框與中心 */
+export function shapesBounds(shapes) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of shapes || []) {
+    const b = shapeBounds(s);
+    if (!(b.maxX > b.minX || b.maxY > b.minY)) continue;
+    minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY);
+    maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY);
+  }
+  if (minX > maxX) return { minX: 0, minY: 0, maxX: 0, maxY: 0, cx: 0, cy: 0 };
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/**
+ * 把一個形狀平移，回傳新的（不改原本的）。
+ *
+ * ── 為什麼要有這個 ──────────────────────────────────
+ * 置中一定要做在**幾何**上，不能靠搬動物件去抵銷。
+ * 搬物件的話畫面上看起來是對的，但物件的**原點**跑到很遠的地方 ——
+ * 而 gizmo 長在原點上，旋轉與縮放也都繞著原點轉。
+ * 那正是 `core/align.js` 開頭警告過的事：
+ * **`pos` 是原點，不是物件的位置。** 2026-08-22 匯入線稿時實際踩到。
+ */
+export function shiftShape(shape, dx, dy) {
+  const move = arr => {
+    const out = [];
+    for (let i = 0; i + 1 < arr.length; i += 2) {
+      out.push(r4(arr[i] + dx), r4(arr[i + 1] + dy));
+    }
+    return out;
+  };
+  return {
+    ...shape,
+    out: move(shape.out || []),
+    holes: (shape.holes || []).map(move)
+  };
+}
+
 const r4 = v => Math.round(v * 1e4) / 1e4;
 
 // ═══════════════════════════════════════════════════════

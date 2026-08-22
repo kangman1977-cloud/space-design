@@ -22,7 +22,8 @@
  */
 
 import { readSVG, UNIT_KEYS } from '../sketch/profile.js';
-import { flatPts, cornerIdx } from '../build/prim.js';
+import { flatPts, cornerIdx, shapeBounds, shapesBounds, shiftShape }
+  from '../build/prim.js';
 import { ModelObject, KIND } from '../core/io.js';
 
 const LS_KEY = 'modeler_import';
@@ -31,7 +32,8 @@ export class ImportPanel {
   /** @param {object} app { doc, sel, hist, onEdit, toast } */
   constructor(app) {
     this.app = app;
-    this.opt = { tolMm: 0.2, h: 3, unit: '', ...loadOpt() };
+    // split ＝ 一個形狀一個物件（預設）。false ＝ 整份稿合成一個物件。
+    this.opt = { tolMm: 0.2, h: 3, unit: '', split: true, ...loadOpt() };
     this.text = '';
     this.fileName = '';
     this.result = null;
@@ -60,6 +62,7 @@ export class ImportPanel {
           <input type="number" id="imTol" step="0.05" min="0.01" style="width:70px">
           <span class="lbl">擠出高度 cm</span>
           <input type="number" id="imH" step="0.5" min="0.05" style="width:70px">
+          <label class="uwCk"><input type="checkbox" id="imSplit"> 一個形狀一個物件</label>
           <span class="sp"></span>
           <button id="imGo" disabled>匯入成 3D 物件</button>
         </div>
@@ -88,6 +91,18 @@ export class ImportPanel {
     this.hIn.value = this.opt.h;
     this.hIn.title = '往上擠出多高。匯入之後在右側面板還可以改';
     this.hIn.onchange = () => { this.opt.h = num(this.hIn.value, 3); save(this.opt); };
+
+    this.splitIn = $('imSplit');
+    this.splitIn.checked = this.opt.split !== false;
+    this.splitIn.parentElement.title = '勾起來：每個形狀變成一個獨立物件，'
+      + '匯進來就能各自移動旋轉，而版面完全維持原樣。'
+      + '不勾：整份稿合成一個物件，相對位置鎖住不會被動到'
+      + '（之後還是可以在右側面板按「打散」拆開）';
+    this.splitIn.onchange = () => {
+      this.opt.split = this.splitIn.checked;
+      save(this.opt);
+      this.run();
+    };
 
     const fin = $('imFileIn');
     $('imPick').onclick = () => fin.click();
@@ -291,58 +306,81 @@ export class ImportPanel {
   // ── 匯入 ────────────────────────────────────────────
 
   /**
-   * 一份 SVG **匯成一個物件**，不是一個形狀一個物件。
+   * ── 置中一定要做在幾何上，不能靠搬動物件去抵銷 ──────────
    *
-   * 理由是它們的相對位置有意義（那是你在 Illustrator 裡排好的版面）。
-   * 拆成多個物件的話，位置雖然還在，但一移動就散了。
-   * 要拆開的人可以用現成的「打散」，合起來的人卻沒辦法把散掉的排回去。
+   * 第一版是把網格留在 SVG 的畫布座標上，然後把**物件**搬到
+   * `pos = -中心` 去抵銷。畫面上東西確實置中了，
+   * 但物件的**原點**跑到很遠的地方 —— 而 gizmo 長在原點上，
+   * **旋轉與縮放也都繞著那個遠處的點在轉**。
+   *
+   * 這正是 `core/align.js` 開頭警告過的陷阱：
+   * 「絕對不能拿 `obj.pos` 當物件位置，`pos` 是原點，
+   * 而網格不一定以原點為中心」。我自己造了一個。
    */
   _import() {
     const r = this.result;
     if (!r || !r.ok) return;
 
-    const src = {
-      type: 'extrude',
-      h: this.opt.h,
-      from: this.fileName || 'SVG',
-      shapes: r.loops.map(l => ({
-        out: flatPts(l.pts),
-        oc: cornerIdx(l.pts),                       // 真轉角的索引，一定要一起存
-        holes: l.holes.map(h => flatPts(h.pts)),
-        hc: l.holes.map(h => cornerIdx(h.pts))
-      }))
-    };
-
-    const obj = new ModelObject({
-      name: baseName(this.fileName) || '匯入線稿',
-      kind: KIND.SOLID,
-      src
-    });
+    const shapes = r.loops.map(l => ({
+      name: l.layer || l.name,
+      out: flatPts(l.pts),
+      oc: cornerIdx(l.pts),                       // 真轉角的索引，一定要一起存
+      holes: l.holes.map(h => flatPts(h.pts)),
+      hc: l.holes.map(h => cornerIdx(h.pts))
+    }));
+    const all = shapesBounds(shapes);
 
     /**
-     * 把輪廓的中心移到原點。
-     * 不移的話物件會落在 SVG 畫布的座標上（可能離原點好幾公尺），
-     * 匯入後畫面上「什麼都沒有」—— 東西在很遠的地方。
+     * 一個形狀一個物件（預設）vs 合成一個。
+     *
+     * 分開：匯進來就能各自移動旋轉，**版面完全維持原樣**
+     *       —— 每個物件的原點是它自己的中心，位置是它相對整份稿的位置。
+     * 合成：整份稿當一件事，相對位置鎖住不會被動到。
+     *
+     * 兩種都留著，是因為兩種需求都真的存在：招牌字要個別調，
+     * 一個 logo 內部好幾塊則不希望被拆開。
      */
-    const b = bnds(r.loops.flatMap(l => l.pts));
-    obj.pos.set(-(b.minX + b.maxX) / 2, 0, -(b.minY + b.maxY) / 2);
+    const objs = this.opt.split === false
+      ? [this._makeObj(baseName(this.fileName) || '匯入線稿',
+          shapes.map(s => shiftShape(s, -all.cx, -all.cy)), 0, 0)]
+      : shapes.map((s, i) => {
+        const b = shapeBounds(s);
+        return this._makeObj(
+          shapeName(s, baseName(this.fileName), i),
+          [shiftShape(s, -b.cx, -b.cy)],
+          b.cx - all.cx, b.cy - all.cy);
+      });
 
-    try {
-      obj.mesh();
-      if (obj.error) throw new Error(obj.error);
-    } catch (e) {
-      this.body.prepend(box('uwWarn', '⚠ 擠不出來：' + (e.message || e)));
-      return;
+    for (const o of objs) {
+      try {
+        o.mesh();
+        if (o.error) throw new Error(o.error);
+      } catch (e) {
+        this.body.prepend(box('uwWarn', `⚠「${o.name}」擠不出來：` + (e.message || e)));
+        return;
+      }
     }
 
-    this.app.doc.objects.push(obj);
-    this.app.sel.set([obj.id]);
-    this.app.onEdit(`匯入線稿 ${obj.name}`);
+    for (const o of objs) this.app.doc.objects.push(o);
+    this.app.sel.set(objs.map(o => o.id));
+    this.app.onEdit(`匯入線稿（${objs.length} 個物件）`);
     if (this.app.toast) {
-      this.app.toast(`已匯入「${obj.name}」：${r.loops.length} 個形狀，`
+      this.app.toast(`已匯入 ${objs.length} 個物件、${r.loops.length} 個形狀，`
         + `${f(r.size.w)} × ${f(r.size.h)} × ${f(this.opt.h)} cm`);
     }
     this.close();
+  }
+
+  /** 建一個擠出物件。輪廓已經以自己的中心為原點，位置放在 pos 上。 */
+  _makeObj(name, shapes, x, z) {
+    const obj = new ModelObject({
+      name,
+      kind: KIND.SOLID,
+      src: { type: 'extrude', h: this.opt.h, from: this.fileName || 'SVG', shapes }
+    });
+    // SVG 的 (x, y) 對應世界的 (x, z)，跟擠出時同一套對應
+    obj.pos.set(x, 0, z);
+    return obj;
   }
 }
 
@@ -366,6 +404,11 @@ function bnds(pts) {
 }
 
 const baseName = s => String(s || '').replace(/\.[^.]+$/, '');
+
+/** 拆開時每個物件的名字。有圖層名就用圖層名 —— 你在 Illustrator 就是那樣分的。 */
+const shapeName = (s, base, i) => (s.name
+  ? `${base ? base + '－' : ''}${s.name}`
+  : `${base || '形狀'} ${i + 1}`);
 const f = v => String(Math.round(v * 100) / 100);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) ? x : d; };

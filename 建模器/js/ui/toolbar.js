@@ -9,7 +9,7 @@
 
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius } from '../build/prim.js';
-import { KIND } from '../core/io.js';
+import { KIND, canExplodeShapes } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -130,6 +130,36 @@ export class Panel {
           this.app.onExplode(obj);
         });
       this._freezeBtn(obj, '排列方式與份數');
+
+    } else if (canExplodeShapes(obj)) {
+      /**
+       * 匯進來的線稿裡有好幾個形狀。合著的好處是版面鎖住不會被動到，
+       * 但要個別移動旋轉就得拆開。拆開之後版面完全一樣，
+       * 只是變成幾個各自有原點的物件。
+       *
+       * 這顆按鈕原本不存在 —— 日誌裡卻寫了「要拆的人可以用現成的打散」，
+       * 那是一個不存在的退路（2026-08-22 kang 問了才發現）。
+       */
+      const spec = PRIM_SPECS[obj.src.type];
+      if (spec) {
+        this.form.appendChild(head(spec.label + ' 參數'));
+        for (const f of spec.fields) {
+          this._rowNum(f.label, obj.src[f.key], f, v => {
+            obj.src[f.key] = f.int ? Math.round(v) : v;
+            obj.invalidate();
+            this.analysisCache.delete(obj.id);
+            this._edit('改' + f.label);
+          }, f.hint);
+        }
+      }
+      this._rowBtn(`打散成 ${obj.src.shapes.length} 個獨立物件`,
+        '每個形狀變成可以各自移動、旋轉、縮放的物件。'
+        + '版面維持原樣，而且每個物件的原點都在自己的中心。'
+        + '拆開之後就不再是同一份稿了，收不回來。', () => {
+          if (!confirm(`會變成 ${obj.src.shapes.length} 個獨立物件，`
+            + '而且收不回來，確定嗎？')) return;
+          this.app.onExplode(obj);
+        });
 
     } else if (obj.isParametric) {
       const spec = PRIM_SPECS[obj.src.type];

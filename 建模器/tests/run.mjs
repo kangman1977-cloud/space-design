@@ -3422,6 +3422,85 @@ section('匯入線稿：擠出');
   near('改高度重新生成', back.objects[0].mesh().volume(), r.area * 7, 1e-3);
 }
 
+section('匯入線稿：原點與打散');
+
+{
+  /**
+   * ⚠ 置中一定要做在**幾何**上，不能靠搬動物件去抵銷。
+   *
+   * 第一版把網格留在 SVG 的畫布座標上，再把物件搬到 `pos = -中心`。
+   * 畫面上東西是置中的，但物件的**原點**跑到很遠的地方 ——
+   * gizmo 長在原點上，**旋轉與縮放也都繞著那個遠處的點在轉**。
+   * kang 一看畫面就問「控制桿為什麼不在物件上」。
+   *
+   * 這正是 `core/align.js` 開頭警告過的：`pos` 是原點，不是物件的位置。
+   */
+  const mk = (x, y, s) => ({
+    out: prim.flatPts([{ x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s }]),
+    oc: [0, 1, 2, 3], holes: [], hc: []
+  });
+  const shapes = [mk(100, 200, 10), mk(140, 260, 20)];
+  const all = prim.shapesBounds(shapes);
+  near('兩個形狀合起來的中心 x', all.cx, 130);
+  near('兩個形狀合起來的中心 y', all.cy, 240);
+
+  // 合成一個：幾何置中、pos 留在原點
+  const one = new io.ModelObject({
+    name: '稿',
+    src: { type: 'extrude', h: 3, shapes: shapes.map(s => prim.shiftShape(s, -all.cx, -all.cy)) }
+  });
+  const b = one.mesh().bounds();
+  eq('合成一個 物件原點沒有被拿來抵銷', `${one.pos.x},${one.pos.z}`, '0,0');
+  near('合成一個 網格自己就是置中的（x）', (b.min.x + b.max.x) / 2, 0, 1e-3);
+  near('合成一個 網格自己就是置中的（z）', (b.min.z + b.max.z) / 2, 0, 1e-3);
+
+  // 打散
+  ok('多形狀的匯入件 拆得開', io.canExplodeShapes(one));
+  ok('單形狀的拆不開',
+     !io.canExplodeShapes(new io.ModelObject({
+       src: { type: 'extrude', h: 1, shapes: [mk(0, 0, 5)] } })));
+  ok('方塊也拆不開',
+     !io.canExplodeShapes(new io.ModelObject({ src: { type: 'box', w: 1, h: 1, d: 1 } })));
+
+  const made = io.explodeShapes(one);
+  eq('拆成兩個', made.length, 2);
+  for (const o of made) {
+    const bb = o.mesh().bounds();
+    near(`「${o.name}」的網格以自己的原點為中心（x）`, (bb.min.x + bb.max.x) / 2, 0, 1e-3);
+    near(`「${o.name}」的網格以自己的原點為中心（z）`, (bb.min.z + bb.max.z) / 2, 0, 1e-3);
+  }
+
+  /**
+   * **版面不能因為拆開就跑掉。** 每個形狀在世界座標的中心，
+   * 拆開前後必須一樣（容許值 1e-3 是座標存檔修到 4 位小數造成的）。
+   */
+  const worldOf = o => {
+    const bb = o.mesh().bounds();
+    return [o.pos.x + (bb.min.x + bb.max.x) / 2, o.pos.z + (bb.min.z + bb.max.z) / 2];
+  };
+  shapes.forEach((s, i) => {
+    const sb = prim.shapeBounds(s);
+    const w = worldOf(made[i]);
+    near(`拆開後 第 ${i + 1} 個形狀的世界位置不變（x）`, w[0], sb.cx - all.cx, 1e-3);
+    near(`拆開後 第 ${i + 1} 個形狀的世界位置不變（z）`, w[1], sb.cy - all.cy, 1e-3);
+  });
+
+  // 母物件被搬過、轉過，拆出來的要跟著
+  one.pos.set(50, 7, -20);
+  one.rot.set(0, Math.PI / 2, 0);
+  const moved = io.explodeShapes(one);
+  near('母物件的高度有跟著', moved[0].pos.y, 7);
+  near('母物件的旋轉有跟著', moved[0].rot.y, Math.PI / 2, 1e-9);
+  const w0 = worldOf(moved[0]);
+  /**
+   * 轉 90 度之後，本地的 +x 會變成世界的 −z。拆出來的位置要照這個算，
+   * 不能只是把本地偏移量加上去 —— 那樣一轉過角度就散開。
+   */
+  const sb0 = prim.shapeBounds(shapes[0]);
+  near('轉過 90 度之後 位置照樣對得上（x）', w0[0], 50 + (sb0.cy - all.cy), 1e-3);
+  near('轉過 90 度之後 位置照樣對得上（z）', w0[1], -20 - (sb0.cx - all.cx), 1e-3);
+}
+
 // ═══════════════════════════════════════════════════════
 //  真轉角與曲線帶（上游知道的事，不要在中途丟掉）
 // ═══════════════════════════════════════════════════════

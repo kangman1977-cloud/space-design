@@ -21,7 +21,8 @@
 
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
-import { buildPrim, PRIM_DEFAULTS } from '../build/prim.js';
+import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape }
+  from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
   from '../build/bool.js';
 import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
@@ -353,6 +354,58 @@ export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR) {
  *
  * @returns {ModelObject[]} 尚未加進文件，由呼叫端決定怎麼放
  */
+/** 這個物件是不是「匯進來的線稿」，而且裡面不只一個形狀 */
+export function canExplodeShapes(obj) {
+  return !!(obj && obj.src && obj.src.type === 'extrude'
+    && Array.isArray(obj.src.shapes) && obj.src.shapes.length > 1);
+}
+
+/**
+ * 把一個匯入件拆成「一個形狀一個物件」。
+ *
+ * ── 為什麼需要這個 ──────────────────────────────────
+ * 一份 SVG 預設可以合成一個物件（相對位置是在 Illustrator 排好的版面，
+ * 合著才不會被動到）。但合著就沒辦法個別移動旋轉 ——
+ * 日誌裡曾經寫「要拆的人可以用現成的『打散』」，**那句話是錯的**：
+ * 打散當時只對陣列有效，匯入件按不到那顆按鈕。這裡把那個退路補上。
+ *
+ * **版面完全維持原樣**：每個新物件的原點放在它自己的中心
+ * （所以 gizmo 在中心、旋轉縮放也繞著中心），
+ * 位置則是它原本所在的地方，經過母物件的變換算到世界座標。
+ */
+export function explodeShapes(obj) {
+  if (!canExplodeShapes(obj)) throw new Error('這個物件沒有多個形狀可以拆');
+
+  const world = obj.matrix();
+
+  return obj.src.shapes.map((s, i) => {
+    const b = shapeBounds(s);
+    // 形狀中心在母物件的本地座標；SVG 的 (x,y) 對應世界的 (x,z)
+    const full = new THREE.Matrix4().multiplyMatrices(
+      world, new THREE.Matrix4().makeTranslation(b.cx, 0, b.cy));
+
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const sc = new THREE.Vector3();
+    full.decompose(p, q, sc);
+
+    return new ModelObject({
+      name: s.name ? `${obj.name}－${s.name}` : `${obj.name} #${i + 1}`,
+      kind: obj.kind,
+      src: {
+        ...obj.src,
+        shapes: [shiftShape(s, -b.cx, -b.cy)]      // 幾何置中，不靠搬物件抵銷
+      },
+      pos: p,
+      rot: new THREE.Euler().setFromQuaternion(q),
+      scale: sc,
+      color: obj.color,
+      thickness: obj.thickness,
+      lockScale: obj.lockScale
+    });
+  });
+}
+
 export function explodeArray(obj) {
   if (!obj.isArray) throw new Error('這個物件不是陣列');
 

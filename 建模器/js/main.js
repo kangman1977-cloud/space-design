@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
-         download, openFile, autosave, loadAutosave }
+         explodeShapes, download, openFile, autosave, loadAutosave }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
@@ -241,7 +241,8 @@ function arrayOp(mode) {
 
 /** 把陣列打散成一個個獨立物件 */
 function explodeSelected(obj) {
-  const made = explodeArray(obj);
+  // 陣列走陣列那條，匯入的多形狀件走形狀那條 —— 面板負責只在對的時候給按鈕
+  const made = obj.isArray ? explodeArray(obj) : explodeShapes(obj);
   doc.remove(obj);
   for (const o of made) doc.add(o);
   view.sync(doc);
