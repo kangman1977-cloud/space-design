@@ -3712,6 +3712,43 @@ section('編輯：移動點／邊／面');
     eq('拉點之後 面數不變', m.faces.length, f0);
   }
 
+  /**
+   * ⚠ 拉點的結果取決於一條**看不見的三角化對角線**。
+   *
+   * 拉方塊頂面的不同角，體積差兩倍 —— 對角線兩端的角屬於兩個三角形
+   * （拉起來是屋脊），另外兩個只屬於一個（單斜面）。
+   * 幾何完全正確，但使用者不知道為什麼。詳見規格檔同名章節。
+   *
+   * 釘住它的用意：**日後有人改三角化，這裡會亮紅燈**，
+   * 提醒他那不只是內部實作，會改變使用者看到的形狀。
+   */
+  {
+    const at = (m, x, y, z) => m.verts.find(v =>
+      Math.abs(v.p.x - x) < 1e-9 && Math.abs(v.p.y - y) < 1e-9 && Math.abs(v.p.z - z) < 1e-9);
+    const lift = (x, z) => {
+      const m = mkBox();
+      m.computeNormals();
+      const v = at(m, x, 22.5, z);
+      const nTop = m.faces.filter(f => f.normal.y > 0.999 && m.faceVerts(f).includes(v)).length;
+      edit.moveVerts([v], new THREE.Vector3(0, 16, 0));
+      edit.refreshAfterEdit(m);
+      return { nTop, dv: m.volume() - 108000, closed: m.isClosed(),
+               chi: m.verts.length - [...m.edges()].length + m.faces.length };
+    };
+    // 抬高一個三角形的一角，掃出的體積 ＝ (1/3)×面積×高；頂面每個三角形 1200 cm²
+    for (const [x, z] of [[30, 20], [30, -20], [-30, 20], [-30, -20]]) {
+      const r = lift(x, z);
+      near(`拉角 (${x}, ${z})：體積增加 ＝ ${r.nTop}×(1/3)×1200×16`,
+           r.dv, r.nTop * 1200 * 16 / 3, 1e-6);
+      ok(`拉角 (${x}, ${z})：拉完仍然封閉、尤拉數 2`, r.closed && r.chi === 2);
+    }
+    // ★ 這一條才是重點：同一個方塊、同樣的位移，四個角不是都一樣
+    const dvs = [[30, 20], [30, -20], [-30, 20], [-30, -20]].map(([x, z]) => lift(x, z).dv);
+    ok('★ 四個頂角拉出來不是同一個結果（對角線兩端 12800、另外兩個 6400）',
+       new Set(dvs).size === 2 && dvs.includes(6400) && dvs.includes(12800),
+       dvs.join(' / '));
+  }
+
   // ── 整體平移是剛體運動：體積與面積都不能變 ──
   {
     const m = mkBox();

@@ -15,6 +15,7 @@ import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
 import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
+import { elementVerts, elementCenter, nonPlanarFaces } from '../core/edit.js';
 import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
@@ -66,8 +67,14 @@ export class Panel {
   refresh() {
     const obj = this.app.sel.active;
     const many = this.app.sel.count > 1;
+    /**
+     * 編輯模式選的是**子元素**，物件本身並沒有被選取（`sel.active` 是 null）。
+     * 所以那個早退不能照走 —— 走了的話，使用者明明選了一個面，
+     * 面板卻寫著「還沒有選取物件」。**畫面在否認他剛做的事。**
+     */
+    const editing = this.app.sel.editMode;
 
-    if (!obj) {
+    if (!obj && !editing) {
       this.empty.hidden = false;
       this.empty.innerHTML = '還沒有選取物件<br><span>點一下畫面中的物件</span>';
       this.form.hidden = true;
@@ -80,6 +87,14 @@ export class Panel {
     this.form.hidden = false;
     this.form.innerHTML = '';
     this._target = this.form;      // 表單元件預設加到這裡；巢狀區塊會暫時換掉
+
+    if (editing) this._editBox();
+
+    if (!obj) {
+      this.anaBody.className = 'empty';
+      this.anaBody.textContent = '選一個物件後按「重新計算」';
+      return;
+    }
 
     // 網格生成失敗（多半是布林算不出來）先講清楚，再讓人去改參數
     if (obj.error) {
@@ -333,6 +348,63 @@ export class Panel {
    * 壓克力方塊：張數 3、片數 6。這裡顯示 stats.total ——
    * 顯示 3 而實際要切 6 片，是「正確的數字，錯誤的意思」。
    */
+  /**
+   * 編輯模式：面板顯示「現在選到什麼」。
+   *
+   * ⚠ **這不是裝飾。** toast 只講一次就消失了，而使用者拉到一半想確認
+   * 「我剛剛選的到底是哪個」時，畫面上只剩一條黃線與三支箭頭 ——
+   * 那分辨得出「選到的是邊還是面的外框」嗎？分辨不出。
+   *
+   * 座標如實列出來的理由跟「均分」那排空隙數字一樣：
+   * **使用者不必相信程式，看數字就好**（坑第 24 條：可用的前提是驗得出來）。
+   */
+  _editBox() {
+    const sel = this.app.sel;
+    const FN = { auto: '自動', vertex: '點', edge: '邊', face: '面' };
+    this.form.appendChild(head('編輯造型'));
+
+    const el = sel.editSel;
+    if (!el) {
+      this.form.appendChild(note(
+        `現在只選「${FN[sel.editFilter]}」。點物件上的一個元素，`
+        + '箭頭會掛到它身上，拖它就是拉它。'
+        + '⚠ 這一刀只移動既有的點，做不出「長出新的一段」（那是擠出面）。'
+      ));
+      return;
+    }
+
+    const mesh = el.obj.mesh();
+    const n = elementVerts(mesh, el).length;
+    const c = elementCenter(mesh, el);
+    const f = v => (Math.round(v * 100) / 100).toFixed(2);
+
+    const what = el.kind === 'vertex' ? '一個點'
+      : el.kind === 'edge' ? '一條邊（2 個頂點）'
+      // 「面」是共面區域不是三角形，這是使用者最容易誤會的一點，要講清楚
+      : `一個面（共面區域，${n} 個頂點）`;
+
+    const box = document.createElement('div');
+    box.className = 'note';
+    box.innerHTML = `選到 <b>${what}</b>，在「${el.obj.name}」上<br>`
+      + `重心 X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`;
+    this.form.appendChild(box);
+
+    /**
+     * 有面被拉歪了就講出來 —— **只提醒不擋**。
+     * 剖面分切不在乎面平不平，只有展開在乎；程式沒資格替人決定做不做得出來。
+     */
+    const np = nonPlanarFaces(mesh);
+    if (np.length) {
+      const worst = np.reduce((a, b) => (a.dev > b.dev ? a : b));
+      this.form.appendChild(bad(
+        `⚠ 有 ${np.length} 個面已經不平了（最大偏離 ${f(worst.dev)} cm）。`
+        + '展開會從精確變成近似；剖面分切與 3D 列印不受影響。'
+        + '要保持平面就整個面一起拉 —— 一整片平移不會歪，'
+        + '只動一個點或一條邊才會。'
+      ));
+    }
+  }
+
   _seamBox(obj) {
     this.form.appendChild(head('分片'));
 

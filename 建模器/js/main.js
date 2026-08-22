@@ -506,6 +506,7 @@ function setEditFilter(kind) {
   for (const b of document.querySelectorAll('.efBtn')) {
     b.classList.toggle('on', b.dataset.f === kind);
   }
+  panel.refresh();      // 面板寫著現在的過濾器與選到什麼，換了要跟著更新
   if (sel.editMode) toast(`現在只選「${FILTER_NAME[kind]}」`);
 }
 
@@ -539,6 +540,11 @@ function editPick(el) {
  * 三件事同時變成謊話，展開長度會錯，而圖看起來完全正常。
  */
 function editDrag(committing, el) {
+  /**
+   * ⚠ **拖曳中不重繪面板。** `panel.refresh()` 會把整個表單的 DOM 重建一次，
+   * 而這支拖曳時每一幀都會跑 —— 那是坑第 22 條（熱路徑上的 O(全部)）的
+   * DOM 版本。代價是拖曳中面板的座標是舊的，放手就會更新。
+   */
   if (!committing) { view.sync(doc); updateBar(); return; }
 
   const r = refreshAfterEdit(el.obj.mesh());
