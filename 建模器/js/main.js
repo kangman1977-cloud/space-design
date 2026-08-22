@@ -30,6 +30,7 @@ import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
+import { ImportPanel } from './ui/importPanel.js';
 
 const $ = id => document.getElementById(id);
 
@@ -81,6 +82,7 @@ const panel = new Panel(app);
 const unfoldWin = new UnfoldPanel(app);
 const exportWin = new ExportPanel(app);
 const sliceWin = new SlicePanel(app);
+const importWin = new ImportPanel(app);
 
 // ═══════════════════════════════════════════════════════
 //  動作
@@ -329,6 +331,7 @@ $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('unfold').onclick = () => unfoldWin.open();
 $('slice').onclick = () => sliceWin.open();
+$('importSvg').onclick = () => importWin.open();
 $('export3d').onclick = () => exportWin.open();
 
 $('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };

@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from '../core/mesh.js';
+import { extrudeMany } from './extrude.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -74,6 +75,17 @@ export function neutralRadius(ri, k, t) {
 
 /** 給介面用的清單：標籤、可調欄位、範圍 */
 export const PRIM_SPECS = {
+  /**
+   * 擠出件只有一個可以改的參數：高度。
+   * 輪廓是匯進來的，要改就回 Illustrator 改再匯一次 ——
+   * 在這裡放一堆點的編輯欄位沒有意義。
+   */
+  extrude: {
+    label: '擠出件',
+    fields: [
+      { key: 'h', label: '高 Y', min: 0.05, step: 0.5 }
+    ]
+  },
   box: {
     label: '方塊',
     fields: [
@@ -165,6 +177,23 @@ export function isSheetPrim(type) {
   return !!(PRIM_SPECS[type] && PRIM_SPECS[type].sheet);
 }
 
+/** 扁平的 [x,y,x,y,…] → [{x,y},…]。存檔用扁平的，算的時候用物件。 */
+function pairs(arr) {
+  const out = [];
+  const a = arr || [];
+  for (let i = 0; i + 1 < a.length; i += 2) out.push({ x: +a[i], y: +a[i + 1] });
+  return out;
+}
+
+/** [{x,y},…] → 扁平的 [x,y,x,y,…]，順便修到 4 位小數（＝ 1 微米，遠超需要） */
+export function flatPts(pts) {
+  const out = [];
+  for (const p of pts) out.push(r4(p.x), r4(p.y));
+  return out;
+}
+
+const r4 = v => Math.round(v * 1e4) / 1e4;
+
 // ═══════════════════════════════════════════════════════
 
 /** three.js 幾何體 → 半邊網格。所有基本體的共同出口。 */
@@ -179,6 +208,29 @@ const num = (v, dflt) => (Number.isFinite(+v) ? +v : dflt);
 const int = (v, dflt, min = 3) => Math.max(min, Math.round(num(v, dflt)));
 
 const BUILDERS = {
+  /**
+   * 從 SVG 匯入的輪廓擠出來的東西。
+   *
+   * ── 為什麼在 BUILDERS 裡，卻不在 PRIM_DEFAULTS 裡 ────────
+   * `PRIM_TYPES`（＝ 新增下拉選單）是由 `PRIM_DEFAULTS` 的鍵產生的。
+   * 擠出件**沒辦法從零生成** —— 它一定要有一份輪廓，而輪廓來自檔案。
+   * 放進 BUILDERS 讓 `buildSrc()` 認得它（存讀檔、布林、陣列因此自動支援），
+   * 但不放進 PRIM_DEFAULTS，選單裡就不會出現一個按了會壞的項目。
+   *
+   * 輪廓存成**扁平陣列**（[x,y,x,y,…]）而不是 {x,y} 物件：
+   * 描一張圖動輒幾千個點，扁平陣列的檔案小一半以上，
+   * 而且照樣看得懂。這仍然是「存參數，不存三角形」——
+   * 改高度不必重新匯入，改完重新生成就好。
+   */
+  extrude(p) {
+    const shapes = (p.shapes || []).map(s => ({
+      pts: pairs(s.out),
+      holes: (s.holes || []).map(h => ({ pts: pairs(h) }))
+    })).filter(s => s.pts.length >= 3);
+    if (!shapes.length) throw new Error('這個擠出件沒有輪廓資料');
+    return extrudeMany(shapes, num(p.h, 3));
+  },
+
   box(p) {
     const d = PRIM_DEFAULTS.box;
     return toMesh(new THREE.BoxGeometry(

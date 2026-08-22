@@ -34,7 +34,11 @@ html, body {
   background: #24272e; border-bottom: 1px solid #3a3f48;
 }
 .grp {
-  display: flex; align-items: center; gap: 4px;
+  /* flex-wrap：一組按鈕自己也要能換行。
+     #bar 本來就會在「組與組之間」換行，但**單一組塞不下時只會被切掉**，
+     而被切掉的按鈕看起來就像不存在。工具列每加一顆按鈕就更窄一分，
+     平板尤其容易踩到。加這一行的成本是零。 */
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
   padding: 3px 8px 3px 6px; border: 1px solid #3a3f48; border-radius: 8px;
 }
 .grp > .lbl {
@@ -353,6 +357,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">新增</span>
       <select id="primType"></select>
       <button id="add">加入</button>
+      <button id="importSvg" title="匯入 Illustrator 的線稿（SVG）：封閉輪廓會擠出成 3D 物件，內孔自動挖掉">匯入線稿</button>
     </div>
 
     <div class="grp">

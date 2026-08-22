@@ -68,6 +68,14 @@ const { toDXF, UNITS, sliceDXF, cutLayer } = await import('../js/out/dxf.js');
 // 剖面分切。切片是純幾何、定位孔是純幾何，兩個都不碰 DOM，所以整條路測得到。
 const sect = await import('../js/slice/section.js');
 const pegsMod = await import('../js/slice/pegs.js');
+// 匯入線稿。解析、攤平、輪廓整理、擠出，四段都是純數學，全部測得到。
+const svgp = await import('../js/sketch/svgPath.js');
+const prof = await import('../js/sketch/profile.js');
+const extr = await import('../js/build/extrude.js');
+const prim = await import('../js/build/prim.js');
+
+/** 尤拉數 V−E+F。封閉曲面 ＝ 2×塊數 − 2×貫穿孔數。 */
+const euler = m => m.verts.length - [...m.edges()].length + m.faces.length;
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
 const { safeName, TYPES, canChoosePath } = await import('../js/out/save.js');
 const { triangles, stlVolume, trisBounds, dropToBed, toSTLBinary, toSTLAscii,
@@ -3156,6 +3164,260 @@ section('剖面分切：效能');
   ok(`球 60 片 切片＋找孔 ${ms}ms（< 5 秒）`, ms < 5000, `${ms}ms`);
   ok('球 60 片 每片都切得出東西', r.slices.every(s => s.loops.length));
   ok('球 找得到定位孔', g.ok, g.reason || '');
+}
+
+// ═══════════════════════════════════════════════════════
+//  匯入線稿（SVG → 輪廓 → 擠出）
+// ═══════════════════════════════════════════════════════
+
+section('匯入線稿：路徑解析與攤平');
+
+{
+  const sq = svgp.parsePath('M0,0 L100,0 L100,100 L0,100 Z', { tol: 1 });
+  eq('正方形 4 個點（Z 不重複補起點）', sq.subpaths[0].pts.length, 4);
+  near('正方形面積', Math.abs(svgp.polyArea(sq.subpaths[0].pts)), 10000);
+  eq('正方形是封閉的', sq.subpaths[0].closed, true);
+
+  const rel = svgp.parsePath('m0,0 l100,0 l0,100 l-100,0 z', { tol: 1 });
+  near('相對座標 ＝ 絕對座標', Math.abs(svgp.polyArea(rel.subpaths[0].pts)), 10000);
+
+  const hv = svgp.parsePath('M0,0 H100 V100 H0 Z', { tol: 1 });
+  near('H／V 指令', Math.abs(svgp.polyArea(hv.subpaths[0].pts)), 10000);
+
+  /**
+   * SVG 允許「數字直接接在後面 ＝ 重複上一個指令」，而 M 後面重複的是 L。
+   * 漏掉這條規則的話，多邊形會少掉除了第一點以外的**所有**點 ——
+   * 而畫面上只剩一條線，很容易被當成「這個檔有問題」。
+   */
+  const imp = svgp.parsePath('M0,0 100,0 100,100 0,100 Z', { tol: 1 });
+  near('M 後面接數字 ＝ 隱含的 L', Math.abs(svgp.polyArea(imp.subpaths[0].pts)), 10000);
+
+  /**
+   * Illustrator 為了省位元組一定會用這些寫法：
+   * `.5.5` 是兩個數、`1-2` 也是兩個數（負號當分隔）。
+   * 用 split(/[\s,]/) 那種切法會靜靜少掉一半的數字。
+   */
+  const tk = svgp.parsePath('M.5.5L1-2Z', { tol: 1 }).subpaths[0].pts;
+  eq('難切的數字寫法 .5.5 與 1-2',
+     tk.map(p => `${p.x},${p.y}`).join(' '), '0.5,0.5 1,-2');
+
+  // 直的三次貝茲不該被切碎
+  eq('直線形狀的貝茲只留兩點',
+     svgp.parsePath('M0,0 C10,0 20,0 30,0', { tol: 0.01 }).subpaths[0].pts.length, 2);
+}
+
+{
+  /**
+   * A 指令畫的整圓，取樣點精確落在圓上 ——
+   * 所以折線一定是**內接**的（比 2πr 短），而且弦高不超過設定值。
+   * 「切幾段」是憑感覺的數字，弦高是量得到的長度（坑第 26 條）。
+   */
+  const R = 100;
+  const d = `M${R},0 A${R},${R} 0 1 1 ${-R},0 A${R},${R} 0 1 1 ${R},0 Z`;
+  for (const tol of [2, 0.5, 0.05]) {
+    const pts = svgp.parsePath(d, { tol }).subpaths[0].pts;
+    let worst = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      worst = Math.max(worst, R - Math.hypot((a.x + b.x) / 2, (a.y + b.y) / 2));
+    }
+    const L = svgp.polyLength(pts, true);
+    ok(`弦高 tol=${tol} 實測 ${fmt(worst)} 不超標`, worst <= tol + 1e-9);
+    ok(`tol=${tol} 折線內接（比 2πr 短）`, L < 2 * Math.PI * R);
+  }
+  const fine = svgp.polyLength(svgp.parsePath(d, { tol: 0.01 }).subpaths[0].pts, true);
+  ok('切得夠細時周長逼近 2πr（誤差 < 0.01%）',
+     Math.abs(fine / (2 * Math.PI * R) - 1) < 1e-4);
+
+  // 半圓弧長
+  near('半圓弧長 ＝ πr',
+       svgp.polyLength(svgp.parsePath('M0,0 A50,50 0 0 1 100,0', { tol: 0.005 })
+         .subpaths[0].pts), Math.PI * 50, 0.02);
+}
+
+section('匯入線稿：讀檔與比例');
+
+/**
+ * 一個仿 Illustrator 輸出的小檔案。刻意選好算的數字：
+ * viewBox 100 單位 ＝ 10cm，所以 **1 單位 ＝ 0.1cm**。
+ *   外框 50×50 單位 → 5×5 cm → 25 cm²，內孔 20×20 → 2×2 cm → 4 cm²
+ *   另一個形狀是半徑 10 單位（＝1cm）的圓
+ */
+const SVG_A = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100">
+  <defs><path d="M0,0 H5 V5 H0 Z"/></defs>
+  <g id="板"><path d="M10,10 H60 V60 H10 Z M25,25 H45 V45 H25 Z" fill="#fff" stroke="#000"/></g>
+  <g id="圓"><path d="M80,50 A10,10 0 1 1 60,50 A10,10 0 1 1 80,50 Z" fill="none" stroke="#000"/></g>
+</svg>`;
+
+{
+  const r = prof.readSVG(SVG_A, { tolMm: 0.05 });
+  ok('讀得動', r.ok, r.reason || '');
+  near('比例：1 單位 ＝ 0.1cm', r.scale.cmPerUnit, 0.1, 1e-12);
+  eq('比例來源是「檔案宣告的」，不是猜的', r.scale.from, 'declared');
+  eq('兩個外框', r.loops.length, 2);
+  eq('圖層名讀得到', r.loops.map(l => l.layer).sort().join(','), '圓,板');
+
+  const plate = r.loops.find(l => l.layer === '板');
+  eq('板有一個內孔', plate.holes.length, 1);
+  near('板的外框面積 25 cm²', Math.abs(plate.area), 25, 1e-9);
+  near('板的內孔面積 4 cm²', Math.abs(plate.holes[0].area), 4, 1e-9);
+
+  const circ = r.loops.find(l => l.layer === '圓');
+  eq('圓沒有內孔', circ.holes.length, 0);
+  /**
+   * 攤平出來的多邊形是**內接**的，所以面積一定小於 πr² ——
+   * 大於就表示取樣點沒有落在圓上，那是算錯了。
+   * 精度靠收斂驗：弦高調細十倍，誤差要跟著掉。
+   */
+  const e1 = 1 - Math.abs(circ.area) / Math.PI;
+  const e2 = 1 - Math.abs(prof.readSVG(SVG_A, { tolMm: 0.005 })
+    .loops.find(l => l.layer === '圓').area) / Math.PI;
+  ok(`圓面積內接於 πcm²（差 ${(e1 * 100).toFixed(3)}%）`, e1 > 0 && e1 < 0.01);
+  ok(`弦高調細十倍 誤差跟著掉（${(e1 * 100).toFixed(3)}% → ${(e2 * 100).toFixed(3)}%）`,
+     e2 > 0 && e2 < e1 / 5);
+
+  /**
+   * `<defs>` 裡的路徑是「定義」，不是圖面上的東西。
+   * 跟著擠出的話會多一塊看不出哪來的鬼影。
+   */
+  eq('<defs> 裡的路徑有被跳過', r.shapes.length, 3);
+
+  near('淨面積 ＝ 25 − 4 ＋ 圓', r.area, 21 + Math.abs(circ.area), 1e-9);
+  eq('沒有錯誤', r.errors.length, 0);
+}
+
+{
+  /**
+   * ⚠ X 與 Y 的比例**不會完全相等**。
+   * Illustrator 把 width／height 四捨五入到 2 位小數，
+   * 真實檔案實測差 0.009%。拿相等去比的話，
+   * **每一個 Illustrator 檔都會被誤判成非等比縮放**（坑第 26 條）。
+   */
+  const s = `<svg width="41.35cm" height="87.38cm" viewBox="0 0 1172.16 2476.79">`
+    + `<path d="M0,0 H100 V100 H0 Z"/></svg>`;
+  const r = prof.readSVG(s, { tolMm: 0.2 });
+  eq('四捨五入造成的比例差不算非等比', r.notes.filter(n => n.includes('比例')).length, 0);
+
+  const skew = `<svg width="10cm" height="20cm" viewBox="0 0 100 100">`
+    + `<path d="M0,0 H100 V100 H0 Z"/></svg>`;
+  ok('真的非等比就要講出來',
+     prof.readSVG(skew, { tolMm: 0.2 }).notes.some(n => n.includes('比例')));
+}
+
+{
+  // 沒寫實際尺寸的檔：可以讀，但一定要講「這是猜的」
+  const s = `<svg viewBox="0 0 100 100"><path d="M0,0 H100 V100 H0 Z"/></svg>`;
+  const r = prof.readSVG(s, { tolMm: 0.2 });
+  eq('沒寫尺寸時 來源標成「猜的」', r.scale.from, 'guess');
+  ok('而且有講出來', r.notes.some(n => n.includes('猜')));
+}
+
+{
+  /**
+   * transform 忽略掉不會報錯，只是東西**跑到別的地方** ——
+   * 而畫面上看起來很正常。這種錯最難查，所以一定要測。
+   */
+  const s = `<svg width="10cm" height="10cm" viewBox="0 0 100 100">`
+    + `<g transform="translate(10,20)"><path d="M0,0 H50 V50 H0 Z"/></g></svg>`;
+  const r = prof.readSVG(s, { tolMm: 0.2 });
+  near('translate 有被吃進去（左上角 x）', r.box.minX, 1, 1e-12);
+  near('translate 有被吃進去（左上角 y）', r.box.minY, 2, 1e-12);
+
+  const m = `<svg width="10cm" height="10cm" viewBox="0 0 100 100">`
+    + `<g transform="matrix(2 0 0 2 0 0)"><path d="M0,0 H50 V50 H0 Z"/></g></svg>`;
+  near('matrix 縮放有被吃進去', prof.readSVG(m, { tolMm: 0.2 }).size.w, 10, 1e-12);
+}
+
+{
+  // 沒封閉的路徑擠不出實體，但畫面上看不出來 —— 一定要擋下來並講清楚
+  const s = `<svg width="10cm" height="10cm" viewBox="0 0 100 100">`
+    + `<path d="M0,0 H50 V50"/></svg>`;
+  const r = prof.readSVG(s, { tolMm: 0.2 });
+  ok('沒封閉的路徑會被擋下來', !r.ok);
+  ok('而且講得出是「沒有封閉」', r.errors.join('').includes('封閉'), r.errors.join('|'));
+}
+
+section('匯入線稿：擠出');
+
+{
+  const sq = (x, y, s) => [{ x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s }];
+
+  let m = extr.extrudeProfile({ pts: sq(0, 0, 100), holes: [] }, 50);
+  /**
+   * ⚠ 體積必須是**正的**。
+   * 輪廓的 (x,y) 對應世界的 (x,z)，而 x̂ × ẑ ＝ −ŷ ——
+   * 照直覺寫的第一版整個模型法向朝內，體積是 −500000。
+   * 法向朝內的模型在畫面上看起來完全正常，
+   * 只有匯出 STL 的列印前檢查才抓得到。
+   */
+  near('方形擠出 體積 ＝ 面積×高（而且是正的）', m.volume(), 100 * 100 * 50, 1e-6);
+  eq('方形擠出 封閉', m.isClosed(), true);
+  eq('方形擠出 尤拉數 2', euler(m), 2);
+  eq('方形擠出 面數（2 蓋各 2 三角形 ＋ 4 側牆）', m.faces.length, 8);
+
+  m = extr.extrudeProfile({ pts: sq(0, 0, 100), holes: [{ pts: sq(40, 40, 20) }] }, 50);
+  near('挖一個孔 體積', m.volume(), (10000 - 400) * 50, 1e-6);
+  eq('挖一個孔 尤拉數 0（貫穿）', euler(m), 0);
+  eq('挖一個孔 仍然封閉', m.isClosed(), true);
+
+  m = extr.extrudeProfile({
+    pts: sq(0, 0, 100), holes: [{ pts: sq(10, 10, 20) }, { pts: sq(60, 60, 20) }]
+  }, 30);
+  near('挖兩個孔 體積', m.volume(), (10000 - 800) * 30, 1e-6);
+  eq('挖兩個孔 尤拉數 −2', euler(m), -2);
+
+  /**
+   * 畫的人不一定照規矩。外框畫成順時針、孔畫成逆時針都要照樣做得出來 ——
+   * 繞向只是慣例，「在不在裡面」才是幾何事實。
+   */
+  m = extr.extrudeProfile({
+    pts: sq(0, 0, 100).reverse(), holes: [{ pts: sq(40, 40, 20).reverse() }]
+  }, 50);
+  near('外框與孔都畫反了 照樣正確', m.volume(), (10000 - 400) * 50, 1e-6);
+
+  /**
+   * 三角化對不對，用面積對答案。
+   * 開橋之後橋墩會出現兩次，早期版本因此**一個耳朵都找不到**，
+   * 三角形數回傳 0 —— 不報錯，只是蓋子整片消失。
+   */
+  const t = extr.triangulateWithHoles(sq(0, 0, 100), [sq(40, 40, 20).slice().reverse()]);
+  near('帶洞三角化 面積 ＝ 多邊形面積', extr.trisArea(t.tris, t.pts), 10000 - 400, 1e-9);
+  ok('帶洞三角化 有切出三角形（橋墩重複點沒有卡死）', t.tris.length > 0);
+}
+
+{
+  // 一份 SVG 走完全程：讀檔 → 輪廓 → 擠出
+  const r = prof.readSVG(SVG_A, { tolMm: 0.05 });
+  const H = 2;
+  const m = extr.extrudeMany(r.loops.map(l => ({ pts: l.pts, holes: l.holes })), H);
+  near('全程 體積 ＝ 淨面積 × 高', m.volume(), r.area * H, 1e-6);
+  eq('全程 封閉', m.isClosed(), true);
+  eq('全程 尤拉數（2 塊、1 貫穿孔 → 2×2−2×1）', euler(m), 2);
+
+  // 走文件物件這條路，並且存讀檔往返
+  const src = {
+    type: 'extrude', h: H,
+    shapes: r.loops.map(l => ({
+      out: prim.flatPts(l.pts), holes: l.holes.map(h => prim.flatPts(h.pts))
+    }))
+  };
+  const obj = new io.ModelObject({ name: '線稿', src });
+  near('存成參數體之後 體積不變', obj.mesh().volume(), r.area * H, 1e-3);
+
+  const doc = new io.Doc();
+  doc.objects.push(obj);
+  const back = new io.Doc();
+  back.loadJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+  near('存讀檔往返 體積相同', back.objects[0].mesh().volume(), obj.mesh().volume(), 1e-9);
+
+  /**
+   * 存的是參數不是三角形，所以改高度可以重新生成 ——
+   * 這正是「關鍵決定 2」的用意，匯入件也照這條走。
+   */
+  back.objects[0].src.h = 7;
+  back.objects[0].invalidate();
+  near('改高度重新生成', back.objects[0].mesh().volume(), r.area * 7, 1e-3);
 }
 
 // ═══════════════════════════════════════════════════════
