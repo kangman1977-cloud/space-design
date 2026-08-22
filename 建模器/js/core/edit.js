@@ -38,7 +38,7 @@
  */
 
 import * as THREE from 'three';
-import { EDGE_ROLE } from './mesh.js';
+import { Mesh, EDGE_ROLE } from './mesh.js';
 import { planarRegions } from './region.js';
 import { FLAT_TOL_DEG } from '../unfold/flatten.js';
 import { DEFAULT_CORNER_DEG } from '../sketch/svgPath.js';
@@ -256,6 +256,224 @@ export function nonPlanarFaces(mesh, tolCm = PLANAR_TOL_CM) {
     if (!r.planar) out.push({ face: f, dev: r.dev });
   }
   return out;
+}
+
+// ═══════════════════════════════════════════════════════
+//  擠出面（第 6 期第二刀）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 一個共面區域的**有序**邊界迴圈（可能不只一個，例如中間有洞的面）。
+ *
+ * `regionBoundaryEdges()` 回傳的是無序線段，畫標示夠用；
+ * 擠出要生側牆，就必須知道**繞的方向**，否則側牆的法向會朝內 ——
+ * 而那在畫面上完全看不出來（坑第 29 條）。
+ *
+ * 半邊本來就繞著面轉，方向跟面的繞向一致，所以串起來的迴圈方向
+ * 自然就是「從外面看，繞著這個區域走」的方向。不必自己判斷方向。
+ *
+ * @returns {Array<HalfEdge[]>} 每個迴圈是首尾相接的一串半邊
+ */
+export function boundaryLoops(mesh, regionFaces) {
+  const inRegion = new Set(regionFaces);
+  const bnd = [];
+  for (const f of regionFaces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (he.twin && he.twin.face && inRegion.has(he.twin.face)) continue;
+      bnd.push(he);
+    }
+  }
+  const byStart = new Map();
+  for (const he of bnd) {
+    if (!byStart.has(he.v)) byStart.set(he.v, []);
+    byStart.get(he.v).push(he);
+  }
+  const used = new Set();
+  const loops = [];
+  for (const start of bnd) {
+    if (used.has(start)) continue;
+    const loop = [];
+    let cur = start;
+    while (cur && !used.has(cur)) {
+      used.add(cur);
+      loop.push(cur);
+      const nexts = (byStart.get(cur.to) || []).filter(h => !used.has(h));
+      // ⚠ 一個頂點上有兩條以上待接的邊界邊 ＝ 區域在那裡「捏」成一點。
+      //   隨便挑一條就可能串出扭曲的迴圈。真的遇到再處理，先不假裝有解。
+      cur = nexts.length === 1 ? nexts[0] : null;
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  return loops;
+}
+
+/**
+ * 擠出一個面：**從它長出新的一段**。做鹿角的那個動作。
+ *
+ * ⚠ 這跟「拉面」（`moveElement`）不是同一件事：
+ * 拉面是把既有的面搬走，方塊拉完還是六個面；
+ * **擠出是長出新的一段**，方塊擠完會多出四面側牆。
+ *
+ * ── 為什麼走「拆掉重建」而不是半邊手術 ────────────────────
+ * `mesh.js` 完全沒有改拓撲的 API，半邊手術要從零長出一整層，
+ * 而且接線錯了不會報錯，只會產生一個結構壞掉的網格。
+ * `Mesh.fromFaceList()` 是現成的、驗過的，而且只要**既有頂點保持原索引、
+ * 新頂點往後追加**，標記的索引配對就還對得上。
+ *
+ * ── 側牆的繞向 ──────────────────────────────────────
+ * 邊界半邊 a→b（繞著區域走）對應的側牆是 **(a, b, b', a')**，
+ * `'` 是偏移後的新頂點。這個順序是兩條獨立的路得到的同一個答案：
+ * 手算一個例子的 Newell 法向，以及對照 `build/extrude.js` 第 91 行
+ * 那支已經驗過的側牆（它踩過「體積 −500000」那個坑）。
+ *
+ * ── 只做封閉的那一種 ────────────────────────────────
+ * Blender 手冊分兩種：邊界邊只屬於一個面時**複製**選取的面，
+ * 否則**不複製**（免得留一個面在實體裡面）。
+ * 這裡只做後者（封閉網格），開放邊緣**擋下來並說明原因** ——
+ * 前者要決定「複製還是搬移」，那是使用者的取捨，不該由我猜。
+ * 而且板件（開放曲面）本來就不在第 6 期的支援範圍內。
+ *
+ * @param {number} dist 沿面法向的距離；負值 ＝ 往內凹
+ * @returns {{ok:boolean, mesh?:Mesh, reason?:string, walls?:number, loops?:number}}
+ */
+export function extrudeFace(mesh, face, dist, opt = {}) {
+  const tolDeg = opt.tolDeg ?? 0.5;
+  const cornerDeg = opt.cornerDeg ?? DEFAULT_CORNER_DEG;
+
+  if (!face) return { ok: false, reason: '沒有選到面' };
+  if (!Number.isFinite(dist) || Math.abs(dist) < 1e-12) {
+    return { ok: false, reason: '擠出距離不能是 0' };
+  }
+
+  const reg = regionOf(mesh, face, tolDeg);
+  if (!reg.faces.length) return { ok: false, reason: '找不到這個面所在的共面區域' };
+  const inRegion = new Set(reg.faces);
+
+  // 邊界邊一定要有隔壁 —— 開放邊緣的行為還沒定案（見上方說明）
+  for (const f of reg.faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (he.twin && he.twin.face && inRegion.has(he.twin.face)) continue;
+      if (!he.twin || !he.twin.face) {
+        return { ok: false, reason: '這個面在網格的開放邊緣上，擠出還不支援' };
+      }
+    }
+  }
+
+  const loops = boundaryLoops(mesh, reg.faces);
+  if (!loops.length) {
+    return { ok: false, reason: '串不出這個面的邊界（形狀太特殊，例如捏成一點）' };
+  }
+
+  const n = mesh.computeFaceNormal(face).clone();
+  if (n.lengthSq() < 1e-12) return { ok: false, reason: '算不出這個面的法向' };
+  const off = n.clone().multiplyScalar(dist);
+
+  // ── 頂點：既有的保持原索引，新的往後追加 ──
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const dup = new Map();                       // 邊界頂點 → 新頂點的索引
+
+  const bndVerts = new Set();
+  for (const loop of loops) for (const he of loop) bndVerts.add(he.v);
+
+  for (const v of bndVerts) {
+    dup.set(v, points.length);
+    points.push(v.p.clone().add(off));
+  }
+  /**
+   * 內部頂點（只有這個區域在用的）**直接搬，不複製**。
+   * 複製的話原本那個就沒有任何面在用了 —— 變成孤點，
+   * 而孤點不會報錯，只會讓頂點數對不上、尤拉數算錯。
+   */
+  for (const v of reg.verts) {
+    if (bndVerts.has(v)) continue;
+    points[vi.get(v.id)] = v.p.clone().add(off);
+  }
+
+  const idxOf = v => (dup.has(v) ? dup.get(v) : vi.get(v.id));
+
+  // ── 面 ──
+  const faces = [];
+  for (const f of mesh.faces) {
+    faces.push(inRegion.has(f)
+      ? mesh.faceVerts(f).map(idxOf)                     // 蓋子改指向新頂點
+      : mesh.faceVerts(f).map(v => vi.get(v.id)));       // 其餘原封不動
+  }
+  let walls = 0;
+  for (const loop of loops) {
+    for (const he of loop) {
+      faces.push([vi.get(he.v.id), vi.get(he.to.id), dup.get(he.to), dup.get(he.v)]);
+      walls++;
+    }
+  }
+
+  const out = Mesh.fromFaceList(points, faces);
+
+  /**
+   * ── 標記的搬移 ──────────────────────────────────────
+   * 先用 `_copyMarksTo()` 搬「索引配對沒變」的那些邊：區域外的邊、
+   * 以及邊界邊（它現在是側牆與鄰居之間那條）。
+   *
+   * ⚠ **蓋子內部的邊搬不到** —— 它的兩個端點都換成新頂點了，
+   * 索引配對整組不同。所以底下要自己再搬一次。
+   * 直接信任 `_copyMarksTo()` 的話，蓋子上使用者標的分片會安靜消失。
+   */
+  mesh._copyMarksTo(out);
+
+  // ⚠ 一定要先建索引表。寫成 `out.verts.indexOf(he.v)` 是「對每條邊查一次
+  //   全部頂點」＝ O(頂點×邊)，正是坑第 3 條。擠出一個描圖輪廓動輒上千頂點。
+  const outIdx = new Map(out.verts.map((v, i) => [v.id, i]));
+  const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+  const byPair = new Map();
+  for (const he of out.edges()) {
+    byPair.set(key(outIdx.get(he.v.id), outIdx.get(he.to.id)), he);
+  }
+
+  for (const he of mesh.edges()) {
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    if (!inRegion.has(he.face) || !inRegion.has(he.twin.face)) continue;   // 只有蓋子內部
+    const to = byPair.get(key(idxOf(he.v), idxOf(he.to)));
+    if (!to) continue;
+    if (he.role !== EDGE_ROLE.FREE) out.setRole(to, he.role);
+    if (he.smooth) out.setSmooth(to, true);
+  }
+
+  /**
+   * ── 新的垂直邊要不要算平滑：**只繼承，不猜** ──────────────
+   *
+   * 側牆的垂直邊，是把「原網格上那條邊」往外延長了一段。
+   * 例如擠出圓柱的頂面，新的垂直邊就是圓柱既有垂直邊的延伸。
+   * **所以直接問那條邊就好**，不必從幾何猜。
+   *
+   * 找法：邊界頂點 v 上，兩條邊界邊的隔壁面是 N1 與 N2，
+   * 它們之間那條（也通過 v 的）邊，就是被延長的那一條。
+   *
+   * ⚠ **刻意不做「轉角小於 3 度就算平滑」那種猜測。**
+   * 標成 smooth 的意思是「這裡不算折線」，猜錯的後果是**漏掉一道折彎**，
+   * 而展開圖漏折彎 ＝ 東西做出來是錯的。標多了只是多一道折線，安全得多。
+   * **這個方向上不對稱，所以寧可不猜。**
+   *
+   * ⚠ 實查（2026-08-23）：九種參數體**一條 smooth 都沒標**，
+   * 只有匯入的擠出件會標（它有貝茲錨點這個上游）。所以擠出參數體的面時，
+   * 垂直邊一律不算平滑 —— 那是對的：32 邊形跟「真的做成 32 面的角柱」
+   * 幾何上完全一樣，分不出來（坑第 10 條）。
+   */
+  for (const loop of loops) {
+    for (let i = 0; i < loop.length; i++) {
+      const prev = loop[(i - 1 + loop.length) % loop.length], cur = loop[i];
+      const N1 = prev.twin && prev.twin.face, N2 = cur.twin && cur.twin.face;
+      if (!N1 || !N2 || N1 === N2) continue;      // 同一個鄰居繞過來，中間沒有邊
+      const src = mesh.vertOutgoing(cur.v).find(h =>
+        h.twin && ((h.face === N1 && h.twin.face === N2) ||
+                   (h.face === N2 && h.twin.face === N1)));
+      if (!src || !src.smooth) continue;
+      const he = byPair.get(key(vi.get(cur.v.id), dup.get(cur.v)));
+      if (he) out.setSmooth(he, true);
+    }
+  }
+
+  out.computeNormals();
+  return { ok: true, mesh: out, walls, loops: loops.length };
 }
 
 // ═══════════════════════════════════════════════════════

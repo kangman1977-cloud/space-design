@@ -3889,6 +3889,140 @@ section('編輯：移動點／邊／面');
   }
 }
 
+section('擠出面：從一個面長出新的一段');
+{
+  const chi = m => m.verts.length - [...m.edges()].length + m.faces.length;
+  const topOf = m => { m.computeNormals(); return m.faces.find(f => f.normal.y > 0.999); };
+
+  // ── 方塊頂面擠出 20：每個數字都手算得出來 ──
+  {
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const r = edit.extrudeFace(m, topOf(m), 20);
+    ok('擠出成功', r.ok, r.reason || '');
+    const o = r.mesh;
+    near('★ 體積 ＝ 108000 ＋ 60×40×20', o.volume(), 156000, 1e-6);
+    eq('頂點 8 ＋ 4（邊界頂點各複製一份）', o.verts.length, 12);
+    eq('面 12 ＋ 4（側牆四邊形）', o.faces.length, 16);
+    eq('側牆回報 4 面、1 個迴圈', r.walls * 10 + r.loops, 41);
+    ok('仍然是封閉實體', o.isClosed());
+    eq('χ 仍然是 2', chi(o), 2);
+    near('高度 45 → 65', o.bounds().max.y - o.bounds().min.y, 65, 1e-9);
+    // 原網格不可以被動到 —— 它還在 Undo 的快照裡
+    near('★ 原網格完全沒被改（體積還是 108000）', m.volume(), 108000, 1e-9);
+    eq('原網格面數也沒變', m.faces.length, 12);
+  }
+
+  // ── 負值 ＝ 往內凹 ──
+  {
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const r = edit.extrudeFace(m, topOf(m), -15);
+    near('負值往內凹：108000 − 60×40×15', r.mesh.volume(), 72000, 1e-6);
+    ok('凹進去也還是封閉、χ＝2', r.mesh.isClosed() && chi(r.mesh) === 2);
+  }
+
+  // ── 連續擠出：做鹿角就是重複這個動作 ──
+  {
+    let m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    for (let k = 1; k <= 3; k++) {
+      const r = edit.extrudeFace(m, topOf(m), 10);
+      ok(`第 ${k} 次擠出成功`, r.ok, r.reason || '');
+      m = r.mesh;
+      edit.refreshAfterEdit(m);
+      near(`連擠 ${k} 次 體積 ＝ 108000 ＋ 2400×10×${k}`, m.volume(), 108000 + 24000 * k, 1e-6);
+    }
+    ok('連擠三次之後 仍然封閉、χ＝2', m.isClosed() && chi(m) === 2);
+    eq('連擠三次 頂點 8＋4×3', m.verts.length, 20);
+    eq('連擠三次 面 12＋4×3', m.faces.length, 24);
+  }
+
+  // ── ★ 斜面：側牆繞向錯了畫面上看不出來，只有體積會變負 ──
+  {
+    const m = buildPrim('cylinder', { r: 25, h: 70, seg: 12 });
+    m.computeNormals();
+    const side = m.faces.find(f => Math.abs(f.normal.y) < 0.01);
+    const r = edit.extrudeFace(m, side, 8);
+    ok('非軸向的斜面 也擠得出來', r.ok, r.reason || '');
+    ok('★ 體積必須是正的（法向朝外）—— 繞向錯了這裡會變負',
+       r.mesh.volume() > 0, r.mesh.volume().toFixed(1));
+    ok('封閉、χ＝2', r.mesh.isClosed() && chi(r.mesh) === 2);
+  }
+
+  // ── 帶洞的面：兩個邊界迴圈 ──
+  {
+    const m = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 16 });
+    const r = edit.extrudeFace(m, topOf(m), 10);
+    ok('管的端面擠得出來', r.ok, r.reason || '');
+    eq('★ 兩個邊界迴圈（外框一圈、內孔一圈）', r.loops, 2);
+    eq('側牆 16＋16 面', r.walls, 32);
+    // 正 16 邊形環的面積 ＝ ½·n·(R²−r²)·sin(2π/n)，不是理想圓的 π(R²−r²)
+    const ring = 0.5 * 16 * (625 - 400) * Math.sin(2 * Math.PI / 16);
+    near('★ 體積增加 ＝ 16 邊形環面積 × 10（不是理想圓）',
+         r.mesh.volume() - m.volume(), ring * 10, 1e-6);
+    ok('封閉，χ＝0（中間還是通的）', r.mesh.isClosed() && chi(r.mesh) === 0);
+  }
+
+  // ── 標記：蓋子搬到新頂點了，索引配對整組不同，不能只靠 _copyMarksTo ──
+  {
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const top = topOf(m);
+    const diag = [...m.edges()].find(h =>
+      h.face && h.twin && h.twin.face && m.isFlat(h) && h.face.normal.y > 0.999);
+    m.setRole(diag, EDGE_ROLE.CUT);
+    const r = edit.extrudeFace(m, top, 20);
+    eq('★ 蓋子上使用者標的 CUT 沒有消失',
+       [...r.mesh.edges()].filter(h => h.role === EDGE_ROLE.CUT).length, 1);
+  }
+
+  // ── 側牆的垂直邊：只繼承上游，不從幾何猜 ──
+  {
+    // 匯入的擠出件才有 smooth（九種參數體一條都沒標，2026-08-23 實查）。
+    // 半圓輪廓：圓弧那段全是平滑點，只有頭尾兩個真轉角。
+    const out2 = [], oc2 = [];
+    const N = 24, R = 20;
+    for (let i = 0; i <= N; i++) {
+      const t = Math.PI * i / N;
+      out2.push(-R * Math.cos(t), R * Math.sin(t));
+    }
+    oc2.push(0, N);
+    const m = buildPrim('extrude', { type: 'extrude', h: 5, shapes: [{ out: out2, oc: oc2 }] });
+    m.computeNormals();
+    const s0 = [...m.edges()].filter(h => h.smooth).length;
+    ok('匯入的擠出件 本來就有 smooth 邊', s0 > 15, `${s0} 條`);
+
+    const r = edit.extrudeFace(m, topOf(m), 8);
+    ok('擠出成功', r.ok, r.reason || '');
+    const s1 = [...r.mesh.edges()].filter(h => h.smooth).length;
+    ok('★ 新的垂直邊繼承了上游的 smooth（總數變多了）', s1 > s0, `${s0} → ${s1}`);
+    ok('封閉、χ＝2', r.mesh.isClosed() && chi(r.mesh) === 2);
+  }
+  {
+    // ★ 反面：沒有上游就不猜。32 邊圓柱每個頂點轉 11.25 度，
+    //   而「32 邊形」跟「真的做成 32 面的角柱」幾何上完全一樣（坑第 10 條）。
+    //   標成 smooth ＝「這裡不算折線」，猜錯會漏掉折彎 —— 不對稱，所以不猜。
+    const m = buildPrim('cylinder', { r: 25, h: 70, seg: 32 });
+    const r = edit.extrudeFace(m, topOf(m), 10);
+    eq('★ 參數體沒有上游 → 垂直邊一條都不標平滑',
+       [...r.mesh.edges()].filter(h => h.smooth).length, 0);
+  }
+  {
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const r = edit.extrudeFace(m, topOf(m), 20);
+    eq('方塊的四個角 也一條平滑邊都沒有',
+       [...r.mesh.edges()].filter(h => h.smooth).length, 0);
+  }
+
+  // ── 擋下來的情況，要講得出原因 ──
+  {
+    const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+    plate.computeNormals();
+    const r1 = edit.extrudeFace(plate, plate.faces[0], 10);
+    ok('開放網格的邊緣 擋下來並說明原因', !r1.ok && /開放邊緣/.test(r1.reason), r1.reason || '竟然通過');
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    ok('距離 0 擋下來', !edit.extrudeFace(m, topOf(m), 0).ok);
+    ok('沒選到面 擋下來', !edit.extrudeFace(m, null, 10).ok);
+  }
+}
+
 section('編輯：面還平不平（預設沿法向的理由）');
 {
   const mkBox = () => buildPrim('box', { w: 60, h: 45, d: 40 });

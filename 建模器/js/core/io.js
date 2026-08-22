@@ -194,6 +194,22 @@ export class ModelObject {
     return this;
   }
 
+  /**
+   * 直接換掉網格。**拆掉重建型的編輯專用**（目前只有擠出面）。
+   *
+   * 拉點／拉邊／拉面是就地改頂點座標，網格物件不換人，所以不需要這一支。
+   * 擠出面會新增頂點與面，只能整個重建，重建出來的是**另一個 Mesh 物件**。
+   *
+   * ⚠ 只對已經 `bake()` 過的網格物件有意義。參數物件換了也沒用 ——
+   * `invalidate()` 或下次開檔就會照參數重生，改動靜靜消失。
+   * 擋這件事是呼叫端的責任（跟分片用同一個 `canMarkSeams()` 判準）。
+   */
+  setMesh(m) {
+    this._mesh = m;
+    this.error = null;
+    return this;
+  }
+
   /** 把參數物件轉成可自由編輯的網格（不可逆，跟 Blender 的 Convert to Mesh 一樣） */
   bake() {
     this.mesh();                 // 先確保算出來了
