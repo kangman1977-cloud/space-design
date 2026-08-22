@@ -90,6 +90,36 @@ export function regionOf(mesh, face, tolDeg = 0.5) {
 }
 
 /**
+ * 一個共面區域的**邊界邊**（跟區域外面相鄰的那些邊）。
+ *
+ * ⚠ **畫「選到這個面」的標示一定要用這個，不能拿 `regionOf().verts` 去串。**
+ * 那份頂點是從 Set 出來的，**順序是任意的** —— 依序連成封閉迴圈的話，
+ * 方塊的一個正方形面會畫成一個蝴蝶結。
+ * 〔2026-08-23 kang 實測截圖抓到：幾何完全正確（4 個頂點沒錯），
+ * 　但畫出來的意思是錯的。又是坑第 20 條「正確的數字，錯誤的意思」〕
+ *
+ * @returns {Array<[Vertex, Vertex]>} 每一組是一條邊界邊的兩個端點
+ */
+export function regionBoundaryEdges(mesh, face, tolDeg = 0.5) {
+  const reg = regionOf(mesh, face, tolDeg);
+  if (!reg.faces.length) return [];
+  const inRegion = new Set(reg.faces);
+  const out = [];
+  const seen = new Set();
+  for (const f of reg.faces) {
+    for (const he of mesh.faceLoop(f)) {
+      // 沒有隔壁（邊界）或隔壁不在這個區域裡 → 這條就是區域的外緣
+      if (he.twin && he.twin.face && inRegion.has(he.twin.face)) continue;
+      const key = he.twin ? Math.min(he.id, he.twin.id) : he.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push([he.v, he.to]);
+    }
+  }
+  return out;
+}
+
+/**
  * 把 select.js 的 pickElement() 回傳的元素，換成「要移動哪些頂點」。
  *
  * 三種 kind 的差別只在這裡，底下的移動與重算完全共用 ——

@@ -3756,6 +3756,24 @@ section('編輯：移動點／邊／面');
     eq('★ 面 ＝ 共面區域，不是三角形 → 4 個頂點',
        edit.elementVerts(m, { kind: 'face', face: top }).length, 4);
     eq('對照：那個三角形本身只有 3 個頂點', m.faceVerts(top).length, 3);
+
+    // ★ 畫「選到這個面」的標示要用邊界邊，不能拿頂點去串 ——
+    //   頂點是從 Set 出來的、順序任意，串起來會變成蝴蝶結。
+    //   〔2026-08-23 kang 實測截圖抓到，幾何對但畫出來的意思是錯的〕
+    const segs = edit.regionBoundaryEdges(m, top);
+    eq('★ 方塊頂面的邊界 ＝ 4 條邊（不是 6 條，三角化的對角線不算）',
+       segs.length, 4);
+    ok('每一條都是兩個不同的頂點', segs.every(([a, b]) => a !== b));
+    // 4 條邊首尾相接成一個封閉迴圈 → 每個頂點恰好出現兩次
+    const deg = new Map();
+    for (const [a, b] of segs) for (const v of [a, b]) deg.set(v, (deg.get(v) || 0) + 1);
+    eq('★ 邊界是封閉迴圈：涵蓋 4 個頂點', deg.size, 4);
+    ok('★ 每個頂點恰好出現兩次（首尾相接，不是蝴蝶結）',
+       [...deg.values()].every(n => n === 2), [...deg.values()].join(','));
+    // 邊界邊長度總和 ＝ 60×40 的面的周長 ＝ 200
+    let peri = 0;
+    for (const [a, b] of segs) peri += a.p.distanceTo(b.p);
+    near('邊界周長 ＝ 2×(60+40)', peri, 200, 1e-9);
     eq('認不得的 kind → 空陣列', edit.elementVerts(m, { kind: '???' }).length, 0);
     eq('null → 空陣列', edit.elementVerts(m, null).length, 0);
   }

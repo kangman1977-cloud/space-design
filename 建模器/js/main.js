@@ -28,6 +28,7 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
+import { elementVerts, refreshAfterEdit } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -50,6 +51,8 @@ const sel = new Selection(view, {
   },
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
+  onEditPick: el => editPick(el),
+  onEditDrag: (committing, el) => editDrag(committing, el),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
   onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n)
 });
@@ -330,6 +333,10 @@ function setOrtho(on) {
 
 $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
+$('edit').onclick = () => toggleEditMode();
+for (const b of document.querySelectorAll('.efBtn')) {
+  b.onclick = () => setEditFilter(b.dataset.f);
+}
 $('unfold').onclick = () => unfoldWin.open();
 $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
@@ -356,6 +363,7 @@ $('mScale').onclick = () => setMode('scale');
 let matePick1 = null;
 
 function toggleMateMode() {
+  if (!sel.mateMode) exitOtherModes('mate');
   const on = sel.setMateMode(!sel.mateMode);
   $('mate').classList.toggle('on', on);
   matePick1 = null;
@@ -455,6 +463,100 @@ function matePick(el) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  編輯造型（第 6 期第一刀）：拉點／拉邊／拉面
+// ═══════════════════════════════════════════════════════
+
+const EDIT_NAME = { vertex: '點', edge: '邊', face: '面' };
+const FILTER_NAME = { auto: '自動', vertex: '點', edge: '邊', face: '面' };
+
+/**
+ * 編輯模式：選物件裡的一個點／邊／面，用 gizmo 把它拉到想要的位置。
+ *
+ * ⚠ **這一刀不改拓撲**，所以做得到「把已經有的形狀捏形狀」，
+ * 做不到鹿角那種「從一個面長出新的一段」（那是擠出面，第二刀）。
+ */
+/**
+ * 三個「點畫面做別的事」的模式互斥。
+ *
+ * 不互斥的話，`pointerup` 的判斷鏈是照順序寫的，排前面那個會把後面的
+ * 整個吃掉 —— 開著編輯就再也點不到分片，而按鈕看起來是亮的。
+ * **畫面說「分片開著」，實際上沒有作用**，那比按鈕沒反應更難查。
+ */
+function exitOtherModes(keep) {
+  if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); }
+  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); }
+  if (keep !== 'mate' && sel.mateMode) {
+    sel.setMateMode(false); $('mate').classList.remove('on');
+    matePick1 = null; view.clearPickMarks();
+  }
+}
+
+function toggleEditMode() {
+  if (!sel.editMode) exitOtherModes('edit');
+  const on = sel.setEditMode(!sel.editMode);
+  $('edit').classList.toggle('on', on);
+  panel.refresh();
+  toast(on
+    ? `編輯模式：點一個${FILTER_NAME[sel.editFilter]}，再用箭頭把它拉走。再按一次「拉點線面」離開`
+    : '已離開編輯模式');
+}
+
+function setEditFilter(kind) {
+  sel.setEditFilter(kind);
+  for (const b of document.querySelectorAll('.efBtn')) {
+    b.classList.toggle('on', b.dataset.f === kind);
+  }
+  if (sel.editMode) toast(`現在只選「${FILTER_NAME[kind]}」`);
+}
+
+/**
+ * 選到（或沒選到）一個子元素。
+ *
+ * 沒選到也要講一句 —— 開著過濾器「只選點」的時候，點空一下什麼都不會發生，
+ * 而使用者無從分辨「我沒點準」跟「這個功能壞了」（坑第 21 條）。
+ */
+function editPick(el) {
+  if (!el) { panel.refresh(); return; }
+  if (el.kind === 'blocked') { toast(seamBlockReason(el.obj), true); return; }
+
+  let extra = '';
+  if (el.kind === 'face') {
+    const n = elementVerts(el.obj.mesh(), el).length;
+    // 講出頂點數，因為「面」是共面區域不是三角形，這是使用者最容易誤會的地方
+    extra = `（共面區域，${n} 個頂點）`;
+  }
+  toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它`);
+  panel.refresh();
+}
+
+/**
+ * 拖曳中／放手。
+ *
+ * ⚠ **拖曳中只更新畫面，不做連帶重算。** `refreshAfterEdit()` 走訪所有的邊，
+ * 是 O(邊數)，而拖曳中這支每一幀都會跑（坑第 3、22 條）。
+ *
+ * 放手時才跑一次，而且**非跑不可** —— 不跑的話法向、折線、`smooth`
+ * 三件事同時變成謊話，展開長度會錯，而圖看起來完全正常。
+ */
+function editDrag(committing, el) {
+  if (!committing) { view.sync(doc); updateBar(); return; }
+
+  const r = refreshAfterEdit(el.obj.mesh());
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 折線變了，接縫線也要重畫
+  commit(`拉${EDIT_NAME[el.kind]}`);
+  panel.refresh();
+
+  // 只在真的有變化時講，不然每拖一下都跳一串數字，看久了就不看了
+  const bits = [];
+  if (r.folds.added) bits.push(`多 ${r.folds.added} 條折線`);
+  if (r.folds.cleared) bits.push(`少 ${r.folds.cleared} 條折線`);
+  if (r.smoothOff) bits.push(`${r.smoothOff} 條邊不再算平滑`);
+  if (r.nonPlanar) bits.push(`⚠ ${r.nonPlanar} 個面已經不平了`);
+  if (bits.length) toast(`拉${EDIT_NAME[el.kind]}：` + bits.join('、'), !!r.nonPlanar);
+}
+
+// ═══════════════════════════════════════════════════════
 //  分片
 // ═══════════════════════════════════════════════════════
 
@@ -469,6 +571,7 @@ function matePick(el) {
  * 少一片就少一道對位誤差，但要多一道銑溝工序。
  */
 function toggleSeamMode() {
+  if (!sel.seamMode) exitOtherModes('seam');
   const on = sel.setSeamMode(!sel.seamMode);
   $('seam').classList.toggle('on', on);
   panel.refresh();

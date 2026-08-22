@@ -135,6 +135,7 @@ export class SceneView {
 
     this.pickables = [...this.byId.values()];
     this._seamsDirty = false;      // 這一輪已經全部重畫過了
+    this._geomDirty = false;
   }
 
   _createNode(obj) {
@@ -233,6 +234,24 @@ export class SceneView {
   markSeamsDirty() { this._seamsDirty = true; }
 
   /**
+   * 告訴畫面「網格的**座標**改過了，下次 sync() 要重建 geometry」。
+   *
+   * ⚠ **編輯（拉點／拉邊／拉面）非它不可。**
+   * `_updateNode()` 用 `node.userData.geomKey !== mesh` 判斷要不要重建，
+   * 而編輯是**就地改同一個 mesh 物件的頂點座標** —— 參考值一模一樣，
+   * 那個判斷永遠是 false，畫面就會停在舊的樣子。
+   * 使用者看到的是「我拉了但東西沒動」，而資料其實已經改了 ——
+   * **畫面與資料不一致，比單純沒反應更難查。**
+   *
+   * 改參數、Undo、讀檔那幾條路不必呼叫：它們會換掉整個 mesh 物件，
+   * `geomKey` 自然就對不上了。
+   *
+   * 跟 markSeamsDirty() 同一條理由：讓畫面每幀去猜有沒有變，
+   * 成本是所有人一起付；明講一聲的成本是零（坑第 3、22 條）。
+   */
+  markGeomDirty() { this._geomDirty = true; }
+
+  /**
    * 板件要不要在畫面上加厚，以及加多少。
    *
    * 資料裡的板件是一張**沒有厚度的中性面**（日誌第 3 個關鍵決定），
@@ -272,7 +291,10 @@ export class SceneView {
     const mesh = obj.mesh();
     const shellT = this._shellThickness(obj);
 
-    if (node.userData.geomKey !== mesh || node.userData.shellT !== shellT) {
+    // _geomDirty ＝ 編輯就地改了頂點座標。mesh 物件沒換，所以前兩個條件
+    // 都察覺不到 —— 少了它，拉點之後畫面不會更新（見 markGeomDirty）。
+    if (node.userData.geomKey !== mesh || node.userData.shellT !== shellT
+        || this._geomDirty) {
       node.geometry.dispose();
       node.geometry = (shellT > 0 ? mesh.shell(shellT) : mesh).toGeometry();
 

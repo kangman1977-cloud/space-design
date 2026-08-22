@@ -17,6 +17,8 @@ import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
   from '../unfold/seam.js';
 import { objectsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
+import { elementVerts, elementCenter, moveVerts, regionBoundaryEdges }
+  from '../core/edit.js';
 
 const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
@@ -72,6 +74,38 @@ export class Selection {
     /** 框選矩形那個 div。沒有也不會壞，只是看不到框 */
     this.marqueeEl = document.getElementById('marqueeBox');
 
+    /**
+     * 編輯模式（第 6 期第一刀）。開著時點畫面選的是**物件裡的點／邊／面**，
+     * 而 gizmo 掛在選到的那個元素上，拖它就是拉那個元素。
+     *
+     * ── 跟分片、貼合的差別 ────────────────────────────
+     * 那兩個模式都把 gizmo **收起來**（箭頭會擋住要點的表面）。
+     * 編輯不能收 —— 它就是要用 gizmo 來拉。折衷做法是：
+     * **還沒選到元素之前不掛**，選到了才掛到那個元素上。
+     * 所以進入模式的當下畫面是乾淨的，可以放心點。
+     */
+    this.editMode = false;
+    /** 'auto' | 'vertex' | 'edge' | 'face' —— 選取過濾器 */
+    this.editFilter = 'auto';
+    /** 目前選到的子元素 {obj, kind, vert|he|face} */
+    this.editSel = null;
+
+    /**
+     * gizmo 掛的那個替身。
+     *
+     * TransformControls 只能掛 Object3D，而「一個頂點」不是 Object3D。
+     * 所以放一個空的 Object3D 在元素的重心上，拖它、讀它的位移、
+     * 再把位移寫回頂點座標。
+     *
+     * ⚠ **它是 node 的子節點，不是場景的子節點。** 這樣 `_proxy.position`
+     * 直接就是網格自己的座標系（node 帶著 obj.pos / rot / scale），
+     * 不必每次自己做 worldToLocal —— 也就不會有「忘了處理縮放」那種錯。
+     */
+    this._proxy = new THREE.Object3D();
+    this._proxy.name = 'editProxy';
+    /** 上一次寫回時 proxy 的位置。位移是**增量**算的，不是絕對值。 */
+    this._proxyBase = new THREE.Vector3();
+
     this._initGizmo();
     this._initPointer();
   }
@@ -86,10 +120,16 @@ export class Selection {
 
     tc.addEventListener('dragging-changed', e => {
       v.orbit.enabled = !e.value;
-      if (!e.value) this._writeBack(true);      // 放手 → 記一步 Undo
+      if (!e.value) {                            // 放手 → 記一步 Undo
+        if (this.editSel) this._writeBackEdit(true);
+        else this._writeBack(true);
+      }
     });
 
-    tc.addEventListener('objectChange', () => this._writeBack(false));
+    tc.addEventListener('objectChange', () => {
+      if (this.editSel) this._writeBackEdit(false);
+      else this._writeBack(false);
+    });
 
     // r16x 之後 gizmo 本身要另外掛進場景
     const helper = tc.getHelper ? tc.getHelper() : tc;
@@ -293,6 +333,7 @@ export class Selection {
       if (dist > TAP_MOVE || dt > TAP_TIME) return;
       if (this.tc.dragging) return;
 
+      if (this.editMode) { this.pickEdit(e.clientX, e.clientY); return; }
       if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
       if (this.mateMode) {
         const el = this.pickElement(e.clientX, e.clientY,
@@ -404,6 +445,10 @@ export class Selection {
    *
    * @param {object} opt.vertex 要不要考慮頂點（分片不需要）
    * @param {boolean} opt.requireMarkable 是否只接受可標記物件（分片才要）
+   * @param {string} opt.only 只接受這一種：'vertex' / 'edge' / 'face'。
+   *        不給 ＝ 維持原本的「點 → 邊 → 面，小的先」自動判斷。
+   *        編輯模式的選取過濾器走這個 —— **平板沒有鍵盤可以按 1/2/3
+   *        切換元素類型，只能做成按鈕**（跟分片、框選同一個做法）。
    */
   pickElement(clientX, clientY, opt = {}) {
     const r = this._toCanvasPx(clientX, clientY);
@@ -440,7 +485,9 @@ export class Selection {
     // 這樣不管拉遠拉近，手感都一樣。
     const toPx = pl => this._project(node.localToWorld(pl.clone()), r);
 
-    if (opt.vertex) {
+    const only = opt.only;
+
+    if (opt.vertex && (!only || only === 'vertex')) {
       const nv = nearestVertex(mesh, pLocal);
       if (nv) {
         const s = toPx(nv.vert.p);
@@ -448,14 +495,23 @@ export class Selection {
           return { obj, kind: 'vertex', vert: nv.vert };
         }
       }
+      /**
+       * 指定只要點的時候，**點不到就回 null，不要往下掉到邊或面**。
+       * 掉下去的話使用者按了「點」卻選到一個面 —— 那比什麼都沒選中更糟，
+       * 因為他會以為自己點中了，然後拉錯東西（坑第 20 條那個家族）。
+       */
+      if (only === 'vertex') return null;
     }
 
-    const near = nearestMarkableEdge(mesh, pLocal);
-    if (near) {
-      const a = toPx(near.he.v.p), b = toPx(near.he.to.p);
-      if (distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y) <= grab) {
-        return { obj, kind: 'edge', he: near.he };
+    if (!only || only === 'edge') {
+      const near = nearestMarkableEdge(mesh, pLocal);
+      if (near) {
+        const a = toPx(near.he.v.p), b = toPx(near.he.to.p);
+        if (distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y) <= grab) {
+          return { obj, kind: 'edge', he: near.he };
+        }
       }
+      if (only === 'edge') return null;
     }
 
     const nf = nearestFace(mesh, pLocal);
@@ -549,6 +605,17 @@ export class Selection {
     const act = this.active;
     const node = act ? v.nodeOf(act.id) : null;
 
+    /**
+     * 編輯模式：gizmo 掛在**子元素的替身**上，不是掛在物件上。
+     * 還沒選到元素之前不掛 —— 三支箭頭會擋住要點的表面。
+     */
+    if (this.editMode) {
+      if (this.editSel) this._attachEditProxy();
+      else this.tc.detach();
+      if (this.hooks.onChange) this.hooks.onChange(this);
+      return;
+    }
+
     // 分片模式下不掛 gizmo。放在這裡是因為 _refresh() 會在選取變動、
     // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
     if (node && !this.seamMode && !this.mateMode) {
@@ -566,6 +633,25 @@ export class Selection {
   /** 文件被外力改過（Undo、讀檔）之後呼叫 */
   revalidate() {
     this.ids = this.ids.filter(id => this._doc && this._doc.byId(id));
+    /**
+     * ⚠ 子元素選取一定要清掉。Undo／讀檔會**換掉整個 mesh 物件**，
+     * 而 editSel 抓的是舊網格裡的 Vertex／HalfEdge／Face 參考 ——
+     * 那些物件還活著（JS 不會回收被引用的東西），拖曳照樣「成功」，
+     * 只是改的是一份**已經不在文件裡的網格**。
+     * 畫面完全沒反應，資料也沒錯，最難查的那一種。
+     *
+     * 但**不能一律清掉** —— `commit()` 每記一步 Undo 也會走到這裡，
+     * 而那條路上網格根本沒換人（`hist.commit()` 只是拍快照）。
+     * 一律清的話，每拉一下就得重選一次元素，那個功能沒人會用。
+     *
+     * 判準是**網格物件還是不是同一個**，不是「物件還在不在」——
+     * 物件還在但網格被換掉，正是最危險的那一種，而它從外面看不出來。
+     */
+    if (this.editSel) {
+      const o = this._doc && this._doc.byId(this.editSel.obj.id);
+      if (!o || o.mesh() !== this.editSel.mesh) this.clearEditSel();
+      else this._drawEditMark();      // 座標可能變了，標示要跟著走
+    }
     this._refresh();
   }
 
@@ -600,6 +686,153 @@ export class Selection {
    * 而分片模式要點的是物件表面上的邊。不收的話使用者會一直
    * 點到箭頭然後把東西拖走，而那看起來就像「分片功能沒反應」。
    */
+  // ── 編輯模式（拉點／拉邊／拉面）────────────────────
+
+  /**
+   * 切換編輯模式。離開時一定要把子元素選取清乾淨 ——
+   * 留著的話 gizmo 會繼續掛在替身上，而使用者以為自己在拖物件。
+   */
+  setEditMode(on) {
+    this.editMode = !!on;
+    if (!this.editMode) this.clearEditSel();
+    this.tc.enabled = !this.seamMode && !this.mateMode;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.seamMode && !this.mateMode;
+    return this.editMode;
+  }
+
+  /**
+   * 選取過濾器：只選點／只選邊／只選面／自動。
+   *
+   * 換過濾器就把目前選的清掉 —— 不清的話，按了「面」卻還掛著一個點的
+   * gizmo，畫面在騙人。
+   */
+  setEditFilter(kind) {
+    this.editFilter = kind || 'auto';
+    this.clearEditSel();
+    return this.editFilter;
+  }
+
+  clearEditSel() {
+    this.editSel = null;
+    if (this._proxy.parent) this._proxy.parent.remove(this._proxy);
+    this.view.clearPickMarks();
+    this.tc.detach();
+  }
+
+  /**
+   * 編輯模式下點一下畫面。
+   *
+   * 擋掉參數物件的理由跟分片一模一樣：參數體存檔只存 `{type:'box',w:60…}`，
+   * 開檔時網格重新生成，改過的座標就沒了。而它在同一次開著的時候又是好的
+   * —— 這種「用起來正常、存檔重開才發現不見了」是最糟的失敗。
+   */
+  pickEdit(clientX, clientY) {
+    const f = this.editFilter;
+    const el = this.pickElement(clientX, clientY, {
+      vertex: f === 'auto' || f === 'vertex',
+      requireMarkable: true,
+      only: f === 'auto' ? null : f,
+    });
+
+    if (!el) { this.clearEditSel(); if (this.hooks.onEditPick) this.hooks.onEditPick(null); return; }
+    if (el.kind === 'blocked') {
+      this.clearEditSel();
+      if (this.hooks.onEditPick) this.hooks.onEditPick(el);
+      return;
+    }
+
+    // 記下當下的網格物件。revalidate() 靠它分辨「網格被換掉了沒」
+    el.mesh = el.obj.mesh();
+    this.editSel = el;
+    this._attachEditProxy();
+    this._drawEditMark();
+    if (this.hooks.onEditPick) this.hooks.onEditPick(el);
+  }
+
+  /** 把替身擺到元素重心上，並把 gizmo 掛過去 */
+  _attachEditProxy() {
+    const el = this.editSel;
+    const node = el && this.view.nodeOf(el.obj.id);
+    if (!node) { this.clearEditSel(); return; }
+
+    if (this._proxy.parent !== node) node.add(this._proxy);
+    const c = elementCenter(el.obj.mesh(), el);
+    this._proxy.position.copy(c);
+    this._proxyBase.copy(c);
+    this.tc.attach(this._proxy);
+    /**
+     * 元素只能移動，不能旋轉縮放 ——「把一個頂點旋轉 30 度」沒有意義，
+     * 而縮放一個面要先定義縮放中心，那是另一個功能。
+     * 不強制切回來的話，使用者從旋轉模式進編輯，拖了半天沒反應。
+     */
+    if (this.tc.getMode() !== 'translate') this.tc.setMode('translate');
+  }
+
+  /**
+   * 把選到的元素標出來（黃色，沿用貼合那一套）。
+   *
+   * ⚠ **這不是裝飾。** 點與邊都很細，沒有標示的話使用者無從確認
+   * 點中的是不是他想要的那一個 —— 拉出來不如預期時，他分不清是
+   * 「選錯了」還是「程式算錯了」。kang 在貼合那一輪實測就回報過這件事
+   * （坑第 24 條）：**正確不等於可用，可用的前提是使用者驗得出來。**
+   */
+  _drawEditMark() {
+    const el = this.editSel;
+    const node = el && this.view.nodeOf(el.obj.id);
+    if (!node) { this.view.clearPickMarks(); return; }
+
+    node.updateMatrixWorld(true);
+    const toWorld = p => node.localToWorld(p.clone());
+
+    if (el.kind === 'vertex') {
+      this.view.setPickMarks([{ kind: 'vertex', points: [toWorld(el.vert.p)], role: 'src' }]);
+      return;
+    }
+    if (el.kind === 'edge') {
+      this.view.setPickMarks([{
+        kind: 'edge', points: [toWorld(el.he.v.p), toWorld(el.he.to.p)], role: 'src'
+      }]);
+      return;
+    }
+
+    /**
+     * 面：畫**共面區域的邊界邊**，一條邊一個 mark。
+     *
+     * ⚠ 不可以拿 `elementVerts()` 那份頂點去串成迴圈 —— 它是從 Set 出來的，
+     * **順序是任意的**，方塊的一個正方形面會被畫成蝴蝶結。
+     * 〔2026-08-23 kang 實測截圖抓到。幾何是對的，畫出來的意思是錯的〕
+     */
+    const segs = regionBoundaryEdges(el.obj.mesh(), el.face);
+    this.view.setPickMarks(segs.map(([a, b]) => ({
+      kind: 'edge', points: [toWorld(a.p), toWorld(b.p)], role: 'src'
+    })));
+  }
+
+  /**
+   * 拖曳替身 → 把位移寫回頂點座標。
+   *
+   * ⚠ **位移是增量算的**（這一幀的 proxy 位置減掉上一幀的），不是絕對值。
+   * 因為頂點跟著移動之後，元素的重心也跟著跑到 proxy 的新位置，
+   * 拿絕對值算會每一幀都重複套用一次，一拖就飛出去。
+   *
+   * ⚠ **拖曳中不跑 refreshAfterEdit()。** 它走訪所有的邊，是 O(邊數)，
+   * 而這支每一幀都會跑。放進熱路徑就是坑第 3、22 條的第三次。
+   * 放手時（committing）才跑一次，由呼叫端在 onEditDrag 裡做。
+   */
+  _writeBackEdit(committing) {
+    const el = this.editSel;
+    if (!el) return;
+    const d = new THREE.Vector3().subVectors(this._proxy.position, this._proxyBase);
+    if (d.lengthSq() > 0) {
+      moveVerts(elementVerts(el.obj.mesh(), el), d);
+      this._proxyBase.copy(this._proxy.position);
+      this.view.markGeomDirty();      // 沒有這行，畫面不會更新（見 scene.js）
+    }
+    if (committing) this._drawEditMark();
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el);
+  }
+
   /**
    * 貼合模式。跟分片一樣要把 gizmo 收起來 ——
    * 三支箭頭會擋在物件前面，而這裡要點的是物件表面上的點／邊／面。
