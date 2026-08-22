@@ -42,7 +42,7 @@ const ROOT = join(HERE, '..');
   console.log('（已建立 node_modules/three 墊片）\n');
 })();
 
-const { Mesh } = await import('../js/core/mesh.js');
+const { Mesh, EDGE_ROLE } = await import('../js/core/mesh.js');
 const { summarize, SURFACE } = await import('../js/core/region.js');
 const { buildPrim, bendDevelopedLength, isSheetPrim, defaultSrc }
   = await import('../js/build/prim.js');
@@ -2726,8 +2726,10 @@ section('接合編號');
    * 圖上那些綠色數字沒有說明的話，師傅只會覺得「這是什麼」。
    * 標了卻沒人看得懂 ＝ 沒標。
    */
+  // 2026-08-22 從「同號碼的邊」改成「同號碼的段」——編號現在是一段一個，
+  // 不是一條邊一個（一個 S 字的面板從 198 個號碼變成 7 段）
   ok('標題欄有說明接合編號怎麼用',
-     titleLines(p0, {}).join('|').includes('同號碼的邊接在一起'));
+     titleLines(p0, {}).join('|').includes('同號碼的段接在一起'));
   ok('沒有接合編號時 標題欄不提這件事',
      !titleLines(rp.pieces[0], {}).join('|').includes('接合編號'));
 }
@@ -3421,8 +3423,196 @@ section('匯入線稿：擠出');
 }
 
 // ═══════════════════════════════════════════════════════
+//  真轉角與曲線帶（上游知道的事，不要在中途丟掉）
+// ═══════════════════════════════════════════════════════
 
-section('結果');
+section('真轉角：從貝茲錨點帶下來');
+
+{
+  /**
+   * ⚠ 這一整節盯的是一個**資訊問題**，不是演算法問題。
+   *
+   * 貝茲曲線的錨點自己知道自己是平滑點還是轉角（進出控制把手共不共線）。
+   * 攤平成折線之後這個資訊就沒了，下游只能從角度猜 ——
+   * 而猜在自由曲線上一定失敗：kang 的一個 S 字，真轉角 7 個，
+   * 攤平後 196 個轉折點，展開圖標了 196 道折彎、398 個接合編號，
+   * 整張圖變成一團綠色數字。
+   *
+   * 判準（比較進出切線、門檻 3°）抄自 kang 已經在用的 SideUnfold.jsx。
+   */
+  const k = 0.5522847498307936 * 100;
+  const circle = `M100,0 C100,${k} ${k},100 0,100 C${-k},100 -100,${k} -100,0 `
+    + `C-100,${-k} ${-k},-100 0,-100 C${k},-100 100,${-k} 100,0 Z`;
+  eq('貝茲畫的圓 一個轉角都沒有', svgp.parsePath(circle, { tol: 0.05 }).corners, 0);
+  eq('正方形 四個角都是轉角', svgp.parsePath('M0,0 H100 V100 H0 Z', { tol: 1 }).corners, 4);
+
+  /**
+   * A 指令的切線用**解析式**算，不是拿第一段弦去估。
+   * 粗略取樣時弦的方向會偏掉半個分段角，而門檻只有 3°——
+   * 用弦估的話，這個只有 16 段的圓會被判出一堆假轉角。
+   */
+  eq('粗取樣的 A 整圓 也不能誤判出轉角',
+     svgp.parsePath('M100,0 A100,100 0 1 1 -100,0 A100,100 0 1 1 100,0 Z',
+       { tol: 2 }).corners, 0);
+  eq('半圓 ＋ 直線收口 剛好兩個轉角',
+     svgp.parsePath('M0,0 A50,50 0 0 1 100,0 L0,0 Z', { tol: 0.1 }).corners, 2);
+
+  // 開放路徑的頭尾本來就是形狀的端點，一律算轉角
+  eq('開放路徑的頭尾算轉角', svgp.parsePath('M0,0 C10,10 20,10 30,0', { tol: 0.1 }).corners, 2);
+
+  eq('門檻可調（1° 抓得比 3° 多）',
+     svgp.parsePath('M0,0 L100,0 L200,3 L200,100 Z', { tol: 1, cornerDeg: 1 }).corners
+     > svgp.parsePath('M0,0 L100,0 L200,3 L200,100 Z', { tol: 1, cornerDeg: 3 }).corners,
+     true);
+}
+
+{
+  // 旗標要一路帶到網格上，而且存讀檔之後還在
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" `
+    + `viewBox="0 0 100 100"><path d="M50,10 A20,20 0 1 1 49.9,10 Z"/></svg>`;
+  const r = prof.readSVG(svg, { tolMm: 0.5 });
+  const loop = r.loops[0];
+  ok('圓形輪廓 幾乎沒有真轉角', loop.pts.filter(p => p.corner).length <= 1,
+     `${loop.pts.filter(p => p.corner).length} 個`);
+
+  const m = extr.extrudeProfile({ pts: loop.pts, holes: [] }, 3);
+  const es = [...m.edges()];
+  const smooth = es.filter(e => e.smooth).length;
+  ok(`側牆的垂直邊大多標成平滑（${smooth} 條）`, smooth >= loop.pts.length - 2);
+
+  const back = Mesh.fromJSON(JSON.parse(JSON.stringify(m.toJSON())));
+  eq('平滑旗標 存讀檔往返還在',
+     [...back.edges()].filter(e => e.smooth).length, smooth);
+
+  const sq = [{ x: 0, y: 0, corner: true }, { x: 10, y: 0, corner: true },
+              { x: 10, y: 10, corner: true }, { x: 0, y: 10, corner: true }];
+  eq('全是轉角的輪廓 一條平滑邊都沒有',
+     [...extr.extrudeProfile({ pts: sq, holes: [] }, 5).edges()]
+       .filter(e => e.smooth).length, 0);
+}
+
+section('曲線帶：連續的平滑折線併成一段');
+
+{
+  /**
+   * 用一個「兩端是直線、中間是半圓」的輪廓 —— 真轉角剛好 2 個。
+   * 擠出之後側牆的折線裡，中間那一段全是平滑的，應該併成一條曲線帶。
+   */
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" `
+    + `viewBox="0 0 100 100"><path d="M20,50 A30,30 0 0 1 80,50 L20,50 Z"/></svg>`;
+  const r = prof.readSVG(svg, { tolMm: 0.2 });
+  const loop = r.loops[0];
+  eq('半圓 ＋ 直線 的輪廓 兩個真轉角', loop.pts.filter(p => p.corner).length, 2);
+
+  const m = extr.extrudeProfile({ pts: loop.pts, holes: [] }, 2);
+  const u = unfoldMesh(m, makeRule('paper', 0.2));
+  const bends = u.pieces.flatMap(p => p.bends);
+  const curves = bends.filter(b => b.isCurve);
+  eq('併成一條曲線帶', curves.length, 1);
+  ok(`曲線帶涵蓋很多小段（${curves[0].segs} 段）`, curves[0].segs > 10);
+  ok('曲線帶不當成圓弧標半徑（沒有假的 R）', curves[0].r === 0 && curves[0].ri === 0);
+
+  /**
+   * 曲線帶不做拉伸。自由曲線每一段曲率都不同，沒有單一半徑可以算真弧長 ——
+   * 硬給一個會是「正確的數字，錯誤的意思」（坑第 20 條）。
+   */
+  near('曲線帶的展開寬 ＝ 弦長總和（不拉伸）', curves[0].arcW, curves[0].chordW, 1e-12);
+
+  const t = titleLines(u.pieces.find(p => p.bends.some(b => b.isCurve)) || u.pieces[0], {});
+  ok('標題欄講得出「曲線帶」而不是一堆折彎', t.join('|').includes('曲線帶'), t.join('|'));
+}
+
+{
+  /**
+   * ⚠ 參數體不能退步。
+   * 圓柱、圓角方塊的圓弧是靠「等寬 ＋ 等角」的幾何猜測認出來的，
+   * 那條路要照舊走得通 —— 新加的標記只是多一條路，不是取代。
+   */
+  const cyl = buildPrim('cylinder', { r: 25, h: 70, seg: 32, openEnded: true }, 0.2);
+  const u = unfoldMesh(cyl, makeRule('steel', 0.2));
+  rel('圓柱側面 展開長仍然是 2πr', u.pieces[0].width, 2 * Math.PI * 25, 1e-7);
+  ok('圓柱的圓弧仍然被認成圓弧（有真的半徑）',
+     u.pieces[0].bends.some(b => b.isArc && !b.isCurve && b.r > 1));
+}
+
+section('接合編號：一段一個');
+
+{
+  /**
+   * ⚠ 這一項是 2026-08-22 改寫的，而且第一版寫壞過。
+   *
+   * 原本是一條切割邊一個號碼。方塊上很好用，但匯入的曲線輪廓有幾百條邊 ——
+   * 一個 S 字的面板標了 198 個號碼、側邊條 398 個，整張圖讀不出來。
+   *
+   * 第一版的修法是「沿著邊界往前後走，把同一段串起來」，結果**兩側走出來的
+   * 分段不一致**：面板併成 7 段，側邊條還是 198 段，於是
+   * 「每個編號恰好出現兩次」直接破功。改成定義在無向邊上的聯集之後，
+   * 兩側算的是同一個分割，**根本不可能不一致**。
+   */
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20cm" height="20cm" `
+    + `viewBox="0 0 200 200"><path d="M40,100 A60,60 0 0 1 160,100 L40,100 Z"/></svg>`;
+  const r = prof.readSVG(svg, { tolMm: 0.2 });
+  const m = extr.extrudeProfile({ pts: r.loops[0].pts, holes: [] }, 3);
+  // 把上下蓋跟側牆切開，才會有接合編號
+  for (const he of m.edges()) {
+    const d = m.dihedral(he);
+    if (d !== null && Math.abs(d * 180 / Math.PI) > 60) m.setRole(he, EDGE_ROLE.CUT);
+  }
+  const u = unfoldMesh(m, makeRule('paper', 0.2));
+
+  const cnt = new Map();
+  for (const p of u.pieces) for (const j of (p.joints || [])) {
+    cnt.set(j.num, (cnt.get(j.num) || 0) + 1);
+  }
+  ok('每個接合編號恰好出現兩次',
+     [...cnt.values()].every(v => v === 2),
+     [...cnt].filter(([, v]) => v !== 2).map(([k, v]) => `${k}:${v}`).join(' '));
+
+  const plate = u.pieces.reduce((a, b) => (a.area > b.area ? a : b));
+  ok(`面板的編號被併成少少幾段（${plate.joints.length} 段）`, plate.joints.length <= 6,
+     `輪廓有 ${plate.outline.length} 個點`);
+  ok('而且有段涵蓋很多條邊', plate.joints.some(j => j.segs > 10),
+     plate.joints.map(j => j.segs).join('/'));
+}
+
+{
+  /**
+   * ⚠ 一條邊的兩側都在同一片上的情況 —— 實測抓到的漏洞。
+   *
+   * 環狀的側牆攤開時，引擎會找個地方剪開一刀，那一刀的兩端都留在
+   * 同一條長條上（長條要繞回去接自己）。第一版只用「段」當 key，
+   * 兩側被併成同一組，於是**那個號碼只出現一次** ——
+   * 而「出現一次」代表有一端接不回去，圖卻看起來完全正常。
+   *
+   * 實測：一個 S 字擠出後切成上蓋／下蓋／側邊條三片，
+   * 編號 15（側邊條自己的接縫）只畫了一個。
+   */
+  const m = extr.extrudeProfile({
+    pts: [...Array(24)].map((_, i) => ({
+      x: 30 * Math.cos(i / 24 * 2 * Math.PI), y: 30 * Math.sin(i / 24 * 2 * Math.PI)
+    })), holes: []
+  }, 4);
+  for (const he of m.edges()) {
+    // 只切上下那兩圈水平邊 —— 側牆因此變成一條要繞回去接自己的長條
+    if (Math.abs(he.v.p.y - he.to.p.y) < 1e-9) {
+      const d = m.dihedral(he);
+      if (d !== null && Math.abs(d * 180 / Math.PI) > 60) m.setRole(he, EDGE_ROLE.CUT);
+    }
+  }
+  const u = unfoldMesh(m, makeRule('paper', 0.2));
+  const cnt = new Map();
+  for (const p of u.pieces) for (const j of (p.joints || [])) {
+    cnt.set(j.num, (cnt.get(j.num) || 0) + 1);
+  }
+  eq('圓筒切成三片', u.pieces.length, 3);
+  ok('側邊條自己接自己的那一段 也是兩個號碼',
+     [...cnt.values()].every(v => v === 2),
+     [...cnt].filter(([, v]) => v !== 2).map(([k, v]) => `${k}:${v}`).join(' '));
+  const strip = u.pieces.reduce((a, b) => (a.width > b.width ? a : b));
+  ok('長條上有一個號碼出現兩次（頭尾各一）',
+     strip.joints.some(j => strip.joints.filter(q => q.num === j.num).length === 2),
+     strip.joints.map(j => j.num).join(','));
+}
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

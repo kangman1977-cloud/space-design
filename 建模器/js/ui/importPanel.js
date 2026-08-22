@@ -22,7 +22,7 @@
  */
 
 import { readSVG, UNIT_KEYS } from '../sketch/profile.js';
-import { flatPts } from '../build/prim.js';
+import { flatPts, cornerIdx } from '../build/prim.js';
 import { ModelObject, KIND } from '../core/io.js';
 
 const LS_KEY = 'modeler_import';
@@ -307,7 +307,9 @@ export class ImportPanel {
       from: this.fileName || 'SVG',
       shapes: r.loops.map(l => ({
         out: flatPts(l.pts),
-        holes: l.holes.map(h => flatPts(h.pts))
+        oc: cornerIdx(l.pts),                       // 真轉角的索引，一定要一起存
+        holes: l.holes.map(h => flatPts(h.pts)),
+        hc: l.holes.map(h => cornerIdx(h.pts))
       }))
     };
 

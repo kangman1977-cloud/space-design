@@ -177,11 +177,17 @@ export function isSheetPrim(type) {
   return !!(PRIM_SPECS[type] && PRIM_SPECS[type].sheet);
 }
 
-/** 扁平的 [x,y,x,y,…] → [{x,y},…]。存檔用扁平的，算的時候用物件。 */
-function pairs(arr) {
+/**
+ * 扁平的 [x,y,x,y,…] → [{x,y,corner},…]。存檔用扁平的，算的時候用物件。
+ * @param {number[]} cor 真轉角的索引清單（一個 S 字只有七八個，比整條 bit 陣列省）
+ */
+function pairs(arr, cor) {
   const out = [];
   const a = arr || [];
-  for (let i = 0; i + 1 < a.length; i += 2) out.push({ x: +a[i], y: +a[i + 1] });
+  const set = new Set(cor || []);
+  for (let i = 0; i + 1 < a.length; i += 2) {
+    out.push({ x: +a[i], y: +a[i + 1], corner: set.has(i / 2) });
+  }
   return out;
 }
 
@@ -189,6 +195,18 @@ function pairs(arr) {
 export function flatPts(pts) {
   const out = [];
   for (const p of pts) out.push(r4(p.x), r4(p.y));
+  return out;
+}
+
+/**
+ * 真轉角的索引清單。
+ * **這個一定要跟著座標一起存。** 少了它，檔案重開之後展開圖就會從
+ * 「9 道折線、10 段」變回「196 道折彎」——而且座標完全正確，
+ * 看不出哪裡不對，只覺得圖突然變得讀不懂了。
+ */
+export function cornerIdx(pts) {
+  const out = [];
+  pts.forEach((p, i) => { if (p.corner) out.push(i); });
   return out;
 }
 
@@ -224,8 +242,8 @@ const BUILDERS = {
    */
   extrude(p) {
     const shapes = (p.shapes || []).map(s => ({
-      pts: pairs(s.out),
-      holes: (s.holes || []).map(h => ({ pts: pairs(h) }))
+      pts: pairs(s.out, s.oc),
+      holes: (s.holes || []).map((h, i) => ({ pts: pairs(h, (s.hc || [])[i]) }))
     })).filter(s => s.pts.length >= 3);
     if (!shapes.length) throw new Error('這個擠出件沒有輪廓資料');
     return extrudeMany(shapes, num(p.h, 3));

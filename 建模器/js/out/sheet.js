@@ -156,8 +156,21 @@ export function drawProgram(piece, opt = {}) {
     for (const b of [...piece.bends].sort((p, q) => p.x0 - q.x0)) {
       const cx = b.isArc ? (b.x0 + b.x1) / 2 : b.x0;
       const dir = b.angle > 0 ? '↑ 上折' : '↓ 下折';
-      const l1 = `${fmt(Math.abs(b.angle))}°　R${fmt(b.ri)}`;
-      const l2 = `${dir}${b.isArc ? `　弧長 ${fmt(b.x1 - b.x0)}` : '　尖角'}`;
+      /**
+       * 曲線帶跟真正的圓弧要分開講。
+       *
+       * 圓弧有唯一的半徑，標「R3」師傅看得懂；自由曲線（Illustrator
+       * 畫出來的那種）每一段曲率都不同，**沒有一個 R 可言**。
+       * 標一個算出來的假半徑比不標更糟 —— 那是坑第 20 條
+       * 「正確的數字，錯誤的意思」：R0 是程式裡的預設值，
+       * 不是這條曲線的半徑。
+       */
+      const l1 = b.isCurve
+        ? `曲線　${fmt(b.x1 - b.x0)} cm`
+        : `${fmt(Math.abs(b.angle))}°　R${fmt(b.ri)}`;
+      const l2 = b.isCurve
+        ? `${dir}　${b.segs} 段　共轉 ${fmt(Math.abs(b.angle))}°`
+        : `${dir}${b.isArc ? `　弧長 ${fmt(b.x1 - b.x0)}` : '　尖角'}`;
       const half = Math.max(labelWidth(l1, 1.5), labelWidth(l2, 1.2)) / 2;
 
       let row = -1;
@@ -292,13 +305,26 @@ export function titleLines(piece, opt = {}) {
    * 那次是擠在一起讀不出來，這次是讀得出來但不知道意思）。
    */
   if (piece.joints && piece.joints.length) {
-    out.push(`接合編號 ${piece.joints.length} 處　同號碼的邊接在一起`);
+    const many = piece.joints.filter(j => (j.segs || 1) > 1).length;
+    out.push(`接合編號 ${piece.joints.length} 段　同號碼的段接在一起`
+      + (many ? `（有 ${many} 段是連續的曲線，整段一個號碼）` : ''));
   }
 
-  const arcs = piece.bends.filter(b => b.isArc).length;
-  const sharp = piece.bends.length - arcs;
+  const curves = piece.bends.filter(b => b.isCurve).length;
+  const arcs = piece.bends.filter(b => b.isArc && !b.isCurve).length;
+  const sharp = piece.bends.length - arcs - curves;
   if (piece.bends.length) {
-    out.push(`折彎 ${piece.bends.length} 道（圓弧 ${arcs}、尖角 ${sharp}）`);
+    /**
+     * 曲線帶要單獨列出來，而且要講它涵蓋幾段。
+     * 不講的話「折彎 12 道」看起來很單純，但其中一條可能是 85 段的曲線 ——
+     * 師傅需要知道那裡是滾的、不是折 12 道。
+     */
+    out.push(`折彎 ${piece.bends.length} 處`
+      + `（曲線帶 ${curves}、圓弧 ${arcs}、真轉角 ${sharp}）`
+      + (curves
+        ? `　曲線帶共 ${piece.bends.filter(b => b.isCurve)
+            .reduce((n, b) => n + b.segs, 0)} 小段，圖上不畫`
+        : ''));
   }
   if (rule.margin && rule.margin() > 0) {
     out.push(`⚠ 圖上未含${rule.marginLabel()} ${fmt(rule.margin())} cm，下料時另加`);

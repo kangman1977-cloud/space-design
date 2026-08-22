@@ -91,7 +91,13 @@ export function readSVG(text, opt = {}) {
          * **沒有鏡射**。這一點錯了的話東西做出來是反的，
          * 而且圖看起來完全正常（跟剖面分切的手性問題同一種）。
          */
-        return { x: w.x * scale.cmPerUnit, y: w.y * scale.cmPerUnit };
+        /**
+         * `corner` 一定要帶著走。它是這條路上最值錢的資訊 ——
+         * 少了它，下游只能從角度猜哪些轉折是真的（一個 S 字會猜出
+         * 196 道折彎，而真的只有 7 道）。座標算錯看得出來，
+         * 這個旗標掉了看不出來，只會讓展開圖變成一團數字。
+         */
+        return { x: w.x * scale.cmPerUnit, y: w.y * scale.cmPerUnit, corner: !!q.corner };
       });
       shapes.push({
         name: p.name || `路徑 ${i + 1}`,

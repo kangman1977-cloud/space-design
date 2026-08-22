@@ -59,6 +59,21 @@ export class HalfEdge {
     this.prev = null;
     this.twin = null;
     this.role = EDGE_ROLE.FREE;
+    /**
+     * 這條邊是「曲面被切成小面」產生的，不是造型上真的有一道折。
+     *
+     * ── 為什麼不能塞進 role ──────────────────────────
+     * `role` 回答的是**製造問題**：這條邊要切、要折、還是不管。
+     * 這個旗標回答的是**形狀問題**：它是造型的一部分，還是離散化的產物。
+     * 兩個問題不同，混在同一個欄位裡就會逼下游用角度去猜 ——
+     * 而猜在自由曲線上一定會失敗（一個 S 字的側面猜出 196 道折彎）。
+     *
+     * 誰知道答案：**上游**。貝茲曲線的錨點自己知道自己是不是平滑點，
+     * 參數體（圓柱、圓角方塊）也知道哪幾圈是滾出來的。
+     * 布林運算之後會消失（Manifold 不認得我們的旗標），
+     * 從 STL 匯進來的也從來沒有 —— 那些情況只能回頭用角度猜。
+     */
+    this.smooth = false;
   }
   /** 終點 ＝ 反向半邊的起點 */
   get to() { return this.twin ? this.twin.v : this.next.v; }
@@ -222,6 +237,13 @@ export class Mesh {
   }
 
   // ── 邊的角色 ──────────────────────────────────────
+
+  /** 設定「這條邊是曲面的一部分」。跟 setRole 一樣，兩條半邊要一起設。 */
+  setSmooth(he, on = true) {
+    he.smooth = !!on;
+    if (he.twin) he.twin.smooth = !!on;
+    return this;
+  }
 
   /** 設定邊的角色。一定要兩條半邊一起設，不然走另一邊會讀到舊值。 */
   setRole(he, role) {
@@ -694,7 +716,12 @@ export class Mesh {
       faces: this.faces.map(f => this.faceVerts(f).map(v => vi.get(v.id))),
       roles: [...this.edges()]
         .filter(he => he.role !== EDGE_ROLE.FREE)
-        .map(he => [vi.get(he.v.id), vi.get(he.to.id), he.role])
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id), he.role]),
+      // 平滑旗標跟 roles 一樣用「頂點索引配對」存，不用 id ——
+      // id 每次載入都會重新編號，存了也對不回來
+      smooth: [...this.edges()]
+        .filter(he => he.smooth)
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id)])
     };
   }
 
@@ -705,18 +732,21 @@ export class Mesh {
     }
     const m = Mesh.fromFaceList(points, d.faces);
 
-    if (d.roles && d.roles.length) {
+    if ((d.roles && d.roles.length) || (d.smooth && d.smooth.length)) {
+      const idx = new Map(m.verts.map((v, i) => [v.id, i]));
       const byPair = new Map();
-      const vi = new Map(m.verts.map((v, i) => [i, v]));
       for (const he of m.edges()) {
-        const a = m.verts.indexOf(he.v), b = m.verts.indexOf(he.to);
+        const a = idx.get(he.v.id), b = idx.get(he.to.id);
         byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
       }
-      for (const [a, b, role] of d.roles) {
+      for (const [a, b, role] of (d.roles || [])) {
         const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
         if (he) m.setRole(he, role);
       }
-      void vi;
+      for (const [a, b] of (d.smooth || [])) {
+        const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+        if (he) m.setSmooth(he, true);
+      }
     }
     return m;
   }

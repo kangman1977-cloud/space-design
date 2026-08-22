@@ -26,6 +26,26 @@
 /** 預設弦高誤差。單位是 SVG 使用者單位，由呼叫端換算過再傳進來。 */
 export const DEFAULT_TOL = 0.2;
 
+/**
+ * 幾度以上算「真轉角」。
+ *
+ * ── 這個旗標是這支檔案最值錢的產出，比座標還值錢 ──────────
+ * 貝茲曲線的錨點**自己知道**它是平滑點還是轉角：平滑點的進出控制把手
+ * 是共線的，轉角才會岔開。攤平成折線之後這個資訊就沒了 ——
+ * 剩下一串一模一樣的頂點，下游只能從角度大小去猜。
+ *
+ * 實測 kang 的一個 S 字外框：真轉角 9 個，但攤平後有 196 個轉折點。
+ * 下游（展開圖）因此標了 196 道折彎、398 個接合編號，整張圖變成一團綠色。
+ * 帶著這個旗標的話，展開就自動是「9 道折線、10 段」。
+ *
+ * **這不是演算法問題，是資訊問題。** 上游知道的事，不要在中途丟掉。
+ * （對照坑第 10 條：那次是資訊真的不存在，所以只能保守；這次是我丟掉的。）
+ *
+ * 3° 這個值抄自 kang 已經在用的 `SideUnfold.jsx`——
+ * 那支程式產出的圖他驗過很多次了，沒有理由另外發明一個數字。
+ */
+export const DEFAULT_CORNER_DEG = 3;
+
 /** 遞迴細分的上限。防呆用，正常的路徑遠遠用不到。 */
 const MAX_DEPTH = 20;
 
@@ -39,6 +59,7 @@ const MAX_DEPTH = 20;
  */
 export function parsePath(d, opt = {}) {
   const tol = opt.tol > 0 ? opt.tol : DEFAULT_TOL;
+  const cornerDeg = opt.cornerDeg >= 0 ? opt.cornerDeg : DEFAULT_CORNER_DEG;
   const tokens = tokenize(String(d || ''));
   const subpaths = [];
   const errors = [];
@@ -51,7 +72,8 @@ export function parsePath(d, opt = {}) {
   let lastCmd = '';
 
   const start = (nx, ny) => {
-    cur = { pts: [{ x: nx, y: ny }], closed: false };
+    cur = { pts: [{ x: nx, y: ny, corner: false }], closed: false, anch: [] };
+    cur.anch.push({ i: 0, inT: null, outT: null });
     subpaths.push(cur);
     sx = nx; sy = ny;
   };
@@ -60,8 +82,24 @@ export function parsePath(d, opt = {}) {
     const last = cur.pts[cur.pts.length - 1];
     // 同一個點連著出現沒有意義，而且會讓後面的繞向計算除以零
     if (Math.abs(last.x - nx) > 1e-12 || Math.abs(last.y - ny) > 1e-12) {
-      cur.pts.push({ x: nx, y: ny });
+      cur.pts.push({ x: nx, y: ny, corner: false });
     }
+  };
+
+  /**
+   * ── 錨點與切線 ──────────────────────────────────────
+   * 只有**錨點**（指令的起訖點）才可能是轉角；中間細分出來的點永遠不是。
+   * `segOut` 記下離開目前錨點的切線，`segIn` 記下抵達新錨點的切線，
+   * 兩者比一比就知道那個錨點是平滑點還是轉角。
+   */
+  const segOut = (tx, ty) => {
+    if (!cur) start(x, y);
+    const a = cur.anch[cur.anch.length - 1];
+    if (a) a.outT = [tx, ty];
+  };
+  const segIn = (tx, ty) => {
+    if (!cur) return;
+    cur.anch.push({ i: cur.pts.length - 1, inT: [tx, ty], outT: null });
   };
 
   let i = 0;
@@ -98,25 +136,15 @@ export function parsePath(d, opt = {}) {
         px = py = null;
         break;
       }
-      case 'L': {
-        const nx = num(), ny = num();
-        x = rel ? x + nx : nx;
-        y = rel ? y + ny : ny;
-        push(x, y);
-        px = py = null;
-        break;
-      }
-      case 'H': {
-        const nx = num();
-        x = rel ? x + nx : nx;
-        push(x, y);
-        px = py = null;
-        break;
-      }
-      case 'V': {
-        const ny = num();
-        y = rel ? y + ny : ny;
-        push(x, y);
+      case 'L': case 'H': case 'V': {
+        let nx = x, ny = y;
+        if (C === 'L') { const a = num(), b = num(); nx = rel ? x + a : a; ny = rel ? y + b : b; }
+        else if (C === 'H') { const a = num(); nx = rel ? x + a : a; }
+        else { const b = num(); ny = rel ? y + b : b; }
+        segOut(nx - x, ny - y);
+        push(nx, ny);
+        segIn(nx - x, ny - y);       // 直線的進出切線是同一個方向
+        x = nx; y = ny;
         px = py = null;
         break;
       }
@@ -134,7 +162,10 @@ export function parsePath(d, opt = {}) {
         const a2 = num(), b2 = num(), a3 = num(), b3 = num();
         const c2x = rel ? x + a2 : a2, c2y = rel ? y + b2 : b2;
         const ex = rel ? x + a3 : a3, ey = rel ? y + b3 : b3;
+        // 控制點跟端點重合時（直線化的貝茲）退而用弦當切線
+        segOut(...pick(c1x - x, c1y - y, c2x - x, c2y - y, ex - x, ey - y));
         for (const p of flattenCubic(x, y, c1x, c1y, c2x, c2y, ex, ey, tol)) push(p.x, p.y);
+        segIn(...pick(ex - c2x, ey - c2y, ex - c1x, ey - c1y, ex - x, ey - y));
         px = c2x; py = c2y;
         x = ex; y = ey;
         break;
@@ -151,7 +182,9 @@ export function parsePath(d, opt = {}) {
         }
         const a2 = num(), b2 = num();
         const ex = rel ? x + a2 : a2, ey = rel ? y + b2 : b2;
+        segOut(...pick(cx - x, cy - y, ex - x, ey - y));
         for (const p of flattenQuad(x, y, cx, cy, ex, ey, tol)) push(p.x, p.y);
+        segIn(...pick(ex - cx, ey - cy, ex - x, ey - y));
         px = cx; py = cy;
         x = ex; y = ey;
         break;
@@ -161,9 +194,17 @@ export function parsePath(d, opt = {}) {
         const large = num(), sweep = num();
         const a2 = num(), b2 = num();
         const ex = rel ? x + a2 : a2, ey = rel ? y + b2 : b2;
+        /**
+         * 圓弧的切線用**解析式**算，不用第一段弦去估。
+         * 粗略取樣時第一段弦的方向會偏掉半個分段角，而轉角門檻只有 3°——
+         * 用弦估的話，一段大圓弧的起點會被誤判成轉角。
+         */
+        const t = arcTangents(x, y, rx, ry, rot, large, sweep, ex, ey);
+        segOut(t.t0[0], t.t0[1]);
         for (const p of flattenArc(x, y, rx, ry, rot, large, sweep, ex, ey, tol)) {
           push(p.x, p.y);
         }
+        segIn(t.t1[0], t.t1[1]);
         px = py = null;
         x = ex; y = ey;
         break;
@@ -178,12 +219,26 @@ export function parsePath(d, opt = {}) {
            */
           const last = cur.pts[cur.pts.length - 1];
           if (Math.abs(last.x - sx) > 1e-9 || Math.abs(last.y - sy) > 1e-9) {
-            cur.pts.push({ x: sx, y: sy });
+            segOut(sx - x, sy - y);            // 隱含的一段直線回到起點
+            cur.pts.push({ x: sx, y: sy, corner: false });
+            segIn(sx - x, sy - y);
           }
-          // 收尾之後，起點與終點是同一個點，存的時候不重複存
+          /**
+           * 收尾之後起點與終點是同一個點，只存一份。
+           * **那個被丟掉的錨點帶著「進來的切線」，要交給第一個錨點** ——
+           * 不交的話，起點永遠沒有 inT，就會被當成開放端點、一律算轉角。
+           * 一個閉合的圓因此會多出一個假的折線。
+           */
           if (cur.pts.length > 1) {
             const f = cur.pts[0], l2 = cur.pts[cur.pts.length - 1];
-            if (Math.abs(f.x - l2.x) < 1e-9 && Math.abs(f.y - l2.y) < 1e-9) cur.pts.pop();
+            if (Math.abs(f.x - l2.x) < 1e-9 && Math.abs(f.y - l2.y) < 1e-9) {
+              cur.pts.pop();
+              const la = cur.anch[cur.anch.length - 1];
+              if (la && la.i === cur.pts.length) {
+                cur.anch.pop();
+                if (cur.anch[0]) cur.anch[0].inT = la.inT;
+              }
+            }
           }
         }
         x = sx; y = sy;
@@ -199,11 +254,52 @@ export function parsePath(d, opt = {}) {
     lastCmd = cmd;
   }
 
+  const out = subpaths.filter(s => s.pts.length >= 2);
+  for (const sp of out) markCorners(sp, cornerDeg);
+
   return {
-    subpaths: subpaths.filter(s => s.pts.length >= 2),
+    subpaths: out,
     cmds: [...used].join(''),
-    errors
+    errors,
+    corners: out.reduce((n, s) => n + s.pts.filter(p => p.corner).length, 0)
   };
+}
+
+/**
+ * 判定每個錨點是不是真轉角，並把旗標寫回點上。
+ *
+ * 判準跟 kang 的 `SideUnfold.jsx` 一樣：比較「進來的切線」與「出去的切線」。
+ * 平滑點的兩條切線共線（夾角 0），轉角才會岔開。
+ *
+ * 開放路徑的頭尾一律算轉角 —— 那裡本來就是形狀的端點。
+ */
+function markCorners(sp, deg) {
+  for (const a of sp.anch) {
+    if (a.i < 0 || a.i >= sp.pts.length) continue;
+    if (!a.inT || !a.outT) {
+      if (!sp.closed) sp.pts[a.i].corner = true;   // 開放路徑的端點
+      continue;
+    }
+    if (Math.abs(turnDeg(a.inT, a.outT)) >= deg) sp.pts[a.i].corner = true;
+  }
+}
+
+/** 從方向 u 轉到方向 v 轉了幾度（−180 ~ 180）。 */
+export function turnDeg(u, v) {
+  if (!u || !v) return 0;
+  if (Math.hypot(u[0], u[1]) < 1e-12 || Math.hypot(v[0], v[1]) < 1e-12) return 0;
+  let d = Math.atan2(v[1], v[0]) - Math.atan2(u[1], u[0]);
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d * 180 / Math.PI;
+}
+
+/** 依序挑第一個不是零向量的，當切線用。控制點跟端點重合時要退而求其次。 */
+function pick(...v) {
+  for (let i = 0; i + 1 < v.length; i += 2) {
+    if (Math.hypot(v[i], v[i + 1]) > 1e-12) return [v[i], v[i + 1]];
+  }
+  return [1, 0];
 }
 
 // ═══════════════════════════════════════════════════════
@@ -288,9 +384,56 @@ function isFlatCubic(x0, y0, x1, y1, x2, y2, x3, y3, tol) {
  * 照著走就好 —— 自己另外發明一套的話，大弧／小弧那四種組合一定會有一種是錯的。
  */
 export function flattenArc(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1, tol) {
+  const A = arcCenter(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1);
+  if (!A) return [{ x: x1, y: y1 }];
+
+  /**
+   * 每一段最多轉幾度，由弦高決定：半徑 r 的弧轉 θ，弦高 ＝ r(1−cos(θ/2))。
+   * 反過來 θ ＝ 2·acos(1 − tol/r)。橢圓取長軸算，是保守的一邊。
+   */
+  const r = Math.max(A.rx, A.ry);
+  const step = tol >= r ? Math.PI : 2 * Math.acos(Math.max(-1, 1 - tol / r));
+  const n = Math.max(1, Math.ceil(Math.abs(A.dth) / step));
+
+  const out = [];
+  for (let k = 1; k <= n; k++) out.push(arcPoint(A, A.th0 + A.dth * (k / n)));
+  // 收尾用給定的終點，避免浮點誤差讓路徑接不起來
+  out[out.length - 1] = { x: x1, y: y1 };
+  return out;
+}
+
+/**
+ * 圓弧在起點與終點的切線方向。
+ *
+ * 用解析式算，不用第一段／最後一段的弦去估 —— 粗略取樣時弦的方向會偏掉
+ * 半個分段角，而轉角門檻只有 3°，一段大圓弧的端點會被誤判成轉角。
+ */
+export function arcTangents(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1) {
+  const A = arcCenter(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1);
+  if (!A) return { t0: [x1 - x0, y1 - y0], t1: [x1 - x0, y1 - y0] };
+  return { t0: arcTangent(A, A.th0), t1: arcTangent(A, A.th0 + A.dth) };
+}
+
+function arcPoint(A, t) {
+  const ex = A.rx * Math.cos(t), ey = A.ry * Math.sin(t);
+  return { x: A.cosP * ex - A.sinP * ey + A.cx, y: A.sinP * ex + A.cosP * ey + A.cy };
+}
+
+function arcTangent(A, t) {
+  const dx = -A.rx * Math.sin(t), dy = A.ry * Math.cos(t);
+  const s = A.dth >= 0 ? 1 : -1;
+  return [s * (A.cosP * dx - A.sinP * dy), s * (A.sinP * dx + A.cosP * dy)];
+}
+
+/**
+ * SVG 的「端點式」圓弧換算成「圓心式」。
+ * 這一段是規格附錄的標準做法，照著走就好 —— 自己另外發明一套的話，
+ * 大弧／小弧 × 順時針／逆時針那四種組合一定會有一種是錯的。
+ */
+function arcCenter(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1) {
   rx = Math.abs(rx); ry = Math.abs(ry);
   // 半徑是 0 ＝ 退化成直線，規格明講要這樣處理
-  if (rx < 1e-12 || ry < 1e-12) return [{ x: x1, y: y1 }];
+  if (rx < 1e-12 || ry < 1e-12) return null;
 
   const phi = rotDeg * Math.PI / 180;
   const cosP = Math.cos(phi), sinP = Math.sin(phi);
@@ -324,23 +467,7 @@ export function flattenArc(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1, tol) {
   if (!sweep && dth > 0) dth -= 2 * Math.PI;
   if (sweep && dth < 0) dth += 2 * Math.PI;
 
-  /**
-   * 每一段最多轉幾度，由弦高決定：半徑 r 的弧轉 θ，弦高 ＝ r(1−cos(θ/2))。
-   * 反過來 θ ＝ 2·acos(1 − tol/r)。橢圓取長軸算，是保守的一邊。
-   */
-  const r = Math.max(rx, ry);
-  const step = tol >= r ? Math.PI : 2 * Math.acos(Math.max(-1, 1 - tol / r));
-  const n = Math.max(1, Math.ceil(Math.abs(dth) / step));
-
-  const out = [];
-  for (let k = 1; k <= n; k++) {
-    const t = th0 + dth * (k / n);
-    const ex = rx * Math.cos(t), ey = ry * Math.sin(t);
-    out.push({ x: cosP * ex - sinP * ey + cx, y: sinP * ex + cosP * ey + cy });
-  }
-  // 收尾用給定的終點，避免浮點誤差讓路徑接不起來
-  out[out.length - 1] = { x: x1, y: y1 };
-  return out;
+  return { cx, cy, rx, ry, cosP, sinP, th0, dth };
 }
 
 // ═══════════════════════════════════════════════════════

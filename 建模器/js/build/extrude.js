@@ -48,6 +48,7 @@ export function extrudeMany(profiles, h, opt = {}) {
 
   const points = [];
   const faces = [];
+  const smoothPairs = [];        // 側牆上「不是真轉角」的那些垂直邊
 
   for (const prof of profiles) {
     const outer = ensureDir(prof.pts, true);
@@ -88,13 +89,34 @@ export function extrudeMany(profiles, h, opt = {}) {
       for (let i = 0; i < L; i++) {
         const a = off + i, b = off + (i + 1) % L;
         faces.push([iBot + b, iBot + a, iTop + a, iTop + b]);
+        /**
+         * 側牆的**垂直邊**對應輪廓上的一個點。那個點不是真轉角的話，
+         * 這條邊就是「曲線被切成折線」的產物，不是造型上真的有一道折。
+         * 記下來，展開時才不會把一段平滑的曲線標成一百多道折彎。
+         */
+        if (!loop[i].corner) smoothPairs.push([iBot + a, iTop + a]);
       }
       off += L;
     }
   }
 
   if (!faces.length) throw new Error('這個輪廓三角化不出任何面');
-  return Mesh.fromFaceList(points, faces);
+  const mesh = Mesh.fromFaceList(points, faces);
+
+  // 建好之後才標得到邊 —— 用「頂點索引配對」找，跟存讀檔同一套做法
+  if (smoothPairs.length) {
+    const idx = new Map(mesh.verts.map((v, i) => [v.id, i]));
+    const byPair = new Map();
+    for (const he of mesh.edges()) {
+      const a = idx.get(he.v.id), b = idx.get(he.to.id);
+      byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
+    }
+    for (const [a, b] of smoothPairs) {
+      const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+      if (he) mesh.setSmooth(he, true);
+    }
+  }
+  return mesh;
 }
 
 /**
@@ -114,7 +136,7 @@ function dedupe(pts) {
   for (const p of pts) {
     const last = out[out.length - 1];
     if (!last || Math.abs(last.x - p.x) > 1e-12 || Math.abs(last.y - p.y) > 1e-12) {
-      out.push({ x: p.x, y: p.y });
+      out.push({ x: p.x, y: p.y, corner: !!p.corner });   // 旗標一定要跟著複製
     }
   }
   while (out.length > 1) {

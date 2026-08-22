@@ -646,25 +646,143 @@ function collectJoints(mesh, faces, pt2, isCut, jointNo) {
   if (!jointNo) return [];
   const out = [];
   const seen = new Set();
+  const inPatch = new Set(faces.map(f => f.id));
 
+  /**
+   * ── 一段一個編號，不是一條邊一個 ──────────────────────
+   *
+   * 第一版是每條切割邊給一個號碼。方塊上很好用（12 條邊、12 組），
+   * 但匯入的曲線輪廓有幾百條邊 —— 一個 S 字的面板標了 198 個號碼、
+   * 側邊條標了 398 個，整張圖變成一團綠色數字，完全讀不出來。
+   *
+   * kang 的做法（他那支 SideUnfold.jsx 用了很久）是：
+   * **沿著輪廓走，遇到「真的要折的地方」才換一個號碼。**
+   * 折線本來就是現場對位的基準，所以段落編號跟折線同一個位置最自然。
+   * S 的側邊因此是 A1~A10 這樣的十段，不是 398 個號碼。
+   *
+   * 這裡的分段點判準：兩條相鄰的切割邊，**對面那兩個面之間的邊**
+   * 是不是平滑的。平滑 ＝ 同一段曲線，繼續；是折線 ＝ 換一段。
+   * 兩側各自走的時候看到的是同一批邊，所以分出來的段一定對得起來。
+   */
+  /**
+   * ── 分段用「聯集」，不要沿著邊界走 ──────────────────────
+   *
+   * 第一版是從一條切割邊往前後走，把同一段串起來。寫得出來，但**兩側
+   * 走出來的分段會不一致** —— 面板那邊併成 7 段，側邊條那邊還是 198 段，
+   * 於是「每個編號恰好出現兩次」這個不變量破了，連方塊都從 12 組變 18 組。
+   *
+   * 改成定義在**無向邊**上的聯集：兩條切割邊如果共用一個頂點，而且那個
+   * 頂點上其他的折線全都是平滑的，就併成同一段。這個定義跟走訪順序無關，
+   * 所以兩側算出來一定是同一個分割 —— 不用「小心地讓兩邊一致」，
+   * 而是**根本不可能不一致**。
+   */
+  const part = seamPartition(mesh, isCut, jointNo);
+
+  const groups = new Map();          // 段的 key → 這一片裡屬於它的切割邊
   for (const f of faces) {
     for (const he of mesh.faceLoop(f)) {
-      if (!isCut(he)) continue;
+      if (!isCut(he) || seen.has(he.id)) continue;
       const th = he.twin;
-      if (!th || !th.face) continue;          // 網格邊界，沒有接合對象
-      if (seen.has(he.id)) continue;
+      if (!th || !th.face) { seen.add(he.id); continue; }   // 網格邊界，沒有對象
       seen.add(he.id);
-
-      const key = Math.min(he.id, th.id);
-      let num = jointNo.map.get(key);
-      if (num === undefined) { num = jointNo.next++; jointNo.map.set(key, num); }
-
-      const a = pt2.get(he.id), b = pt2.get(he.next.id);
-      if (!a || !b) continue;
-      out.push({ a, b, num });
+      /**
+       * ⚠ 一條邊的**兩側都可能在同一片上**。
+       *
+       * 環狀的側牆攤開時，引擎會找個地方剪開一刀；那一刀的兩端
+       * 都留在同一條長條上（長條要繞回去接自己）。只用段的 key 分組的話，
+       * 兩側會被併成同一組 → 只畫一個號碼 → **那個號碼只出現一次**，
+       * 而「每個編號恰好出現兩次」正是這套編號唯一的保命符：
+       * 出現一次 ＝ 有一端接不回去，而且圖看起來完全正常。
+       *
+       * 所以 key 要再帶一個「哪一側」。同一對半邊裡 id 小的算 0、大的算 1
+       * —— 兩側因此一定被分開，號碼也就一定出現兩次。
+       */
+      const side = he.id < th.id ? 0 : 1;
+      const k = `${part.find(edgeKey(he))}|${side}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(he);
     }
   }
+
+  for (const [k, run] of groups) {
+    // 號碼本身只認「哪一段」，不認哪一側 —— 兩側才會拿到同一個號碼
+    const numKey = k.split('|')[0];
+    let num = jointNo.map.get(numKey);
+    if (num === undefined) { num = jointNo.next++; jointNo.map.set(numKey, num); }
+
+    // 號碼放整段的中點，不是第一條邊上 —— 那才是現場找得到的位置
+    const mid = run[Math.floor(run.length / 2)];
+    const a = pt2.get(mid.id), b = pt2.get(mid.next.id);
+    if (!a || !b) continue;
+    out.push({ a, b, num, segs: run.length });
+  }
+  void inPatch;
   return out;
+}
+
+const edgeKey = he => Math.min(he.id, he.twin ? he.twin.id : he.id);
+
+/**
+ * 把整個網格的切割邊分成一段一段。整份文件只算一次，存在 jointNo 上。
+ *
+ * 判準：兩條切割邊共用一個頂點，而且**那個頂點上其他的折線全是平滑的**
+ * → 同一段。有一條是真的折線就換段 —— 折線本來就是現場對位的基準。
+ *
+ * 共面的邊不算（那是三角化的產物，不是折線），所以面板上那些
+ * 看不見的對角線不會把一段切開。
+ */
+function seamPartition(mesh, isCut, jointNo) {
+  if (jointNo._part) return jointNo._part;
+
+  const parent = new Map();
+  const find = k => {
+    let r = k;
+    while (parent.get(r) !== undefined && parent.get(r) !== r) r = parent.get(r);
+    let c = k;
+    while (parent.get(c) !== undefined && parent.get(c) !== c) {
+      const n = parent.get(c); parent.set(c, r); c = n;
+    }
+    return r;
+  };
+  const union = (a, b) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb));
+  };
+
+  // 每個頂點上有哪些切割邊、有沒有「不平滑的折線」
+  const cutAt = new Map();
+  const hardAt = new Set();
+  for (const he of mesh.edges()) {
+    if (!he.twin || !he.twin.face || !he.face) continue;
+    const a = he.v.id, b = he.to.id;
+    if (isCut(he)) {
+      const k = edgeKey(he);
+      if (parent.get(k) === undefined) parent.set(k, k);
+      for (const v of [a, b]) {
+        if (!cutAt.has(v)) cutAt.set(v, []);
+        cutAt.get(v).push(k);
+      }
+    } else {
+      const d = mesh.dihedral(he);
+      // 共面的不算折線；真的有轉折而且沒被標成平滑的，就是分段點
+      if (d !== null && Math.abs(d * DEG) > FLAT_TOL_DEG && !he.smooth) {
+        hardAt.add(a); hardAt.add(b);
+      }
+    }
+  }
+
+  for (const [v, ks] of cutAt) {
+    if (hardAt.has(v)) continue;              // 這個頂點上有真的折線 → 換段
+    /**
+     * 一個頂點上剛好兩條切割邊才併。三條以上表示那裡是好幾片的交會點
+     * （方塊的角就是三條），併下去會把不相干的段黏在一起。
+     */
+    if (ks.length !== 2) continue;
+    union(ks[0], ks[1]);
+  }
+
+  jointNo._part = { find };
+  return jointNo._part;
 }
 
 /** 這一片內部的折線（不含外輪廓）。順便記下轉折角。 */
@@ -685,7 +803,9 @@ function collectFolds(mesh, faces, inPatch, pt2, isCut) {
 
       const a = pt2.get(he.id), b = pt2.get(he.next.id);
       if (!a || !b) continue;
-      out.push({ a, b, angle: d * DEG, band: null });
+      // smooth ＝ 這條邊是曲面被切成小面的產物，不是造型上真的有一道折。
+      // 上游（貝茲錨點、參數體）才知道，這裡只是帶著走。
+      out.push({ a, b, angle: d * DEG, band: null, smooth: !!he.smooth });
     }
   }
   return out;
@@ -798,23 +918,46 @@ function bandsInGroup(g, rule, sMin, sMax) {
   for (const f of g.folds) {
     const s = ((f.a.x + f.b.x) / 2) * px + ((f.a.y + f.b.y) / 2) * py;
     let L = lines.find(q => Math.abs(q.s - s) <= 1e-6 + 1e-6 * Math.abs(s));
-    if (!L) { L = { s, angle: 0, n: 0, folds: [] }; lines.push(L); }
+    if (!L) { L = { s, angle: 0, n: 0, folds: [], smooth: true }; lines.push(L); }
     L.angle += f.angle; L.n++; L.folds.push(f);
+    if (!f.smooth) L.smooth = false;      // 有一段不是平滑的，整條就不算平滑
   }
   for (const L of lines) L.angle /= L.n;
   lines.sort((a, b) => a.s - b.s);
 
   if (lines.length < 2) return lines.map(sharpBand);
 
+  /**
+   * ── 先問上游，再猜 ────────────────────────────────
+   *
+   * 下面那個「等寬 ＋ 等角」的掃描是為**圓柱、圓角方塊**寫的 ——
+   * 那些形狀的每一格都一模一樣，所以認得出來。
+   * 但 Illustrator 畫的自由曲線每一段長度和角度都不同
+   * （實測一個 S 字：段長 0.001～7.47cm），**一格都認不出來**，
+   * 於是 196 道折彎全部被當成尖角折，展開圖上標了 196 個標註、
+   * 398 個接合編號，整張圖變成一團數字。
+   *
+   * 但那個資訊其實一直都在：貝茲錨點知道自己是平滑點還是轉角。
+   * 只要上游把它帶下來（`he.smooth`），這裡就不必猜 ——
+   * **連續的平滑折線 ＝ 一條曲線帶**，不管每一格寬不寬、角度等不等。
+   *
+   * 所以先掃一遍有標記的，剩下的才交給原本那套幾何猜測。
+   * 兩者可以並存：參數體走幾何猜測（它的格子本來就等寬等角），
+   * 匯入的線稿走這一條。
+   */
+  const used = new Set();
+  const bands = [];
+  smoothBands(lines, bands, used);
+
   const gaps = [];
   for (let i = 0; i + 1 < lines.length; i++) gaps.push(lines[i + 1].s - lines[i].s);
 
   // ── 掃描：找「等寬 ＋ 中間等角 ＋ 同方向」的連續段 ──
-  const used = new Set();
-  const bands = [];
   let i = 0;
 
   while (i < gaps.length) {
+    // 已經被上一輪（有標記的曲線帶）認走的就跳過
+    if (used.has(lines[i]) || used.has(lines[i + 1])) { i++; continue; }
     // δ ＝ 每一格轉多少，由這一段的第一條「中間折線」定義。
     // 圓弧的頭尾兩條各只轉 δ/2（弦跟切線差半個角），
     // 所以判斷延不延伸只能看**中間**那條，看到頭尾會提早收手。
@@ -904,6 +1047,60 @@ function bandsInGroup(g, rule, sMin, sMax) {
 
   bands.sort((a, b) => a.s0 - b.s0);
   return bands;
+}
+
+/**
+ * 用上游帶下來的標記找曲線帶：**連續的平滑折線就是一段曲線**。
+ *
+ * 不看每一格寬不寬、角度等不等 —— 那是幾何猜測要煩惱的事。
+ * 這裡的判準是「上游說它是平滑的」，而上游（貝茲錨點）真的知道。
+ *
+ * 一段裡的折線全部被吃掉，兩端的真轉角**不吃** ——
+ * 那兩條是造型上真的有的折，要留著當折線畫出來、當分段點用。
+ */
+function smoothBands(lines, bands, used) {
+  let i = 0;
+  while (i < lines.length) {
+    if (!lines[i].smooth) { i++; continue; }
+    let j = i;
+    while (j + 1 < lines.length && lines[j + 1].smooth) j++;
+
+    /**
+     * 一條孤零零的平滑折線不成帶 —— 它就是一格，跟坑第 10 條同一個道理：
+     * 一格的「圓弧」跟一個倒角在幾何上完全一樣，硬當成帶只是自欺欺人。
+     * 讓它照舊走尖角折，該標就標。
+     */
+    if (j > i) {
+      const seg = lines.slice(i, j + 1);
+      let ang = 0;
+      for (const L of seg) ang += L.angle;
+      const w = lines[j].s - lines[i].s;
+      bands.push({
+        isArc: true,
+        /**
+         * `isCurve` 跟真正的圓弧分開。
+         * 圓弧有唯一的半徑，可以算展開長；這種自由曲線每一段曲率都不同，
+         * 沒有「一個 R」可言。出圖時要標成「曲線」而不是「R 多少」——
+         * 標一個假的半徑比不標更糟（坑第 20 條：正確的數字，錯誤的意思）。
+         */
+        isCurve: true,
+        s0: lines[i].s, s1: lines[j].s,
+        chordW: w,
+        arcW: w,          // 不做拉伸：自由曲線沒有單一半徑可以算真弧長
+        angle: ang,
+        r: 0, ri: 0,
+        segs: seg.length,
+        approx: false,
+        flange: undefined,
+        lines: seg
+      });
+      for (const L of seg) {
+        used.add(L);
+        for (const f of L.folds) f.band = bands[bands.length - 1];
+      }
+    }
+    i = j + 1;
+  }
 }
 
 function sharpBand(L) {
