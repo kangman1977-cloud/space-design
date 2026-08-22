@@ -80,6 +80,8 @@ const euler = m => m.verts.length - [...m.edges()].length + m.faces.length;
 const { safeName, TYPES, canChoosePath } = await import('../js/out/save.js');
 const { triangles, stlVolume, trisBounds, dropToBed, toSTLBinary, toSTLAscii,
         printCheck, STL_UNITS } = await import('../js/out/stl.js');
+// 第 6 期第一刀。移動頂點與改完之後的連帶重算，全部是純幾何、不碰 DOM。
+const edit = await import('../js/core/edit.js');
 
 // ═══════════════════════════════════════════════════════
 //  小小的測試框架
@@ -3692,6 +3694,256 @@ section('接合編號：一段一個');
      strip.joints.some(j => strip.joints.filter(q => q.num === j.num).length === 2),
      strip.joints.map(j => j.num).join(','));
 }
+// ═══════════════════════════════════════════════════════
+//  第 6 期第一刀：點／邊／面的幾何編輯（core/edit.js）
+// ═══════════════════════════════════════════════════════
+section('編輯：移動點／邊／面');
+{
+  const mkBox = () => buildPrim('box', { w: 60, h: 45, d: 40 });
+
+  // ── 拓撲不能被動到。這一刀刻意不改拓撲，所以尤拉數是最強的看門狗 ──
+  {
+    const m = mkBox();
+    const e0 = euler(m), v0 = m.verts.length, f0 = m.faces.length;
+    edit.moveVerts([m.verts[0]], new THREE.Vector3(3, -2, 5));
+    edit.refreshAfterEdit(m);
+    eq('拉點之後 尤拉數不變', euler(m), e0);
+    eq('拉點之後 頂點數不變', m.verts.length, v0);
+    eq('拉點之後 面數不變', m.faces.length, f0);
+  }
+
+  // ── 整體平移是剛體運動：體積與面積都不能變 ──
+  {
+    const m = mkBox();
+    const vol0 = m.volume(), area0 = m.area();
+    edit.moveVerts(m.verts, new THREE.Vector3(17, -3.5, 8));
+    near('所有頂點同一個位移 體積不變', m.volume(), vol0, 1e-9);
+    near('所有頂點同一個位移 面積不變', m.area(), area0, 1e-9);
+  }
+
+  // ── 沿法向推拉一個面：體積變化 ＝ 面積 × 距離，可以手算對答案 ──
+  {
+    const m = mkBox();
+    const vol0 = m.volume();
+    // 挑法向朝 +Y 的頂面（60×40）
+    m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    ok('找得到頂面', !!top);
+    const moved = edit.pushFace(m, top, 10);
+    eq('頂面推出去 移動 4 個頂點', moved, 4);
+    near('體積增加 ＝ 60×40×10', m.volume() - vol0, 24000, 1e-6);
+    near('高度變成 55', m.bounds().max.y - m.bounds().min.y, 55, 1e-9);
+  }
+  {
+    const m = mkBox();
+    const vol0 = m.volume();
+    m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    edit.pushFace(m, top, -10);
+    near('負值 ＝ 往內縮，體積減少 24000', vol0 - m.volume(), 24000, 1e-6);
+  }
+
+  // ── 三種 kind 涉及的頂點數 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const he = [...m.edges()].find(h => h.face && h.twin && h.twin.face);
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    eq('點 → 1 個頂點', edit.elementVerts(m, { kind: 'vertex', vert: m.verts[0] }).length, 1);
+    eq('邊 → 2 個頂點', edit.elementVerts(m, { kind: 'edge', he }).length, 2);
+    // ★ 方塊在網格裡是 12 個三角形，使用者看到的是 6 個正方形面。
+    //   點頂面要拿到 4 個頂點，不是命中那個三角形的 3 個。
+    eq('★ 面 ＝ 共面區域，不是三角形 → 4 個頂點',
+       edit.elementVerts(m, { kind: 'face', face: top }).length, 4);
+    eq('對照：那個三角形本身只有 3 個頂點', m.faceVerts(top).length, 3);
+    eq('認不得的 kind → 空陣列', edit.elementVerts(m, { kind: '???' }).length, 0);
+    eq('null → 空陣列', edit.elementVerts(m, null).length, 0);
+  }
+
+  // ── gizmo 掛在重心：單點就是它自己，一條邊就是中點 ──
+  {
+    const m = mkBox();
+    const v = m.verts[0];
+    const c = edit.elementCenter(m, { kind: 'vertex', vert: v });
+    near('單點的重心 ＝ 它自己', c.distanceTo(v.p), 0, 1e-12);
+    const he = [...m.edges()][0];
+    const mid = new THREE.Vector3().addVectors(he.v.p, he.to.p).multiplyScalar(0.5);
+    near('一條邊的重心 ＝ 中點',
+         edit.elementCenter(m, { kind: 'edge', he }).distanceTo(mid), 0, 1e-12);
+  }
+}
+
+section('編輯：面還平不平（預設沿法向的理由）');
+{
+  const mkBox = () => buildPrim('box', { w: 60, h: 45, d: 40 });
+  // ── 沿法向推拉：面永遠是平的（整個面剛體平移）──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    edit.pushFace(m, top, 12.5);
+    edit.refreshAfterEdit(m);
+    eq('沿法向推完 沒有任何面變不平', edit.nonPlanarFaces(m).length, 0);
+  }
+  // ── 自由移動一個頂點，把一個「真的四邊形」拉歪 ──
+  //    方塊測不出來：它 12 個面全是三角形，而三角形恆為平面。
+  //    ⚠ 實查過各參數體的面：box / plate / cylinder / cone / prism / sphere
+  //    **全部是三角形**，只有 `tube`（64 個四邊形）與 `roundBox`（20 個四邊形
+  //    ＋ 2 個 20 邊形）有真的多邊形面。所以這裡用管。
+  {
+    const m = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 16 });
+    m.computeNormals();
+    const quads = m.faces.filter(f => m.faceVerts(f).length === 4).length;
+    ok('管有真的四邊形面（box/plate/cylinder/cone/sphere 全是三角形）',
+       quads > 0, `${quads} 個`);
+    eq('一開始 0 個不平的面', edit.nonPlanarFaces(m).length, 0);
+    edit.moveVerts([m.verts[0]], new THREE.Vector3(0, 0, 8));
+    edit.refreshAfterEdit(m);
+    ok('★ 自由拉一個頂點 會把四邊形拉歪（這就是預設沿法向的理由）',
+       edit.nonPlanarFaces(m).length > 0, `${edit.nonPlanarFaces(m).length} 個`);
+  }
+  // ── 方塊拉點不會產生「不平的面」，但會產生新的折線 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const before = edit.refreshAfterEdit(m);
+    eq('方塊全是三角形，拉之前 0 個不平的面', before.nonPlanar, 0);
+    edit.moveVerts([m.verts[0]], new THREE.Vector3(0, 5, 0));
+    const after = edit.refreshAfterEdit(m);
+    eq('拉完仍然 0 個不平的面（三角形恆為平面）', after.nonPlanar, 0);
+    ok('但多了折線 —— 原本共面的三角形被拉出角度',
+       after.folds.added > 0, `多 ${after.folds.added} 條`);
+  }
+  // ── 三角形恆為平面，是幾何事實不是容許值 ──
+  {
+    const m = buildPrim('cone', { r1: 20, r2: 0, h: 30, seg: 16 });
+    m.computeNormals();
+    const tri = m.faces.find(f => m.faceVerts(f).length === 3);
+    ok('找得到三角形面', !!tri);
+    const r = edit.facePlanarity(m, tri);
+    ok('三角形恆為平面', r.planar && r.dev === 0);
+  }
+}
+
+section('編輯：改完之後的連帶重算');
+{
+  const mkBox = () => buildPrim('box', { w: 60, h: 45, d: 40 });
+
+  // ── ★ 最重要的一條：使用者標的 CUT 不可以被洗掉 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const marked = [...m.edges()].filter(h => h.face && h.twin && h.twin.face).slice(0, 3);
+    for (const he of marked) m.setRole(he, EDGE_ROLE.CUT);
+    const before = [...m.edges()].filter(h => h.role === EDGE_ROLE.CUT).length;
+    eq('先標 3 條 CUT', before, 3);
+    edit.moveVerts([m.verts[0]], new THREE.Vector3(2, 2, 2));
+    const r = edit.refreshAfterEdit(m);
+    const after = [...m.edges()].filter(h => h.role === EDGE_ROLE.CUT).length;
+    eq('★ 編輯之後 CUT 一條都沒少', after, before);
+    eq('回報保留了 3 條', r.folds.kept, 3);
+  }
+  // ── 對照組：直接呼叫 autoMarkFolds() 會洗掉 CUT（證明上面那條不是白測的）──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const he = [...m.edges()].find(h => h.face && h.twin && h.twin.face && !m.isFlat(h));
+    m.setRole(he, EDGE_ROLE.CUT);
+    m.autoMarkFolds();
+    ok('對照組：autoMarkFolds() 真的會把 CUT 洗回 FOLD（所以不能直接用它）',
+       he.role === EDGE_ROLE.FOLD, `現在是 ${he.role}`);
+  }
+
+  // ── 過期的 FOLD 要清掉（autoMarkFolds 只加不減）──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    // 找一個面內被三角化切出來的共面邊，硬標成 FOLD，重算之後應該被清回 FREE
+    const flat = [...m.edges()].find(h => h.face && h.twin && h.twin.face && m.isFlat(h));
+    ok('找得到共面的邊', !!flat);
+    m.setRole(flat, EDGE_ROLE.FOLD);
+    const r = edit.refreshAfterEdit(m);
+    eq('共面卻標著 FOLD 的邊 被清回 FREE', flat.role, EDGE_ROLE.FREE);
+    ok('而且有回報清了幾條', r.folds.cleared >= 1, `${r.folds.cleared} 條`);
+  }
+
+  // ── ★ smooth 要依幾何關掉，否則展開長度會錯而且圖看起來正常 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const he = [...m.edges()].find(h => h.face && h.twin && h.twin.face && !m.isFlat(h));
+    m.setSmooth(he, true);
+    ok('先把一條 90 度的邊謊報成 smooth', he.smooth === true);
+    const r = edit.refreshAfterEdit(m);
+    eq('★ 夾角遠大於 3 度 → smooth 被關掉', he.smooth, false);
+    ok('有回報關掉幾條', r.smoothOff >= 1, `${r.smoothOff} 條`);
+    ok('兩條半邊一起關（不然走另一邊會讀到舊值）', he.twin.smooth === false);
+  }
+  // ── 反向不成立：共線的真轉角不會被自動打開 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const flat = [...m.edges()].find(h => h.face && h.twin && h.twin.face && m.isFlat(h));
+    eq('共面的邊 一開始不是 smooth', flat.smooth, false);
+    edit.refreshAfterEdit(m);
+    eq('★ 重算之後 也沒有被自動打開（只關不開）', flat.smooth, false);
+  }
+  // ── 夾角還在門檻內的 smooth 要留著（不能一律關掉）──
+  {
+    const m = buildPrim('cylinder', { r: 25, h: 70, seg: 128 });
+    m.computeNormals();
+    let n = 0;
+    for (const he of m.edges()) {
+      const d = m.dihedral(he);
+      if (d !== null && Math.abs(d * 180 / Math.PI) < 3) { m.setSmooth(he, true); n++; }
+    }
+    ok('128 段圓柱上有一堆夾角 < 3 度的邊', n > 100, `${n} 條`);
+    edit.refreshAfterEdit(m);
+    const kept = [...m.edges()].filter(h => h.smooth).length;
+    eq('★ 夾角在門檻內的 smooth 一條都沒被誤關', kept, n);
+  }
+
+  // ── 重算的順序：法向必須先算，否則後兩步是拿舊資料在判斷 ──
+  {
+    const m = mkBox();
+    m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    const n0 = top.normal.clone();
+    edit.pushFace(m, top, 10);
+    // 推完之後不自己算法向，直接交給 refreshAfterEdit
+    const r = edit.refreshAfterEdit(m);
+    ok('refreshAfterEdit 自己會先重算法向', top.normal.distanceTo(n0) < 1e-9);
+    ok('回傳三項都在', r.folds && typeof r.smoothOff === 'number'
+       && typeof r.nonPlanar === 'number');
+  }
+}
+
+section('編輯：改完之後 展開還是對的');
+{
+  // ★ 這一組才是這一刀真正要證明的事：
+  //   改得動 ≠ 改完還能出圖。整條下游（展開）必須跟著更新且正確。
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const u0 = unfoldMesh(m, makeRule('foamboard', 0.5));
+  near('編輯前 總面積 13800', u0.stats.area, 13800, 1e-6);
+  // 珍珠板銑 45 度 V 溝可折，所以方塊展成一整片；壓克力才會拆成 6 片。
+  eq('編輯前 珍珠板方塊展成 1 片', u0.stats.total, 1);
+
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  edit.pushFace(m, top, 10);            // 45 → 55 高
+  edit.refreshAfterEdit(m);
+  const u1 = unfoldMesh(m, makeRule('foamboard', 0.5));
+  // 60×55×40 的表面積 ＝ 2(60×55 + 60×40 + 55×40) = 2(3300+2400+2200) = 15800
+  near('★ 推高 10 之後 展開總面積 ＝ 15800（手算對答案）', u1.stats.area, 15800, 1e-6);
+  eq('片數不變（推高不改變哪裡要切開）', u1.stats.total, u0.stats.total);
+  near('體積也對得上 60×55×40', m.volume(), 132000, 1e-6);
+
+  // 換成折不起來的材料，片數與張數要跟基準表對得上（60×55×40 仍是 6 片 3 張）
+  const a1 = unfoldMesh(m, makeRule('acrylic', 0.5));
+  eq('壓克力 6 片', a1.stats.total, 6);
+  eq('壓克力 3 張（三種形狀各 2 片）', a1.pieces.length, 3);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
