@@ -13,7 +13,8 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { nearestMarkableEdge, nearestFace, canMarkSeams } from '../unfold/seam.js';
+import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
+  from '../unfold/seam.js';
 import { objectsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
 
@@ -53,6 +54,12 @@ export class Selection {
      * 兩種入口共用同一組動作 —— 又是「事件入口分開，動作邏輯共用」。
      */
     this.seamMode = false;
+
+    /**
+     * 貼合模式。點第一個元素＝來源，點第二個＝目標，選完立刻貼上去。
+     * 「把**這個**貼到**那個**」，所以先點的那個會動。
+     */
+    this.mateMode = false;
 
     /**
      * 框選模式。開著時空白處拖曳畫矩形，不再旋轉視角。
@@ -150,6 +157,12 @@ export class Selection {
       if (this.tc.dragging) return;
 
       if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
+      if (this.mateMode) {
+        const el = this.pickElement(e.clientX, e.clientY,
+                                    { vertex: true, requireMarkable: false });
+        if (el && this.hooks.onMatePick) this.hooks.onMatePick(el);
+        return;
+      }
       this.pick(e.clientX, e.clientY, e.shiftKey || this.multi);
     });
   }
@@ -237,7 +250,25 @@ export class Selection {
   pickSeam(clientX, clientY) {
     const hook = this.hooks.onSeamPick;
     if (!hook) return;
+    const el = this.pickElement(clientX, clientY, { vertex: false });
+    if (!el) return;
+    if (el.kind === 'blocked') { hook(el); return; }
+    hook(el);
+  }
 
+  /**
+   * 點畫面 → 打到哪一個頂點／邊／面。
+   *
+   * 分片與貼合共用這一組。判斷順序 **點 → 邊 → 面**，
+   * 因為點比邊小、邊比面小 —— 反過來的話小的永遠搶不到。
+   *
+   * 幾何判斷全在 seam.js（不碰 DOM，測得到），這裡只負責把螢幕座標
+   * 換算成物件本地座標，以及用 px 距離決定「算不算點中」。
+   *
+   * @param {object} opt.vertex 要不要考慮頂點（分片不需要）
+   * @param {boolean} opt.requireMarkable 是否只接受可標記物件（分片才要）
+   */
+  pickElement(clientX, clientY, opt = {}) {
     const r = this._toCanvasPx(clientX, clientY);
     this._ndc.x = (r.x / r.w) * 2 - 1;
     this._ndc.y = -(r.y / r.h) * 2 + 1;
@@ -249,14 +280,16 @@ export class Selection {
       const mid = this.view.modelIdOf(h.object);
       if (mid !== null) { hit = h; id = mid; break; }
     }
-    if (!hit) return;
+    if (!hit) return null;
 
     const obj = this._doc && this._doc.byId(id);
-    if (!obj) return;
-    if (!canMarkSeams(obj)) { hook({ obj, kind: 'blocked' }); return; }
+    if (!obj) return null;
+    if (opt.requireMarkable !== false && !canMarkSeams(obj)) {
+      return { obj, kind: 'blocked' };
+    }
 
     const node = this.view.nodeOf(id);
-    if (!node) return;
+    if (!node) return null;
 
     /**
      * 命中點換算到「物件本地座標」。
@@ -265,20 +298,31 @@ export class Selection {
      */
     const pLocal = node.worldToLocal(hit.point.clone());
     const mesh = obj.mesh();
+    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+    // 3D 距離只用來挑候選；**是否算點中，一律用螢幕上的 px 距離判斷**，
+    // 這樣不管拉遠拉近，手感都一樣。
+    const toPx = pl => this._project(node.localToWorld(pl.clone()), r);
+
+    if (opt.vertex) {
+      const nv = nearestVertex(mesh, pLocal);
+      if (nv) {
+        const s = toPx(nv.vert.p);
+        if (Math.hypot(r.x - s.x, r.y - s.y) <= grab) {
+          return { obj, kind: 'vertex', vert: nv.vert };
+        }
+      }
+    }
 
     const near = nearestMarkableEdge(mesh, pLocal);
     if (near) {
-      // 3D 距離只用來挑候選；**是否算點中，一律用螢幕上的 px 距離判斷**，
-      // 這樣不管拉遠拉近，手感都一樣。
-      const a = this._project(node.localToWorld(near.he.v.p.clone()), r);
-      const b = this._project(node.localToWorld(near.he.to.p.clone()), r);
-      const px = distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y);
-      const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
-      if (px <= grab) { hook({ obj, kind: 'edge', he: near.he }); return; }
+      const a = toPx(near.he.v.p), b = toPx(near.he.to.p);
+      if (distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y) <= grab) {
+        return { obj, kind: 'edge', he: near.he };
+      }
     }
 
     const nf = nearestFace(mesh, pLocal);
-    if (nf) hook({ obj, kind: 'face', face: nf.face });
+    return nf ? { obj, kind: 'face', face: nf.face } : null;
   }
 
   // ── 選取 ──────────────────────────────────────────
@@ -370,7 +414,7 @@ export class Selection {
 
     // 分片模式下不掛 gizmo。放在這裡是因為 _refresh() 會在選取變動、
     // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
-    if (node && !this.seamMode) {
+    if (node && !this.seamMode && !this.mateMode) {
       this.tc.attach(node);
       this.tc.showX = this.tc.showY = this.tc.showZ = true;
       // 鎖定縮放的物件不給縮放把手（跟 system 物件同樣的做法）
@@ -419,16 +463,28 @@ export class Selection {
    * 而分片模式要點的是物件表面上的邊。不收的話使用者會一直
    * 點到箭頭然後把東西拖走，而那看起來就像「分片功能沒反應」。
    */
+  /**
+   * 貼合模式。跟分片一樣要把 gizmo 收起來 ——
+   * 三支箭頭會擋在物件前面，而這裡要點的是物件表面上的點／邊／面。
+   */
+  setMateMode(on) {
+    this.mateMode = !!on;
+    this.tc.enabled = !this.mateMode && !this.seamMode;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.mateMode && !this.seamMode;
+    return this.mateMode;
+  }
+
   setSeamMode(on) {
     this.seamMode = !!on;
-    this.tc.enabled = !this.seamMode;
+    this.tc.enabled = !this.seamMode && !this.mateMode;
     /**
      * 一定要重跑 _refresh()，它才會依照新的模式決定掛不掛 gizmo。
      * 少了這一行，離開分片模式後 gizmo 不會回來 —— 要等下次點選才復原，
      * 而使用者只會覺得「東西不能拖了」。
      */
     this._refresh();
-    if (this.helper) this.helper.visible = !this.seamMode;
+    if (this.helper) this.helper.visible = !this.seamMode && !this.mateMode;
     return this.seamMode;
   }
 }

@@ -366,6 +366,75 @@ export class SceneView {
     void doc;
   }
 
+  // ── 點選標示 ──────────────────────────────────────
+
+  /**
+   * 把「使用者剛剛點到的那個元素」畫出來。
+   *
+   * ── 為什麼一定要有 ────────────────────────────────
+   * 面還好認，但**點與邊很細**，選完沒有標示的話使用者無從確認
+   * 點中的是不是他想要的那一個 —— 貼合的結果不如預期時，
+   * 他也分不清是「選錯了」還是「程式算錯了」。
+   *
+   * kang 2026-08-22 實測回報：面對面驗得出來，點對點與邊對邊
+   * 「沒辦法驗證準確，不知道是不是操作有誤」。就是缺這個。
+   *
+   * 用世界座標直接畫，不掛在物件節點下 —— 這樣物件貼合移動時
+   * 標示不會跟著跑掉，而是由呼叫端決定何時更新或清掉。
+   */
+  setPickMarks(marks) {
+    this.clearPickMarks();
+    if (!marks || !marks.length) return;
+
+    const g = new THREE.Group();
+    g.name = 'pickMarks';
+
+    for (const m of marks) {
+      const col = m.role === 'dst' ? 0x3ad07a : 0xffd23f;   // 目標綠、來源黃
+
+      if (m.kind === 'vertex') {
+        // 點要畫得夠大才看得見，但太大會蓋住旁邊的角
+        const s = new THREE.Mesh(
+          new THREE.SphereGeometry(1.4, 12, 8),
+          new THREE.MeshBasicMaterial({ color: col, depthTest: false })
+        );
+        s.position.copy(m.points[0]);
+        s.renderOrder = 6;
+        g.add(s);
+      } else {
+        const pos = [];
+        const pts = m.points;
+        const close = m.kind === 'face';
+        for (let i = 0; i < pts.length - (close ? 0 : 1); i++) {
+          const a = pts[i], b = pts[(i + 1) % pts.length];
+          pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        const ln = new THREE.LineSegments(
+          geo, new THREE.LineBasicMaterial({ color: col, depthTest: false })
+        );
+        ln.renderOrder = 6;
+        g.add(ln);
+      }
+    }
+
+    // 標示不參與點選，否則會擋住底下真正要點的東西
+    g.traverse(o => { o.raycast = () => {}; });
+    this.scene.add(g);
+    this._pickMarks = g;
+  }
+
+  clearPickMarks() {
+    if (!this._pickMarks) return;
+    this.scene.remove(this._pickMarks);
+    this._pickMarks.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._pickMarks = null;
+  }
+
   // ── 投影方式與標準視角 ────────────────────────────
 
   get isOrtho() { return this.camera === this.ortho; }

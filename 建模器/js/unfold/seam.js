@@ -204,12 +204,17 @@ export function faceIsCutOut(mesh, face, tolDeg = FLAT_TOL_DEG) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  點到哪一條邊、哪一個面
+//  點到哪一個頂點、哪一條邊、哪一個面
 // ═══════════════════════════════════════════════════════
 //
 // 這一段是「點選」的幾何部分，刻意放在這裡而不是 select.js，
 // 因為它不碰 DOM 也不碰 three.js 的場景 —— 所以**測得到**。
 // select.js 只留真正的滑鼠／觸控事件那一層。
+//
+// ⚠ 這幾個函式**已經不只分片在用了** —— 貼合（mate.js）也用同一組。
+//    再有第三個功能要用的話，就該搬到自己的模組（例如 core/pick.js），
+//    現在不搬是因為搬動會動到已經驗證過的 seam.js 匯出與 select.js 匯入，
+//    而那是為了整齊去冒險改能用的東西。
 //
 // 又是同一條原則：要讓東西測得到，就把不碰 DOM 的那一半抽出來。
 //
@@ -222,6 +227,22 @@ export function faceIsCutOut(mesh, face, tolDeg = FLAT_TOL_DEG) {
 // 改用「命中點的 3D 座標」就完全避開這件事：座標是幾何事實，
 // 不依賴任何編號。而且命中點必定落在**朝向鏡頭的那一面**上，
 // 所以背面的邊不會被誤選 —— 這是免費送的。
+
+/**
+ * 離這個點最近的頂點。貼合的「點對點」用。
+ *
+ * 只回傳**有面連著**的頂點 —— 網格裡不該有孤立頂點，但布林運算或
+ * 讀進來的舊檔可能留下，那種點貼上去毫無意義。
+ */
+export function nearestVertex(mesh, p) {
+  let best = null;
+  for (const v of mesh.verts) {
+    if (!v.he) continue;
+    const d = p.distanceTo(v.p);
+    if (!best || d < best.dist) best = { vert: v, dist: d };
+  }
+  return best;
+}
 
 /** 點到線段的最短距離 */
 export function distPointSeg(p, a, b) {

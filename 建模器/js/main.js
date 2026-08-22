@@ -26,6 +26,8 @@ import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
   from './unfold/seam.js';
 import { unfoldObject } from './unfold/part.js';
+import { faceFrame, edgeFrame, vertexPoint,
+         mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { ExportPanel } from './ui/exportPanel.js';
 
 const $ = id => document.getElementById(id);
@@ -45,6 +47,7 @@ const sel = new Selection(view, {
     else updateBar();
   },
   onSeamPick: hit => seamPick(hit),
+  onMatePick: el => matePick(el),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
   onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n)
 });
@@ -320,6 +323,7 @@ function setOrtho(on) {
             : '透視投影：看整體量體用');
 }
 
+$('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('unfold').onclick = () => unfoldWin.open();
 $('export3d').onclick = () => exportWin.open();
@@ -330,6 +334,118 @@ $('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l)
 $('mMove').onclick = () => setMode('translate');
 $('mRot').onclick = () => setMode('rotate');
 $('mScale').onclick = () => setMode('scale');
+
+// ═══════════════════════════════════════════════════════
+//  貼合
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 貼合模式：把一個物件的點／邊／面貼到另一個物件的點／邊／面。
+ *
+ * kang 的原話：「一個物件的點線面可以貼合到另一個物件的點線面」。
+ * 跟工具列那個「吸附」不一樣 —— 那個是吸到 1／5／10cm 的網格，
+ * 這個是吸到另一個物件的幾何。
+ */
+let matePick1 = null;
+
+function toggleMateMode() {
+  const on = sel.setMateMode(!sel.mateMode);
+  $('mate').classList.toggle('on', on);
+  matePick1 = null;
+  view.clearPickMarks();
+  panel.refresh();
+  toast(on ? '貼合：先點「要移動的」物件的點／邊／面，再點目標。再按一次離開'
+           : '已離開貼合模式');
+}
+
+const MATE_NAME = { vertex: '點', edge: '邊', face: '面' };
+
+/**
+ * 把點到的元素換算成世界座標的一組點，交給畫面標示出來。
+ *
+ * 面畫外框、邊畫線段、點畫一顆球。沒有這個的話，點與邊細到
+ * 使用者根本無從確認自己點中的是不是想要的那一個。
+ */
+function mateMarkPoints(el) {
+  const M = el.obj.matrix();
+  if (el.kind === 'vertex') return [vertexPoint(el.obj, el.vert)];
+  if (el.kind === 'edge') {
+    return [el.he.v.p.clone().applyMatrix4(M), el.he.to.p.clone().applyMatrix4(M)];
+  }
+  return el.obj.mesh().faceVerts(el.face).map(v => v.p.clone().applyMatrix4(M));
+}
+
+/**
+ * 貼合模式下點了畫面。第一下記起來，第二下就貼。
+ *
+ * 幾何全在 mate.js（不碰 DOM，測得到），這裡只負責流程與回報。
+ */
+function matePick(el) {
+  if (!el || el.kind === 'blocked') return;
+
+  if (!matePick1) {
+    matePick1 = el;
+    sel.set([el.obj.id]);
+    view.setPickMarks([{ kind: el.kind, points: mateMarkPoints(el), role: 'src' }]);
+    toast(`來源：「${el.obj.name}」的${MATE_NAME[el.kind]}（黃色）　接著點目標`);
+    return;
+  }
+
+  /**
+   * 同一個物件貼自己沒有意義，而且會把它轉到莫名其妙的方向。
+   * 直接擋下來並重新開始，不要讓人以為功能壞了。
+   */
+  if (el.obj.id === matePick1.obj.id) {
+    toast('目標要選另一個物件。已重新開始，請重點來源', true);
+    matePick1 = null;
+    view.clearPickMarks();
+    return;
+  }
+
+  /**
+   * 兩邊種類要一樣：點對點、邊對邊、面對面。
+   * 「把一個點貼到一個面」在數學上做得到（點落到面上），但**面上哪裡？**
+   * 沒有唯一答案，做出來的行為使用者猜不到。寧可講清楚，不要亂猜。
+   */
+  if (el.kind !== matePick1.kind) {
+    toast(`要點同一種：來源是${MATE_NAME[matePick1.kind]}，目標也要點${MATE_NAME[matePick1.kind]}`, true);
+    return;
+  }
+
+  const src = matePick1.obj;
+  let r = null;
+
+  if (el.kind === 'face') {
+    r = mateFaceToFace(src,
+      faceFrame(src, matePick1.face), faceFrame(el.obj, el.face));
+  } else if (el.kind === 'edge') {
+    r = mateEdgeToEdge(src,
+      edgeFrame(src, matePick1.he), edgeFrame(el.obj, el.he));
+  } else {
+    r = mateVertexToVertex(src,
+      vertexPoint(src, matePick1.vert), vertexPoint(el.obj, el.vert));
+  }
+
+  matePick1 = null;
+  view.clearPickMarks();
+  if (!r) return;
+
+  if (!r.moved) { toast('已經貼合了，沒有東西需要移動'); return; }
+
+  src.pos.copy(r.pos);
+  src.rot.copy(r.rot);
+  commit(`貼合（${MATE_NAME[el.kind]}）`);
+  panel.refresh();
+
+  /**
+   * 180 度旋轉的軸不唯一，這是數學事實不是 bug。
+   * 講出來讓人知道「轉出來的方位可能不是你想的那個，自己再轉一下就好」，
+   * 比默默轉一個奇怪的方向好 —— 沉默地做怪事最難查。
+   */
+  toast(r.ambiguous
+    ? `貼合完成。這次要轉 180 度，轉軸不唯一，方位若不對請自己再轉`
+    : `貼合完成：「${src.name}」已貼到「${el.obj.name}」`);
+}
 
 // ═══════════════════════════════════════════════════════
 //  分片

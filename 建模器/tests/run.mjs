@@ -2210,6 +2210,159 @@ section('對齊與均分（align.js）');
   }
 }
 
+section('貼合（mate.js）');
+
+/**
+ * kang 的原話：「一個物件的點線面可以貼合到另一個物件的點線面」。
+ * 兩個已定案的決定：含旋轉、選兩個元素再按一下。
+ *
+ * 這一節驗的是「貼上去之後，是不是真的貼上去了」——
+ * 那要用三個數字同時成立才算：法線正對、共平面、體積不變。
+ */
+{
+  const M = await import('../js/core/mate.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  const mkA = () => new io.ModelObject({
+    name: 'A', src: { type: 'box', w: 40, h: 30, d: 30 }, kind: 'solid',
+    pos: V3(120, 0, 0), rot: new THREE.Euler(0, 0.35, 0.2)
+  });
+  const B = new io.ModelObject({
+    name: 'B', src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid', pos: V3(0, 0, 0)
+  });
+  const faceAt = (o, p) => seam.nearestFace(o.mesh(), p).face;
+
+  // ── 面貼面 ──
+  {
+    const A = mkA();
+    const fA = faceAt(A, V3(-20, 0, 0));       // A 的 −X 面
+    const fB = faceAt(B, V3(30, 0, 0));        // B 的 +X 面
+    const frB = M.faceFrame(B, fB);
+    const volBefore = A.mesh().volume();
+
+    const r = M.mateFaceToFace(A, M.faceFrame(A, fA), frB);
+    A.pos.copy(r.pos); A.rot.copy(r.rot);
+
+    const after = M.faceFrame(A, fA);
+    near('面貼面 兩面法線正對（點積 −1）', after.dir.dot(frB.dir), -1, 1e-9);
+    near('面貼面 兩面共平面（沿法線距離 0）',
+         after.point.clone().sub(frB.point).dot(frB.dir), 0, 1e-9);
+    /**
+     * 貼合是剛體運動，物件本身不該被拉扯變形。
+     * 體積一旦變了就表示動到的不只是位置與角度。
+     */
+    near('面貼面 體積完全不變（剛體運動）', A.mesh().volume(), volBefore, 1e-9);
+
+    /**
+     * 已經貼好了再按一次，不該再動。
+     * ⚠ 這一項曾經失敗過：moved 拿四元數跟單位四元數做 equals()，
+     * 那是精確比對，而算出來的是 (0,0,0,0.9999999999)，永遠不相等。
+     * 於是每次都回報「動了」，使用者按第二下會開始懷疑到底貼上去沒。
+     * 改成看轉了幾度。
+     */
+    const again = M.mateFaceToFace(A, M.faceFrame(A, fA), frB);
+    ok('已經貼合 再按一次不會動', !again.moved);
+    near('已經貼合 位置也確實沒變', again.pos.distanceTo(A.pos), 0, 1e-9);
+  }
+
+  /**
+   * ⚠ 面內位置不動。
+   *
+   * 貼合只負責「貼平」，不會把兩個面的中心對在一起 ——
+   * 那會讓東西突然飛到模型另一頭，而使用者只是想讓它貼上去。
+   * 這一項在盯「有沒有偷偷把中心對齊」：沿著法線的距離該歸零，
+   * 但**垂直於法線的那兩個方向不該被動到**。
+   */
+  {
+    const A = mkA();
+    A.rot.set(0, 0, 0);                        // 已經正對，只差距離
+    A.pos.set(120, 17, -9);
+    const fA = faceAt(A, V3(-20, 0, 0));
+    const fB = faceAt(B, V3(30, 0, 0));
+    const r = M.mateFaceToFace(A, M.faceFrame(A, fA), M.faceFrame(B, fB));
+    near('貼合後 Y 沒有被動到', r.pos.y, 17, 1e-12);
+    near('貼合後 Z 沒有被動到', r.pos.z, -9, 1e-12);
+    ok('貼合後 X 有被推過去', Math.abs(r.pos.x - 120) > 1);
+  }
+
+  // ── 點貼點 ──
+  {
+    const A = mkA();
+    const before = A.rot.clone();
+    const va = A.mesh().verts[0], vb = B.mesh().verts[3];
+    const pa = M.vertexPoint(A, va), pb = M.vertexPoint(B, vb);
+    const r = M.mateVertexToVertex(A, pa, pb);
+    A.pos.copy(r.pos);
+    near('點貼點 兩點重合', M.vertexPoint(A, va).distanceTo(pb), 0, 1e-9);
+    /** 一個點沒有方向，所以沒有「要轉到哪」—— 這是三種裡唯一不轉的 */
+    eq('點貼點 角度完全不變', `${r.rot.x},${r.rot.y},${r.rot.z}`,
+       `${before.x},${before.y},${before.z}`);
+  }
+
+  // ── 邊貼邊 ──
+  {
+    const A = mkA();
+    const ea = [...A.mesh().edges()][0];
+    const eb = [...B.mesh().edges()][2];
+    const frB = M.edgeFrame(B, eb);
+    const volBefore = A.mesh().volume();
+    const r = M.mateEdgeToEdge(A, M.edgeFrame(A, ea), frB);
+    A.pos.copy(r.pos); A.rot.copy(r.rot);
+
+    const after = M.edgeFrame(A, ea);
+    near('邊貼邊 中點重合', after.point.distanceTo(frB.point), 0, 1e-9);
+    near('邊貼邊 方向平行（|點積| ＝ 1）', Math.abs(after.dir.dot(frB.dir)), 1, 1e-9);
+    near('邊貼邊 體積不變', A.mesh().volume(), volBefore, 1e-9);
+
+    /**
+     * ⚠ 這一項才是邊對邊真正該驗的東西。
+     *
+     * 只讓兩條邊重合的話，物件還能繞著那條邊自轉任意角度 ——
+     * 邊仍然完全重合，但成品方位是隨機的。
+     * kang 實測回報「邊對邊沒辦法驗證準確」就是因為這個：
+     * **自由度沒鎖滿的功能，使用者無法判斷它有沒有做對，
+     * 那比做錯更糟 —— 做錯還能發現，隨機只會讓人不敢用。**
+     *
+     * 鎖法是讓相鄰的面法線反向（跟面對面同一條規則）。
+     */
+    near('邊貼邊 相鄰面法線反向（自轉被鎖死）',
+         after.faceDir.dot(frB.faceDir), -1, 1e-9);
+    ok('邊貼邊 結果唯一，不再標成 ambiguous', !r.ambiguous);
+  }
+
+  /**
+   * 沒有相鄰面可參考時（兩側都沒有面）只能退回「只對齊邊」，
+   * 而且必須誠實標成 ambiguous —— 那時自轉角度確實是任意的。
+   * 寧可講出來，不要假裝結果是確定的。
+   */
+  {
+    const A = mkA();
+    const ea = [...A.mesh().edges()][0];
+    const eb = [...B.mesh().edges()][2];
+    const noFace = M.edgeFrame(B, eb);
+    noFace.faceDir = null;
+    const r = M.mateEdgeToEdge(A, M.edgeFrame(A, ea), noFace);
+    ok('沒有相鄰面可參考時 誠實標成 ambiguous', r.ambiguous);
+  }
+
+  /**
+   * ⚠ 完全反向（180 度）時，轉軸不唯一。
+   *
+   * 繞著任何一條垂直軸轉 180 度都能把 from 轉到 to，這是數學事實，
+   * 不是函式庫的缺陷。程式不去假裝聰明挑一個軸，而是把情況標出來，
+   * 讓使用者知道「方位可能不是你想的那個，自己再轉一下」。
+   * 沉默地轉一個奇怪的方向最難查。
+   */
+  {
+    const a = M.rotationBetween(V3(1, 0, 0), V3(-1, 0, 0));
+    ok('完全反向 會標示轉軸不唯一', a.ambiguous);
+    const b = M.rotationBetween(V3(1, 0, 0), V3(0, 1, 0));
+    ok('一般角度 不會誤報', !b.ambiguous);
+    const c = M.rotationBetween(V3(1, 0, 0), V3(1, 0, 0));
+    ok('完全同向 也不會誤報', !c.ambiguous);
+  }
+}
+
 section('框選（screen.js）');
 
 /**
