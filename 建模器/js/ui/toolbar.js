@@ -16,6 +16,8 @@ import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
 import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
 import { unfoldObject } from '../unfold/part.js';
+import { alignPositions, distributePositions, spacePositions, currentGaps,
+         AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -86,6 +88,7 @@ export class Panel {
 
     if (many) {
       this.form.appendChild(note(`已選 ${this.app.sel.count} 個，以下編輯最後選的「${obj.name}」`));
+      this._alignBox();
     }
 
     this._rowText('名稱', obj.name, v => { obj.name = v; this._edit('改名稱'); });
@@ -172,6 +175,111 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  對齊與均分
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 對齊面板。**只有選兩個以上才出現** —— 一個物件要對誰？
+   *
+   * kang 要的是「多個物件組合時，每個物件準確移動到正確位置」，
+   * 而他給的參考是 Illustrator 的對齊面板。
+   *
+   * 版面照那個面板的分組：對齊物件 → 均分物件 → 均分間距。
+   * 差別是這裡多一個軸，所以每一組是三列（X／Y／Z）而不是兩排按鈕。
+   *
+   * ── 基準是「整組選取的外框」──────────────────────────
+   * 對應 Illustrator 的「對齊至：選取範圍」。靠左＝全部貼到最左那個的左緣。
+   * 沒有做「對齊至關鍵物件」，因為 3D 裡沒有「最後點的那個要當基準」
+   * 這個既有慣例，貿然做反而難猜。真的需要再加。
+   */
+  _alignBox() {
+    const objs = this.app.sel.objects;
+    if (objs.length < 2) return;
+
+    this.form.appendChild(head('對齊'));
+
+    for (const ax of AXIS_KEYS) {
+      const r = document.createElement('div');
+      r.className = 'alignRow';
+      const lb = document.createElement('label');
+      lb.textContent = ax.toUpperCase();
+      r.appendChild(lb);
+      for (const mode of [ALIGN.MIN, ALIGN.CENTER, ALIGN.MAX]) {
+        const b = document.createElement('button');
+        b.textContent = ALIGN_LABEL[ax][mode];
+        b.onclick = () => this._applyPositions(
+          alignPositions(this.app.sel.objects, ax, mode),
+          `對齊 ${ALIGN_LABEL[ax][mode]}`);
+        r.appendChild(b);
+      }
+      this.form.appendChild(r);
+    }
+
+    /**
+     * 均分要三個以上才有意義 —— 兩個的話頭尾就是全部，動不了誰。
+     * 不夠就直接說，不要放一顆按下去沒反應的按鈕（坑第 21 條）。
+     */
+    this.form.appendChild(head('均分'));
+    if (objs.length < 3) {
+      this.form.appendChild(note('均分要選三個以上'));
+      return;
+    }
+
+    for (const ax of AXIS_KEYS) {
+      const r = document.createElement('div');
+      r.className = 'alignRow';
+      const lb = document.createElement('label');
+      lb.textContent = ax.toUpperCase();
+      r.appendChild(lb);
+
+      const b1 = document.createElement('button');
+      b1.textContent = '均分物件';
+      b1.title = '讓各物件的「中心」等距。大小一致時跟均分間距一樣';
+      b1.onclick = () => this._applyPositions(
+        distributePositions(this.app.sel.objects, ax), `${ax.toUpperCase()} 均分物件`);
+
+      const b2 = document.createElement('button');
+      b2.textContent = '均分間距';
+      b2.title = '讓相鄰兩物件之間的「空隙」相等。大小不一時看起來對的是這個';
+      b2.onclick = () => this._applyPositions(
+        spacePositions(this.app.sel.objects, ax), `${ax.toUpperCase()} 均分間距`);
+
+      r.append(b1, b2);
+      this.form.appendChild(r);
+    }
+
+    /**
+     * 目前的空隙如實列出來。
+     *
+     * 均分做完之後這排數字應該全部一樣 —— 使用者不必相信我，看數字就好。
+     * 這跟分片的「展開後 N 片」是同一件事：**讓操作有沒有生效變成看得見的**。
+     */
+    const g = currentGaps(objs, 'x');
+    if (g.length) {
+      this.form.appendChild(note(
+        'X 空隙 ' + g.map(v => round(v)).join('　') + ' cm'));
+    }
+  }
+
+  /**
+   * 把算好的新位置套上去。
+   *
+   * align.js 的函式一律不改動任何東西，只回傳新位置 —— 套用這一步
+   * 刻意留在這裡，因為只有這裡知道要記一步 Undo、要重畫、要講一句話。
+   */
+  _applyPositions(list, label) {
+    const objs = this.app.sel.objects;
+    if (list.length !== objs.length) return;
+    let moved = 0;
+    objs.forEach((o, i) => {
+      if (o.pos.distanceToSquared(list[i]) > 1e-18) moved++;
+      o.pos.copy(list[i]);
+    });
+    this._edit(label);
+    if (this.app.toast) this.app.toast(`${label}：移動了 ${moved} 個物件`);
   }
 
   // ═══════════════════════════════════════════════════

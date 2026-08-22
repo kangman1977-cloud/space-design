@@ -14,6 +14,8 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { nearestMarkableEdge, nearestFace, canMarkSeams } from '../unfold/seam.js';
+import { objectsInRect, normRect } from '../core/screen.js';
+import { worldBounds } from '../core/align.js';
 
 const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
@@ -51,6 +53,17 @@ export class Selection {
      * 兩種入口共用同一組動作 —— 又是「事件入口分開，動作邏輯共用」。
      */
     this.seamMode = false;
+
+    /**
+     * 框選模式。開著時空白處拖曳畫矩形，不再旋轉視角。
+     *
+     * 做成模式而不是「Shift＋拖曳」，是 kang 選的 —— 平板沒有 Shift，
+     * 而這個工具一開始就是桌機平板都要能用。跟「分片」同一個做法。
+     */
+    this.marqueeMode = false;
+    this._marq = null;
+    /** 框選矩形那個 div。沒有也不會壞，只是看不到框 */
+    this.marqueeEl = document.getElementById('marqueeBox');
 
     this._initGizmo();
     this._initPointer();
@@ -97,7 +110,23 @@ export class Selection {
 
     cv.addEventListener('pointerdown', e => {
       this._down = { x: e.clientX, y: e.clientY, t: performance.now() };
+      if (this.marqueeMode && !this.tc.dragging) {
+        const r = this._toCanvasPx(e.clientX, e.clientY);
+        this._marq = { ax: r.x, ay: r.y, bx: r.x, by: r.y };
+        // 抓住指標，這樣拖出畫布外再放開也收得到事件
+        if (cv.setPointerCapture) { try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 舊瀏覽器沒有就算了 */ } }
+        this._drawMarquee();
+      }
     });
+
+    cv.addEventListener('pointermove', e => {
+      if (!this._marq) return;
+      const r = this._toCanvasPx(e.clientX, e.clientY);
+      this._marq.bx = r.x; this._marq.by = r.y;
+      this._drawMarquee();
+    });
+
+    cv.addEventListener('pointercancel', () => this._endMarquee(null, false));
 
     cv.addEventListener('pointerup', e => {
       const d = this._down;
@@ -107,6 +136,15 @@ export class Selection {
       const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
       const dt = performance.now() - d.t;
 
+      /**
+       * 框選：拖得夠遠才算框選，否則當成一般的點一下。
+       * 不分這一刀的話，框選模式下就再也點不到單一物件了。
+       */
+      if (this._marq) {
+        this._endMarquee(e, dist > TAP_MOVE);
+        if (dist > TAP_MOVE) return;
+      }
+
       // 拖曳過、按太久、或正在操作 gizmo → 不算點選
       if (dist > TAP_MOVE || dt > TAP_TIME) return;
       if (this.tc.dragging) return;
@@ -114,6 +152,60 @@ export class Selection {
       if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
       this.pick(e.clientX, e.clientY, e.shiftKey || this.multi);
     });
+  }
+
+  // ── 框選 ──────────────────────────────────────────
+
+  _drawMarquee() {
+    const el = this.marqueeEl;
+    if (!el || !this._marq) return;
+    const m = this._marq;
+    const r = normRect(m.ax, m.ay, m.bx, m.by);
+    el.hidden = false;
+    el.style.left = r.x0 + 'px';
+    el.style.top = r.y0 + 'px';
+    el.style.width = (r.x1 - r.x0) + 'px';
+    el.style.height = (r.y1 - r.y0) + 'px';
+  }
+
+  /**
+   * 放開手，決定選到誰。
+   *
+   * 幾何判定全在 `core/screen.js`（不碰 DOM，測得到）；
+   * 這裡只負責把畫布尺寸與相機交出去，再把結果套進選取。
+   */
+  _endMarquee(e, commit) {
+    const m = this._marq;
+    this._marq = null;
+    if (this.marqueeEl) this.marqueeEl.hidden = true;
+    if (!m || !commit || !this._doc) return;
+
+    const cv = this.view.canvas;
+    const box = cv.getBoundingClientRect();
+    const rect = normRect(m.ax, m.ay, m.bx, m.by);
+
+    const entries = this._doc.objects.map(o => ({ id: o.id, box: worldBounds(o) }));
+    const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
+
+    // 按著 Shift 或開著「加選」就是往現有選取上加，跟點選的規矩一致
+    const additive = (e && e.shiftKey) || this.multi;
+    this.set(additive ? [...new Set([...this.ids, ...hits])] : hits);
+    if (this.hooks.onMarquee) this.hooks.onMarquee(hits.length);
+  }
+
+  /**
+   * 切換框選模式。
+   *
+   * 只關掉旋轉與平移，**滾輪縮放留著** —— 框選時常常要先拉遠看全景，
+   * 為了框一下還要退出模式再進來，用兩次就會放棄這個功能。
+   */
+  setMarqueeMode(on) {
+    this.marqueeMode = !!on;
+    const orb = this.view.orbit;
+    orb.enableRotate = !this.marqueeMode;
+    orb.enablePan = !this.marqueeMode;
+    if (!this.marqueeMode) this._endMarquee(null, false);
+    return this.marqueeMode;
   }
 
   // ── 分片模式的點選 ────────────────────────────────
@@ -192,6 +284,19 @@ export class Selection {
   // ── 選取 ──────────────────────────────────────────
 
   bindDoc(doc) { this._doc = doc; }
+
+  /**
+   * 場景換相機了（透視 ↔ 正交），gizmo 要跟著換。
+   * 不換的話拖曳方向會對不上畫面，而且箭頭大小會算錯 ——
+   * TransformControls 是拿相機去換算螢幕尺寸的。
+   */
+  setCamera(cam) {
+    this.tc.camera = cam;
+    /**
+     * 點選不必處理 —— hitTest() 每次都是現讀 `this.view.camera`，
+     * 而場景換相機時那個屬性就跟著換了。Raycaster 本身也認得正交相機。
+     */
+  }
 
   /** 螢幕座標 → 打到哪個物件 */
   hitTest(clientX, clientY) {

@@ -44,9 +44,14 @@ const sel = new Selection(view, {
     if (committing) commit('變換物件');
     else updateBar();
   },
-  onSeamPick: hit => seamPick(hit)
+  onSeamPick: hit => seamPick(hit),
+  // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
+  onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n)
 });
 sel.bindDoc(doc);
+
+// 場景換相機（透視 ↔ 正交）時，gizmo 也要跟著換，否則拖曳方向會對不上畫面
+view.onCameraChange = cam => sel.setCamera(cam);
 
 const hist = new History({
   get: () => doc.toJSON(),
@@ -63,7 +68,9 @@ const app = {
   doc, view, sel, hist,
   get head() { return doc.head; },
   onEdit: label => { view.sync(doc); commit(label); },
-  onExplode: obj => explodeSelected(obj)
+  onExplode: obj => explodeSelected(obj),
+  // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
+  toast: (msg, bad) => toast(msg, bad)
 };
 
 const panel = new Panel(app);
@@ -286,6 +293,33 @@ $('aLinear').onclick = () => arrayOp(ARRAY_MODES.LINEAR);
 $('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
 $('aMirror').onclick = () => arrayOp(ARRAY_MODES.MIRROR);
 
+/**
+ * 標準視角。
+ *
+ * 切到正視／側視／上視時**自動打開正交投影** —— 因為那三個視角存在的
+ * 意義就是精確對位，而透視投影下遠的東西看起來偏中間，對不準。
+ * 切回等角時不自動關掉：使用者可能就是要正交的等角圖（很多 CAD 的預設）。
+ */
+for (const [id, v] of [['vFront', 'front'], ['vRight', 'right'],
+                       ['vTop', 'top'], ['vIso', 'iso']]) {
+  $(id).onclick = () => {
+    if (v !== 'iso' && !view.isOrtho) setOrtho(true);
+    view.setView(v);
+    for (const k of ['vFront', 'vRight', 'vTop', 'vIso']) {
+      $(k).classList.toggle('on', k === id);
+    }
+  };
+}
+
+$('vOrtho').onclick = () => setOrtho(!view.isOrtho);
+
+function setOrtho(on) {
+  const now = view.setProjection(on);
+  $('vOrtho').classList.toggle('on', now);
+  toast(now ? '正交投影：關掉近大遠小，可以照著畫面對位'
+            : '透視投影：看整體量體用');
+}
+
 $('seam').onclick = () => toggleSeamMode();
 $('unfold').onclick = () => unfoldWin.open();
 $('export3d').onclick = () => exportWin.open();
@@ -385,6 +419,13 @@ for (const b of document.querySelectorAll('.snapBtn')) {
     toast(s > 0 ? `吸附 ${s}cm` : '吸附關閉');
   };
 }
+
+$('marquee').onclick = function () {
+  const on = sel.setMarqueeMode(!sel.marqueeMode);
+  this.classList.toggle('on', on);
+  toast(on ? '框選開啟：拖曳畫矩形，碰到的物件都選起來。滾輪縮放仍然可用'
+           : '框選關閉：空白處拖曳恢復成旋轉視角');
+};
 
 $('multi').onclick = function () {
   sel.multi = !sel.multi;

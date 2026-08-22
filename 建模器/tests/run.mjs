@@ -2079,6 +2079,218 @@ section('STL：列印前檢查');
   near('錐體 STL 體積 ＝ 網格體積×1000', stlVolume(tris) / (cone.volume() * 1000), 1, 1e-9);
 }
 
+section('對齊與均分（align.js）');
+
+/**
+ * kang 的原話：「當有一個造型是由多個物件所組合時，每個物件要如何準確的
+ * 移動到正確位置」。「準確」是這一節唯一在驗的事 ——
+ * 對齊算錯了不會讓程式當掉，只會讓東西差幾公分，
+ * 而那用眼睛看不出來，只有拿數字對答案抓得到。
+ */
+{
+  const A = await import('../js/core/align.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const mk = (name, w, x, y = 0) => new io.ModelObject({
+    name, src: { type: 'box', w, h: 10, d: 10 }, kind: 'solid', pos: V3(x, y, 0)
+  });
+  const apply = (objs, ps) => objs.forEach((o, i) => o.pos.copy(ps[i]));
+  const bx = o => A.worldBounds(o);
+  const cx = o => (bx(o).min.x + bx(o).max.x) / 2;
+
+  // ── 對齊 ──
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    const before = A.unionBounds(objs).clone();
+
+    apply(objs, A.alignPositions(objs, 'x', A.ALIGN.MIN));
+    const mins = objs.map(o => bx(o).min.x);
+    near('靠左對齊 全部貼齊最左緣', Math.max(...mins) - Math.min(...mins), 0, 1e-12);
+    near('靠左對齊 貼的是原本整組的左緣', mins[0], before.min.x, 1e-12);
+  }
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    apply(objs, A.alignPositions(objs, 'x', A.ALIGN.CENTER));
+    const cs = objs.map(cx);
+    near('置中對齊 中心完全一致', Math.max(...cs) - Math.min(...cs), 0, 1e-12);
+  }
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    apply(objs, A.alignPositions(objs, 'x', A.ALIGN.MAX));
+    const mx = objs.map(o => bx(o).max.x);
+    near('靠右對齊 全部貼齊最右緣', Math.max(...mx) - Math.min(...mx), 0, 1e-12);
+  }
+
+  /**
+   * 一個物件要對誰？不動。
+   * 這種邊界情況不擋的話，Math.min(...[]) 會回傳 Infinity，
+   * 物件會飛到無限遠 —— 而使用者只會看到東西不見了。
+   */
+  {
+    const one = [mk('S', 10, 7)];
+    eq('只選一個 對齊不動它', A.alignPositions(one, 'x', A.ALIGN.MIN)[0].x, 7);
+    eq('只選一個 均分不動它', A.distributePositions(one, 'x')[0].x, 7);
+  }
+
+  /**
+   * ⚠ 不能拿 obj.pos 當作物件的位置來對齊。
+   *
+   * pos 是原點的位置，而網格不一定以原點為中心 —— 折板、布林結果、
+   * 陣列都可能偏一邊。拿 pos 對齊，畫面上看起來就是沒對齊。
+   * 這一項刻意用「原點不在中心」的折板來驗。
+   */
+  {
+    const bend = new io.ModelObject({
+      name: 'bend', kind: 'sheet', thickness: 0.2, pos: V3(0, 0, 0),
+      src: { type: 'bend', w: 30, first: 40, arcSeg: 4, k: 0.4,
+             bends: [{ angle: 90, ri: 2, len: 30 }] }
+    });
+    const box = mk('box', 20, 90);
+    ok('折板的原點確實不在外框中心',
+       Math.abs((bx(bend).min.x + bx(bend).max.x) / 2 - bend.pos.x) > 1);
+
+    const objs = [bend, box];
+    apply(objs, A.alignPositions(objs, 'x', A.ALIGN.CENTER));
+    near('原點不在中心的物件 一樣對得準', cx(objs[0]) - cx(objs[1]), 0, 1e-12);
+  }
+
+  // ── 兩種均分互為反例 ──
+  /**
+   * 物件大小不一時，兩種均分結果**不同**，而且各自滿足自己的定義、
+   * 不滿足對方的。兩項一起測才證明得了「這兩個不是同一件事」——
+   * 只測一個的話，把另一個實作錯了也看不出來。
+   */
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    apply(objs, A.distributePositions(objs, 'x'));
+    const cs = objs.map(cx).sort((a, b) => a - b);
+    near('均分物件 中心間距相等', (cs[1] - cs[0]) - (cs[2] - cs[1]), 0, 1e-12);
+    const g = A.currentGaps(objs, 'x');
+    ok('均分物件 空隙不相等（大小不一時本來就會這樣）',
+       Math.abs(g[0] - g[1]) > 1, `${g[0].toFixed(2)} vs ${g[1].toFixed(2)}`);
+  }
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    const before = A.unionBounds(objs).clone();
+    apply(objs, A.spacePositions(objs, 'x'));
+    const g = A.currentGaps(objs, 'x');
+    near('均分間距 空隙相等', g[0] - g[1], 0, 1e-12);
+    const cs = objs.map(cx).sort((a, b) => a - b);
+    ok('均分間距 中心不等距（同上，互為反例）',
+       Math.abs((cs[1] - cs[0]) - (cs[2] - cs[1])) > 1);
+    /**
+     * 頭尾不動 —— 均分是「把中間的排好」，不是「把整組搬走」。
+     * 整組外框變了就表示演算法把端點也動到了。
+     */
+    const after = A.unionBounds(objs);
+    near('均分間距 整組外框不變（頭尾不動）', after.min.x, before.min.x, 1e-12);
+    near('均分間距 整組外框不變（右緣）', after.max.x, before.max.x, 1e-12);
+  }
+  {
+    const objs = [mk('A', 10, 0), mk('B', 60, 50), mk('C', 20, 110)];
+    apply(objs, A.spacePositions(objs, 'x', 5));
+    const g = A.currentGaps(objs, 'x');
+    near('指定間距 5 每個空隙都是 5', Math.max(...g.map(v => Math.abs(v - 5))), 0, 1e-12);
+  }
+
+  // ── 三個軸都要能用 ──
+  /**
+   * 只測 X 的話，把 Y 或 Z 寫死成 X 也會通過。
+   * 這種錯在 2D 版搬到 3D 時最容易發生。
+   */
+  {
+    for (const ax of A.AXIS_KEYS) {
+      const objs = [
+        new io.ModelObject({ src: { type: 'box', w: 10, h: 10, d: 10 }, kind: 'solid', pos: V3(0, 0, 0) }),
+        new io.ModelObject({ src: { type: 'box', w: 10, h: 10, d: 10 }, kind: 'solid', pos: V3(30, 40, 50) })
+      ];
+      apply(objs, A.alignPositions(objs, ax, A.ALIGN.CENTER));
+      const c = objs.map(o => (bx(o).min[ax] + bx(o).max[ax]) / 2);
+      near(`${ax.toUpperCase()} 軸 置中對齊有效`, c[0] - c[1], 0, 1e-12);
+    }
+  }
+}
+
+section('框選（screen.js）');
+
+/**
+ * 框選問的是「這個物件在畫面上有沒有落在我拉的矩形裡」。
+ * 那是投影問題，只需要相機，不需要 DOM —— 所以測得到。
+ * select.js 只留真正的滑鼠／觸控事件那一層。
+ */
+{
+  const S = await import('../js/core/screen.js');
+  const A = await import('../js/core/align.js');
+  const W = 800, H = 600;
+
+  const cam = new THREE.PerspectiveCamera(45, W / H, 1, 20000);
+  cam.position.set(0, 0, 400);
+  cam.lookAt(0, 0, 0);
+  cam.updateMatrixWorld(true);
+
+  const mk = (x, y) => new io.ModelObject({
+    src: { type: 'box', w: 20, h: 20, d: 20 }, kind: 'solid',
+    pos: new THREE.Vector3(x, y, 0)
+  });
+  const entry = (id, o) => ({ id, box: A.worldBounds(o) });
+
+  const mid = mk(0, 0), right = mk(200, 0), far = mk(-200, 0);
+  const list = [entry(1, mid), entry(2, right), entry(3, far)];
+
+  const sb = S.screenBounds(A.worldBounds(mid), cam, W, H);
+  ok('置中的物件投影在畫面中央',
+     Math.abs((sb.x0 + sb.x1) / 2 - W / 2) < 1 && Math.abs((sb.y0 + sb.y1) / 2 - H / 2) < 1);
+
+  eq('框住中央 只選到中間那個',
+     S.objectsInRect(list, { x0: 350, y0: 250, x1: 450, y1: 350 }, cam, W, H).join(','), '1');
+  eq('框住整個畫面 三個都選到',
+     S.objectsInRect(list, { x0: 0, y0: 0, x1: W, y1: H }, cam, W, H).sort().join(','), '1,2,3');
+  eq('框在空白角落 一個都不選',
+     S.objectsInRect(list, { x0: 0, y0: 0, x1: 5, y1: 5 }, cam, W, H).length, 0);
+
+  /**
+   * 「碰到就算」vs「要整個包住」。
+   * 預設是碰到就算 —— 3D 裡物件互相遮擋、外框又比實體大，
+   * 要求整個包住的話大件永遠選不到。
+   */
+  {
+    const tiny = { x0: 395, y0: 295, x1: 405, y1: 305 };
+    eq('碰到就算 選得到', S.objectsInRect(list, tiny, cam, W, H).length, 1);
+    eq('要整個包住 就選不到', S.objectsInRect(list, tiny, cam, W, H, { enclose: true }).length, 0);
+  }
+
+  /**
+   * ⚠ 相機後面的物件不能算進來。
+   *
+   * 透視投影下相機後方的點投影出來會左右上下顛倒，直接取外框會得到一個
+   * 橫跨整個畫面的假矩形 —— 於是框選一拉就把背後的東西也選進來，
+   * 而那個東西根本不在畫面上。使用者只會覺得「怎麼多選了看不見的東西」。
+   */
+  {
+    const behind = mk(0, 0);
+    behind.pos.z = 900;                       // 相機在 z=400 看向 −Z，這個在背後
+    const sb2 = S.screenBounds(A.worldBounds(behind), cam, W, H);
+    eq('相機後面的物件 投影結果為 null', sb2, null);
+    eq('框住整個畫面也選不到它',
+       S.objectsInRect([entry(9, behind)], { x0: 0, y0: 0, x1: W, y1: H }, cam, W, H).length, 0);
+  }
+
+  /**
+   * 正交相機沒有「相機後面」這個問題（投影不會翻轉），所以一樣要能用。
+   * 對齊那三個視角都是正交的，框選在那裡不能失效。
+   */
+  {
+    const oc = new THREE.OrthographicCamera(-200, 200, 150, -150, -20000, 20000);
+    oc.position.set(0, 0, 400);
+    oc.lookAt(0, 0, 0);
+    oc.updateMatrixWorld(true);
+    eq('正交相機下 框住整個畫面也選得到',
+       S.objectsInRect(list, { x0: 0, y0: 0, x1: W, y1: H }, oc, W, H).sort().join(','), '1,2,3');
+  }
+
+  eq('normRect 會把反向拖曳整理成左上右下',
+     JSON.stringify(S.normRect(100, 80, 20, 10)), JSON.stringify({ x0: 20, y0: 10, x1: 100, y1: 80 }));
+}
+
 section('指定分片（seam.js）');
 
 /**

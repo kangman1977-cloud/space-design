@@ -65,6 +65,12 @@ select {
 #stage { flex: 1 1 auto; position: relative; min-width: 0; }
 #cv { display: block; width: 100%; height: 100%; touch-action: none; }
 
+/* 框選的矩形。pointer-events:none 讓它不會擋住底下的拖曳事件 */
+#marqueeBox {
+  position: absolute; z-index: 4; pointer-events: none;
+  border: 1px solid #6fa8ff; background: rgba(111,168,255,.16);
+}
+
 /* ══ 右側面板 ══════════════════════════════════════ */
 #panel {
   flex: none; width: 300px; overflow-y: auto;
@@ -124,6 +130,16 @@ button.mini {
   font-size: 11.5px; color: #f0b8b8; line-height: 1.6;
 }
 button.wide { width: 100%; margin-top: 10px; }
+
+/* 對齊面板：一列 = 一個軸，後面接三顆等寬的按鈕 */
+.alignRow { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.alignRow > label {
+  flex: none; width: 52px; font-size: 12px; color: #a8b0bd;
+}
+.alignRow > button {
+  flex: 1 1 0; min-width: 0; padding: 5px 2px; font-size: 11.5px;
+  white-space: nowrap;      /* 空間不足時被壓成直排，見坑第 5 條 */
+}
 
 /* ══ 布林運算樹 ════════════════════════════════════ */
 .tree { margin: 4px 0 2px; }
@@ -374,6 +390,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="mRot">旋轉</button>
       <button id="mScale">縮放</button>
       <button id="multi">加選</button>
+      <button id="marquee" title="框選：拖曳畫一個矩形，碰到的物件全部選起來。開著時空白處拖曳不再旋轉視角">框選</button>
     </div>
 
     <div class="grp">
@@ -382,6 +399,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button class="snapBtn on" data-s="1">1cm</button>
       <button class="snapBtn" data-s="5">5cm</button>
       <button class="snapBtn" data-s="10">10cm</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">視角</span>
+      <button id="vFront" title="正視圖（從前面看）。對齊要靠這個 —— 透視圖裡對不準">前</button>
+      <button id="vRight" title="右側視圖">側</button>
+      <button id="vTop" title="上視圖（俯視）">上</button>
+      <button id="vIso" class="on" title="等角（斜看）">等角</button>
+      <button id="vOrtho" title="正交投影：關掉近大遠小。要精確對位一定要開">正交</button>
     </div>
 
     <div class="grp">
@@ -395,6 +421,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
   <div id="main">
     <div id="stage">
       <canvas id="cv"></canvas>
+      <div id="marqueeBox" hidden></div>
       <div id="toast"></div>
       <div id="status">
         <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>

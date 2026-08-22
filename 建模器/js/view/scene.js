@@ -26,8 +26,26 @@ export class SceneView {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1b1e23);
 
-    this.camera = new THREE.PerspectiveCamera(45, 1, 1, 20000);
-    this.camera.position.set(320, 260, 340);
+    /**
+     * 兩台相機，隨時可以換。
+     *
+     * ── 為什麼一定要有正交相機 ──────────────────────────
+     * kang 要的是「多個物件組合時，每個物件準確移動到正確位置」。
+     * 透視投影下**遠的東西看起來比較小、比較靠中間**，所以兩個深度不同
+     * 的物件就算 X 真的對齊了，畫面上看起來也不會齊。
+     * 靠眼睛對位在透視圖裡根本辦不到 —— 這正是所有 CAD 都有正交視圖的原因。
+     *
+     * 透視留著，因為看整體量體、感覺空間還是它自然。
+     */
+    this.persp = new THREE.PerspectiveCamera(45, 1, 1, 20000);
+    this.persp.position.set(320, 260, 340);
+
+    this.ortho = new THREE.OrthographicCamera(-100, 100, 100, -100, -20000, 20000);
+    this.ortho.position.copy(this.persp.position);
+
+    this.camera = this.persp;
+    /** 相機換人時通知外面（gizmo 要跟著換，否則拖曳會歪掉）*/
+    this.onCameraChange = null;
 
     this.orbit = new OrbitControls(this.camera, canvas);
     this.orbit.target.set(0, 40, 0);
@@ -35,7 +53,13 @@ export class SceneView {
     this.orbit.dampingFactor = 0.08;
     this.orbit.minDistance = 20;
     this.orbit.maxDistance = 6000;
-    this.orbit.maxPolarAngle = Math.PI * 0.495;
+    /**
+     * 剛好 90 度，不是 89.1 度。
+     * 原本是 `Math.PI * 0.495`，那樣**正側視圖差 0.9 度看不出來但對不準** ——
+     * 而正視圖存在的意義就是「這條線到底齊了沒」。
+     * 90 度一樣擋得住鑽到地板下面，只是剛好能停在水平。
+     */
+    this.orbit.maxPolarAngle = Math.PI / 2;
 
     this._buildEnvironment();
 
@@ -325,13 +349,96 @@ export class SceneView {
     } else {
       const c = box.getCenter(new THREE.Vector3());
       const r = box.getSize(new THREE.Vector3()).length() / 2 || 100;
-      const dist = r / Math.sin(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 1.15;
-      const dir = new THREE.Vector3(0.8, 0.65, 0.85).normalize();
+      // 張角一律取自透視相機 —— 正交相機沒有 fov，而視野範圍是從它回推的
+      const dist = r / Math.sin(THREE.MathUtils.degToRad(this.persp.fov / 2)) * 1.15;
+      /**
+       * 方向維持不變。原本寫死等角方向，但那會讓「切到正視圖 → 按全部入鏡」
+       * 又轉回等角 —— 使用者剛選好的視角被搶走，而他只是想看全部。
+       */
+      const dir = new THREE.Vector3().subVectors(this.camera.position, this.orbit.target);
+      if (dir.lengthSq() < 1e-9) dir.set(0.8, 0.65, 0.85);
+      dir.normalize();
       this.camera.position.copy(c).addScaledVector(dir, dist);
       this.orbit.target.copy(c);
     }
+    if (this.isOrtho) this._fitOrtho();
     this.orbit.update();
     void doc;
+  }
+
+  // ── 投影方式與標準視角 ────────────────────────────
+
+  get isOrtho() { return this.camera === this.ortho; }
+
+  /**
+   * 切換透視／正交。
+   *
+   * 換的時候要把「現在在看什麼」原封不動帶過去，否則使用者按一下
+   * 畫面整個跳掉，就得重新找方向。所以位置與朝向直接複製，
+   * 正交的視野範圍再從透視的張角回推 ——
+   * 目標點附近的東西看起來大小一樣，畫面幾乎不跳。
+   */
+  setProjection(ortho) {
+    const want = ortho ? this.ortho : this.persp;
+    if (want === this.camera) return this.isOrtho;
+
+    const from = this.camera;
+    want.position.copy(from.position);
+    want.quaternion.copy(from.quaternion);
+
+    if (ortho) this._fitOrtho();
+
+    this.camera = want;
+    this.orbit.object = want;
+    this.orbit.update();
+    this.resize();
+    // gizmo 也要換相機，不然拖曳的方向會對不上畫面
+    if (this.onCameraChange) this.onCameraChange(want);
+    return this.isOrtho;
+  }
+
+  /** 依照目前與目標點的距離，算出正交相機該看多大範圍 */
+  _fitOrtho() {
+    const dist = this.ortho.position.distanceTo(this.orbit.target) || 100;
+    const halfH = dist * Math.tan(THREE.MathUtils.degToRad(this.persp.fov / 2));
+    const el = this.canvas.parentElement;
+    const aspect = (el && el.clientHeight) ? el.clientWidth / el.clientHeight : 1;
+    const halfW = halfH * aspect;
+    Object.assign(this.ortho, {
+      left: -halfW, right: halfW, top: halfH, bottom: -halfH
+    });
+    this.ortho.zoom = 1;
+    this.ortho.updateProjectionMatrix();
+  }
+
+  /**
+   * 標準視角。距離維持不變，只換方向。
+   *
+   * 上視圖刻意用 `Math.PI/2 - 1e-4` 而不是正上方：正上方時視線與 up 向量
+   * 平行，OrbitControls 算不出水平方位角，畫面會突然轉一圈。
+   * 差萬分之一度肉眼看不出來，但少一個會嚇到人的行為。
+   */
+  setView(which) {
+    const t = this.orbit.target;
+    const dist = this.camera.position.distanceTo(t) || 300;
+    const dir = {
+      front: [0, 0, 1],
+      back:  [0, 0, -1],
+      right: [1, 0, 0],
+      left:  [-1, 0, 0],
+      top:   [0, 1, 0],
+      iso:   [0.8, 0.65, 0.85]
+    }[which];
+    if (!dir) return;
+
+    const v = new THREE.Vector3(...dir).normalize();
+    if (which === 'top') v.set(0, 1, 1e-4).normalize();
+
+    this.camera.position.copy(t).addScaledVector(v, dist);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(t);
+    if (this.isOrtho) this._fitOrtho();
+    this.orbit.update();
   }
 
   // ── 畫面 ──────────────────────────────────────────
@@ -340,8 +447,9 @@ export class SceneView {
     const el = this.canvas.parentElement;
     const w = el.clientWidth, h = el.clientHeight;
     if (!w || !h) return;
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.persp.aspect = w / h;
+    this.persp.updateProjectionMatrix();
+    if (this.isOrtho) this._fitOrtho();
     this.renderer.setSize(w, h, false);
   }
 
