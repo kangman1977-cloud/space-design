@@ -1759,8 +1759,14 @@ section('第 3 期：展開圖與 DXF');
     (dxf.match(/\r\n0\r\nTEXT\r\n/g) || []).length
     === (dxf.match(/\r\n7\r\nSTANDARD\r\n/g) || []).length);
   ok('DXF 不寫 $INSUNITS（那是 R14 才有的變數）', !dxf.includes('$INSUNITS'));
+  /**
+   * 圖層數宣告錯了，有些軟體會直接判檔案壞掉。
+   * 2026-08-22 加 JOIN 層時這一項擋下來過一次 —— 加了圖層卻忘了改宣告，
+   * 而 DXF 本身「看起來」完全正常。這就是這一項存在的理由。
+   */
   ok('DXF 表格數量宣告正確',
-    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n6\r\n'), '5 個圖層 ＋ 圖層 0');
+    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n7\r\n'),
+    'CUT/FOLD/BEND/DIM/TEXT/JOIN 六個圖層 ＋ 圖層 0');
 
   // ENDTAB / ENDSEC 要成對，少一個整個檔就打不開
   eq('DXF TABLE 與 ENDTAB 成對', (dxf.match(/\r\nENDTAB\r\n/g) || []).length, tbls.length);
@@ -2253,6 +2259,100 @@ section('指定分片（seam.js）');
   ok('切完之後 faceIsCutOut 認得出來', seam.faceIsCutOut(m, ftop));
   eq('再點一次 收回頂面', seam.cutAroundFace(m, ftop, false), 4);
   ok('收回之後 faceIsCutOut 變回 false', !seam.faceIsCutOut(m, ftop));
+}
+
+section('接合編號');
+
+/**
+ * kang 的原話：「簡單的展開圖很好區分，遇到複雜的分切展開，
+ * 標示就需要研究一下了。」—— 那是最早那句話的後半段「切割後**再組裝結合**」。
+ *
+ * ⚠ 接合編號與「一樣的片合併成一張圖」**本質上互斥**：
+ * 合併只看形狀，方塊的頂面與底面形狀一樣會被併成一張圖，
+ * 但它們接的是不同的邊，一張圖只能標一組號碼。
+ * kang 的決定：分切過的就不合併，全部給編號；沒標過的維持原本行為。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const mk = () => {
+    const o = new io.ModelObject({ src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid' });
+    o.bake();
+    return o;
+  };
+
+  // ── 沒標過分片的物件：行為完全不變 ──
+  const plain = mk();
+  const rp = unfoldObject(plain, { material: 'foamboard' });
+  eq('沒標分片 仍然是一片', rp.stats.total, 1);
+  eq('沒標分片 沒有接合編號', rp.pieces[0].joints.length, 0);
+
+  /**
+   * 壓克力方塊是**材料規則**拆開的，不是使用者標的。
+   * 判準用「使用者有沒有標過」而不是「展開結果有沒有超過一片」，
+   * 就是為了不要靜靜地改掉這條天天在用的路。
+   */
+  const acr = unfoldObject(plain, { material: 'acrylic' });
+  eq('材料拆開的 仍然合併成 3 張圖', acr.pieces.length, 3);
+  eq('材料拆開的 沒有接合編號', acr.pieces.reduce((n, p) => n + p.joints.length, 0), 0);
+
+  // ── 六面全部手動切開 ──
+  const o = mk();
+  const m = o.mesh();
+  for (const p of [V(0, 22.5, 0), V(0, -22.5, 0), V(30, 0, 0),
+                   V(-30, 0, 0), V(0, 0, 20), V(0, 0, -20)]) {
+    seam.cutAroundFace(m, seam.nearestFace(m, p).face, true);
+  }
+  const r = unfoldObject(o, { material: 'foamboard' });
+
+  eq('分切過的 不合併，六張圖', r.pieces.length, 6);
+  eq('分切過的 片數 6', r.stats.total, 6);
+  near('分切過的 面積仍然守恆', r.stats.area, 13800, 1e-9);
+
+  /**
+   * ⚠ 這一項是整節最重要的：**每個編號恰好出現兩次。**
+   *
+   * 那正是「A 片的 ③ 對上 B 片的 ③」該有的數學性質。
+   * 出現一次 ＝ 有一條邊找不到對象，接不回去；
+   * 出現三次以上 ＝ 編號撞號，師傅會接錯。
+   * 兩種都是「圖看起來很正常，但東西組不起來」——
+   * 而那要等切完料才會發現。
+   */
+  const cnt = new Map();
+  for (const p of r.pieces) for (const j of p.joints) cnt.set(j.num, (cnt.get(j.num) || 0) + 1);
+  eq('接合編號共 12 組（＝方塊的邊數）', cnt.size, 12);
+  eq('每個編號恰好出現兩次', [...cnt.values()].filter(n => n !== 2).length, 0);
+
+  // ── 標示畫得出來，而且落在料上面 ──
+  /**
+   * 往片內縮，不往外放 —— 外面已經被尺寸與折彎標註佔滿了，
+   * 再擠進去就是坑第 12 條那團「0.9787.05.24」。
+   * 這一項在盯「號碼有沒有掉到料外面去」，那樣師傅根本不知道它指哪條邊。
+   */
+  const p0 = r.pieces[0];
+  const marks = drawProgram(p0, {}).items.filter(i => i.style === 'joint');
+  eq('第一片畫出 4 個接合編號', marks.length, 4);
+  ok('接合編號全部落在料的範圍內',
+     marks.every(i => i.x > 0 && i.x < p0.width && i.y > 0 && i.y < p0.height));
+
+  // ── DXF ──
+  /**
+   * JOIN 獨立一層：它是給組裝的人看的，不是給機器的。
+   * 進 Illustrator 重新排版時可以先關掉，排完再開回來。
+   */
+  const dxf = toDXF(r.pieces, { unit: 'mm' });
+  const ent = dxf.slice(dxf.indexOf('ENTITIES'));
+  eq('DXF 的 ENTITIES 裡有 24 個接合編號（6 片 × 4）',
+     (ent.match(/\r\nJOIN\r\n/g) || []).length, 24);
+  ok('DXF 的圖層表裡有 JOIN', dxf.slice(0, dxf.indexOf('ENTITIES')).includes('JOIN'));
+
+  /**
+   * 圖上那些綠色數字沒有說明的話，師傅只會覺得「這是什麼」。
+   * 標了卻沒人看得懂 ＝ 沒標。
+   */
+  ok('標題欄有說明接合編號怎麼用',
+     titleLines(p0, {}).join('|').includes('同號碼的邊接在一起'));
+  ok('沒有接合編號時 標題欄不提這件事',
+     !titleLines(rp.pieces[0], {}).join('|').includes('接合編號'));
 }
 
 section('第 3 期：效能');

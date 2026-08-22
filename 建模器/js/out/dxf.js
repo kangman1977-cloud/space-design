@@ -35,15 +35,20 @@
  *   BEND   折彎區 —— 圓弧折彎的起訖線與中心線
  *   DIM    尺寸線
  *   TEXT   文字說明
+ *   JOIN   接合編號 —— 這條邊要跟哪一條接回去（同號碼配對）
  * 分層的意義：廠商可以只留 CUT 層丟給機器，其餘關掉。
  * 全部畫在同一層的話，折線會被當成切割線切下去，整片報廢。
+ *
+ * JOIN 特別重要要獨立一層：它是**給組裝的人看的**，不是給機器的。
+ * 而且進 Illustrator 之後使用者要重新排版，那時候把 JOIN 關掉
+ * 排完再開回來，比在一堆數字裡找方便得多。
  *
  * ── 單位 ────────────────────────────────────────────
  * 專案內部一律 cm，但雷切／CNC 廠幾乎都收 mm。
  * 所以輸出時換算，並寫進 $INSUNITS 讓對方軟體自己認。
  */
 
-const COLOR = { CUT: 7, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8 };
+const COLOR = { CUT: 7, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
 
 /**
  * 單位換算：專案內部 cm → 輸出單位。
@@ -119,6 +124,28 @@ export function toDXF(pieces, opt = {}) {
       if (b.isArc) continue;
       out.text('BEND', ox + b.x0 * s, y1 + 1.2 * s, 0.8 * s,
         `${round(b.angle)}deg R0`);
+    }
+
+    /**
+     * 接合編號：這條邊要跟哪一條接回去。同號碼配對。
+     * 位置跟預覽圖一致 —— 邊的中點往片內縮，因為外面已經被
+     * 尺寸與折彎標註佔滿了（坑第 12 條：讀不出來的標示比沒有更糟）。
+     */
+    if (p.joints && p.joints.length) {
+      let cx = 0, cy = 0;
+      for (const q of p.outline) { cx += q.x; cy += q.y; }
+      cx /= (p.outline.length || 1); cy /= (p.outline.length || 1);
+      const IN = 1.8;
+
+      for (const j of p.joints) {
+        const mx = (j.a.x + j.b.x) / 2, my = (j.a.y + j.b.y) / 2;
+        let nx = -(j.b.y - j.a.y), ny = j.b.x - j.a.x;
+        const L = Math.hypot(nx, ny) || 1;
+        nx /= L; ny /= L;
+        if ((cx - mx) * nx + (cy - my) * ny < 0) { nx = -nx; ny = -ny; }
+        out.text('JOIN', ox + (mx + nx * IN) * s, oy + (my + ny * IN) * s,
+                 1.4 * s, String(j.num));
+      }
     }
 
     // 尺寸：整片外框（DXF 的標註實體版本差異大，直接畫線＋文字最保險）

@@ -41,6 +41,11 @@ export const STYLE = {
   fold: { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '折線' },
   bend: { w: 0.025, minPx: 1.0, dash: [0.8, 0.5],  color: '#2980b9', label: '折彎區' },
   dim:  { w: 0.018, minPx: 0.8, dash: null,        color: '#666',  label: '尺寸' },
+  /**
+   * 接合編號。用綠色是為了跟切割線（黑）、折線（紅）、折彎區（藍）、
+   * 尺寸（灰）都分得開 —— 師傅在圖上找「號碼」時不必先分辨那是不是尺寸。
+   */
+  joint: { w: 0.020, minPx: 0.9, dash: null,       color: '#1e8449', label: '接合編號' },
   text: { w: 0.018, minPx: 0.8, dash: null,        color: '#111',  label: '文字' },
   note: { w: 0.018, minPx: 0.8, dash: null,        color: '#888',  label: '註記' }
 };
@@ -89,6 +94,36 @@ export function drawProgram(piece, opt = {}) {
   for (const f of piece.folds) {
     if (f.isArcEdge) continue;
     line('fold', f.a.x, f.a.y, f.b.x, f.b.y);
+  }
+
+  /**
+   * ── 接合編號 ──────────────────────────────────────
+   *
+   * 「這條邊要跟誰接回去」。同一個號碼一定剛好出現兩次
+   * （可能在兩片上，也可能在同一片的兩處），對起來就是了。
+   *
+   * 位置：那條邊的中點，**往片內縮一點**。
+   * 不往外放是因為外面已經被尺寸標註與折彎標註佔滿了，
+   * 再擠進去就會變成坑第 12 條那團「0.9787.05.24」——
+   * 讀不出來的標示比沒有標示更糟。
+   *
+   * 往內縮的方向用「邊的法線朝向片的重心」那一側，所以不管
+   * 這條邊在輪廓的哪個方位，號碼都會落在料上面。
+   */
+  if (opt.showJoints !== false && piece.joints && piece.joints.length) {
+    const cx = piece.outline.reduce((s, p) => s + p.x, 0) / (piece.outline.length || 1);
+    const cy = piece.outline.reduce((s, p) => s + p.y, 0) / (piece.outline.length || 1);
+    const IN = 1.8;                         // 往內縮多少 cm
+
+    for (const j of piece.joints) {
+      const mx = (j.a.x + j.b.x) / 2, my = (j.a.y + j.b.y) / 2;
+      let nx = -(j.b.y - j.a.y), ny = j.b.x - j.a.x;
+      const L = Math.hypot(nx, ny) || 1;
+      nx /= L; ny /= L;
+      // 法線有兩個方向，取指向重心的那一個
+      if ((cx - mx) * nx + (cy - my) * ny < 0) { nx = -nx; ny = -ny; }
+      text('joint', mx + nx * IN, my + ny * IN, j.num, 1.8, 'middle');
+    }
   }
 
   // ── 折彎區 ──
@@ -238,6 +273,18 @@ export function titleLines(piece, opt = {}) {
 
   out.push(`外框 ${fmt(piece.width)} × ${fmt(piece.height)} cm`
     + `　面積 ${fmt(piece.area)} cm²`);
+
+  /**
+   * 一定要講這一行。
+   *
+   * 圖上那些綠色數字如果沒有說明，師傅只會覺得「這是什麼」——
+   * 而它正是「切完之後怎麼接回去」的唯一線索。
+   * 標了卻沒人看得懂，等於沒標（坑第 12 條的另一面：
+   * 那次是擠在一起讀不出來，這次是讀得出來但不知道意思）。
+   */
+  if (piece.joints && piece.joints.length) {
+    out.push(`接合編號 ${piece.joints.length} 處　同號碼的邊接在一起`);
+  }
 
   const arcs = piece.bends.filter(b => b.isArc).length;
   const sharp = piece.bends.length - arcs;

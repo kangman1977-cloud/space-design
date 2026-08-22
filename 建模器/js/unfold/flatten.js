@@ -61,15 +61,39 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const patches = splitPatches(mesh, rule, tolDeg);
   const pieces = [];
 
+  /**
+   * ── 接合編號：只有「使用者自己標過分片」的物件才給 ──────────
+   *
+   * kang 的原話：「簡單的展開圖很好區分，遇到複雜的分切展開，
+   * 標示就需要研究一下了。」—— 那正是他最早那句話的後半段
+   * 「切割後**再組裝結合**」。程式做到了切開，沒做怎麼接回去。
+   *
+   * 紙模型的慣例：每一對接合邊給同一個號碼，A 片的 ③ 對上 B 片的 ③。
+   * 這個資訊程式完全知道 —— 每一條被切開的邊，兩側就分屬兩片。
+   *
+   * ⚠ **接合編號與「一樣的片合併成一張圖」本質上互斥。**
+   *
+   * 合併只看形狀。方塊的頂面與底面形狀一樣會被併成一張圖，
+   * 但它們接的是不同的邊 —— 一張圖只能標一組號碼，另一片的沒地方放。
+   * 任何「說明這片裝在哪裡」的標示都會讓合併失效，這不是實作問題。
+   *
+   * kang 的決定（2026-08-22）：**分切過的就不合併，全部給編號。**
+   * 沒標過分片的物件維持原本的合併行為 —— 那是天天在用的路，
+   * 不能因為新功能而改掉。判準用「使用者有沒有標過」，
+   * 不用「展開結果有沒有超過一片」：後者會靜靜地改掉壓克力箱體的行為。
+   */
+  const wantJoints = hasUserSeams(mesh);
+  const jointNo = wantJoints ? { map: new Map(), next: 1 } : null;
+
   for (const patch of patches) {
-    const r = flattenPatch(mesh, patch, rule, tolDeg);
+    const r = flattenPatch(mesh, patch, rule, tolDeg, jointNo);
     if (r.piece) pieces.push(r.piece);
     else if (r.error && !warnings.includes(r.error)) warnings.push(r.error);
   }
 
   // 完全一樣的片合併成「一張圖 ×N」—— 12 片一樣的側板要出一張圖，
   // 不是 12 張一樣的圖。這跟說明表的「套數」是同一個概念。
-  const merged = groupIdentical(pieces);
+  const merged = groupIdentical(pieces, !wantJoints);
 
   for (const p of merged) {
     for (const w of rule.validate(p)) p.warnings.push(w);
@@ -193,7 +217,7 @@ function splitPatches(mesh, rule, tolDeg) {
  * 所以兩者的「左」剛好指向相反側，不必額外判斷。
  * 這是半邊結構本身就帶著的資訊，換成面清單就要自己算繞向。
  */
-function flattenPatch(mesh, faces, rule, tolDeg) {
+function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
   if (!faces.length) return null;
 
   const inPatch = new Set(faces.map(f => f.id));
@@ -318,7 +342,8 @@ function flattenPatch(mesh, faces, rule, tolDeg) {
   }
 
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
-    used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : []);
+    used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : [],
+    jointNo);
   return { piece };
 }
 
@@ -406,7 +431,7 @@ function placeFace(mesh, th, O2, T2, pt2) {
  * 全部就地改同一份 pt2，所以折線、輪廓、折彎帶三者永遠對得起來，
  * 不會出現「輪廓修正了、折線沒修正」這種畫面騙人的情況。
  */
-function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
+function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
   const inPatch = new Set(faces.map(f => f.id));
 
   const folds = collectFolds(mesh, faces, inPatch, pt2, isCut);
@@ -451,6 +476,11 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn) {
     outline: loops[0] || [],
     holes: loops.slice(1),
     folds: folds.map(f => ({ a: f.a, b: f.b, angle: f.angle, isArcEdge: !!f.band })),
+    /**
+     * 接合處：這條邊在 2D 上是邊界，但在 3D 上有鄰居，要接回去。
+     * 兩側的片會拿到同一個號碼。沒有分片標記的物件是空陣列。
+     */
+    joints: collectJoints(mesh, faces, pt2, isCut, jointNo),
     bends: bands,
     faces: polys,
     warnings: warn.slice(),
@@ -585,6 +615,57 @@ function radialFan(folds) {
  *
  * 至於「這是實體、不是板件」，part.js 的 unfoldObject() 已經擋在前面了。
  */
+
+/**
+ * 這個網格上有沒有使用者標的分片切割線。
+ *
+ * 只認「內部的邊」—— 網格邊界本來就是 CUT（`Mesh` 建構時自動標的），
+ * 拿它當判準的話每一片開放的板件都會被當成「使用者標過」。
+ */
+function hasUserSeams(mesh) {
+  for (const he of mesh.edges()) {
+    if (he.role === EDGE_ROLE.CUT && he.face && he.twin && he.twin.face) return true;
+  }
+  return false;
+}
+
+/**
+ * 這一片邊界上的接合處，以及它們的編號。
+ *
+ * 「接合處」＝ 在 2D 上是邊界、但在 3D 上有鄰居的邊。
+ * 也就是「原本連在一起、被切開、之後要接回去」的地方。
+ * 網格真正的邊界（`twin.face` 是 null）不算 —— 它本來就沒有對象。
+ *
+ * 編號用 `min(he.id, twin.id)` 當 key，所以兩側的片各自跑到這裡時
+ * **一定會拿到同一個號碼**，不必兩片互相知道對方的存在。
+ *
+ * 包含 implicit 那一類（能折但被攤平的生成樹剪開的邊，例如圓筒的接縫）——
+ * 那些在實體上同樣要接回去，漏掉的話圓筒就少一條接縫標示。
+ */
+function collectJoints(mesh, faces, pt2, isCut, jointNo) {
+  if (!jointNo) return [];
+  const out = [];
+  const seen = new Set();
+
+  for (const f of faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (!isCut(he)) continue;
+      const th = he.twin;
+      if (!th || !th.face) continue;          // 網格邊界，沒有接合對象
+      if (seen.has(he.id)) continue;
+      seen.add(he.id);
+
+      const key = Math.min(he.id, th.id);
+      let num = jointNo.map.get(key);
+      if (num === undefined) { num = jointNo.next++; jointNo.map.set(key, num); }
+
+      const a = pt2.get(he.id), b = pt2.get(he.next.id);
+      if (!a || !b) continue;
+      out.push({ a, b, num });
+    }
+  }
+  return out;
+}
 
 /** 這一片內部的折線（不含外輪廓）。順便記下轉折角。 */
 function collectFolds(mesh, faces, inPatch, pt2, isCut) {
@@ -1161,7 +1242,16 @@ function project(poly, nx, ny) {
  * 判斷「一樣」用尺寸與折彎序列，不用輪廓逐點比對 ——
  * 鏡射過的片點順序會反過來，但那仍然是同一張下料圖。
  */
-function groupIdentical(pieces) {
+function groupIdentical(pieces, merge = true) {
+  /**
+   * merge=false ＝ 分切過的物件。每片各自一張圖、各自帶接合編號，
+   * 不合併。理由見 unfoldMesh() 裡「接合編號」那一段。
+   */
+  if (!merge) {
+    pieces.forEach((p, i) => { p.name = `展開片 ${i + 1}`; });
+    return pieces;
+  }
+
   const map = new Map();
   for (const p of pieces) {
     const key = [
