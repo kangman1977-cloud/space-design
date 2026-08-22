@@ -61,6 +61,7 @@ const { makeRule, MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL }
 const { unfoldMesh } = await import('../js/unfold/flatten.js');
 // part.js 是文件物件與展開引擎之間的轉接層，不碰 DOM，所以測得到
 const { unfoldObject } = await import('../js/unfold/part.js');
+const seam = await import('../js/unfold/seam.js');
 const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/sheet.js');
 const { toDXF, UNITS } = await import('../js/out/dxf.js');
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
@@ -2070,6 +2071,128 @@ section('STL：列印前檢查');
   }
   eq('匯出的三角形沒有退化的', zero, 0);
   near('錐體 STL 體積 ＝ 網格體積×1000', stlVolume(tris) / (cone.volume() * 1000), 1, 1e-9);
+}
+
+section('指定分片（seam.js）');
+
+/**
+ * 這一節盯的是「接縫位置由誰決定」。
+ * 在 seam.js 出現之前，接縫是攤平生成樹走訪順序的副產品；
+ * 現在它是使用者的決定，而這裡要證明那個決定真的有效、而且不會弄壞幾何。
+ */
+{
+  const box = () => {
+    const o = new io.ModelObject({ src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid' });
+    o.bake();
+    return o;
+  };
+  const un = o => unfoldObject(o, { material: 'foamboard' });
+
+  /**
+   * ⚠ pieces.length 是「幾張圖」，不是「幾片」。
+   *
+   * 展開引擎會把一樣的片合併成一張圖加一個 qty ——「12 支一樣的橫料
+   * 出一張圖 ×12，不是 12 張一樣的圖」。所以壓克力方塊六個面是
+   * 3 種形狀各 2 片：pieces.length ＝ 3，stats.total ＝ 6。
+   *
+   * **介面上要顯示的是 stats.total。** 顯示 3 而實際要切 6 片，
+   * 是這個專案踩過最多次的那種錯：正確的數字，錯誤的意思。
+   */
+  const drawings = r => r.pieces.length;      // 幾張圖
+  const total    = r => r.stats.total;        // 幾片（實際要切幾片）
+  const areaOf   = r => r.stats.area;         // 已經含 qty
+
+  // ── 誰能標、哪些邊能標 ──
+  const raw = new io.ModelObject({ src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid' });
+  ok('參數物件擋住不給標', !seam.canMarkSeams(raw));
+  ok('擋住時有講原因', (seam.seamBlockReason(raw) || '').includes('轉成可編輯網格'));
+
+  const o = box();
+  ok('烘成網格後可以標', seam.canMarkSeams(o));
+
+  const m = o.mesh();
+  eq('方塊總邊數', [...m.edges()].length, 18);
+  /**
+   * 18 條邊裡有 6 條是三角化產生的共面對角線，畫面上看不到
+   * （scene.js 畫稜線用 EdgesGeometry(geometry, 1)，只畫轉折 > 1 度的）。
+   * 可標記的必須剛好是看得見的那 12 條 ——
+   * 讓人標到看不見的邊，結果會是「一個面被斜切成兩半」，
+   * 正確但絕對不是他要的，而且他不知道自己點了什麼。
+   */
+  eq('可標記的邊 ＝ 看得見的稜線', seam.markableEdges(m).length, 12);
+
+  // ── 一鍵切出一個面 ──
+  const before = un(o);
+  eq('未標記時 片數', total(before), 1);
+
+  /**
+   * 「一個面」指的是共面區域，不是三角形。
+   * 方塊的正方形面在網格裡是兩個三角形，周圍是 4 條邊不是 3 條。
+   * 這一項就是在盯 cutAroundFace 有沒有先做區域合併。
+   */
+  eq('一鍵切出一個面 切了幾條邊', seam.cutAroundFace(m, m.faces[0], true), 4);
+  eq('切完 seamCount', seam.seamCount(m), 4);
+
+  const after = un(o);
+  eq('切出一個面後 片數', total(after), 2);
+  eq('切出一個面後 張數', drawings(after), 2);   // 兩片形狀不同，所以兩張圖
+
+  /**
+   * ⚠ 這一項是整節最重要的。
+   * 攤平是剛體運動，切幾刀都不該改變總面積。面積一旦跟著變，
+   * 就表示分片動到了幾何而不只是動到「哪裡分開」——
+   * 那會讓下料尺寸出錯，而且是靜靜地錯。
+   */
+  near('分片前後 總面積守恆', areaOf(after), areaOf(before), 1e-9);
+  near('總面積 ＝ 方塊表面積', areaOf(after), 13800, 1e-9);
+
+  // ── 存讀檔往返 ──
+  /**
+   * 標記存在 mesh.toJSON() 的 roles 裡，而且是用**頂點索引配對**存的，
+   * 不是用 id（id 來自全域計數器，每次建網格都不一樣，存了也對不回來）。
+   * 所以這一項同時在驗「當初選對了 key」。
+   */
+  const doc = new io.Doc();
+  doc.objects = [o];
+  const back = io.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON()))).objects[0];
+  eq('存讀檔往返 標記還在', seam.seamCount(back.mesh()), 4);
+  eq('存讀檔往返 片數不變', total(un(back)), 2);
+  near('存讀檔往返 面積不變', areaOf(un(back)), 13800, 1e-9);
+
+  // ── 取消與清除 ──
+  eq('清除標記 清掉幾條', seam.clearSeams(m), 4);
+  eq('清除後 片數回到原狀', total(un(o)), 1);
+  near('清除後 面積仍然守恆', areaOf(un(o)), 13800, 1e-9);
+
+  /**
+   * 取消標記回到 FOLD，是「交還給材料規則決定」，不是「強迫它折起來」。
+   * 所以同一個網格換成壓克力（折不了），照樣會被拆成 6 片。
+   * 這一項證明使用者的標記**不可能**覆蓋掉材料的物理限制 ——
+   * 也就不可能產生一張做不出來的圖。
+   */
+  const acr = unfoldObject(o, { material: 'acrylic' });
+  eq('清除後換壓克力 仍然拆成 6 片', total(acr), 6);
+  eq('壓克力方塊 只需 3 張圖（6 片是 3 種形狀各 2 片）', drawings(acr), 3);
+  near('壓克力 面積仍然守恆', areaOf(acr), 13800, 1e-9);
+  /**
+   * 交叉對答案：把每張圖的面積乘上它的份數再相加，必須等於 stats.area。
+   * 這一項在盯「qty 有沒有被漏乘」—— 漏乘的話備料會少叫料，
+   * 而且因為單張圖本身是對的，光看圖看不出來。
+   */
+  near('張數×份數 相加 ＝ 總面積',
+       acr.pieces.reduce((s, p) => s + p.area * p.qty, 0), acr.stats.area, 1e-9);
+
+  // ── 邊界邊不受影響 ──
+  /**
+   * 板件的邊界邊本來就是外輪廓，標了沒意義、取消更做不到。
+   * 平板 100×60 攤開永遠是一片。
+   */
+  const plate = new io.ModelObject({
+    src: { type: 'plate', w: 100, d: 60 }, kind: 'sheet', thickness: 0.2
+  });
+  plate.bake();
+  eq('平板的邊界邊不可標記', seam.markableEdges(plate.mesh()).length, 0);
+  eq('平板 清除標記 動到 0 條', seam.clearSeams(plate.mesh()), 0);
 }
 
 section('第 3 期：效能');
