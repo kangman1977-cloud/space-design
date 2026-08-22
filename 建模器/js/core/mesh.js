@@ -373,7 +373,7 @@ export class Mesh {
 
   clone() {
     const m = Mesh.fromFaceList(this.verts.map(v => v.p.clone()), this._faceList());
-    this._copyRolesTo(m);
+    this._copyMarksTo(m);      // role ＋ smooth 都要搬，只搬 role 會讓展開圖讀不懂
     return m;
   }
 
@@ -389,7 +389,13 @@ export class Mesh {
     const flip = new THREE.Matrix3().setFromMatrix4(m4).determinant() < 0;
     const faces = this._faceList();
     const m = Mesh.fromFaceList(points, flip ? faces.map(f => f.slice().reverse()) : faces);
-    this._copyRolesTo(m);
+    /**
+     * ⚠ 一定要連 `smooth` 一起搬。翻繞向只改變「每個面裡頂點的順序」，
+     * **頂點索引本身沒變**，所以索引配對照樣對得上。
+     * 只搬 role 的話，純縮放或鏡射一次，匯入件的展開圖就從
+     * 「5 處折彎」變成「45 處折彎」（見 `_copySmoothTo` 的實測表）。
+     */
+    this._copyMarksTo(m);
     return m;
   }
 
@@ -517,6 +523,60 @@ export class Mesh {
       const role = pairs.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
       if (role) other.setRole(he, role);
     }
+    return other;
+  }
+
+  /**
+   * 把 `smooth` 旗標搬到另一個網格上。做法跟 `_copyRolesTo()` 一樣，
+   * 用**頂點索引配對**（id 每次都重新編號，存了也對不回來）。
+   *
+   * 🔴 **這一支是 2026-08-23 補的，補的是一個一直存在的 bug。**
+   * `clone()` 與 `transformed()` 以前只搬 `role`，**`smooth` 全部掉光**，
+   * 而那兩支被這些路徑用著：
+   *   `part.js` 展開前的縮放、`array.js` 陣列與鏡射、
+   *   `io.js` 子物件擺位、`slicePanel.js` 剖面分切前
+   *
+   * 後果實測（自由曲線的擠出件，形狀完全沒變、只是縮放 2 倍）：
+   *
+   * | | smooth 邊 | 折彎處 | 圓弧 | 尖角 |
+   * |---|---|---|---|---|
+   * | 原件 | 42 | **5** | 1 | 4 |
+   * | 縮放 2 倍 | 0 | **45** | 0 | 45 |
+   *
+   * **展開圖從「5 處折彎」變成「45 處折彎」，而形狀一模一樣。**
+   * 那正是日誌上「196 道折彎、整張圖一團綠色數字」的同一個症狀 ——
+   * 圖看起來完全正常，只是讀不懂，而且要出圖才發現。
+   *
+   * ⚠ 布林之後掉光是**正常的**（Manifold 不認得我們的旗標，輸出是全新網格），
+   * 那件事日誌早就寫明；這裡修的是「純搬移／純縮放也掉」那條。
+   */
+  _copySmoothTo(other) {
+    const src = this._vertIndex(), dst = other._vertIndex();
+    const pairs = new Set();
+    for (const he of this.edges()) {
+      if (!he.smooth) continue;
+      const a = src.get(he.v.id), b = src.get(he.to.id);
+      pairs.add(`${Math.min(a, b)}-${Math.max(a, b)}`);
+    }
+    if (!pairs.size) return other;
+    for (const he of other.edges()) {
+      const a = dst.get(he.v.id), b = dst.get(he.to.id);
+      if (pairs.has(`${Math.min(a, b)}-${Math.max(a, b)}`)) other.setSmooth(he, true);
+    }
+    return other;
+  }
+
+  /**
+   * 邊上的兩個標記一起搬。**凡是「拆掉重建」的路徑都該叫這一支**，
+   * 不要只叫 `_copyRolesTo()` —— 漏掉 `smooth` 不會報錯，
+   * 只會讓展開圖在**匯入的自由曲線**上突然變得讀不懂（見 `_copySmoothTo`）。
+   *
+   * 兩個標記回答的是兩個不同的問題（`role` ＝ 製造問題、`smooth` ＝ 形狀問題），
+   * 但它們一起活、一起死，所以給一個入口。
+   */
+  _copyMarksTo(other) {
+    this._copyRolesTo(other);
+    this._copySmoothTo(other);
     return other;
   }
 

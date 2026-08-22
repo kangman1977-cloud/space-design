@@ -3697,6 +3697,67 @@ section('接合編號：一段一個');
 // ═══════════════════════════════════════════════════════
 //  第 6 期第一刀：點／邊／面的幾何編輯（core/edit.js）
 // ═══════════════════════════════════════════════════════
+section('標記搬移：clone / transformed 不可以掉 smooth');
+{
+  /**
+   * ⚠ 2026-08-23 抓到的既有 bug：`clone()` 與 `transformed()` 以前只搬 `role`，
+   * `smooth` 全部掉光。而 part.js（展開前的縮放）、array.js（陣列鏡射）、
+   * io.js、slicePanel.js 都走那兩支。
+   *
+   * 後果：**形狀完全沒變、只是縮放或複製一次，展開圖就從「5 處折彎」
+   * 變成「45 處折彎」** —— 圖看起來正常，只是讀不懂，而且要出圖才發現。
+   * 那正是日誌上「196 道折彎、一團綠色數字」的同一個症狀。
+   *
+   * ⚠ 用**自由曲線**才驗得到。等距取樣的半圓、參數體的圓柱，
+   * 幾何猜測（等寬等角）本來就抓得到，掉了 smooth 也看不出來 ——
+   * 這是坑第 17 條「樣本要涵蓋不同的網格結構」的第三次。
+   */
+  const out = [], oc = [];
+  let t = 0, i = 0;
+  while (t < Math.PI) {
+    const r = 20 + 6 * Math.sin(3 * t) + 3 * Math.cos(7 * t);   // 半徑一直變 → 不等角
+    out.push(-r * Math.cos(t), r * Math.sin(t));
+    t += 0.04 + 0.06 * Math.abs(Math.sin(5 * t));               // 步長一直變 → 不等寬
+    i++;
+  }
+  out.push(20, 0);
+  oc.push(0, i);                                                // 只有頭尾是真轉角
+
+  const mk = () => {
+    const m = buildPrim('extrude', { type: 'extrude', h: 5, shapes: [{ out, oc }] });
+    m.computeNormals();
+    return m;
+  };
+  const rule = makeRule('paper', 0.2);
+  const bends = m => unfoldMesh(m, rule).pieces[0].bends.length;
+
+  const a = mk();
+  const s0 = [...a.edges()].filter(h => h.smooth).length;
+  const b0 = bends(a);
+  ok('自由曲線的擠出件 有一堆 smooth 邊', s0 > 30, `${s0} 條`);
+  ok('而且折彎被歸成少少幾處（不是一段一處）', b0 < 10, `${b0} 處`);
+
+  for (const [label, m4] of [
+    ['縮放 2 倍', new THREE.Matrix4().makeScale(2, 2, 2)],
+    ['純平移', new THREE.Matrix4().makeTranslation(10, 0, 0)],
+    ['鏡射（負行列式，繞向會被翻過來）', new THREE.Matrix4().makeScale(-1, 1, 1)]
+  ]) {
+    const b = a.transformed(m4);
+    eq(`★ ${label} smooth 一條都沒掉`, [...b.edges()].filter(h => h.smooth).length, s0);
+    eq(`★ ${label} 折彎處數不變`, bends(b), b0);
+  }
+  const c = a.clone();
+  eq('★ clone() smooth 一條都沒掉', [...c.edges()].filter(h => h.smooth).length, s0);
+  eq('★ clone() 折彎處數不變', bends(c), b0);
+
+  // role 本來就有搬，一併釘住免得日後改 _copyMarksTo 時弄丟
+  const withRole = mk();
+  const he = [...withRole.edges()].find(h => h.face && h.twin && h.twin.face);
+  withRole.setRole(he, EDGE_ROLE.CUT);
+  const rc = m => [...m.edges()].filter(h => h.role === EDGE_ROLE.CUT).length;
+  eq('clone() 也還是有搬 role', rc(withRole.clone()), rc(withRole));
+}
+
 section('編輯：移動點／邊／面');
 {
   const mkBox = () => buildPrim('box', { w: 60, h: 45, d: 40 });
