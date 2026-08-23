@@ -93,7 +93,12 @@ export function toDXF(pieces, opt = {}) {
 
   const th = (opt.rule && opt.rule.thickness) || 0;
   const mat = (opt.rule && opt.rule.label) || '';
-  const kf = (opt.rule && opt.rule.k);
+  /**
+   * ⚠ 〔2026-08-23 拿掉 K 因子〕原本這裡有 `const kf = opt.rule.k`，
+   * DXF 標題會印 ` K0.5`。K 是金屬中性層的模型，主力材料用不到，
+   * 而且它已經不影響圖上任何一個數字 —— 印出來只會讓人以為有關。
+   * kang：「不應該在真實尺寸中出現」。
+   */
 
   for (const { p, ox, oy } of laid) {
     const X = pt => ox + pt.x * s;
@@ -121,8 +126,9 @@ export function toDXF(pieces, opt = {}) {
       out.line('BEND', ox + b.x0 * s, y0, ox + b.x0 * s, y1);
       out.line('BEND', ox + b.x1 * s, y0, ox + b.x1 * s, y1);
       const cx = ox + (b.x0 + b.x1) / 2 * s;
+      // r ＝ 網格量出來的半徑。〔2026-08-23 從 b.ri（K 推的內側 R）改過來〕
       out.text('BEND', cx, y1 + 1.2 * s, 0.8 * s,
-        `${round(b.angle)}deg R${round(b.ri)}`);
+        `${round(b.angle)}deg R${round(b.r)}`);
     }
     for (const b of p.bends) {
       if (b.isArc) continue;
@@ -161,8 +167,7 @@ export function toDXF(pieces, opt = {}) {
     // 標題：這一片是什麼、要做幾片、什麼材料
     const title = `${p.name} x${p.qty}`
       + (mat ? `  ${mat}` : '')
-      + (th ? ` t${round(th)}` : '')
-      + (kf !== undefined ? ` K${kf}` : '');
+      + (th ? ` t${round(th)}` : '');
     out.text('TEXT', ox, oy - 5 * s, 1.0 * s, ascii(title));
     out.text('TEXT', ox, oy - 7 * s, 0.7 * s, `unit=${U.label}`);
   }

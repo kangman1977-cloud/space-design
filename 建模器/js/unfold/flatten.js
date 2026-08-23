@@ -485,11 +485,15 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
    * 超過一組就代表這一片有修正管不到的地方。
    */
   const dirGroups = groupByDirection(folds);
-  const bands = arcCorrection(pt2, folds, rule, dirGroups);
+  const bands = arcCorrection(pt2, folds, dirGroups);
   orient(pt2, folds, mesh, faces, isCut);
 
   const loops = traceLoops(mesh, faces, inPatch, pt2, isCut);
   const polys = faces.map(f => mesh.faceLoop(f).map(he => pt2.get(he.id)));
+
+  // 整片在展開方向上的範圍。折彎帶要用它補回「外側沒有折線」的那幾格。
+  let px0 = Infinity, px1 = -Infinity;
+  for (const p of pt2.values()) { px0 = Math.min(px0, p.x); px1 = Math.max(px1, p.x); }
 
   // 擺正之後才知道折彎帶落在展開圖的哪一段（x 就是展開方向）
   for (const b of bands) {
@@ -500,15 +504,62 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
         hi = Math.max(hi, f.a.x, f.b.x);
       }
     }
+
+    /**
+     * 🔴 補回「外側沒有折線」的那幾格（2026-08-23）。
+     *
+     * ── 這是什麼 bug ────────────────────────────────
+     * 上面那個迴圈是從**折線的位置**量出這條帶的範圍。但圓筒側面
+     * 繞一圈接回來，接縫被剪開之後，最外面那兩格仍然是完整的一格弧，
+     * **只是外側沒有折線了**（32 個面只有 31 條折線）。
+     * 於是量出來的是 30 格的寬度，而 `segs` 是含頭尾的 32 ——
+     *
+     *     圖上標「展開 147.03　32 段」，而 147.03 ÷ 4.9009 ＝ 30.0
+     *
+     * 畫面上也看得到：折彎區的兩條虛線沒有涵蓋整片，兩端各留 4.9。
+     * 可是圓柱身體整張都是彎的，那兩格也是弧的一部分。
+     *
+     * 〔kang 2026-08-23 實測截圖照出來的。舊版標「弧長 147.03」，
+     * 　沒有段數可以對照，所以這個矛盾一直沒被看見 ——
+     * 　是加上「N 段」之後它才自相矛盾。鐵律：**兩個數字互相對得起來，
+     * 　錯誤才會自己現形。**〕
+     *
+     * ── 怎麼補 ──────────────────────────────────────
+     * `bandsInGroup()` 記了 `ext`（頭尾各多吃幾格）與 `chord`（一格弦長），
+     * 所以補多少是**算得出來的**：一端補一格弦長。
+     *
+     * 🔴 **先驗一次再補**：只有在「折線量到的寬度 ＋ ext × 一格弦長
+     * 剛好等於 `chordW`」時才動手。對不上就完全不補。
+     *
+     * ⚠ 這道驗證是必要的，不是保險 —— 第一版寫成「直接延伸到整片的
+     * 邊界 `px0`／`px1`」，管（tube）當場出事：外壁與內壁的折線方向一樣，
+     * 攤平後疊在一起變成同一片，`px0`／`px1` 是**整片**的邊界而不是
+     * 那條帶的，結果折彎區被拉成 129.02 而 `chordW` 只有 117.62 ——
+     * **比原本的錯還糟，因為它宣稱的範圍比帶本身還大。**
+     *
+     * ⚠ 只延伸一端時，用「哪一邊的空隙剛好等於一格弦長」來認。
+     * **兩邊都像或都不像就不動** —— 標少一點總比標錯好
+     * （坑第 24 條：結果不唯一就不要猜）。
+     */
+    if (b.ext && Number.isFinite(lo) && near(b.chordW - (hi - lo), b.ext * b.chord)) {
+      if (b.ext >= 2) {
+        lo -= b.chord; hi += b.chord;
+      } else {
+        const gapLo = near(lo - px0, b.chord);
+        const gapHi = near(px1 - hi, b.chord);
+        if (gapLo && !gapHi) lo -= b.chord;
+        else if (gapHi && !gapLo) hi += b.chord;
+      }
+    }
+
     b.x0 = Number.isFinite(lo) ? lo : 0;
     b.x1 = Number.isFinite(hi) ? hi : b.x0;
     delete b.lines;                 // 內部用的，不要留在輸出裡
     delete b.s0; delete b.s1;
+    delete b.ext; delete b.chord;
   }
   bands.sort((a, b) => a.x0 - b.x0);
 
-  let px0 = Infinity, px1 = -Infinity;
-  for (const p of pt2.values()) { px0 = Math.min(px0, p.x); px1 = Math.max(px1, p.x); }
   computeFlanges(bands, px0, px1);
 
   const ov = detectOverlap(polys);
@@ -889,7 +940,7 @@ function collectFolds(mesh, faces, inPatch, pt2, isCut) {
  * 匯入的自由曲線每一段都不同，走的是上游帶下來的 `he.smooth`
  * 標記那一條路（見 `smoothBands()`）。
  */
-function arcCorrection(pt2, folds, rule, groups = null) {
+function arcCorrection(pt2, folds, groups = null) {
   if (!folds.length) return [];
 
   groups = groups || groupByDirection(folds);
@@ -905,7 +956,7 @@ function arcCorrection(pt2, folds, rule, groups = null) {
       if (s > hi) hi = s;
     }
 
-    const found = bandsInGroup(g, rule, lo, hi);
+    const found = bandsInGroup(g, lo, hi);
     if (found.some(b => b.isArc)) arcGroups++;
 
     /**
@@ -986,7 +1037,7 @@ function groupByDirection(folds, tolDeg = 1) {
  * （同一條折線可能被切成好幾段半邊，s 相同的就是同一條），
  * 再掃描相鄰折線之間的間距，找等寬等角的連續段。
  */
-function bandsInGroup(g, rule, sMin, sMax) {
+function bandsInGroup(g, sMin, sMax) {
   const px = -g.dir.y, py = g.dir.x;           // 垂直於折線的方向
 
   // ── 合併成折線 ──
@@ -1082,11 +1133,21 @@ function bandsInGroup(g, rule, sMin, sMax) {
          */
         let s0 = lines[i].s, s1 = lines[j + 1].s;
         let mm = m;
+        /**
+         * `ext` ＝ 這條弧在頭尾各多吃了幾格（0／1／2）。
+         * 〔2026-08-23 新增。**這個數字後面 `buildPiece()` 要用**〕
+         *
+         * 為什麼要記：`buildPiece()` 會重新從**折線的位置**算出這條帶
+         * 在圖上佔的範圍（`x0`／`x1`），而多吃的那幾格**外側沒有折線**，
+         * 於是就被漏掉了 —— 圓柱因此標成「展開 147.03　32 段」，
+         * 而 147.03 其實只有 30 段（實測，2026-08-23 kang 的截圖照出來的）。
+         */
+        let ext = 0;
         if (near(Math.abs(lines[i].angle), dAvg) && near(s0 - sMin, chord)) {
-          s0 = sMin; mm++;
+          s0 = sMin; mm++; ext++;
         }
         if (near(Math.abs(lines[j + 1].angle), dAvg) && near(sMax - s1, chord)) {
-          s1 = sMax; mm++;
+          s1 = sMax; mm++; ext++;
         }
         const totalAll = dAvg * mm;
         /**
@@ -1107,9 +1168,36 @@ function bandsInGroup(g, rule, sMin, sMax) {
           s0, s1,
           chordW: mm * chord, arcW,
           angle: totalAll * Math.sign(lines[i + 1].angle),
-          r,                                   // 中性層半徑（網格本身就是中性面）
-          ri: Math.max(0, r - rule.k * rule.thickness),
+          /**
+           * `r` ＝ **從網格量出來的半徑**（等寬等角反推）。圖上標的就是它。
+           *
+           * 🔴 〔2026-08-23 拿掉 `ri`〕原本這裡還有一個
+           * `ri: Math.max(0, r - rule.k * rule.thickness)` —— 內側圓角半徑，
+           * 由 K 因子與板厚推出來，圖上印的是那一個。**整個拿掉了。**
+           *
+           * **為什麼**：K 因子／中性層是**金屬折彎的模型**（材料被拉伸，
+           * 所以長度要照中性層算）。我們一種金屬都不用，而且 ——
+           *
+           * ⚠ **實測**：K 因子從頭到尾沒有參與圓柱的建模。
+           * `buildPrim()` 建圓柱直接用 r=25，`neutralRadius()` 根本沒被叫到。
+           * 網格半徑就是 25.000，K 怎麼調它都不動 —— 但圖上卻印 R24.9。
+           * **那個數字描述的是一個不存在的東西**（坑第 20 條：
+           * 正確的數字，錯誤的意思）。師傅會以為內側半徑是 24.9。
+           *
+           * kang 2026-08-23：「K 因子…這都是造成混亂的條件…
+           * **不應該在真實尺寸中出現**」。
+           *
+           * ⛔ 不要把 `ri` 加回來，也不要在這裡問任何材料的事。
+           * 圖上要標的是**這一圈現在的半徑**，那是網格事實。
+           *
+           * 〔折板的 K 因子是另一回事，留著 —— 它在 `buildPrim()` 裡
+           * 真的參與建模（換 K 連網格都變），跟 seg 決定圓柱有幾邊同類。
+           * 那是**建模參數**，不是展開參數。〕
+           */
+          r,
           segs: mm,
+          ext,                                 // 頭尾各多吃幾格（給 buildPiece 用）
+          chord,                               // 一格的弦長（同上）
           approx: false,
           flange: undefined,
           lines: lines.slice(i, j + 2)
@@ -1175,7 +1263,7 @@ function smoothBands(lines, bands, used) {
         chordW: w,
         arcW: w,          // 不做拉伸：自由曲線沒有單一半徑可以算真弧長
         angle: ang,
-        r: 0, ri: 0,
+        r: 0,
         segs: seg.length,
         approx: false,
         flange: undefined,
@@ -1193,7 +1281,7 @@ function smoothBands(lines, bands, used) {
 function sharpBand(L) {
   return {
     isArc: false, s0: L.s, s1: L.s, chordW: 0, arcW: 0,
-    angle: L.angle, r: 0, ri: 0, segs: 0, approx: false, flange: undefined,
+    angle: L.angle, r: 0, segs: 0, approx: false, flange: undefined,
     lines: [L]
   };
 }

@@ -1156,17 +1156,32 @@ function meshDevelopedLength(src, t) {
 }
 
 {
-  // 辨識出來的內側 R 與角度必須跟輸入的一樣 —— 展開圖上標的就是這兩個數字
+  /**
+   * 辨識出來的半徑與角度。
+   *
+   * 🔴 〔2026-08-23 改〕原本驗「內側 R ＝ 使用者填的 2 / 3.5」，
+   * 那是 `b.ri`，由 K 因子與板厚推出來的 —— **那個欄位已經拿掉了**。
+   * 現在圖上標的是 `b.r` ＝ **網格量出來的半徑**（＝中性層 2.12）。
+   *
+   * kang 2026-08-23：「K 因子…這都是造成混亂的條件…
+   * 不應該在真實尺寸中出現」。
+   *
+   * ⚠ 折板這一格特別要說清楚：使用者填 2，網格建在 2.12，圖上標 2.12。
+   * 那**不是標錯**，是那個模型的圓弧真的就在 2.12 ——
+   * K 因子在 buildPrim() 決定了它建在哪，那一步是**建模**（跟 seg 同類），
+   * 但建完之後，圖上就只該講網格現在是什麼樣子。
+   */
   const t = 0.3;
   const src = { w: 40, first: 25, arcSeg: 6, k: 0.4,
     bends: [{ angle: 90, ri: 2, len: 15 }, { angle: -60, ri: 3.5, len: 25 }] };
   const p = unfoldMesh(buildPrim('bend', src, t), makeRule('steel', t)).pieces[0];
 
   near('辨識 第1道 角度', p.bends[0].angle, 90, 1e-6);
-  near('辨識 第1道 內側R', p.bends[0].ri, 2, 1e-6);
-  near('辨識 第1道 中性層R', p.bends[0].r, 2.12, 1e-6);
+  near('辨識 第1道 半徑（網格量出來的）', p.bends[0].r, 2.12, 1e-6);
+  ok('★ 第1道 已經沒有 ri 這個欄位（K 推出來的內側 R）',
+    p.bends[0].ri === undefined);
   near('辨識 第2道 角度', p.bends[1].angle, -60, 1e-6);
-  near('辨識 第2道 內側R', p.bends[1].ri, 3.5, 1e-6);
+  near('辨識 第2道 半徑（網格量出來的）', p.bends[1].r, 3.5 + 0.4 * t, 1e-6);
   eq('辨識 第1道 是圓弧', p.bends[0].isArc, true);
 
   /**
@@ -1236,7 +1251,88 @@ section('第 3 期：其他形狀');
     near(`圓柱側面 ${seg} 段 展開高`, p.height, 70, 1e-9);
     near(`圓柱側面 ${seg} 段 辨識半徑`, p.bends[0].r, 25, 1e-4);
     near(`圓柱側面 ${seg} 段 辨識總角度`, Math.abs(p.bends[0].angle), 360, 1e-3);
+
+    /**
+     * ★★ 折彎區畫出來的寬度，必須跟它自己宣告的段數對得起來。
+     * 〔2026-08-23 新增，kang 實測截圖抓到的〕
+     *
+     * ── 這一項在防什麼 ──────────────────────────────
+     * `buildPiece()` 是從**折線的位置**量出折彎區的範圍。圓筒繞一圈
+     * 接回來，接縫剪開後只剩 31 條折線，最外面那兩格**外側沒有折線**，
+     * 於是量出來只有 30 格，而 `segs` 是 32：
+     *
+     *     圖上標「展開 147.03　32 段」，147.03 ÷ 4.9009 ＝ 30.0
+     *
+     * ⭐ **這個 bug 一直都在，是加上「N 段」之後才自曝的。**
+     * 舊標註只寫「弧長 147.03」，沒有第二個數字可以對照。
+     * 教訓：**讓兩個數字互相對得起來，錯誤才會自己現形。**
+     */
+    const b0 = p.bends[0];
+    near(`★★ 圓柱側面 ${seg} 段 折彎區寬 ＝ 整條弧（不漏頭尾兩格）`,
+      b0.x1 - b0.x0, b0.chordW, 1e-9);
+    near(`★★ 圓柱側面 ${seg} 段 折彎區換算回來就是 ${seg} 段`,
+      (b0.x1 - b0.x0) / (b0.chordW / b0.segs), seg, 1e-6);
+    near(`圓柱側面 ${seg} 段 折彎區 ＝ 整片寬（整根都是彎的）`,
+      b0.x1 - b0.x0, p.width, 1e-6);
   }
+}
+
+{
+  /**
+   * ★★ 通則：**可用的圖上**，每一條圓弧帶畫出來的寬度都要等於 `chordW`，
+   * 也就是跟它自己宣告的段數對得起來。
+   *
+   * ── 為什麼限定「可用的圖」──────────────────────────
+   * ⚠ 有一個既有的破口：沒標分片的**管**攤平後，外壁與內壁疊成同一片，
+   * 而兩邊的折線方向剛好一樣，於是被歸進同一條帶 ——
+   * 量出來的範圍橫跨兩面牆（129.02），而 `chordW` 只有 117.62。
+   *
+   * 🔴 **那不是這次改出來的，是本來就有的**（折線分組只看方向，
+   * 不管中間隔著另一面牆）。這次的修法在補之前會先驗
+   * 「差額 ＝ ext × 一格弦長」，對不上就完全不補，所以沒有讓它變糟 ——
+   * 但也沒有修好它。
+   *
+   * 那一片本來就攤不出可用的圖（會跳重疊警告），所以這裡把它排除，
+   * 並用下一項單獨盯著「它確實有被標示成不可用」。
+   * ⛔ 不要把這一項的範圍放寬到含重疊的片 —— 那等於把破口寫進期望值。
+   */
+  const cases = [
+    ['圓柱 open', buildPrim('cylinder', { r: 25, h: 70, seg: 32, openEnded: true }, 0.2), 'foamboard'],
+    ['圓柱 封閉', buildPrim('cylinder', { r: 25, h: 70, seg: 32 }, 0.2), 'paper'],
+    ['圓角方塊', buildPrim('roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 4 }, 0.2), 'foamboard'],
+    ['折板 Z 型', buildPrim('bend', { w: 40, first: 25, arcSeg: 4, k: 0.4,
+      bends: [{ angle: 90, ri: 2, len: 15 }, { angle: -90, ri: 2, len: 25 }] }, 0.5), 'steel'],
+    ['圓錐 open', buildPrim('cone', { rTop: 0, rBottom: 30, h: 70, seg: 32, openEnded: true }, 0.2), 'foamboard']
+  ];
+
+  let checked = 0, bad = [];
+  for (const [name, mesh, mat] of cases) {
+    for (const p of unfoldMesh(mesh, makeRule(mat, 0.2)).pieces) {
+      if (p.overlap) continue;                       // 本來就不可用的圖，見上面說明
+      for (const b of p.bends) {
+        if (!b.isArc || b.isCurve) continue;
+        checked++;
+        if (Math.abs((b.x1 - b.x0) - b.chordW) > 1e-6) {
+          bad.push(`${name} ${(b.x1 - b.x0).toFixed(4)}≠${b.chordW.toFixed(4)}`);
+        }
+      }
+    }
+  }
+  ok(`★★ 可用的圖上 ${checked} 條弧帶 折彎區寬都 ＝ chordW`,
+    checked >= 8 && bad.length === 0, bad.join(' / '));
+
+  /**
+   * ★ 那個既有的破口，至少要被「不可用」擋住 ——
+   * 使用者不會拿到一張標錯又沒警告的圖。
+   */
+  const rt = unfoldMesh(buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }, 0.2),
+    makeRule('paper', 0.2));
+  const wide = rt.pieces.flatMap(p => p.bends.map(b => ({ p, b })))
+    .filter(x => x.b.isArc && !x.b.isCurve && x.b.x1 - x.b.x0 > x.b.chordW + 1e-6);
+  ok('★ 管：折彎區橫跨兩面牆的那條帶還在（既有破口，尚未修）', wide.length > 0);
+  ok('★ 但它所在的片一定被標成有重疊（使用者不會誤用）',
+    wide.every(x => x.p.overlap === true));
+  ok('沒標分片的管 有重疊警告', rt.warnings.some(w => w.includes('重疊')));
 }
 
 {
@@ -3797,7 +3893,9 @@ section('曲線帶：連續的平滑折線併成一段');
   const curves = bends.filter(b => b.isCurve);
   eq('併成一條曲線帶', curves.length, 1);
   ok(`曲線帶涵蓋很多小段（${curves[0].segs} 段）`, curves[0].segs > 10);
-  ok('曲線帶不當成圓弧標半徑（沒有假的 R）', curves[0].r === 0 && curves[0].ri === 0);
+  // 〔2026-08-23：`ri` 欄位已拿掉，只驗 r〕
+  ok('曲線帶不當成圓弧標半徑（沒有假的 R）',
+    curves[0].r === 0 && curves[0].ri === undefined);
 
   /**
    * 曲線帶不做拉伸。自由曲線每一段曲率都不同，沒有單一半徑可以算真弧長 ——

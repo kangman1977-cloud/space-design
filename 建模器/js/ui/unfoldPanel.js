@@ -29,7 +29,14 @@ export class UnfoldPanel {
   constructor(app) {
     this.app = app;
     this.opt = {
-      material: DEFAULT_MATERIAL, k: null, unit: 'mm', askPath: true, ...loadOpt()
+      /**
+       * 🔴 〔2026-08-23 拿掉 `k`〕展開面板不再有 K 因子輸入框。
+       * K 是金屬中性層的模型，而且它已經不影響圖上任何一個數字 ——
+       * 留一個什麼都不做的控制項比拿掉更糟。
+       * kang：「不應該在真實尺寸中出現」。
+       * ⚠ 舊的偏好設定裡若還存著 `k`，讀進來也沒有人會用它。
+       */
+      material: DEFAULT_MATERIAL, unit: 'mm', askPath: true, ...loadOpt()
     };
     this.result = null;
     this._build();
@@ -52,8 +59,6 @@ export class UnfoldPanel {
         </div>
         <div class="uwBar">
           <span class="lbl">材質</span><select id="uwMat"></select>
-          <span class="lbl">K 因子</span><input type="number" id="uwK" step="0.05" min="0" max="0.5" style="width:70px">
-          <button class="mini" id="uwKreset" title="改回這個材質的建議值">用建議值</button>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="uwUnit"></select>
           <label class="uwCk"><input type="checkbox" id="uwAsk"> 指定存放位置</label>
@@ -83,8 +88,6 @@ export class UnfoldPanel {
     mat.value = this.opt.material;
     mat.onchange = () => {
       this.opt.material = mat.value;
-      this.opt.k = null;                 // 換材質就回到那個材質的建議 K
-      this._syncK();
       this.run();
     };
     this.matSel = mat;
@@ -115,16 +118,6 @@ export class UnfoldPanel {
       saveOpt(this.opt);
     };
 
-    this.kIn = $('uwK');
-    this.kIn.title = '中性層落在板厚的幾成（從內側量起）。'
-      + '下料長度 ＝ 直段 ＋ 各折彎的 θ×(內側R ＋ K×板厚)';
-    this.kIn.onchange = () => {
-      const v = parseFloat(this.kIn.value);
-      this.opt.k = Number.isFinite(v) ? v : null;
-      this.run();
-    };
-    $('uwKreset').onclick = () => { this.opt.k = null; this._syncK(); this.run(); };
-
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
 
@@ -137,12 +130,6 @@ export class UnfoldPanel {
       if (!this.el.hidden && e.key === 'Escape') this.close();
     });
 
-    this._syncK();
-  }
-
-  _syncK() {
-    const m = MATERIALS[this.opt.material] || MATERIALS[DEFAULT_MATERIAL];
-    this.kIn.value = this.opt.k ?? m.k;
     saveOpt(this.opt);
   }
 
@@ -164,7 +151,7 @@ export class UnfoldPanel {
     // 沒選東西就展開整份文件 —— 一個案子通常就是要全部出圖
     const picked = this.app.sel.objects;
     const objs = picked.length ? picked : this.app.doc.objects;
-    const r = unfoldMany(objs, { material: this.opt.material, k: this.opt.k ?? undefined });
+    const r = unfoldMany(objs, { material: this.opt.material });
     this.result = r;
     this._render(r, objs);
   }

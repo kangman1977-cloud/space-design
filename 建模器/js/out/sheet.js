@@ -165,9 +165,21 @@ export function drawProgram(piece, opt = {}) {
        * 「正確的數字，錯誤的意思」：R0 是程式裡的預設值，
        * 不是這條曲線的半徑。
        */
+      /**
+       * ⚠ 這裡以前標 `R${b.ri}`（內側圓角，由 K 因子與板厚推出來），
+       * 2026-08-23 改成 `R${b.r}` —— **網格量出來的半徑**。
+       *
+       * 舊的那個數字描述的是一個不存在的東西：K 因子從頭到尾沒有
+       * 參與圓柱的建模（實測換 K 網格半徑一動也不動），可是圖上
+       * 卻印 R24.9 而網格是 25.0。師傅會照著 24.9 做。
+       * 〔坑第 20 條：正確的數字，錯誤的意思〕
+       *
+       * kang 2026-08-23：「K 因子…這都是造成混亂的條件…
+       * 不應該在真實尺寸中出現」。
+       */
       const l1 = b.isCurve
         ? `曲線　${fmt(b.x1 - b.x0)} cm`
-        : `${fmt(Math.abs(b.angle))}°　R${fmt(b.ri)}`;
+        : `${fmt(Math.abs(b.angle))}°　R${fmt(b.r)}`;
       /**
        * ⚠ 這裡以前標「弧長 X」，2026-08-23 改成「展開 X　N 段」。
        *
@@ -299,9 +311,18 @@ export function titleLines(piece, opt = {}) {
 
   out.push(`${piece.name}　×${piece.qty} 片`);
   const spec = [];
+  /**
+   * ⚠ 〔2026-08-23 拿掉 `K ${rule.k}`〕
+   * K 因子是金屬中性層的模型，主力材料一種金屬都不用，
+   * 而且它已經不影響圖上任何一個數字了。留著只會讓人以為
+   * 圖上的尺寸跟它有關 —— 那正是要清掉的混淆。
+   *
+   * 材質與板厚**留著**，但它們是**案件資訊**，不是尺寸的依據：
+   * 板厚不進展開圖（45° 斜接會把板厚吃掉），它的用途在展開圖之後
+   * —— 銑 V 溝要多寬、STL 加厚。見 `規格\建模器-展開與分片.md`。
+   */
   if (rule.label) spec.push(rule.label);
   if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
-  if (rule.k !== undefined) spec.push(`K ${rule.k}`);
   if (spec.length) out.push(spec.join('　'));
 
   out.push(`外框 ${fmt(piece.width)} × ${fmt(piece.height)} cm`

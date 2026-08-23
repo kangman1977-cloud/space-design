@@ -18,12 +18,16 @@ import { unfoldMesh } from './flatten.js';
  * 展開一個物件。
  *
  * @param {ModelObject} obj
- * @param {object} opt { material, k, flatTolDeg }
+ * @param {object} opt { material, flatTolDeg }
  * @returns {{ok:boolean, reason?:string, pieces, warnings, stats, rule}}
  */
 export function unfoldObject(obj, opt = {}) {
   const material = opt.material || DEFAULT_MATERIAL;
-  const rule = makeRule(material, obj.thickness, { k: opt.k });
+  /**
+   * ⚠ 〔2026-08-23 不再傳 `k`〕展開流程已經沒有任何東西會用到 K 因子。
+   * 詳見 `js/unfold/rules.js` 檔頭與 `PROJECT_LOG.md`「尺寸的依據」。
+   */
+  const rule = makeRule(material, obj.thickness);
 
   /**
    * ⚠ 這裡**刻意沒有**「不是板件就拒絕展開」這道門。2026-08-22 拿掉的。
