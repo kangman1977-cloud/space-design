@@ -1035,35 +1035,101 @@ section('第 3 期：K 因子與中性層');
   ok('板厚變厚，展開長一定變長', b > a);
 }
 
-section('第 3 期：展開長度交叉驗證（弧長 vs 弦長）');
+section('第 3 期：展開長度 ＝ 網格真值（2026-08-23 依新定義改寫）');
+
+/**
+ * 🔴 **這一節在 2026-08-23 整個翻過來，改動理由比數字重要。**
+ *
+ * ── 舊的驗法（已作廢）────────────────────────────────
+ * 驗「flatten.js 從網格算出來的展開長 ＝ bendDevelopedLength() 從參數
+ * 套公式算出來的」，兩條獨立的路對答案。
+ *
+ * ── 為什麼作廢 ──────────────────────────────────────
+ * 那個等式建立在「展開要把弦長拉成弧長」上，而**那件事已經不做了**。
+ * kang 2026-08-23 定調：
+ *
+ *     **展開尺寸 ＝ 網格攤平後的總和。與材料無關。**
+ *
+ * 模型就是網格，網格裡沒有曲面。一道 arcSeg=4 的 90° 折彎在網格裡
+ * 就是 4 片平板，展開長就是那 4 片相加。公式算的是**理想圓弧**，
+ * 那是另一個問題的答案（詳見 `js/unfold/flatten.js` 檔頭）。
+ *
+ * ── 新的驗法 ────────────────────────────────────────
+ * 兩條路還是要對答案，只是右邊換成「**網格真值的手算公式**」：
+ *
+ *     平面段總和 ＋ Σ（每道折彎的弦長總和）
+ *     弦長總和 = m × 2·rn·sin(θ / 2m)      rn = ri + k×t
+ *
+ * ⭐ 而且**保留一項專門驗「公式與網格確實不同」** —— 把「這兩個數字
+ * 本來就不該相等」釘死在測試裡。否則哪天有人看到差額，
+ * 又會覺得那是誤差該補回去（那正是舊做法的由來）。
+ */
+/**
+ * 網格真值 ＝ 參數公式 − Σ（每道折彎的弧弦差）
+ *
+ * 弦長 = m × 2·rn·sin(θ/2m)，弧長 = rn·θ ＝ BA
+ * 所以           弦長 / BA = sin(θ/2m) / (θ/2m)      ← 就是 sinc
+ *                弧弦差    = BA × (1 − sinc)
+ *
+ * ⚠ **兩個寫法都試錯過，記在這裡免得再犯：**
+ *
+ * ① 「平面段 ＋ Σ弦長」—— 90 度折彎全過，「四道混合」差 0.106。
+ *    因為 `len` 怎麼量到折彎切點會隨角度變，不是單純相加。
+ *
+ * ② 自己算 `rn = ri + k×t` —— 「四道混合」差 4.35e-4。
+ *    因為 **`neutralRadius(0, k, t)` 回傳 0，不是 k×t**：
+ *    `ri = 0` 是**尖角折，根本沒有圓弧面**，`buildPrim()` 的
+ *    `r > 1e-9` 那個條件會整段跳過，一片弧面都不生。
+ *    自己重寫一份 rn 就是在跟權威函式賽跑，遲早會漂掉。
+ *    〔鐵律：不要推論，去讀程式。2026-08-23 又犯一次〕
+ *
+ * → 所以一律**從 `bendAllowance()` 反推**，不自己算 rn。
+ *   BA = 0 時 sinc 那一項自動退化成 0，尖角折免費處理對。
+ *
+ * 這也是為什麼右邊仍然要用 `bendDevelopedLength()` —— 它沒有被廢掉，
+ * 只是不再是**圖面尺寸**的權威，改當「理想圓弧」那一側的參考值。
+ */
+function meshDevelopedLength(src, t) {
+  let L = bendDevelopedLength(src, t);
+  for (const b of src.bends) {
+    const ba = bendAllowance(b, src.k, t);          // ＝ rn × θ；尖角折時是 0
+    const th = Math.abs(b.angle) * Math.PI / 180;
+    const half = th / (2 * src.arcSeg);
+    const sinc = half > 1e-12 ? Math.sin(half) / half : 1;
+    L -= ba * (1 - sinc);                            // 弧 − 弦，恆為正
+  }
+  return L;
+}
 
 {
-  /**
-   * 這一節是整個第 3 期最重要的驗證。
-   *
-   * flatten.js 是**從網格**辨識出圓弧折彎帶再算展開長，
-   * bendDevelopedLength() 是**從參數**直接套公式。
-   * 兩條完全獨立的路，算出來必須一模一樣 ——
-   * 對不上就代表其中一邊有問題，這跟第 2 期「管 vs 布林」同一招。
-   *
-   * 同時要確認修正真的有在動：修正後的長度必須明顯大於弦長總和，
-   * 不然「有沒有修正」根本測不出來。
-   */
   for (const seg of [2, 3, 4, 6, 8, 12, 24]) {
     const t = 0.3;
     const src = { w: 20, first: 30, arcSeg: seg, k: 0.4,
       bends: [{ angle: 90, ri: 2, len: 20 }] };
     const r = unfoldMesh(buildPrim('bend', src, t), makeRule('steel', t));
-    const want = bendDevelopedLength(src, t);
 
     eq(`arcSeg ${seg} 展開成一片`, r.pieces.length, 1);
-    near(`arcSeg ${seg} 網格辨識 ＝ 參數公式`, r.pieces[0].width, want, 1e-9);
+    near(`arcSeg ${seg} 網格辨識 ＝ 網格真值手算`, r.pieces[0].width,
+      meshDevelopedLength(src, t), 1e-9);
 
-    // 弦長總和（沒修正時會得到的數字）
-    const rn = 2 + 0.4 * t;
-    const chord = seg * 2 * rn * Math.sin(Math.PI / 2 / seg / 2);
-    ok(`arcSeg ${seg} 修正後確實比弦長長`, want - (50 + chord) > 1e-9);
+    /**
+     * ★ 這一項是新定義的守門員：公式一定大於網格，而且差額不是誤差。
+     * 弦永遠短於弧，所以 bendDevelopedLength() 一定比較大。
+     * 差額 ＝ 你選 arcSeg=4 而不是 arcSeg=128 的代價，由建模階段承擔。
+     */
+    const byFormula = bendDevelopedLength(src, t);
+    const byMesh = meshDevelopedLength(src, t);
+    ok(`★ arcSeg ${seg} 公式 > 網格（兩者本來就不該相等）`,
+      byFormula - byMesh > 1e-12, `公式 ${byFormula.toFixed(6)} 網格 ${byMesh.toFixed(6)}`);
   }
+
+  // 分段越多，網格越接近理想圓 —— 這是「精緻度用 seg 調」的量化證據
+  const t = 0.3;
+  const mk = seg => ({ w: 20, first: 30, arcSeg: seg, k: 0.4,
+    bends: [{ angle: 90, ri: 2, len: 20 }] });
+  const gap = seg => bendDevelopedLength(mk(seg), t) - meshDevelopedLength(mk(seg), t);
+  ok('★ 分段越多，網格與公式的差額越小', gap(2) > gap(4) && gap(4) > gap(24));
+  ok('★ arcSeg 24 的差額已小於 0.01cm（本專案的物理尺度）', gap(24) < 0.01);
 }
 
 {
@@ -1082,7 +1148,7 @@ section('第 3 期：展開長度交叉驗證（弧長 vs 弦長）');
   for (const [name, src, t, nBend] of cases) {
     const r = unfoldMesh(buildPrim('bend', src, t), makeRule('steel', t));
     const p = r.pieces[0];
-    near(`${name} 展開長 ＝ 參數公式`, p.width, bendDevelopedLength(src, t), 1e-9);
+    near(`${name} 展開長 ＝ 網格真值手算`, p.width, meshDevelopedLength(src, t), 1e-9);
     near(`${name} 展開寬 ＝ 板寬`, p.height, src.w, 1e-9);
     eq(`${name} 折彎道數`, p.bends.length, nBend);
     eq(`${name} 一片`, r.pieces.length, 1);
@@ -1103,11 +1169,23 @@ section('第 3 期：展開長度交叉驗證（弧長 vs 弦長）');
   near('辨識 第2道 內側R', p.bends[1].ri, 3.5, 1e-6);
   eq('辨識 第1道 是圓弧', p.bends[0].isArc, true);
 
-  // 折彎區在展開圖上佔的寬度 ＝ 那一道的 BA
-  near('第1道 折彎區寬 ＝ BA', p.bends[0].x1 - p.bends[0].x0,
-    bendAllowance(src.bends[0], src.k, t), 1e-9);
-  near('第2道 折彎區寬 ＝ BA', p.bends[1].x1 - p.bends[1].x0,
-    bendAllowance(src.bends[1], src.k, t), 1e-9);
+  /**
+   * 折彎區在展開圖上佔的寬度 ＝ 那一道的**弦長總和**，不是 BA。
+   * 〔2026-08-23 改。原本驗 `bendAllowance()`，那是理想圓弧的公式〕
+   *
+   * BA 仍然是一個有意義的數字（理想圓弧的展開長），只是它**不是圖上
+   * 這一段的寬度**。圖上那一段就是 m 片平板排在一起。
+   */
+  const chordW = b => {
+    const rn = b.ri + src.k * t;
+    return src.arcSeg * 2 * rn * Math.sin(Math.abs(b.angle) * Math.PI / 180 / (2 * src.arcSeg));
+  };
+  near('第1道 折彎區寬 ＝ 弦長總和', p.bends[0].x1 - p.bends[0].x0,
+    chordW(src.bends[0]), 1e-9);
+  near('第2道 折彎區寬 ＝ 弦長總和', p.bends[1].x1 - p.bends[1].x0,
+    chordW(src.bends[1]), 1e-9);
+  ok('★ 折彎區寬 < BA（弦短於弧，永遠成立）',
+    p.bends[0].x1 - p.bends[0].x0 < bendAllowance(src.bends[0], src.k, t));
   near('第1道 折邊（前面那段）', p.bends[0].flange, 15, 1e-6);
 }
 
@@ -1138,16 +1216,23 @@ section('第 3 期：其他形狀');
   /**
    * 圓柱側面。這一題同時驗兩件事：
    *   1. 繞一圈接回自己的網格會自動剪開一條縫（否則攤不平、抓不到輪廓）
-   *   2. 剪開之後兩端那兩片仍算在圓弧裡，總長才會等於 2πr
-   * 少算任何一項都會得到 157.0 而不是 157.08。
+   *   2. 剪開之後兩端那兩片仍算在圓弧裡，段數才會等於 seg
+   *
+   * 🔴 **2026-08-23：期望值從 2πr 改成弦長總和。**
+   * seg 段的「圓柱」在網格裡就是一根 seg 邊柱，展開寬就是 seg 片相加。
+   * 2πr 算的是一個從來沒被做出來過的理想圓（見 flatten.js 檔頭）。
    */
   // 容許值 1e-4 cm ＝ 1 微米。轉折角是從面法向量算出來的，
   // 段數多的時候浮點誤差會累積；平均過後這是可以穩定達到的精度，
   // 而且遠比任何加工公差嚴格。寫死 1e-6 只是自欺欺人。
+  const chordSum = (r, seg) => seg * 2 * r * Math.sin(Math.PI / seg);
+
   for (const seg of [8, 16, 32, 64, 128]) {
     const m = buildPrim('cylinder', { r: 25, h: 70, seg, openEnded: true }, 0.2);
     const p = unfoldMesh(m, makeRule('steel', 0.2)).pieces[0];
-    near(`圓柱側面 ${seg} 段 展開長 ＝ 2πr`, p.width, 2 * Math.PI * 25, 1e-4);
+    near(`圓柱側面 ${seg} 段 展開長 ＝ 弦長總和`, p.width, chordSum(25, seg), 1e-4);
+    ok(`★ 圓柱側面 ${seg} 段 展開長 < 2πr（弦短於弧，永遠成立）`,
+      p.width < 2 * Math.PI * 25);
     near(`圓柱側面 ${seg} 段 展開高`, p.height, 70, 1e-9);
     near(`圓柱側面 ${seg} 段 辨識半徑`, p.bends[0].r, 25, 1e-4);
     near(`圓柱側面 ${seg} 段 辨識總角度`, Math.abs(p.bends[0].angle), 360, 1e-3);
@@ -1165,38 +1250,57 @@ section('第 3 期：其他形狀');
   ok('封閉實體 相同的面合併成 ×2', r.pieces.every(p => p.qty === 2));
 }
 
-section('第 5 期(A)：算不準的展開一定要講出來');
+section('錐面：攤平本來就精確（2026-08-23 依新定義改寫）');
 
 /**
- * ── 這一節在盯什麼 ──────────────────────────────────
- * 第 3 期的圓弧修正是**沿垂直於折線方向的一維拉伸**，
- * 這個做法只在「同一片裡的折線互相平行」時成立（見 flatten.js 檔頭）。
- * 圓錐的折線指向頂點，彼此不平行，修正整個不會觸發，
- * 於是展開長度退回**弦長**，而弦長永遠比弧長短（踩過的坑第 6 條）。
+ * 🔴 **這一節在 2026-08-23 整個翻過來。**
  *
- * 在第 5 期(B) 的極座標展開做完之前，這種片一定要標出來。
- * 標錯邊（誤報）比不標更糟，所以正反兩面都要測。
+ * ── 舊的驗法（已作廢）────────────────────────────────
+ * 驗「圓錐一定要跳出『請勿據以下料』的警告」，理由是圓弧修正的前提
+ * （折線互相平行）在錐面上不成立，所以展開長度退回弦長、偏短。
+ *
+ * ── 為什麼作廢 ──────────────────────────────────────
+ * 因為**弦長現在就是正確答案**（見 flatten.js 檔頭）。
+ * 那則警告是在叫人不要用一個正確的數字 —— 誤報比漏報更糟（坑第 18 條）。
+ *
+ * 而且 2026-08-23 沙箱實測證明**錐面的攤平一格誤差都沒有**：
+ * r=30、h=70，seg 6／8／16／32／64，展開圖上離頂點最遠的距離
+ * 一律 76.1579，母線 76.1577。扇形半徑精確等於母線。
+ *
+ * ── 新的驗法 ────────────────────────────────────────
+ * 改成驗那件實測到的事實：**扇形半徑 ＝ 母線**。
+ * 這比原本的警告有價值得多 —— 警告只是講話，這一項是在對答案。
+ * `radialFolds` 仍然要驗（它是事實，之後對錐面做別的事會用到）。
  */
 {
-  // ── 反面：會出事的，一個都不能漏 ──
   for (const seg of [8, 16, 32]) {
     const cone = buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg, openEnded: true }, 0.3);
     const r = unfoldMesh(cone, makeRule('steel', 0.3));
     const p = r.pieces[0];
     ok(`圓錐 ${seg} 段 認出是錐面（折線放射狀）`, p.radialFolds === true);
-    ok(`圓錐 ${seg} 段 有「請勿據以下料」的警告`,
-      r.warnings.some(w => w.includes('請勿據以下料')));
+    ok(`★ 圓錐 ${seg} 段 不再有「請勿據以下料」的誤報`,
+      !r.warnings.some(w => w.includes('請勿據以下料')));
+  }
 
-    /**
-     * 短少的幅度也要釘住，第 5 期(B) 修好之後這幾條會變成
-     * 「差 0」，届時直接改成對真弧長，就知道確實修好了。
-     * 分段數越少錯越多 —— 而鈑金正好會把 seg 調小（seg ＝ 實際要滾的稜線數）。
-     */
-    const chord = seg * 2 * 30 * Math.sin(Math.PI / seg);
-    const arc = 2 * Math.PI * 30;
-    ok(`圓錐 ${seg} 段 底緣目前是弦長（比真弧長短）`, chord < arc - 1e-9);
-    near(`圓錐 ${seg} 段 短少幅度`, (arc - chord) / arc,
-      1 - Math.sin(Math.PI / seg) / (Math.PI / seg), 1e-12);
+  /**
+   * ★ 正圓錐：展開扇形的半徑必須精確等於母線。
+   *
+   * 這是攤平是剛體運動的直接後果 —— 側面每個三角形從頂點量到底緣
+   * 的那條邊，攤平前後長度不變。對不上就代表攤平壞了。
+   */
+  for (const seg of [6, 8, 16, 32, 64]) {
+    const L = Math.hypot(30, 70);                     // 母線
+    const p = unfoldMesh(buildPrim('cone', { rTop: 0, rBottom: 30, h: 70, seg, openEnded: true }),
+      makeRule('foamboard', 0.5)).pieces[0];
+    const pts = p.outline;
+    // 頂點 ＝ 讓「到其他輪廓點距離 ≈ 母線」的個數最多的那個點
+    let apex = pts[0], bestN = -1;
+    for (const c of pts) {
+      const n = pts.filter(q => Math.abs(Math.hypot(q.x - c.x, q.y - c.y) - L) < 1e-4).length;
+      if (n > bestN) { bestN = n; apex = c; }
+    }
+    const far = Math.max(...pts.map(q => Math.hypot(q.x - apex.x, q.y - apex.y)));
+    near(`★ 圓錐 ${seg} 段 扇形半徑 ＝ 母線`, far, L, 1e-3);
   }
 
   /**
@@ -1216,6 +1320,60 @@ section('第 5 期(A)：算不準的展開一定要講出來');
   ok('球冠 改由重疊偵測負責（生成樹改良後才抓得到）', rc.pieces[0].overlap === true);
   ok('球冠 仍然有警告（換一條，但沒有漏掉）',
     rc.warnings.some(w => w.includes('重疊')));
+  ok('★ 球冠 這一片確實檢查過（不是跳過的）', rc.pieces[0].overlapChecked === true);
+}
+
+/**
+ * ★★ 重疊偵測的三態（2026-08-23 新增）
+ *
+ * ── 為什麼要有這一節 ────────────────────────────────
+ * 原本 `detectOverlap()` 在 `polys.length > 3000` 時**直接回 false**，
+ * 也就是大模型一律顯示「沒問題」，而且**不會說自己沒檢查**。
+ *
+ * 那是**沉默的漏報** —— 比誤報更糟：誤報至少會讓人去看一眼，
+ * 沉默的漏報連「該懷疑」都不會發生（外部參考調查 0-1）。
+ *
+ * 「沒有重疊」和「沒有檢查」是兩件完全不同的事。
+ * 這一節就是釘死它們不准再被同一個 false 表達。
+ */
+{
+  // ① 乾淨：檢查過，而且真的沒重疊
+  const flat = unfoldMesh(buildPrim('plate', { w: 100, d: 60 }, 0.2), makeRule('steel', 0.2));
+  ok('① 平板 檢查過', flat.pieces[0].overlapChecked === true);
+  ok('① 平板 沒有重疊', flat.pieces[0].overlap === false);
+  ok('① 平板 不該有任何重疊相關的訊息',
+    !flat.warnings.some(w => w.includes('重疊')));
+
+  // ② 真的重疊：球冠（見上）—— 訊息要講「不能直接下料」與「請用分片」
+  const cap2 = Mesh.fromGeometry(
+    new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3));
+  const w2 = unfoldMesh(cap2, makeRule('steel', 0.3)).warnings.join('|');
+  ok('② 有重疊時 要講「不能直接下料」', w2.includes('不能直接下料'));
+  ok('② 有重疊時 要指路（用「分片」切開）', w2.includes('分片'));
+
+  /**
+   * ③ 🔴 太大沒檢查：一定要**說出來**。
+   *
+   * 用 128×64 的球面湊出超過 3000 個面。這裡不驗「有沒有重疊」——
+   * 重點就是程式**不知道**，而它必須承認自己不知道。
+   */
+  const big = Mesh.fromGeometry(new THREE.SphereGeometry(30, 128, 64));
+  const rb = unfoldMesh(big, makeRule('steel', 0.3));
+  ok('③ 這個模型確實超過 3000 片', rb.pieces.some(p => p.overlapChecked === false),
+    `片數 ${rb.pieces.map(p => p.faces.length).join(',')}`);
+  const wb = rb.warnings.join('|');
+  ok('★★ ③ 沒檢查時 必須明講「沒有檢查」', wb.includes('沒有檢查'));
+  ok('★★ ③ 而且要把話說死：不是「沒有問題」', wb.includes('不是'));
+  ok('③ 沒檢查時 不可以宣稱沒有重疊',
+    !rb.pieces.some(p => p.overlapChecked === false && p.overlap === true));
+
+  /**
+   * ★ 訊息裡不可以再出現「第 7 期」。
+   * 第 7 期（自動分片）已經取消 —— 剖面分切把同一個需求解得更好。
+   * 承諾一個不存在的退路，使用者會等一個永遠不會來的功能（鐵律六）。
+   */
+  const allWarn = [w2, wb, flat.warnings.join('|')].join('|');
+  ok('★ 警告裡不再提已取消的「第 7 期」', !allWarn.includes('第 7 期'));
 }
 
 {
@@ -1335,45 +1493,83 @@ section('第 5 期(A)：算不準的展開一定要講出來');
   ok('只有一道時不加「共 N 道」', one.length === 0 || !one[0].includes('共'));
 }
 
-section('第 5 期(B)：捲得起來走弧長，捲不起來走弦長');
+section('🔴 尺寸的依據是網格，與材料無關（2026-08-23 定調）');
 
 /**
  * ── 這一節在盯什麼 ──────────────────────────────────
  *
- * 網格上的一段「圓弧」是一圈平面小面。這些面到底代表
- * 「一個真的被捲圓的曲面」還是「一圈平板拼出來的多邊形」，
- * **幾何本身分不出來**（踩過的坑第 10 條）。分得出來的是材料。
+ * **展開尺寸 ＝ 網格攤平後的總和。與材料無關。**〔kang 2026-08-23〕
  *
- *   紙、帆布   捲得起來 → 小面是離散化的產物，真長度是**弧長**
- *   板材       捲不起來 → 小面就是實際要切的平板，長度是**弦長**
+ * 模型就是網格，網格裡沒有曲面。seg 段的「圓柱」在網格裡就是一根
+ * seg 邊柱，展開寬就是 seg 片平板相加。2πr 算的是一個**從來沒被
+ * 做出來過的理想圓** —— 起點不同，不是誰比較準。
  *
- * 這條在 2026-08-22 之前是寫死「一律弧長」，也就是對板材一律算錯，
- * 而且往多的錯：4 角柱 +11.07%、6 角柱 +4.72%、8 段圓柱 +2.62%。
- * kang 說明他們用紙材、發泡板、珍珠板、木板、壓克力，一種金屬都不用。
+ * ── 這一節的歷史（兩次都是同一個病：定義沒講清楚）────
+ * 2026-08-22 之前：寫死「一律弧長」→ 板材一律往多的錯
+ *                  （4 角柱 +11.07%、8 段圓柱 +2.62%）
+ * 2026-08-22：改成「捲得起來走弧長，捲不起來走弦長」
+ *             → 結論對了一半，但**理由錯了**，而且留下一個大洞：
+ *               同一個模型換個材料就換尺寸，沒有一個數字有單一意義
+ * 2026-08-23：改成「一律網格真值」→ 材料完全退出尺寸計算
+ *
+ * ⛔ **不要把材料判斷寫回長度計算裡。** 基準一旦有條件，
+ *    圖上就再也沒有一個數字有單一意義了。
  *
  * 容許值用相對誤差 1e-7：攤平是剛體運動，理論上精確，
  * 實際差在 1e-8～1e-16 之間，那是浮點雜訊。
- * 這個檔案開頭就寫過「寫死 1e-6 只是自欺欺人」—— 這裡同一個道理，
- * 不要用比浮點精度還嚴的門檻去假裝嚴謹。
+ * 這個檔案開頭就寫過「寫死 1e-6 只是自欺欺人」—— 這裡同一個道理。
  */
 {
-  const board = makeRule('foamboard', 0.8);   // 捲不起來
-  const soft  = makeRule('paper', 0.05);      // 捲得起來
+  const board = makeRule('foamboard', 0.8);
   const r = 30, h = 60;
+
+  /** ★ 新規則的核心：所有材料給同一個數字 */
+  const ALL = ['foamboard', 'paper', 'canvas', 'steel', 'stainless', 'aluminum'];
 
   for (const seg of [4, 6, 8, 12, 16, 32, 64]) {
     const chord = seg * 2 * r * Math.sin(Math.PI / seg);   // 正 n 邊形周長
-    const arc = 2 * Math.PI * r;                           // 圓周長
+    const arc = 2 * Math.PI * r;                           // 理想圓周長
 
-    const pb = unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.8), board).pieces[0];
-    const pp = unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.05), soft).pieces[0];
+    const widths = ALL.map(mat => unfoldMesh(
+      buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.8),
+      makeRule(mat, 0.8)).pieces[0].width);
 
-    rel(`板材 ${seg} 段 展開長 ＝ 弦長（各面外緣相加）`, pb.width, chord);
-    rel(`紙材 ${seg} 段 展開長 ＝ 弧長（2πr）`, pp.width, arc, 1e-6);
+    rel(`${seg} 段 展開長 ＝ 弦長（各面外緣相加）`, widths[0], chord);
 
-    // 板材一定比紙材短（除非段數趨近無限）—— 方向錯了比大小錯了更嚴重
-    ok(`${seg} 段 板材必定短於紙材`, pb.width < pp.width);
+    /**
+     * ★★ 這一項是整條新規則的守門員。
+     * 只要有人把材料判斷寫回尺寸計算，這裡第一個炸。
+     * ⚠ 壓克力不列入 —— 它折不起來，會被拆成 seg 片各自下料，
+     *   那是**片數**不同（材料本來就該管的事），不是尺寸被改。
+     */
+    ok(`★★ ${seg} 段 六種材料給同一個展開長（尺寸與材料無關）`,
+      widths.every(w => Math.abs(w - widths[0]) < 1e-9),
+      ALL.map((m, i) => `${m}:${widths[i].toFixed(6)}`).join(' '));
+
+    // 弦永遠短於弧 —— 方向錯了比大小錯了更嚴重
+    ok(`★ ${seg} 段 展開長 < 2πr（弦短於弧，永遠成立）`, widths[0] < arc);
   }
+
+  // 分段越多越接近理想圓 —— 「精緻度用 seg 調，不用公式補」的量化證據
+  const w = seg => unfoldMesh(buildPrim('cylinder', { r, h, seg, openEnded: true }, 0.8),
+    board).pieces[0].width;
+  const arc = 2 * Math.PI * r;
+  ok('★ seg 越大越接近 2πr', (arc - w(8)) > (arc - w(32)) && (arc - w(32)) > (arc - w(128)));
+
+  /**
+   * ★ 用**半徑誤差**當門檻，不用周長差。
+   *
+   * 周長差會隨半徑放大（r=30 的 128 段差 0.019cm，r=25 只差 0.016），
+   * 拿它跟一個絕對門檻比，等於讓判準隨模型大小漂移。
+   * 真正有物理意義的是「這張料捲起來之後，半徑差多少」——
+   * 那是師傅拿卡尺量得到的東西，而且不隨周長縮放。
+   *   〔坑第 20 條的近親：正確的數字，錯誤的意思〕
+   */
+  const radiusErr = seg => r - w(seg) / (2 * Math.PI);
+  ok('★ seg 128 捲起來的半徑誤差 < 0.01cm（本專案的物理尺度）',
+    radiusErr(128) < 0.01, `誤差 ${radiusErr(128).toFixed(5)} cm`);
+  ok('★ seg 8 的半徑誤差大到不能忽略（> 0.5cm）', radiusErr(8) > 0.5,
+    `誤差 ${radiusErr(8).toFixed(5)} cm`);
 
   /**
    * 交叉檢查：矩形片的 展開長 × 展開寬 必須等於面積。
@@ -1408,15 +1604,20 @@ section('第 5 期(B)：捲得起來走弧長，捲不起來走弦長');
 
 {
   /**
-   * 錐面警告只對捲得起來的材料成立。
-   * 對板材而言錐面的弦長是**對的**，跳警告等於叫人不要用正確的數字。
+   * 🔴 2026-08-23：錐面的「請勿據以下料」警告**已整則刪除**。
+   *
+   * 原本它只對捲得起來的材料發。現在弦長對所有材料都是正確答案，
+   * 所以那則警告對誰都是誤報（坑第 18 條：誤報比漏報更糟）。
+   *
+   * 這四項從「紙材／帆布要警告、板材不要」改成「**誰都不要**」——
+   * 一併把「材料決定看到什麼訊息」這件事也清掉。
    */
   const cone = () => buildPrim('cone', { rBottom: 30, rTop: 15, h: 40, seg: 32, openEnded: true }, 0.3);
   const hasWarn = rule => unfoldMesh(cone(), rule).warnings.some(w => w.includes('請勿據以下料'));
 
-  ok('紙材 錐面要警告（弧長修不到，偏短）', hasWarn(makeRule('paper', 0.05)) === true);
-  ok('帆布 錐面要警告', hasWarn(makeRule('canvas', 0.1)) === true);
-  ok('珍珠板 錐面不該警告（弦長就是答案）', hasWarn(makeRule('foamboard', 0.8)) === false);
+  ok('★ 紙材 錐面不該警告（弦長就是答案）', hasWarn(makeRule('paper', 0.05)) === false);
+  ok('★ 帆布 錐面不該警告', hasWarn(makeRule('canvas', 0.1)) === false);
+  ok('珍珠板 錐面不該警告', hasWarn(makeRule('foamboard', 0.8)) === false);
   ok('壓克力 錐面不該警告', hasWarn(makeRule('acrylic', 0.3)) === false);
 
   // 但「認出這是錐面」這個事實不受材料影響 —— 事實歸事實，結論歸結論
@@ -1890,14 +2091,16 @@ section('第 3 期：標註不可以疊在一起');
     }
   }
 
-  // 折彎區的數字很窄（3.33cm）但一定要標出來 —— 那是師傅畫線的依據，
-  // 不能因為放不下就丟掉，只能錯開到下一排
+  // 折彎區的數字很窄（3.31cm）但一定要標出來 —— 那是師傅畫線的依據，
+  // 不能因為放不下就丟掉，只能錯開到下一排（坑第 12 條）
+  // 〔2026-08-23：期望值從 3.33（BA）改成 3.31（弦長總和）。
+  //   驗的事情沒變 —— 窄的數字要標得出來 —— 只是那個數字的定義換了〕
   const rz = unfoldMesh(buildPrim('bend', { w: 60, first: 40, arcSeg: 4, k: 0.4,
     bends: [{ angle: 90, ri: 2, len: 30 }, { angle: -90, ri: 2, len: 25 }] }, 0.3),
     makeRule('steel', 0.3));
   const texts = drawProgram(rz.pieces[0], { rule: makeRule('steel', 0.3) }).items
     .filter(i => i.t === 'text' && i.style === 'dim').map(i => i.s);
-  ok('窄的折彎區尺寸仍然標得出來', texts.filter(s => s === '3.33').length === 2,
+  ok('窄的折彎區尺寸仍然標得出來', texts.filter(s => s === '3.31').length === 2,
     texts.join(' '));
 
   // 字寬估算：中文一個字約一個字高，數字約 0.55
@@ -2743,7 +2946,10 @@ section('第 3 期：效能');
   const m = buildPrim('cylinder', { r: 25, h: 70, seg: 128, openEnded: true }, 0.2);
   const r = unfoldMesh(m, makeRule('steel', 0.2));
   const ms = Date.now() - t0;
-  near('128 段圓柱 展開長仍精確', r.pieces[0].width, 2 * Math.PI * 25, 1e-6);
+  // 〔2026-08-23：期望值從 2πr 改成 128 邊形的弦長總和。驗的事情沒變 ——
+  //   段數很多的時候辨識仍然精確、沒有累積誤差〕
+  near('128 段圓柱 展開長仍精確', r.pieces[0].width,
+    128 * 2 * 25 * Math.sin(Math.PI / 128), 1e-6);
   ok(`128 段圓柱 展開耗時 ${ms}ms（< 2 秒）`, ms < 2000, `${ms}ms`);
 }
 
@@ -3611,7 +3817,9 @@ section('曲線帶：連續的平滑折線併成一段');
    */
   const cyl = buildPrim('cylinder', { r: 25, h: 70, seg: 32, openEnded: true }, 0.2);
   const u = unfoldMesh(cyl, makeRule('steel', 0.2));
-  rel('圓柱側面 展開長仍然是 2πr', u.pieces[0].width, 2 * Math.PI * 25, 1e-7);
+  // 〔2026-08-23：期望值從 2πr 改成 32 邊形的弦長總和〕
+  rel('圓柱側面 展開長仍然是弦長總和', u.pieces[0].width,
+    32 * 2 * 25 * Math.sin(Math.PI / 32), 1e-7);
   ok('圓柱的圓弧仍然被認成圓弧（有真的半徑）',
      u.pieces[0].bends.some(b => b.isArc && !b.isCurve && b.r > 1));
 }

@@ -168,9 +168,20 @@ export function drawProgram(piece, opt = {}) {
       const l1 = b.isCurve
         ? `曲線　${fmt(b.x1 - b.x0)} cm`
         : `${fmt(Math.abs(b.angle))}°　R${fmt(b.ri)}`;
+      /**
+       * ⚠ 這裡以前標「弧長 X」，2026-08-23 改成「展開 X　N 段」。
+       *
+       * 那個數字現在（而且從板材那條路以來一直）是**網格攤平後的寬度**，
+       * 也就是 N 片平板相加，不是理想圓的弧長。叫它「弧長」是
+       * 坑第 20 條：正確的數字，錯誤的意思 —— 看的人會以為程式
+       * 已經幫他換算成真正的圓周了。
+       *
+       * 補上段數是因為那是判斷精緻度的依據：同樣 R25，
+       * 32 段跟 128 段捲起來的半徑差 0.37mm。
+       */
       const l2 = b.isCurve
         ? `${dir}　${b.segs} 段　共轉 ${fmt(Math.abs(b.angle))}°`
-        : `${dir}${b.isArc ? `　弧長 ${fmt(b.x1 - b.x0)}` : '　尖角'}`;
+        : `${dir}${b.isArc ? `　展開 ${fmt(b.x1 - b.x0)}　${b.segs} 段` : '　尖角'}`;
       const half = Math.max(labelWidth(l1, 1.5), labelWidth(l2, 1.2)) / 2;
 
       let row = -1;
