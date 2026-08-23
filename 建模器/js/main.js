@@ -28,7 +28,7 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
-import { elementVerts, refreshAfterEdit } from './core/edit.js';
+import { elementVerts, refreshAfterEdit, extrudeFace } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -334,6 +334,7 @@ function setOrtho(on) {
 $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
+$('extrude').onclick = () => extrudeSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
   b.onclick = () => setEditFilter(b.dataset.f);
 }
@@ -528,6 +529,16 @@ function editPick(el) {
   }
   toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它`);
   panel.refresh();
+  /**
+   * ⚠ 一定要叫 `updateBar()`。「擠出」那顆按鈕的啟用狀態靠它算，
+   * 而 `pickEdit()` 是直接掛 gizmo、**沒有走 `_refresh()`**，
+   * 所以 `onChange`（裡面才有 updateBar）不會被觸發。
+   *
+   * 少了這一行的症狀：選到面之後箭頭出來了，「擠出」卻還是灰的，
+   * 要先拖一下 gizmo（走到 editDrag → updateBar）才會亮。
+   * 〔2026-08-23 kang 實測抓到〕
+   */
+  updateBar();
 }
 
 /**
@@ -553,13 +564,71 @@ function editDrag(committing, el) {
   commit(`拉${EDIT_NAME[el.kind]}`);
   panel.refresh();
 
-  // 只在真的有變化時講，不然每拖一下都跳一串數字，看久了就不看了
+  /**
+   * ⚠ **一律用藍色，不用紅色。**
+   *
+   * 紅色只留給「程式做不到你要求的事」（坑第 28 條）。
+   * 面被拉歪、側牆被壓扁，都是**使用者自己拉出來的結果** ——
+   * 他明確做的事被程式打紅叉，紅色就失去意義了，
+   * 下次真的有錯他也不會看。
+   *
+   * 折線的增減不講。那是每拉一下都會變的東西，講了只是雜訊；
+   * 真正值得說的只有「這一下讓形狀進了某個要知道的狀態」。
+   * 〔2026-08-23 kang 實測回報：反方向拉會跳一串紅字「少 13 條折線
+   * 　多 10 條折線、13 個面已經不平了」，看不出那是不是壞掉了〕
+   */
   const bits = [];
-  if (r.folds.added) bits.push(`多 ${r.folds.added} 條折線`);
-  if (r.folds.cleared) bits.push(`少 ${r.folds.cleared} 條折線`);
-  if (r.smoothOff) bits.push(`${r.smoothOff} 條邊不再算平滑`);
-  if (r.nonPlanar) bits.push(`⚠ ${r.nonPlanar} 個面已經不平了`);
-  if (bits.length) toast(`拉${EDIT_NAME[el.kind]}：` + bits.join('、'), !!r.nonPlanar);
+  if (r.degenerate) bits.push(`${r.degenerate} 個面被壓成零面積（拉回去就恢復）`);
+  if (r.nonPlanar) bits.push(`${r.nonPlanar} 個面不再是平的（展開會變近似；剖面分切與 3D 列印不受影響）`);
+  if (bits.length) toast(bits.join('　'));
+}
+
+/**
+ * 擠出面：從選到的面長出新的一段。**做鹿角就是重複這個動作。**
+ *
+ * ── 為什麼是「先長一段，再用拉面調整」（kang 2026-08-23 選的方案 C）──
+ * 另外兩條路各有代價：跳輸入框填距離不直觀；拖曳決定距離則是
+ * **每拖一格就要重建一次網格**（擠出是拆掉重建，不是就地改座標），
+ * 上千頂點的匯入件會卡，Undo 也難處理。
+ *
+ * C 的好處是**完全不需要新的拖曳邏輯**：擠出只負責「長出來」，
+ * 調整走已經做好而且驗過的「拉面」。一個動作一件事。
+ *
+ * ── 預設距離為什麼用吸附格距 ────────────────────────────
+ * 那是**使用者自己已經設定的尺度**，講得出物理意義（鐵律三：
+ * 容許值與預設值要挑一個講得出物理意義的量）。而且擠完馬上用同樣的
+ * 格距拉，數字會很乾淨。它只是起點，不是最終值。
+ * 吸附關掉時退回 1cm —— 總得有個數字，而 0 會被 `extrudeFace` 擋掉。
+ */
+function extrudeSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'face') {
+    toast('先在編輯模式下選一個面，再按「擠出」', true);
+    return;
+  }
+  const step = sel.snapStep > 0 ? sel.snapStep : 1;
+  const obj = el.obj;
+
+  const r = extrudeFace(obj.mesh(), el.face, step);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 折線變了（多了四圈側牆的邊）
+  commit(`擠出面 ${step} cm`);
+
+  /**
+   * ⚠ 一定要在 commit() 之後才重選。commit() 會走 revalidate()，
+   * 而擠出換掉了整個網格物件，那裡會把子元素選取清掉（本來就該清，
+   * 舊的 Face 參考已經不在文件裡了）。先選後 commit 等於白做。
+   */
+  const got = sel.selectFace(obj, r.capFace);
+  panel.refresh();
+
+  toast(got
+    ? `已擠出 ${step} cm（新增 ${r.walls} 面側牆）　用箭頭拉到想要的長度`
+    : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -726,6 +795,19 @@ function updateBar() {
 
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
   for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = sel.count < 1;
+
+  /**
+   * 擠出：**選到一個面才給按**。
+   *
+   * 灰掉比按了跳錯誤訊息好 —— 使用者一眼就知道「還缺一步」，
+   * 而不是按下去被罵。`title` 也跟著換，滑過去就講得出缺什麼。
+   */
+  const face = sel.editMode && sel.editSel && sel.editSel.kind === 'face';
+  $('extrude').disabled = !face;
+  $('extrude').title = face
+    ? `從選到的面長出新的一段（先長 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，再用箭頭拉）`
+    : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
+                    : '先按「拉點線面」進入編輯模式，再選一個面');
 
   /**
    * 展開：**有物件就開放**。沒選東西就展開全部，所以不看選取數量。

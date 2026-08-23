@@ -3912,6 +3912,68 @@ section('擠出面：從一個面長出新的一段');
     eq('原網格面數也沒變', m.faces.length, 12);
   }
 
+  /**
+   * ── capFace：擠完要能立刻選中新長出來的蓋子 ──
+   * 這是「擠出只負責長出來、調整交給拉面」那個分工的接縫。
+   * 回傳錯的面 → 箭頭停在別的地方 → 使用者拉了發現動的不是他要的那一塊，
+   * 而畫面上看起來像功能壞掉。
+   */
+  {
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const top = topOf(m);
+    const r = edit.extrudeFace(m, top, 20);
+    ok('★ 有回傳新的蓋子', !!r.capFace);
+    r.mesh.computeNormals();
+    ok('★ 新蓋子的法向仍然朝上（是同一個面，被推出去了）',
+       r.capFace.normal.y > 0.999, JSON.stringify(r.capFace.normal));
+    const vs = edit.elementVerts(r.mesh, { kind: 'face', face: r.capFace });
+    eq('★ 新蓋子是 4 個頂點的共面區域', vs.length, 4);
+    const y = vs.map(v => v.p.y);
+    ok('★ 新蓋子的四個頂點都在 y ＝ 42.5（22.5＋20）',
+       y.every(v => Math.abs(v - 42.5) < 1e-9), y.join(','));
+    // 而且它是新的面，不是原網格那個
+    ok('回傳的是新網格上的面，不是原網格的', r.capFace !== top);
+  }
+
+  /**
+   * ── ★ 擠出之後把蓋子拉回原位：側牆被壓成零面積 ──
+   * 〔2026-08-23 kang 實測抓到：舊版把這個回報成「4 個面不平了」，
+   * 　偵測是對的，講出來的意思是錯的 —— 坑第 20 條的另一次。
+   * 　零面積的面其實**是平的**（所有點共線），該講的是「被壓扁了」。〕
+   */
+  {
+    let m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const r = edit.extrudeFace(m, topOf(m), 20);
+    m = r.mesh;
+    edit.refreshAfterEdit(m);
+    eq('擠出後 0 個退化面', edit.degenerateFaces(m).length, 0);
+    eq('擠出後 0 個不平的面', edit.nonPlanarFaces(m).length, 0);
+
+    const cap = m.faces.find(f => f.normal.y > 0.999
+      && m.faceVerts(f).every(v => Math.abs(v.p.y - 42.5) < 1e-6));
+    edit.moveVerts(edit.elementVerts(m, { kind: 'face', face: cap }),
+                   new THREE.Vector3(0, -20, 0));
+    const back = edit.refreshAfterEdit(m);
+    near('拉回原位 體積回到 108000', m.volume(), 108000, 1e-6);
+    eq('★ 四面側牆被壓成零面積 → 回報為「退化」', back.degenerate, 4);
+    eq('★ 而且不可以被回報成「不平」（零面積的面是平的）', back.nonPlanar, 0);
+  }
+  {
+    // 繼續往下拉會變成一個凹坑 —— 那是合理的形狀，不該有任何警告
+    let m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    m = edit.extrudeFace(m, topOf(m), 20).mesh;
+    edit.refreshAfterEdit(m);
+    const cap = m.faces.find(f => f.normal.y > 0.999
+      && m.faceVerts(f).every(v => Math.abs(v.p.y - 42.5) < 1e-6));
+    edit.moveVerts(edit.elementVerts(m, { kind: 'face', face: cap }),
+                   new THREE.Vector3(0, -30, 0));
+    const r2 = edit.refreshAfterEdit(m);
+    near('往下拉穿過去 ＝ 挖了一個 10 深的凹坑', m.volume(), 108000 - 2400 * 10, 1e-6);
+    ok('凹坑仍然封閉', m.isClosed());
+    eq('凹坑沒有退化面', r2.degenerate, 0);
+    eq('凹坑沒有不平的面', r2.nonPlanar, 0);
+  }
+
   // ── 負值 ＝ 往內凹 ──
   {
     const m = buildPrim('box', { w: 60, h: 45, d: 40 });

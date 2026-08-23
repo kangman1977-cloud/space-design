@@ -228,9 +228,30 @@ export function pushFace(mesh, face, dist, tolDeg = 0.5) {
  */
 export function facePlanarity(mesh, face, tolCm = PLANAR_TOL_CM) {
   const vs = mesh.faceVerts(face);
-  if (vs.length <= 3) return { planar: true, dev: 0 };
+
+  /**
+   * 🔴 **先分辨「被壓成零面積」與「不平」——這是兩件事。**
+   *
+   * 〔2026-08-23 kang 實測抓到：擠出 20 之後把蓋子拉回原位，側牆被壓扁成
+   * 　零面積，而舊版把它回報成「4 個面不平了」。**偵測是對的，講出來的
+   * 　意思是錯的** —— 坑第 20 條的另一次。〕
+   *
+   * 零面積的面其實**是平的**（所有點都在同一條線上），所以 planar 回 true；
+   * 真正該講的是「它被壓扁了」，那要另外一個欄位。
+   */
+  let area = 0;
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3();
+  for (let i = 2; i < vs.length; i++) {
+    ab.subVectors(vs[i - 1].p, vs[0].p);
+    ac.subVectors(vs[i].p, vs[0].p);
+    area += ab.cross(ac).length() / 2;
+  }
+  if (area < 1e-9) return { planar: true, dev: 0, area, degenerate: true };
+
+  if (vs.length <= 3) return { planar: true, dev: 0, area, degenerate: false };
+
   const n = mesh.computeFaceNormal(face);
-  if (n.lengthSq() < 1e-12) return { planar: false, dev: Infinity };
+  if (n.lengthSq() < 1e-12) return { planar: true, dev: 0, area, degenerate: true };
   const c = new THREE.Vector3();
   for (const v of vs) c.add(v.p);
   c.divideScalar(vs.length);
@@ -239,7 +260,23 @@ export function facePlanarity(mesh, face, tolCm = PLANAR_TOL_CM) {
   for (const v of vs) {
     dev = Math.max(dev, Math.abs(t.subVectors(v.p, c).dot(n)));
   }
-  return { planar: dev <= tolCm, dev };
+  return { planar: dev <= tolCm, dev, area, degenerate: false };
+}
+
+/**
+ * 被壓成零面積的面。
+ *
+ * 最常見的來路：擠出一段之後又把蓋子拉回原位，側牆就被壓扁了。
+ * **不是錯誤** —— 使用者可能就是要把那一段收回去。但它值得講一聲，
+ * 因為零面積的面沒有法向，畫面上會閃、折線判定也會亂跳。
+ */
+export function degenerateFaces(mesh) {
+  const out = [];
+  for (const f of mesh.faces) {
+    const r = facePlanarity(mesh, f);
+    if (r.degenerate) out.push(f);
+  }
+  return out;
 }
 
 /**
@@ -394,7 +431,17 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
 
   // ── 面 ──
   const faces = [];
+  /**
+   * 記下「被點到的那個面」在新網格裡的位置。
+   *
+   * 擠完之後呼叫端要立刻把它選起來，箭頭才會停在新長出來的蓋子上 ——
+   * 使用者可以直接用「拉面」調到想要的長度。
+   * 沒有這個的話，擠完畫面上什麼都沒選中，他得自己再點一次那個面，
+   * 而那個面剛剛才移動過，不一定點得到同一個。
+   */
+  let capIdx = -1;
   for (const f of mesh.faces) {
+    if (f === face) capIdx = faces.length;
     faces.push(inRegion.has(f)
       ? mesh.faceVerts(f).map(idxOf)                     // 蓋子改指向新頂點
       : mesh.faceVerts(f).map(v => vi.get(v.id)));       // 其餘原封不動
@@ -473,7 +520,12 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
   }
 
   out.computeNormals();
-  return { ok: true, mesh: out, walls, loops: loops.length };
+  return {
+    ok: true, mesh: out, walls, loops: loops.length,
+    // `fromFaceList` 只會跳過「少於 3 個點」的面，而網格裡不存在那種，
+    // 所以索引是一一對應的。仍然防一手，對不到就回 null 讓呼叫端自己處理。
+    capFace: (capIdx >= 0 && capIdx < out.faces.length) ? out.faces[capIdx] : null
+  };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -567,5 +619,6 @@ export function refreshAfterEdit(mesh, opts = {}) {
   const folds = remarkFolds(mesh, tolDeg);
   const smoothOff = demoteSmooth(mesh, cornerDeg);
   const nonPlanar = nonPlanarFaces(mesh, opts.planarTolCm ?? PLANAR_TOL_CM).length;
-  return { folds, smoothOff, nonPlanar };
+  const degenerate = degenerateFaces(mesh).length;
+  return { folds, smoothOff, nonPlanar, degenerate };
 }

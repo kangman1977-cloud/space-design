@@ -15,7 +15,8 @@ import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
 import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
-import { elementVerts, elementCenter, nonPlanarFaces } from '../core/edit.js';
+import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
+  from '../core/edit.js';
 import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
@@ -390,14 +391,23 @@ export class Panel {
     this.form.appendChild(box);
 
     /**
-     * 有面被拉歪了就講出來 —— **只提醒不擋**。
-     * 剖面分切不在乎面平不平，只有展開在乎；程式沒資格替人決定做不做得出來。
+     * 形狀進了某些「要知道」的狀態就講出來 —— **只提醒不擋，而且不用紅色**。
+     *
+     * 紅色只留給「程式做不到你要求的事」（坑第 28 條）。這兩種都是
+     * **使用者自己拉出來的結果**，他明確做的事被打紅叉，紅色就失去意義了。
      */
+    const deg = degenerateFaces(mesh);
+    if (deg.length) {
+      this.form.appendChild(note(
+        `${deg.length} 個面被壓成零面積 —— 多半是擠出來的那一段又被拉回原位了。`
+        + '拉回去就恢復，資料沒壞。'
+      ));
+    }
     const np = nonPlanarFaces(mesh);
     if (np.length) {
       const worst = np.reduce((a, b) => (a.dev > b.dev ? a : b));
-      this.form.appendChild(bad(
-        `⚠ 有 ${np.length} 個面已經不平了（最大偏離 ${f(worst.dev)} cm）。`
+      this.form.appendChild(note(
+        `${np.length} 個面不再是平的（最大偏離 ${f(worst.dev)} cm）。`
         + '展開會從精確變成近似；剖面分切與 3D 列印不受影響。'
         + '要保持平面就整個面一起拉 —— 一整片平移不會歪，'
         + '只動一個點或一條邊才會。'

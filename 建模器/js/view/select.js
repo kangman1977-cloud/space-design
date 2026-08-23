@@ -750,6 +750,26 @@ export class Selection {
     if (this.hooks.onEditPick) this.hooks.onEditPick(el);
   }
 
+  /**
+   * 直接指定要選哪一個面（不經過點選）。
+   *
+   * 擠出面之後用它把**新長出來的蓋子**選起來，箭頭立刻停在上面，
+   * 使用者可以無縫接著用「拉面」調到想要的長度 —— 這就是「擠出只負責
+   * 長出來、調整交給已經驗過的拉面」那個分工的接縫。
+   *
+   * ⚠ 一定要在 `commit()` **之後**呼叫。`commit()` 會走 `revalidate()`，
+   * 而擠出換掉了整個網格物件，那裡會把子元素選取清掉（本來就該清，
+   * 因為舊的 Face 參考已經不在文件裡了）。先選後 commit 等於白做。
+   */
+  selectFace(obj, face) {
+    if (!obj || !face) { this.clearEditSel(); return false; }
+    this.editSel = { obj, kind: 'face', face, mesh: obj.mesh() };
+    this._attachEditProxy();
+    this._drawEditMark();
+    if (this.hooks.onChange) this.hooks.onChange(this);
+    return true;
+  }
+
   /** 把替身擺到元素重心上，並把 gizmo 掛過去 */
   _attachEditProxy() {
     const el = this.editSel;
