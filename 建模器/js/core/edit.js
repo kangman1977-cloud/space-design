@@ -159,6 +159,144 @@ export function elementCenter(mesh, el, tolDeg = 0.5) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  方向：選到的元素自己的座標系（gizmo 的箭頭朝哪）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 這一個頂點的法向 ＝ 圍繞它的面法向的和。
+ *
+ * 不用 `mesh.vertexNormals()`，因為那支會把**整個網格**的頂點都算一遍
+ * （O(V+F)），而這裡只要一個。⚠ 邊界頂點只走得到半邊的扇形
+ * （`vertOutgoing()` 自己的註解寫著），那對「箭頭朝哪」不致命 ——
+ * 它只影響方向，不影響尺寸。
+ */
+function vertNormal(mesh, v) {
+  const n = new THREE.Vector3();
+  for (const he of mesh.vertOutgoing(v)) {
+    if (he.face) n.add(mesh.computeFaceNormal(he.face));
+  }
+  return n;
+}
+
+/**
+ * 用「Z 想朝哪、Y 大概朝哪」建一組正交基底，回傳對應的四元數。
+ *
+ * ⚠ **退化情況要當第一等公民處理，不是例外。**
+ * Z 與 Y 共線、Y 給不出來、Z 是零向量 —— 三種都會讓矩陣建不起來，
+ * 而建不起來的症狀是箭頭消失或亂轉，看起來像功能壞掉。
+ * Blender 的做法是一條**退化鏈**：算不出來就往下退，
+ * **永遠有答案，永遠不會沉默地什麼都不做。** 這裡照做。
+ *
+ * @returns {THREE.Quaternion|null} Z 真的是零向量時才回 null（呼叫端退回世界）
+ */
+function basisFrom(nz, ty) {
+  const z = nz.clone();
+  if (z.lengthSq() < 1e-16) return null;          // 退到最後一階：交給呼叫端用世界
+  z.normalize();
+
+  let y = ty ? ty.clone() : null;
+  if (y) {
+    y.addScaledVector(z, -y.dot(z));               // 投影到與 Z 垂直的平面
+    if (y.lengthSq() < 1e-12) y = null;            // 跟 Z 共線 → 當成沒給
+  }
+  if (!y) {
+    // 沒有切線就挑一個**跟 Z 最不共線**的世界軸來湊。挑最不共線的那一個，
+    // 是為了讓叉積夠長 —— 這正是 Blender 那條「切線挑最不共線的」的同一個理由。
+    const ax = Math.abs(z.x), ay = Math.abs(z.y), az = Math.abs(z.z);
+    const w = (ax <= ay && ax <= az) ? new THREE.Vector3(1, 0, 0)
+            : (ay <= az) ? new THREE.Vector3(0, 1, 0)
+            : new THREE.Vector3(0, 0, 1);
+    y = w.addScaledVector(z, -w.dot(z));
+  }
+  y.normalize();
+
+  const x = new THREE.Vector3().crossVectors(y, z).normalize();
+  y.crossVectors(z, x).normalize();                // 重算 Y，保證嚴格正交
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+/**
+ * 🔴 選到的元素自己的座標系（**Z 一律是法向**），單位四元數，網格自己的座標系。
+ *
+ * ── 為什麼需要它 ────────────────────────────────────
+ * 「擠出好像沒用」「斜面推不動」「拉不出梯形」根源是同一件事：
+ * **gizmo 只有世界 XYZ 一種方向**。而變換其實是三個正交的概念 ——
+ * **種類（移動／旋轉／縮放）× 方向 × 中心**，方向只是其中一個
+ * （`外部參考-Blender編輯.md` 第 3 節）。
+ *
+ * 有了這一支，「沿法向推拉」就**不再是一個獨立功能**，
+ * 而是「移動 × 法向 × 任意中心」的一個組合 —— `pushFace()` 那支
+ * 獨立函式（以及它那個一直沒接上的介面）因此變成多餘的。
+ *
+ * ── 三種 kind 的規則（照 Blender，只取我們用得到的三種）──
+ * | 選到 | Z（法向） | Y（切線） |
+ * |---|---|---|
+ * | 面 | 共面區域的面法向和 | **最長的那一條邊界邊**的方向 |
+ * | 邊 | 兩端頂點法向和，投影到與邊垂直的平面 | 沿邊方向（v → to） |
+ * | 點 | 頂點法向 | 剛好連兩條邊時取兩邊方向和，否則沒有 |
+ *
+ * 面的切線刻意用**最長的邊界邊**，而不是自己發明一條：那條邊
+ * **畫面上正被畫成黃色**，使用者看得見箭頭為什麼朝那邊。
+ * 長度相同時比座標決定先後 —— **同一個模型每次都要給同一個答案**
+ * （鐵律三：結果不唯一就補條件補到唯一）。
+ *
+ * @returns {{quat: THREE.Quaternion, ok: boolean}} ok=false ＝ 算不出來，請退回世界方向
+ */
+export function elementBasis(mesh, el, tolDeg = 0.5) {
+  const fail = () => ({ quat: new THREE.Quaternion(), ok: false });
+  if (!mesh || !el) return fail();
+
+  let z = null, y = null;
+
+  if (el.kind === 'vertex') {
+    if (!el.vert) return fail();
+    z = vertNormal(mesh, el.vert);
+    const out = mesh.vertOutgoing(el.vert);
+    if (out.length === 2) {
+      y = new THREE.Vector3()
+        .subVectors(out[0].to.p, el.vert.p).normalize()
+        .add(new THREE.Vector3().subVectors(out[1].to.p, el.vert.p).normalize());
+    }
+
+  } else if (el.kind === 'edge') {
+    const he = el.he;
+    if (!he || he.v === he.to) return fail();
+    y = new THREE.Vector3().subVectors(he.to.p, he.v.p);
+    if (y.lengthSq() < 1e-20) return fail();
+    z = vertNormal(mesh, he.v).add(vertNormal(mesh, he.to));
+    // 法向要投影到與邊垂直的平面上，否則 Y 與 Z 不正交，基底會被 basisFrom 扭回去
+    const d = y.clone().normalize();
+    z.addScaledVector(d, -z.dot(d));
+
+  } else if (el.kind === 'face') {
+    if (!el.face) return fail();
+    const reg = regionOf(mesh, el.face, tolDeg);
+    z = new THREE.Vector3();
+    for (const f of (reg.faces.length ? reg.faces : [el.face])) {
+      z.add(mesh.computeFaceNormal(f));
+    }
+    // 切線 ＝ 最長的邊界邊。長度相同時比端點座標，答案才唯一。
+    let best = null, bestLen = -1, bestKey = null;
+    for (const [a, b] of regionBoundaryEdges(mesh, el.face, tolDeg)) {
+      const d = new THREE.Vector3().subVectors(b.p, a.p);
+      const L = d.length();
+      const key = `${a.p.x},${a.p.y},${a.p.z}|${b.p.x},${b.p.y},${b.p.z}`;
+      if (L > bestLen + 1e-9 || (Math.abs(L - bestLen) <= 1e-9 && bestKey !== null && key < bestKey)) {
+        best = d; bestLen = Math.max(L, bestLen); bestKey = key;
+      }
+    }
+    y = best;
+
+  } else {
+    return fail();
+  }
+
+  const q = basisFrom(z, y);
+  return q ? { quat: q, ok: true } : fail();
+}
+
+// ═══════════════════════════════════════════════════════
 //  移動
 // ═══════════════════════════════════════════════════════
 
@@ -185,13 +323,19 @@ export function moveElement(mesh, el, delta, tolDeg = 0.5) {
 /**
  * 沿面法向推拉一個面。**這是「拉面」的預設模式。**
  *
- * ⚠ **目前沒有任何介面呼叫這一支**（2026-08-23 查證）。
- * UI 的「拉面」走的是 `moveElement()` ＋ gizmo 的自由三軸位移。
- * 這支留著是因為測試涵蓋得到、而且日後要推**非軸向的斜面**時就需要它 ——
- * 軸向的面用 gizmo 那根對應的箭頭就等於沿法向了。
+ * 🔴 **它已經被降級成一支便利函式，不再是「沿法向推拉」的唯一辦法。**
+ * 介面走的是 **`elementBasis()` ＋ 方向切到「法向」＋ 拉 Z 那根箭頭** ——
+ * 也就是「移動 × 法向 × 中心」的一個組合，不是一個獨立功能
+ * （`外部參考-Blender編輯.md` 第 3 節：三個概念正交之後，
+ * 沿法向擠出就不必是一個寫死的工具）。
+ *
+ * 留著它的理由只剩一個：**測試拿它當「已知正確的答案」**去對
+ * 新的變換路徑（同一個位移，兩條路要算出同一個網格）。
+ * ⛔ **不要再為它加介面**，那條待辦已經因為方向做出來而消失了。
  *
  * 〔曾經在規格檔寫成「拉面預設沿法向」，那是假的：那個開關不存在。
- * 　kang 實測截圖照出來的。鐵律六「不要寫一個不存在的退路」。〕
+ * 　kang 實測截圖照出來的。鐵律六「不要寫一個不存在的退路」。
+ * 　現在那個開關真的存在了，而它不是這一支。〕
  *
  * ── 整個面一起動不會拉歪，動一部分才會 ────────────────
  * 一整個共面區域一起平移是剛體運動，**面一定還是平的**，
@@ -212,6 +356,68 @@ export function pushFace(mesh, face, dist, tolDeg = 0.5) {
   const n = mesh.computeFaceNormal(face).clone();
   if (n.lengthSq() < 1e-12) return 0;
   return moveVerts(reg.verts, n.multiplyScalar(dist));
+}
+
+// ═══════════════════════════════════════════════════════
+//  變換：記下初始座標，每一幀從初始值重算
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 拖曳開始時，把這些頂點現在的座標拍一份下來。
+ *
+ * 🔴 **這一份是整個互動模型的地基。**
+ * 舊做法是**增量累加**（這一幀的位置減上一幀），而它是被逼出來的：
+ * 頂點跟著移動之後元素重心也跟著跑，拿絕對值算會每幀重複套用一次，
+ * 一拖就飛出去。記下初始座標之後**那個問題自動消失** ——
+ * 因為每一幀都是「從沒動過的樣子重算一次」，不是疊在上一幀的結果上。
+ *
+ * 而真正的收穫不是手感，是**這些東西跟著變成免費的**：
+ * 取消（把這份寫回去就好）、旋轉與縮放（增量累加根本做不對）、
+ * 拖到一半直接打數字（把數字套上去跟把拖曳量套上去是同一段程式）、
+ * 以及不累積浮點誤差。
+ * 〔`外部參考-Blender編輯.md` 第 5 節：Blender 的 `iloc`〕
+ */
+export function snapshotVerts(verts) {
+  return (verts || []).map(v => v.p.clone());
+}
+
+/** 把快照寫回去 ＝ 取消。取消因此不是一個功能，是「什麼都不做」。 */
+export function restoreVerts(verts, base) {
+  if (!verts || !base || verts.length !== base.length) return 0;
+  for (let i = 0; i < verts.length; i++) verts[i].p.copy(base[i]);
+  return verts.length;
+}
+
+/**
+ * 把 gizmo 替身「從開始到現在」的變換，套到那份初始座標上。
+ *
+ * 替身在拖曳開始時位於 `start`（位置 ＝ 元素中心、旋轉 ＝ 方向基底、縮放 ＝ 1），
+ * 現在位於 `now`。兩者相除就是這一次拖曳做了什麼，套到初始座標上即可。
+ *
+ * **移動、旋轉、縮放共用這一段** —— 只拖移動時 `now.quat === start.quat`
+ * 且 `now.scale` 是 1，矩陣自然退化成純位移，不必分支。
+ *
+ * ⚠ 縮放是在**替身自己的座標系**裡發生的（`start.quat` 決定），
+ * 所以方向切到「法向」之後，縮放也跟著沿法向與切線走 ——
+ * 三個概念正交的好處在這裡直接兌現。
+ *
+ * @param {Vertex[]} verts
+ * @param {THREE.Vector3[]} base 對應 verts 的初始座標（snapshotVerts 拍的）
+ * @param {{pos:THREE.Vector3, quat:THREE.Quaternion}} start
+ * @param {{pos:THREE.Vector3, quat:THREE.Quaternion, scale?:THREE.Vector3}} now
+ * @returns {number} 實際寫入的頂點數
+ */
+export function applyElementTransform(verts, base, start, now) {
+  if (!verts || !base || verts.length !== base.length || !verts.length) return 0;
+  if (!start || !now) return 0;
+
+  const ONE = new THREE.Vector3(1, 1, 1);
+  const m0 = new THREE.Matrix4().compose(start.pos, start.quat, ONE);
+  const m1 = new THREE.Matrix4().compose(now.pos, now.quat, now.scale || ONE);
+  const m = m1.multiply(m0.invert());
+
+  for (let i = 0; i < verts.length; i++) verts[i].p.copy(base[i]).applyMatrix4(m);
+  return verts.length;
 }
 
 // ═══════════════════════════════════════════════════════

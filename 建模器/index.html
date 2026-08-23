@@ -261,6 +261,15 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
   border: 1px solid #3f4550; background: #191c21; color: #e8eaed;
   font-variant-numeric: tabular-nums;
 }
+/* 編輯模式的數值輸入框。長得跟展開列那個一樣，因為它們是同一種東西：
+   「把一個精確的數字打進去」。同一件事看起來要一樣，否則使用者要重學一次。 */
+.grp input[type=number] {
+  width: 74px; padding: 5px 7px; border-radius: 5px;
+  border: 1px solid #3f4550; background: #191c21; color: #e8eaed;
+  font-variant-numeric: tabular-nums;
+}
+.grp input[type=number]:disabled { opacity: .45; }
+.grp .unit { font-size: 11px; color: #8b93a1; min-width: 22px; }
 .uwCk {
   display: flex; align-items: center; gap: 5px;
   font-size: 11.5px; color: #a8b0bd; cursor: pointer;
@@ -390,6 +399,22 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="efEdge" class="efBtn" data-f="edge" title="只選邊">邊</button>
       <button id="efFace" class="efBtn" data-f="face" title="只選面（整個共面區域，不是單一三角形）">面</button>
       <button id="extrude" disabled title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
+    </div>
+
+    <!--
+      編輯模式專用。**只在按下「拉點線面」之後才出現** ——
+      平常工具列已經很擠，而這兩樣東西在編輯模式以外沒有意義。
+      「模式」那一組（移動／旋轉／縮放）不搬過來，它本來就在，
+      而且編輯模式下用的是同一組按鈕（同一件事只給一個入口）。
+    -->
+    <div class="grp" id="gEditXf" hidden>
+      <span class="lbl">方向</span>
+      <button id="spWorld" class="spBtn on" data-s="world" title="箭頭朝世界的 X／Y／Z">世界</button>
+      <button id="spNormal" class="spBtn" data-s="normal" title="箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個">法向</button>
+      <span class="lbl">數值</span>
+      <input id="editNum" type="number" step="0.1" disabled
+             title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
+      <span id="editNumUnit" class="unit">—</span>
     </div>
 
     <div class="grp" id="gUnfold">

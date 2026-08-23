@@ -4562,6 +4562,249 @@ section('編輯：改完之後 展開還是對的');
   eq('壓克力 3 張（三種形狀各 2 片）', a1.pieces.length, 3);
 }
 
+// ═══════════════════════════════════════════════════════
+//  第 6 期地基：變換 ＝ 種類 × 方向 × 中心
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 這一組守的是「三件事」的第二件：**拉點線面與擠出被鎖死在只能沿世界 XYZ 平移**。
+ *
+ * 解法照 Blender 的三層分解（`外部參考-Blender編輯.md` 第 3 節）：
+ * 方向做成一組基底（`elementBasis`）、變換做成「從初始座標套一個位姿」
+ * （`applyElementTransform`）。兩支都不碰 DOM，所以整條路測得到 ——
+ * **測不到的只剩「箭頭在畫面上朝哪」，那一項只能 kang 開來看。**
+ */
+
+section('第 6 期地基：方向（elementBasis）');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+
+  const b = edit.elementBasis(m, { kind: 'face', face: top });
+  ok('方塊頂面 算得出法向基底', b.ok);
+
+  const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(b.quat);
+  const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(b.quat);
+  const az = new THREE.Vector3(0, 0, 1).applyQuaternion(b.quat);
+
+  // ★ 這一條是整組的重點：Z 一律是法向，所以「拉 Z 那根箭頭」＝ 沿法向推拉
+  near('★ 基底的 Z 就是面法向（頂面朝 +Y）', az.dot(new THREE.Vector3(0, 1, 0)), 1, 1e-9);
+
+  // 三軸互相垂直、都是單位長、而且右手系 —— 缺任何一條 gizmo 都會亂轉
+  near('X·Y ＝ 0', ax.dot(ay), 0, 1e-9);
+  near('Y·Z ＝ 0', ay.dot(az), 0, 1e-9);
+  near('Z·X ＝ 0', az.dot(ax), 0, 1e-9);
+  near('三軸都是單位長', ax.length() + ay.length() + az.length(), 3, 1e-9);
+  near('右手系（X×Y ＝ Z）',
+       new THREE.Vector3().crossVectors(ax, ay).dot(az), 1, 1e-9);
+
+  /**
+   * 切線取「最長的那一條邊界邊」。頂面是 60(X) × 40(Z)，
+   * 所以 Y 軸應該沿世界 X —— 而那條邊**畫面上正被畫成黃色**，
+   * 使用者看得見箭頭為什麼朝那邊。
+   */
+  near('切線 ＝ 最長的邊界邊（頂面 60 那一邊，沿世界 X）',
+       Math.abs(ay.dot(new THREE.Vector3(1, 0, 0))), 1, 1e-9);
+
+  // 結果唯一：同一個面問兩次要給同一個答案（鐵律三）
+  const b2 = edit.elementBasis(m, { kind: 'face', face: top });
+  near('同一個面問兩次 給同一個基底', b.quat.angleTo(b2.quat), 0, 1e-12);
+}
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const he = [...m.edges()][0];
+  const b = edit.elementBasis(m, { kind: 'edge', he });
+  ok('邊 算得出基底', b.ok);
+
+  const dir = new THREE.Vector3().subVectors(he.to.p, he.v.p).normalize();
+  const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(b.quat);
+  const az = new THREE.Vector3(0, 0, 1).applyQuaternion(b.quat);
+  near('邊：Y 沿邊的方向', Math.abs(ay.dot(dir)), 1, 1e-9);
+  near('邊：Z 與邊垂直', az.dot(dir), 0, 1e-9);
+}
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const v = m.verts[0];
+  const b = edit.elementBasis(m, { kind: 'vertex', vert: v });
+  ok('點 算得出基底', b.ok);
+  const az = new THREE.Vector3(0, 0, 1).applyQuaternion(b.quat);
+  near('點：Z 是單位長', az.length(), 1, 1e-9);
+
+  /**
+   * 🔴 **退化情況要當第一等公民。**
+   * 認不得的 kind、給了 null —— 都要回 `ok:false` 讓呼叫端退回世界方向，
+   * 而不是丟例外或給一個爛掉的矩陣（那會讓箭頭消失，看起來像功能壞了）。
+   */
+  ok('認不得的 kind → ok:false（退回世界）',
+     edit.elementBasis(m, { kind: 'blob' }).ok === false);
+  ok('face 給 null → ok:false',
+     edit.elementBasis(m, { kind: 'face', face: null }).ok === false);
+  ok('el 給 null → ok:false', edit.elementBasis(m, null).ok === false);
+}
+
+section('第 6 期地基：從初始座標重算（applyElementTransform）');
+
+/** 拍一份選取元素的初始狀態，跟 select.js 拖曳開始時做的事一樣 */
+function beginXf(m, el) {
+  const verts = edit.elementVerts(m, el);
+  const b = edit.elementBasis(m, el);
+  return {
+    verts,
+    base: edit.snapshotVerts(verts),
+    start: { pos: edit.elementCenter(m, el).clone(), quat: b.quat.clone() }
+  };
+}
+
+{
+  // ★ 讓兩條路算出同一個答案（鐵律：一個孤零零的數字沒有人能驗）
+  const m1 = buildPrim('box', { w: 60, h: 45, d: 40 }); m1.computeNormals();
+  const m2 = buildPrim('box', { w: 60, h: 45, d: 40 }); m2.computeNormals();
+  const t1 = m1.faces.find(f => f.normal.y > 0.999);
+  const t2 = m2.faces.find(f => f.normal.y > 0.999);
+
+  edit.pushFace(m1, t1, 10);                      // 舊路：專用函式
+
+  const d = beginXf(m2, { kind: 'face', face: t2 });   // 新路：方向 ＋ 拉 Z
+  edit.applyElementTransform(d.verts, d.base, d.start, {
+    pos: d.start.pos.clone().add(
+      new THREE.Vector3(0, 0, 1).applyQuaternion(d.start.quat).multiplyScalar(10)),
+    quat: d.start.quat
+  });
+
+  near('★ 沿法向拉 Z 10　＝ pushFace(10)：體積都是 132000', m2.volume(), 132000, 1e-6);
+  near('　　舊路的體積也是 132000（兩條路對得起來）', m1.volume(), 132000, 1e-6);
+  let maxd = 0;
+  for (let i = 0; i < m1.verts.length; i++) {
+    maxd = Math.max(maxd, m1.verts[i].p.distanceTo(m2.verts[i].p));
+  }
+  near('★ 兩條路的每一個頂點都在同一個位置', maxd, 0, 1e-9);
+}
+
+{
+  // 縮放：頂面兩個切線方向各縮一半 → 60×45×40 的方塊變成上小下大的棱台
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const d = beginXf(m, { kind: 'face', face: top });
+
+  edit.applyElementTransform(d.verts, d.base, d.start, {
+    pos: d.start.pos, quat: d.start.quat,
+    scale: new THREE.Vector3(0.5, 0.5, 1)          // 兩個切線縮半，法向不動
+  });
+
+  /**
+   * 棱台體積用擬柱體公式手算：h/6 ×(下底 ＋ 4×中截面 ＋ 上底)
+   *   下底 60×40 ＝ 2400　上底 30×20 ＝ 600　中截面 45×30 ＝ 1350
+   *   45/6 ×(2400 ＋ 5400 ＋ 600) ＝ 7.5 × 8400 ＝ 63000
+   */
+  near('★ 頂面縮一半 → 棱台體積 63000（擬柱體公式手算）', m.volume(), 63000, 1e-6);
+  eq('縮放不改拓撲 V/E/F 不變', `${m.verts.length}/${[...m.edges()].length}/${m.faces.length}`, '8/18/12');
+  eq('仍然封閉、尤拉數 2', `${m.isClosed()}/${euler(m)}`, 'true/2');
+
+  // 取消 ＝ 把初始座標寫回去。取消因此不是一個功能，是「什麼都不做」。
+  edit.restoreVerts(d.verts, d.base);
+  near('★ 取消之後 體積精確回到 108000', m.volume(), 108000, 1e-9);
+  let same = true;
+  for (let i = 0; i < d.verts.length; i++) {
+    if (!d.verts[i].p.equals(d.base[i])) same = false;
+  }
+  ok('★ 取消之後 每一個座標都跟拖之前一模一樣', same);
+}
+
+{
+  // 旋轉：繞法向轉，平面不變、而且是剛體運動
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const d = beginXf(m, { kind: 'face', face: top });
+
+  const spin = a => {
+    const q = d.start.quat.clone().multiply(
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), a));
+    edit.applyElementTransform(d.verts, d.base, d.start,
+      { pos: d.start.pos, quat: q });
+  };
+
+  spin(37 * Math.PI / 180);
+  // 剛體運動：被移動的頂點之間，距離一格都不變
+  let worst = 0;
+  for (let i = 0; i < d.verts.length; i++) {
+    for (let j = i + 1; j < d.verts.length; j++) {
+      worst = Math.max(worst, Math.abs(
+        d.verts[i].p.distanceTo(d.verts[j].p) - d.base[i].distanceTo(d.base[j])));
+    }
+  }
+  near('★ 轉 37 度是剛體運動（頂點間距離不變）', worst, 0, 1e-9);
+  // 繞法向轉，整個面仍然待在原來那個平面上
+  let offPlane = 0;
+  for (const v of d.verts) offPlane = Math.max(offPlane, Math.abs(v.p.y - 22.5));
+  near('★ 繞法向轉 面仍然在原平面上（y 全部是 22.5）', offPlane, 0, 1e-9);
+
+  /**
+   * 🔴 **轉 180 度：位置的集合回到原樣，但體積變了。**
+   *
+   * 60×40 的矩形繞中心轉半圈會對應到自己 —— 但那是**位置的集合**對應到自己，
+   * **不是每個頂點回到自己的位置**：四個角兩兩對調了。
+   * 而側牆連的是「底下第 i 個角 ↔ 上面第 i 個角」，角一換，
+   * 側牆就跟著**扭成麻花**，體積從 108000 掉到 36000。
+   *
+   * 〔2026-08-23 實測抓到。這一條原本寫的是「體積必須一格都不變」，
+   * 　推論的時候把「集合不變」讀成「每個點不動」。
+   * 　鐵律一：**這種事不能靠推理，要靠對答案。**〕
+   *
+   * 這不是 bug，Blender 轉一個面也是這樣（拓撲沒變，側牆只好跟著扭）。
+   * 但它是使用者要知道的事：**旋轉面是拿來做斜面與梯形的（小角度），
+   * 不是拿來「把一片轉個方向」的。**
+   */
+  spin(Math.PI);
+  const key = p => `${+p.x.toFixed(9)},${+p.y.toFixed(9)},${+p.z.toFixed(9)}`;
+  const before = new Set(d.base.map(key));
+  const after = new Set(d.verts.map(v => key(v.p)));
+  ok('轉 180 度 四個角的位置集合回到原樣（兩兩對調）',
+     before.size === after.size && [...after].every(k => before.has(k)));
+  ok('★ 但體積變了 —— 側牆被扭成麻花（旋轉面只適合小角度）',
+     Math.abs(m.volume() - 108000) > 1, `體積 ${+m.volume().toFixed(2)}`);
+
+  spin(0);
+  near('轉 0 度 ＝ 恆等（體積 108000）', m.volume(), 108000, 1e-9);
+}
+
+{
+  // 斜面：圓柱側面沿自己的法向推出去，體積要變大（繞向錯了會變小或變負）
+  const m = buildPrim('cylinder', { r: 25, h: 40, seg: 32 });
+  m.computeNormals();
+  const v0 = m.volume();
+  // 挑一個側面（法向幾乎水平的）
+  const side = m.faces.find(f => Math.abs(f.normal.y) < 0.01);
+  ok('圓柱找得到側面', !!side);
+
+  const d = beginXf(m, { kind: 'face', face: side });
+  const n = new THREE.Vector3(0, 0, 1).applyQuaternion(d.start.quat);
+  near('側面的基底 Z 是水平的（就是那一片的法向）', n.y, 0, 1e-6);
+  edit.applyElementTransform(d.verts, d.base, d.start,
+    { pos: d.start.pos.clone().addScaledVector(n, 5), quat: d.start.quat });
+  ok('★ 斜面沿法向推出去 體積變大（繞向對）', m.volume() > v0,
+     `${(+m.volume().toFixed(2))} > ${(+v0.toFixed(2))}`);
+}
+
+{
+  // 防呆：長度對不上就什麼都不做，不要拿錯的基準去改幾何
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const d = beginXf(m, { kind: 'face', face: top });
+  const bad = edit.applyElementTransform(d.verts, d.base.slice(1), d.start,
+    { pos: d.start.pos, quat: d.start.quat });
+  eq('快照長度對不上 → 一個頂點都不動', bad, 0);
+  near('　　體積也沒被動到', m.volume(), 108000, 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

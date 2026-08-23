@@ -17,7 +17,8 @@ import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
   from '../unfold/seam.js';
 import { objectsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
-import { elementVerts, elementCenter, moveVerts, regionBoundaryEdges }
+import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
+         snapshotVerts, restoreVerts, applyElementTransform }
   from '../core/edit.js';
 
 const TAP_MOVE = 8;      // px
@@ -103,11 +104,39 @@ export class Selection {
      */
     this._proxy = new THREE.Object3D();
     this._proxy.name = 'editProxy';
-    /** 上一次寫回時 proxy 的位置。位移是**增量**算的，不是絕對值。 */
-    this._proxyBase = new THREE.Vector3();
+
+    /**
+     * 🔴 **箭頭朝哪**：`'world'` ＝ 世界 XYZ（原本唯一的選擇）、
+     * `'normal'` ＝ 選到的那個元素自己的座標系（Z 是法向）。
+     *
+     * 「擠出好像沒用」「斜面推不動」「拉不出梯形」根源都是**只有世界 XYZ**。
+     * 變換其實是三個正交的概念 —— **種類 × 方向 × 中心**，這是「方向」。
+     * 〔`外部參考-Blender編輯.md` 第 3 節〕
+     *
+     * 中心目前只有一種（元素重心）。單選的時候「重心」跟「選取元素本身」
+     * 是同一個點，要等多選才分得出來，所以刻意不先做。
+     */
+    this.editSpace = 'world';
+
+    /**
+     * 🔴 **一次拖曳的初始狀態**（Blender 那個 `iloc` 的同一件事）。
+     *
+     * `{verts, base, start:{pos,quat}, cancelled}` —— 拖曳開始時拍一份，
+     * 之後**每一幀都從這份重算**，不是疊在上一幀的結果上。
+     *
+     * 舊做法是增量累加，而它是被逼出來的：頂點一動元素重心也跟著跑，
+     * 拿絕對值算會每幀重複套用一次，一拖就飛出去。
+     * 記了初始值之後那個問題自動消失，而且**取消、旋轉縮放、打數字
+     * 全部變成免費的**。
+     *
+     * 放手之後刻意**不清掉** —— 數值輸入框要拿它把精確數字套回初始座標。
+     * 換選取、換方向、換種類才清。
+     */
+    this._drag = null;
 
     this._initGizmo();
     this._initPointer();
+    this._initEditKeys();
   }
 
   _initGizmo() {
@@ -120,9 +149,20 @@ export class Selection {
 
     tc.addEventListener('dragging-changed', e => {
       v.orbit.enabled = !e.value;
-      if (!e.value) {                            // 放手 → 記一步 Undo
-        if (this.editSel) this._writeBackEdit(true);
-        else this._writeBack(true);
+      if (e.value) {                             // 按下去 → 拍一份初始狀態
+        if (this.editSel) this._beginEditDrag();
+        return;
+      }
+      if (this.editSel) {                        // 放手 → 記一步 Undo
+        /**
+         * 拖到一半按 Esc 取消過的話，座標已經被還原了，
+         * 這一下**不能再記一步 Undo** —— 記了就會多出一步「什麼都沒做」，
+         * 而使用者按 Undo 會以為壞掉了。
+         */
+        if (this._drag && this._drag.cancelled) { this._rebaseProxy(); return; }
+        this._writeBackEdit(true);
+      } else {
+        this._writeBack(true);
       }
     });
 
@@ -213,6 +253,13 @@ export class Selection {
     if (!L) return;
 
     const tc = this.tc;
+    /**
+     * ⚠ **一定要問 `tc.object`，不能問物件的 node。**
+     * 編輯模式下 gizmo 掛的是替身，而替身**自己帶著方向**
+     * （方向切到「法向」時），跟 node 的旋轉不是同一個。
+     * 問錯對象的症狀是 X／Y／Z 三個字跟箭頭錯開 ——
+     * 而那正是最需要看清楚哪根是哪根的時候。
+     */
     const node = tc.object;
     /**
      * 判準只看一件事：**gizmo 自己看不看得見**。
@@ -620,6 +667,14 @@ export class Selection {
     // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
     if (node && !this.seamMode && !this.mateMode) {
       this.tc.attach(node);
+      /**
+       * ⚠ **一定要把 space 設回世界。**
+       * 編輯模式的「法向」方向是靠把 space 切成 `local` 做到的，
+       * 而 `space` 是 gizmo 自己的狀態，離開編輯模式不會自己還原 ——
+       * 不設回來的話，接著拖一般物件時箭頭會沿**物件自己的軸**走，
+       * 而使用者根本不知道自己什麼時候換過方向。
+       */
+      this.tc.space = 'world';
       this.tc.showX = this.tc.showY = this.tc.showZ = true;
       // 鎖定縮放的物件不給縮放把手（跟 system 物件同樣的做法）
       if (act.lockScale && this.tc.getMode() === 'scale') this.tc.setMode('translate');
@@ -658,6 +713,17 @@ export class Selection {
   // ── gizmo ─────────────────────────────────────────
 
   setMode(mode) {
+    /**
+     * 編輯模式下的限制跟物件層不同：judgement 在 `editModeAllowed()`，
+     * 只擋**點**（一個頂點繞自己轉或縮放都不會改變任何座標）。
+     * 擋下來要**回傳 false 讓呼叫端說一句** —— 按了沒反應是最糟的回饋。
+     */
+    if (this.editMode) {
+      if (this.editSel && !this.editModeAllowed(mode)) return false;
+      this._drag = null;            // 換了種類，上一次拖曳的量沒有意義了
+      this.tc.setMode(mode);
+      return true;
+    }
     const act = this.active;
     if (mode === 'scale' && act && act.lockScale) return false;
     this.tc.setMode(mode);
@@ -715,6 +781,7 @@ export class Selection {
 
   clearEditSel() {
     this.editSel = null;
+    this._drag = null;              // 快照跟著選取走，選取沒了就對不上任何東西
     if (this._proxy.parent) this._proxy.parent.remove(this._proxy);
     this.view.clearPickMarks();
     this.tc.detach();
@@ -745,6 +812,7 @@ export class Selection {
     // 記下當下的網格物件。revalidate() 靠它分辨「網格被換掉了沒」
     el.mesh = el.obj.mesh();
     this.editSel = el;
+    this._drag = null;              // 換了元素，上一次的快照對不上了
     this._attachEditProxy();
     this._drawEditMark();
     if (this.hooks.onEditPick) this.hooks.onEditPick(el);
@@ -764,29 +832,114 @@ export class Selection {
   selectFace(obj, face) {
     if (!obj || !face) { this.clearEditSel(); return false; }
     this.editSel = { obj, kind: 'face', face, mesh: obj.mesh() };
+    this._drag = null;
     this._attachEditProxy();
     this._drawEditMark();
     if (this.hooks.onChange) this.hooks.onChange(this);
     return true;
   }
 
-  /** 把替身擺到元素重心上，並把 gizmo 掛過去 */
+  /**
+   * 把替身擺到元素重心上、轉成目前選的方向，並把 gizmo 掛過去。
+   *
+   * ── 方向是怎麼做到的（而且沒有動 TransformControls）────────
+   * `TransformControls` 的 `space` 只有 `world` 與 `local` 兩種，
+   * 而 `local` 取的是**掛著那個物件的世界四元數**。替身是我們自己的
+   * 空 Object3D，所以**把方向基底寫進替身的 quaternion ＋ space 設 local**，
+   * 箭頭就朝法向了 —— 不必去改它的自訂軸向（那不是它原生擅長的事）。
+   *
+   * 方向是「世界」時 space 維持 `world`，行為跟原本一模一樣：
+   * 替身雖然掛在 node 底下，箭頭仍然朝世界 XYZ。
+   * ⚠ 這一點不能偷懶改成「一律 local ＋ 單位四元數」——
+   * 物件本身轉過角度時，那會變成沿**物件的軸**走，不是世界軸。
+   */
   _attachEditProxy() {
     const el = this.editSel;
     const node = el && this.view.nodeOf(el.obj.id);
     if (!node) { this.clearEditSel(); return; }
 
     if (this._proxy.parent !== node) node.add(this._proxy);
-    const c = elementCenter(el.obj.mesh(), el);
-    this._proxy.position.copy(c);
-    this._proxyBase.copy(c);
+    this._rebaseProxy();
     this.tc.attach(this._proxy);
+    this._applyModeLimit();
+  }
+
+  /**
+   * 把替身重新對準目前的元素（重心 ＋ 方向），並清掉上一次拖曳的快照。
+   *
+   * 每次「元素動過了」都要叫 —— 放手之後、取消之後、換方向之後。
+   * 不重新對準的話，替身會留在上一次的位置與角度，
+   * 而**畫面上箭頭的位置就跟它實際會做的事對不起來**。
+   */
+  _rebaseProxy() {
+    const el = this.editSel;
+    if (!el) return;
+    const mesh = el.obj.mesh();
+
+    this._proxy.position.copy(elementCenter(mesh, el));
+    this._proxy.scale.set(1, 1, 1);
+
+    if (this.editSpace === 'normal') {
+      const b = elementBasis(mesh, el);
+      /**
+       * 算不出法向基底（零面積面、孤立點…）→ **退回世界，並且說出來**。
+       * 沉默地退回是最糟的做法：使用者會以為「法向」這顆按鈕壞了。
+       * 〔坑第 11 條。Blender 那條退化鏈也是同一個原則：永遠有答案〕
+       */
+      this._proxy.quaternion.copy(b.quat);
+      this.tc.space = b.ok ? 'local' : 'world';
+      this.lastBasisOk = b.ok;
+    } else {
+      this._proxy.quaternion.identity();
+      this.tc.space = 'world';
+      this.lastBasisOk = true;
+    }
     /**
-     * 元素只能移動，不能旋轉縮放 ——「把一個頂點旋轉 30 度」沒有意義，
-     * 而縮放一個面要先定義縮放中心，那是另一個功能。
-     * 不強制切回來的話，使用者從旋轉模式進編輯，拖了半天沒反應。
+     * ⚠ **這裡刻意不清 `_drag`。**
+     * `commit()` 會走 `revalidate()` → `_refresh()` → 這一支，
+     * 也就是**每放一次手都會經過這裡**。在這裡清掉的話，
+     * 放手之後就再也打不了數字了 —— 而那正是最需要打數字的時候。
+     * 清掉的時機是「這份快照對不上了」：換選取、換方向、換種類。
      */
-    if (this.tc.getMode() !== 'translate') this.tc.setMode('translate');
+  }
+
+  /**
+   * 種類（移動／旋轉／縮放）依 kind 設限。
+   *
+   * ⚠ **原本這裡是一行「一律切回 translate」，而那一行鎖死了整個第 6 期。**
+   * 它的理由（「把一個頂點旋轉 30 度沒有意義」）**對點成立，對面完全不成立** ——
+   * 梯形、收尖、斜面推拉全被那一行擋在門外。
+   * 〔`外部參考調查.md` 第 1 節把它列為「推論出來的東西」的頭號證據〕
+   *
+   * 所以現在只鎖**點**：一個頂點沒有大小也沒有方向，繞自己轉或縮放
+   * 都不會改變任何座標，給了只會讓人拖半天沒反應。
+   */
+  _applyModeLimit() {
+    const el = this.editSel;
+    if (el && el.kind === 'vertex' && this.tc.getMode() !== 'translate') {
+      this.tc.setMode('translate');
+    }
+  }
+
+  /** 這個 kind 給不給這種變換（介面拿去決定按鈕要不要灰掉） */
+  editModeAllowed(mode) {
+    if (!this.editSel) return false;
+    return this.editSel.kind !== 'vertex' || mode === 'translate';
+  }
+
+  /**
+   * 切換方向（世界／法向）。回傳實際生效的方向 ——
+   * 要求法向但算不出來時會退回世界，而**回傳值就是真話**，
+   * 呼叫端據此更新按鈕與提示，畫面不會說謊。
+   */
+  setEditSpace(space) {
+    this.editSpace = space === 'normal' ? 'normal' : 'world';
+    this._drag = null;              // 換了方向，上一次拖曳的軸向就對不上了
+    if (this.editSel) {
+      this._rebaseProxy();
+      if (this.editSpace === 'normal' && !this.lastBasisOk) this.editSpace = 'world';
+    }
+    return this.editSpace;
   }
 
   /**
@@ -830,11 +983,34 @@ export class Selection {
   }
 
   /**
-   * 拖曳替身 → 把位移寫回頂點座標。
+   * 拖曳開始 → 拍一份初始狀態。**這是整個互動模型的地基。**
    *
-   * ⚠ **位移是增量算的**（這一幀的 proxy 位置減掉上一幀的），不是絕對值。
-   * 因為頂點跟著移動之後，元素的重心也跟著跑到 proxy 的新位置，
-   * 拿絕對值算會每一幀都重複套用一次，一拖就飛出去。
+   * 記的是三樣東西：受影響的頂點、它們現在的座標、以及替身此刻的位姿。
+   * 之後每一幀都拿這三樣重算一次，不疊在上一幀的結果上。
+   */
+  _beginEditDrag() {
+    const el = this.editSel;
+    if (!el) { this._drag = null; return; }
+    const verts = elementVerts(el.obj.mesh(), el);
+    this._drag = {
+      verts,
+      base: snapshotVerts(verts),
+      start: {
+        pos: this._proxy.position.clone(),
+        quat: this._proxy.quaternion.clone()
+      },
+      cancelled: false
+    };
+  }
+
+  /**
+   * 拖曳替身 → 把變換寫回頂點座標。
+   *
+   * 🔴 **從初始座標重算，不是增量累加。**
+   * 舊做法是「這一幀的 proxy 位置減掉上一幀」，而它是被逼出來的：
+   * 頂點跟著移動之後元素重心也跑到 proxy 的新位置，拿絕對值算會每幀
+   * 重複套用一次，一拖就飛出去。記了初始值之後**那個問題自動消失**，
+   * 而且旋轉與縮放才做得對 —— 增量累加沒辦法正確累積旋轉。
    *
    * ⚠ **拖曳中不跑 refreshAfterEdit()。** 它走訪所有的邊，是 O(邊數)，
    * 而這支每一幀都會跑。放進熱路徑就是坑第 3、22 條的第三次。
@@ -843,14 +1019,165 @@ export class Selection {
   _writeBackEdit(committing) {
     const el = this.editSel;
     if (!el) return;
-    const d = new THREE.Vector3().subVectors(this._proxy.position, this._proxyBase);
-    if (d.lengthSq() > 0) {
-      moveVerts(elementVerts(el.obj.mesh(), el), d);
-      this._proxyBase.copy(this._proxy.position);
-      this.view.markGeomDirty();      // 沒有這行，畫面不會更新（見 scene.js）
+    const d = this._drag;
+    /**
+     * 沒有快照就什麼都不做。會走到這裡的只有一種情況：
+     * `objectChange` 比 `dragging-changed` 早一步送到（換 three.js 版本
+     * 時順序可能變）。**寧可這一幀不動，也不要拿錯的基準去算** ——
+     * 拿舊基準算出來的東西不會報錯，只會把模型悄悄改成另一個形狀。
+     */
+    if (!d || d.cancelled) return;
+
+    applyElementTransform(d.verts, d.base, d.start, {
+      pos: this._proxy.position,
+      quat: this._proxy.quaternion,
+      scale: this._proxy.scale
+    });
+    this.view.markGeomDirty();        // 沒有這行，畫面不會更新（見 scene.js）
+
+    if (committing) {
+      this._drawEditMark();
+      /**
+       * ⚠ 快照**刻意留著**（不 rebase）—— 放手之後數值輸入框還要拿它
+       * 把精確數字套回初始座標。替身重新對準的時機改由呼叫端決定，
+       * 因為它要先跑完連帶重算與 commit。
+       */
     }
-    if (committing) this._drawEditMark();
     if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el);
+  }
+
+  /**
+   * 拖到一半反悔 → 把初始座標寫回去。
+   *
+   * **取消不是一個功能，是「什麼都不做」** —— 這正是記初始值換來的東西。
+   * 增量累加的年代做不到：程式手上根本沒有「沒動過的樣子」。
+   *
+   * @returns {boolean} 有沒有真的取消掉什麼
+   */
+  cancelEditDrag() {
+    const d = this._drag;
+    if (!d || d.cancelled) return false;
+    restoreVerts(d.verts, d.base);
+    d.cancelled = true;
+    this._proxy.position.copy(d.start.pos);
+    this._proxy.quaternion.copy(d.start.quat);
+    this._proxy.scale.set(1, 1, 1);
+    this.view.markGeomDirty();
+    this._drawEditMark();
+    return true;
+  }
+
+  /**
+   * 目前這一次拖曳「在哪根軸上做了多少」。給數值輸入框顯示用。
+   *
+   * ⚠ **只在拉單一一根箭頭時才給得出數字。** 拉平面把手或螢幕空間把手時
+   * 沒有「一個值」這種東西，回 `null`，介面要據此把輸入框停掉並說明 ——
+   * **沉默地顯示一個看起來像數字的東西，比沒有數字更糟**（坑第 20 條）。
+   *
+   * @returns {{axis:string, mode:string, value:number, unit:string}|null}
+   */
+  editDragValue() {
+    const d = this._drag;
+    const axis = this.tc.axis;
+    if (!d || !axis || !['X', 'Y', 'Z'].includes(axis)) return null;
+    const mode = this.tc.getMode();
+
+    if (mode === 'translate') {
+      const dir = this._axisDir(axis, d.start.quat);
+      const off = new THREE.Vector3().subVectors(this._proxy.position, d.start.pos);
+      return { axis, mode, value: off.dot(dir), unit: 'cm' };
+    }
+    if (mode === 'scale') {
+      return { axis, mode, value: this._proxy.scale[axis.toLowerCase()], unit: '倍' };
+    }
+    // 旋轉：把「從初始到現在」的四元數換成繞那根軸轉了幾度
+    const dq = d.start.quat.clone().invert().premultiply(this._proxy.quaternion);
+    const e = new THREE.Euler().setFromQuaternion(dq, 'XYZ');
+    return { axis, mode, value: THREE.MathUtils.radToDeg(e[axis.toLowerCase()]), unit: '°' };
+  }
+
+  /**
+   * 把一個精確的數字套到目前這一次拖曳上（取代拖出來的量）。
+   *
+   * **這跟拖曳走的是同一段程式** —— 兩者都只是「拿一個位姿去套那份初始座標」，
+   * 差別只在位姿是拖出來的還是打出來的。記初始值之後這件事是免費的。
+   *
+   * 下料尺寸本來就是**打出來的**，不是拖出來的。
+   *
+   * @returns {boolean} 有沒有套上去
+   */
+  applyEditNumber(num) {
+    const d = this._drag;
+    const info = this.editDragValue();
+    if (!d || !info || !Number.isFinite(num)) return false;
+
+    const k = info.axis.toLowerCase();
+    if (info.mode === 'translate') {
+      this._proxy.position.copy(d.start.pos)
+        .addScaledVector(this._axisDir(info.axis, d.start.quat), num);
+    } else if (info.mode === 'scale') {
+      if (num === 0) return false;                 // 縮到 0 ＝ 把面壓成零面積
+      this._proxy.scale.set(1, 1, 1);
+      this._proxy.scale[k] = num;
+    } else {
+      const e = new THREE.Euler(0, 0, 0, 'XYZ');
+      e[k] = THREE.MathUtils.degToRad(num);
+      this._proxy.quaternion.copy(d.start.quat)
+        .multiply(new THREE.Quaternion().setFromEuler(e));
+    }
+
+    applyElementTransform(d.verts, d.base, d.start, {
+      pos: this._proxy.position,
+      quat: this._proxy.quaternion,
+      scale: this._proxy.scale
+    });
+    this.view.markGeomDirty();
+    this._drawEditMark();
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel);
+    return true;
+  }
+
+  /**
+   * 一根箭頭在**替身的父座標系**（＝網格自己的座標系）裡指向哪。
+   *
+   * 位移是寫進 `_proxy.position` 的，而那是父座標系的量 ——
+   * 所以要換算的是「世界／替身」到「父」，不是到世界。
+   *
+   * ⚠ **要問的是拖曳開始時那一份四元數，不是替身現在的。**
+   * 放手之後替身會重新對準（幾何變了，法向也跟著變），
+   * 拿新的去換算，打進去的數字就會沿著**另一根軸**走 ——
+   * 而數字看起來完全正常。
+   */
+  _axisDir(axis, quat) {
+    const u = new THREE.Vector3(
+      axis === 'X' ? 1 : 0, axis === 'Y' ? 1 : 0, axis === 'Z' ? 1 : 0);
+    if (this.tc.space === 'local') {
+      return u.applyQuaternion(quat || this._proxy.quaternion);
+    }
+    // 世界方向 → 父座標系：除掉 node 的世界旋轉
+    const node = this._proxy.parent;
+    if (!node) return u;
+    const q = new THREE.Quaternion();
+    node.getWorldQuaternion(q);
+    return u.applyQuaternion(q.invert());
+  }
+
+  /**
+   * Esc ＝ 取消這一次拖曳。
+   *
+   * ⚠ 掛在 window 的 capture 階段，而且**只在真的正在拖的時候才吃掉事件** ——
+   * 否則會把 `main.js` 那個「Esc 清除選取」整個蓋掉，
+   * 而那看起來會像「Esc 有時候沒作用」，是最難查的一種。
+   */
+  _initEditKeys() {
+    window.addEventListener('keydown', e => {
+      if (e.key !== 'Escape' || !this.tc.dragging || !this.editSel) return;
+      if (this.cancelEditDrag()) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (this.hooks.onEditCancel) this.hooks.onEditCancel();
+      }
+    }, true);
   }
 
   /**

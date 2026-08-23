@@ -53,6 +53,7 @@ const sel = new Selection(view, {
   onMatePick: el => matePick(el),
   onEditPick: el => editPick(el),
   onEditDrag: (committing, el) => editDrag(committing, el),
+  onEditCancel: () => editCancelled(),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
   onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n)
 });
@@ -338,6 +339,20 @@ $('extrude').onclick = () => extrudeSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
   b.onclick = () => setEditFilter(b.dataset.f);
 }
+for (const b of document.querySelectorAll('.spBtn')) {
+  b.onclick = () => setEditSpace(b.dataset.s);
+}
+/**
+ * 數值輸入：打完按 Enter（或離開欄位）就套上去。
+ *
+ * ⚠ `change` 事件在手機上是「離開欄位」才發，桌機是「按 Enter 或離開」。
+ * 兩個都接才會兩邊行為一樣 —— 事件入口分開、動作邏輯共用，
+ * 就是這個專案從第 0 期就在用的那條。
+ */
+$('editNum').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); commitEditNumber(); }
+});
+$('editNum').addEventListener('change', () => commitEditNumber());
 $('unfold').onclick = () => unfoldWin.open();
 $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
@@ -469,6 +484,8 @@ function matePick(el) {
 
 const EDIT_NAME = { vertex: '點', edge: '邊', face: '面' };
 const FILTER_NAME = { auto: '自動', vertex: '點', edge: '邊', face: '面' };
+/** Undo 標籤用。三種變換要分得出來，否則使用者不知道要退回哪一步 */
+const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
 
 /**
  * 編輯模式：選物件裡的一個點／邊／面，用 gizmo 把它拉到想要的位置。
@@ -496,10 +513,84 @@ function toggleEditMode() {
   if (!sel.editMode) exitOtherModes('edit');
   const on = sel.setEditMode(!sel.editMode);
   $('edit').classList.toggle('on', on);
+  /**
+   * 「方向」與「數值」只在編輯模式下有意義，所以整組跟著開關。
+   * 平常不佔工具列的寬 —— 工具列每多一顆按鈕，平板上就更容易把
+   * 後面的整組擠掉（`.grp` 那條 flex-wrap 註解講的同一件事）。
+   */
+  $('gEditXf').hidden = !on;
+  updateEditNum();
+  syncModeButtons();
   panel.refresh();
+  updateBar();
   toast(on
     ? `編輯模式：點一個${FILTER_NAME[sel.editFilter]}，再用箭頭把它拉走。再按一次「拉點線面」離開`
     : '已離開編輯模式');
+}
+
+/**
+ * 切換箭頭朝哪：世界 XYZ ／ 選到那個元素自己的方向。
+ *
+ * 🔴 **這一顆解掉的是「擠出好像沒用、斜面推不動、拉不出梯形」那一整組。**
+ * 它們的根源是同一件事 —— gizmo 只有世界 XYZ 一種方向。
+ * 〔`外部參考-Blender編輯.md` 第 3 節：變換 ＝ 種類 × 方向 × 中心〕
+ *
+ * ⚠ 算不出法向基底時 `setEditSpace()` 會退回世界，而且**回傳真話** ——
+ * 按鈕照回傳值更新，所以畫面上亮著的一定是實際生效的那一個。
+ * 沉默地退回是最糟的做法（坑第 11 條）。
+ */
+function setEditSpace(want) {
+  const got = sel.setEditSpace(want);
+  for (const b of document.querySelectorAll('.spBtn')) {
+    b.classList.toggle('on', b.dataset.s === got);
+  }
+  updateEditNum();
+  if (got !== want) {
+    toast('這個元素算不出法向（面積是零或孤立的點），先用世界方向', true);
+    return;
+  }
+  toast(got === 'normal'
+    ? '箭頭改朝元素自己的方向：藍色那根（Z）就是法向'
+    : '箭頭改朝世界的 X／Y／Z');
+}
+
+/**
+ * 把輸入框裡的數字套到剛才那一次拖曳上。
+ *
+ * **這跟拖曳走的是同一段程式** —— 都只是「拿一個位姿去套那份初始座標」。
+ * 記了初始座標之後，「打數字」不是一個新功能，是同一件事的另一個入口。
+ */
+function commitEditNumber() {
+  const v = parseFloat($('editNum').value);
+  if (!Number.isFinite(v)) { updateEditNum(); return; }
+  if (!sel.applyEditNumber(v)) {
+    toast('先拉一下箭頭，程式才知道你要改哪一根軸', true);
+    updateEditNum();
+    return;
+  }
+  updateEditNum();
+}
+
+/**
+ * 輸入框顯示「這一次拖曳在哪根軸上做了多少」。
+ *
+ * ⚠ 拉平面把手或螢幕空間把手時**沒有「一個值」這種東西**，
+ * 這時停掉輸入框並把單位顯示成「—」。
+ * 顯示一個看起來像數字、實際上沒有意義的東西，比沒有數字更糟（坑第 20 條）。
+ */
+function updateEditNum() {
+  const box = $('editNum'), unit = $('editNumUnit');
+  const info = sel.editMode ? sel.editDragValue() : null;
+  if (!info) {
+    box.disabled = true;
+    box.value = '';
+    unit.textContent = '—';
+    return;
+  }
+  box.disabled = false;
+  // 拖曳中不要覆蓋使用者正在打的字；只有沒聚焦時才跟著拖曳跑
+  if (document.activeElement !== box) box.value = (+info.value.toFixed(4)).toString();
+  unit.textContent = `${info.axis}　${info.unit}`;
 }
 
 function setEditFilter(kind) {
@@ -539,6 +630,12 @@ function editPick(el) {
    * 〔2026-08-23 kang 實測抓到〕
    */
   updateBar();
+  /**
+   * 選到「點」時 gizmo 會被切回移動（`_applyModeLimit()`），
+   * 而那條路沒經過 `setMode()` —— 按鈕要在這裡跟上，否則會亮錯。
+   */
+  syncModeButtons();
+  updateEditNum();
 }
 
 /**
@@ -556,13 +653,19 @@ function editDrag(committing, el) {
    * 而這支拖曳時每一幀都會跑 —— 那是坑第 22 條（熱路徑上的 O(全部)）的
    * DOM 版本。代價是拖曳中面板的座標是舊的，放手就會更新。
    */
-  if (!committing) { view.sync(doc); updateBar(); return; }
+  if (!committing) { view.sync(doc); updateBar(); updateEditNum(); return; }
 
   const r = refreshAfterEdit(el.obj.mesh());
   view.markGeomDirty();
   view.markSeamsDirty();      // 折線變了，接縫線也要重畫
-  commit(`拉${EDIT_NAME[el.kind]}`);
+  /**
+   * Undo 的標籤要說出**做了哪一種變換**，不能一律叫「拉」。
+   * 現在種類有三種，而 Undo 清單是使用者唯一能回頭對照的東西 ——
+   * 三種都寫「拉面」的話，他分不出要退回哪一步。
+   */
+  commit(`${XF_NAME[sel.mode] || '拉'}${EDIT_NAME[el.kind]}`);
   panel.refresh();
+  updateEditNum();
 
   /**
    * ⚠ **一律用藍色，不用紅色。**
@@ -581,6 +684,24 @@ function editDrag(committing, el) {
   if (r.degenerate) bits.push(`${r.degenerate} 個面被壓成零面積（拉回去就恢復）`);
   if (r.nonPlanar) bits.push(`${r.nonPlanar} 個面不再是平的（展開會變近似；剖面分切與 3D 列印不受影響）`);
   if (bits.length) toast(bits.join('　'));
+}
+
+/**
+ * 拖到一半按 Esc 取消。
+ *
+ * **一定要講一句。** 取消之後畫面會彈回原樣，而「彈回原樣」跟
+ * 「這一下根本沒作用」長得一模一樣 —— 使用者分不出是哪一種
+ * （坑第 21 條：有時候看起來沒作用的操作，必須有東西持續告訴他有沒有作用）。
+ *
+ * 也不記 Undo：取消之後模型跟拖之前**完全一樣**，
+ * 記一步「什麼都沒做」只會讓 Undo 清單多一格空的。
+ */
+function editCancelled() {
+  view.sync(doc);
+  panel.refresh();
+  updateEditNum();
+  updateBar();
+  toast('已取消這一次拖曳');
 }
 
 /**
@@ -704,7 +825,29 @@ function commitSeam(obj, label) {
 }
 
 function setMode(m) {
-  if (!sel.setMode(m)) { toast('這個物件鎖定了縮放', true); return; }
+  if (!sel.setMode(m)) {
+    /**
+     * 兩個不同的拒絕理由，訊息一定要分開 ——
+     * 講錯理由比不講更糟，使用者會去找一個不存在的問題。
+     */
+    toast(sel.editMode && sel.editSel && sel.editSel.kind === 'vertex'
+      ? '一個「點」轉或縮放都不會改變任何座標。要做梯形／收尖請選「邊」或「面」'
+      : '這個物件鎖定了縮放', true);
+    return;
+  }
+  syncModeButtons();
+  updateEditNum();
+}
+
+/**
+ * 三顆模式按鈕跟著 gizmo 實際的狀態走。
+ *
+ * ⚠ **不能只在按下去的時候更新。** 選到一個「點」時 `_attachEditProxy()`
+ * 會自己把 gizmo 切回移動，那條路沒有經過 `setMode()` ——
+ * 不同步的話按鈕會亮在「旋轉」而箭頭是移動的，**畫面在騙人**。
+ */
+function syncModeButtons() {
+  const m = sel.mode;
   for (const [id, mode] of [['mMove', 'translate'], ['mRot', 'rotate'], ['mScale', 'scale']]) {
     $(id).classList.toggle('on', mode === m);
   }
@@ -808,6 +951,23 @@ function updateBar() {
     ? `從選到的面長出新的一段（先長 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，再用箭頭拉）`
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
                     : '先按「拉點線面」進入編輯模式，再選一個面');
+
+  /**
+   * 編輯模式下選到「點」時，旋轉與縮放要灰掉。
+   *
+   * ⚠ 這**不是**原本那條「一律鎖成移動」的復辟。差別很重要：
+   * 原本那一行對**所有** kind 都鎖，把梯形、收尖、斜面推拉整組擋在門外
+   * —— 而它的理由（「把一個頂點旋轉 30 度沒有意義」）**只對點成立**。
+   * 現在只擋點，邊與面全開。
+   *
+   * 用灰掉而不是按了跳訊息：一眼就看得出「這個 kind 沒有這種變換」。
+   */
+  const vtx = sel.editMode && sel.editSel && sel.editSel.kind === 'vertex';
+  for (const id of ['mRot', 'mScale']) {
+    $(id).disabled = vtx;
+    if (vtx) $(id).title = '一個「點」轉或縮放都不會改變任何座標。要做梯形／收尖請選「邊」或「面」';
+    else $(id).removeAttribute('title');
+  }
 
   /**
    * 展開：**有物件就開放**。沒選東西就展開全部，所以不看選取數量。
