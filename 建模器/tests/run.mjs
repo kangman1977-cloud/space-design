@@ -6701,6 +6701,69 @@ section('導圓角：段數 1 就是現在的斜切邊');
   }
 }
 
+section('全選邊：會選到哪些邊');
+
+/**
+ * 🔴 **這一組守的是「介面上那個數字不可以說謊」。**
+ *
+ * ⚠ **這顆按鈕是 kang 2026-08-25 實測逼出來的，而且問題不在導角。**
+ * 他要做方塊六面 12 邊圓角 —— **功能本來就做得到**，但介面上要
+ * **開加選點 12 下**，中間漏一條或重複點到同一條邊的另一側，
+ * 就會有角落只導到兩條 → 被擋下來，而**畫面上看不出哪一條沒選到**。
+ *
+ * 判準沿用 `isMarkable()`（⛔ 不要另外寫一套）：
+ * 共面的三角化對角線畫面上根本沒有，選進來數字就會說謊（坑第 20 條）；
+ * 而環切／內縮／切一刀加出來的 `hard` 邊**要選進來**，
+ * `isMarkable()` 早就為它們開了例外。
+ */
+{
+  const pick = m => [...m.edges()].filter(he => seam.isMarkable(m, he));
+
+  {
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    eq('★★ 方塊全選 ＝ 12 條（不是 18 條）', pick(box).length, 12);
+    eq('　　（對照）網格裡其實有幾條邊', edgeCount(box), 12);
+  }
+
+  {
+    /** 🔴 環切加出來的 hard 邊要選得到 —— 選不到的話等於環切白做 */
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const v = findEdge(box, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9);
+    const r = edit.loopCut(box, v);
+    eq('★★ 環切之後全選 ＝ 20 條（新的一圈 4 條也選得到）', pick(r.mesh).length, 20);
+    eq('　　其中 hard 的有 4 條', [...r.mesh.edges()].filter(he => he.hard).length, 4);
+  }
+
+  {
+    /** 切一刀加出來的 hard 邊同理 */
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const r = edit.bisect(box, { n: new THREE.Vector3(1, 0, 0), d: 0 });
+    eq('★ 切一刀之後全選 ＝ 20 條', pick(r.mesh).length, 20);
+  }
+
+  {
+    /**
+     * 🔴 **這一條就是 kang 那個流程的機械斷言**：
+     * 全選 → 導圓角，必須真的成功（他手點 12 下失敗過）。
+     */
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const all = pick(box);
+    eq('（前置）全選拿到 12 條', all.length, 12);
+    const r = edit.bevelEdges(box, all, 5, { segments: 4 });
+    ok('★★ 全選 → 導圓角段數 4，真的成功', r.ok, r.reason || '');
+    eq('　　12 片斜切面 ＋ 8 個角落', `${r.walls}/${r.corners}`, '48/8');
+    eq('　　χ 仍然是 2', chi(r.mesh), 2);
+    ok('　　仍然封閉', r.mesh.isClosed());
+  }
+
+  {
+    /** 板件（開放的殼）：外輪廓不算「看得見的稜線」，但也不該整個沒東西 */
+    const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+    plate.computeNormals();
+    ok('★ 板件全選不會爆掉', pick(plate).length >= 0, `${pick(plate).length} 條`);
+  }
+}
+
 section('🔴 假邊界不可以變成分片線（recalcNormalsOutside）');
 
 /**

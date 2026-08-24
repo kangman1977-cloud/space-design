@@ -23,7 +23,7 @@ import { SceneView } from './view/scene.js';
 import { Selection, isTouch } from './view/select.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
-import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
+import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
   from './unfold/seam.js';
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
@@ -361,6 +361,7 @@ $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
+$('selAllEdges').onclick = () => selectAllEdges();
 $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
@@ -1010,6 +1011,46 @@ function loopCutSelected() {
   if (!r.closed) bits.push('（沒有繞回來 —— 撞到不是四邊形的面就會停，那是正常的）');
   if (got) bits.push(`新的 ${got} 條邊已選起來，用箭頭直接拉`);
   toast(bits.join('　'));
+}
+
+/**
+ * 全選邊：把這個物件所有「看得見的」邊一次選起來。
+ *
+ * 🔴 **這顆按鈕是 kang 2026-08-25 實測逼出來的，而且問題不在導角。**
+ * 他要做方塊六面 12 邊圓角 —— **功能本來就做得到**（沙箱驗過段數 1～16），
+ * 但介面上**要開加選點 12 下**，中間漏一條、或重複點到同一條邊的另一側，
+ * 就會有角落只導到兩條 → 被擋下來，而**畫面上看不出哪一條沒選到**。
+ * → 功能沒問題，**難的是選取**。那正是能力對照表第 10.7 節三大缺口之一
+ * （「多選只能一個一個點，32 片 seg 要點 32 下」）。
+ *
+ * ⚠ **判準用 `isMarkable()`，不是「所有的邊」** ——
+ * 共面的三角化對角線畫面上根本沒有，選進來使用者會看不懂數字
+ * （方塊會變成 18 條而不是 12 條，坑第 20 條）。
+ * 而環切／內縮／切一刀加出來的 `hard` 邊**要選進來**，
+ * `isMarkable()` 已經為它們開了例外，所以這裡直接沿用同一支，
+ * ⛔ 不要另外寫一套判斷。
+ */
+function selectAllEdges() {
+  const obj = sel.active;
+  if (!sel.editMode || !obj) {
+    toast('先按「拉點線面」進入編輯模式，選到物件再按「全選邊」', true);
+    return;
+  }
+  const mesh = obj.mesh();
+  const hes = [...mesh.edges()].filter(he => isMarkable(mesh, he));
+  if (!hes.length) {
+    toast('這個物件沒有看得見的邊可以選', true);
+    return;
+  }
+  const got = sel.selectEdges(obj, hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  /**
+   * 講出條數 —— **那個數字使用者自己驗得出來**（方塊應該是 12）。
+   * 只講「選好了」等於沒講，而他正是因為數不出來才踩到坑的。
+   */
+  toast(`已選起 ${got} 條邊　接著可以按「導角」做整個物件的圓角`);
 }
 
 /**
@@ -1728,6 +1769,16 @@ function updateBar() {
   $('selRing').title = edge1
     ? '從這條邊繞出一整圈邊全部選起來（也可以先按它看環切會切在哪）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
+
+  /**
+   * 全選邊：**選到物件就給按，不必先選任何邊** ——
+   * 它就是拿來取代「一條一條點」的。
+   */
+  const canAll = sel.editMode && !!sel.active;
+  $('selAllEdges').disabled = !canAll;
+  $('selAllEdges').title = canAll
+    ? '把這個物件所有看得見的邊一次選起來（方塊 12 條）。要做整個物件的導角／圓角就先按它'
+    : '先按「拉點線面」進入編輯模式，再選一個物件';
 
   /**
    * 任意切線：**選到物件就給按，不必選任何元素** ——
