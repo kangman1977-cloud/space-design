@@ -5685,6 +5685,146 @@ section('環切：切下去之後的網格');
   eq('　　警告數也一樣', after.warnings.length, before.warnings.length);
 }
 
+section('內縮（Inset）：加線 × 面的內縮輪廓');
+
+/**
+ * 🔴 **這一組同時在驗兩件事**：內縮本身，以及
+ * **「加線／加面／移除／移動」四動作框架成不成立**（kang 2026-08-25 選的試金石）。
+ *
+ * 框架成立的判準很具體：**內縮不該有任何一行新的數學** ——
+ * miter 是 `shell()` 現成的、外緣是 `boundaryLoops()`、重建是 `fromFaceList()`、
+ * 新邊標 `hard` 是環切那一輪定的規則。
+ */
+{
+  const baked = (type, params) => {
+    const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+    const m = r.ok ? r.mesh : buildPrim(type, params);
+    m.computeNormals();
+    return m;
+  };
+  const edgeCnt = m => [...m.edges()].length;
+  const chiOf = m => m.verts.length - edgeCnt(m) + m.faces.length;
+
+  {
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const top = box.faces.find(f => f.normal.z > 0.99);
+    const vol0 = box.volume(), area0 = box.area();
+    const r = edit.insetFaces(box, top, 5);
+    ok('內縮成功', r.ok);
+
+    eq('V 8 → 12', r.mesh.verts.length, 12);
+    eq('F 6 → 10', r.mesh.faces.length, 10);
+    eq('★★ χ 仍然是 2', chiOf(r.mesh), 2);
+    ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+
+    /**
+     * 🔴 **內縮只加線，形狀一格都不能變** —— 跟環切同一條斷言。
+     * 這一條就是「它是加線，不是別的東西」的機械證明。
+     */
+    rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+    rel('★★ 面積精確不變', r.mesh.area(), area0);
+
+    eq('★ 新的一圈 4 條邊，而且全部標成 hard', r.ring, 4);
+    eq('　　hard 邊確實是 4 條', [...r.mesh.edges()].filter(he => he.hard).length, 4);
+    eq('迴圈 1 圈', r.loops, 1);
+
+    /**
+     * 🔴 **miter：只推角平分線會不夠寬。**
+     * 內縮 5 的話，實際牆距要剛好是 5 —— 沿角平分線推 5 只會得到
+     * 5×cos45° ＝ 3.5355（`shell()` 檔頭那個坑第 7 條的同一件事）。
+     * 這裡直接量新的一圈離原本的邊多遠。
+     */
+    {
+      const b = box.bounds();
+      const inner = r.mesh.verts.filter(v => Math.abs(v.p.z - b.max.z) < 1e-9
+        && Math.abs(v.p.x) < 29.9);
+      const dx = Math.min(...inner.map(v => Math.abs(Math.abs(v.p.x) - 30)));
+      const dy = Math.min(...inner.map(v => Math.abs(Math.abs(v.p.y) - 20)));
+      near('★★ 實際牆距 x 剛好是 5（不是 3.5355）', dx, 5, 1e-9);
+      near('★★ 實際牆距 y 剛好是 5', dy, 5, 1e-9);
+    }
+
+    /**
+     * 🔴 **內圈那個面要能單獨選到、單獨拉動。**
+     * 它跟外框那一圈是**共面**的，所以只有 `hard` 邊擋住 `planarRegions()`
+     * 泛洪，它才會自成一區。沒有那條規則的話會選到一整片，內縮等於沒作用。
+     */
+    ok('★ 有回傳內圈那個面', !!r.innerFace);
+    eq('★★ 內圈那個面自成一區（hard 邊把它跟外框斷開）',
+       edit.regionOf(r.mesh, r.innerFace).faces.length, 1);
+    eq('　　而且是 4 邊形', r.mesh.faceVerts(r.innerFace).length, 4);
+
+    /**
+     * 🔴 **方案 C 的端對端驗證**：內縮完沿法向推，做出一個凹槽。
+     * 頂面是 60×40，內縮 5 之後推 10 —— 牆是斜的，所以挖掉的體積是
+     *   ∫₀¹⁰ (60−u)(40−u) du ＝ 24000 − 5000 + 1000/3 ＝ 19333.3333…
+     * ⚠ **這個數字連「牆是斜的」都算進去了**。
+     * 〔一開始拿 50×30×10 ＝ 15000 去對，那是把凹槽當成直壁 —— 模型錯，不是程式錯〕
+     */
+    {
+      const before = r.mesh.volume();
+      edit.moveElement(r.mesh, { kind: 'face', face: r.innerFace, mesh: r.mesh },
+                       new THREE.Vector3(0, 0, -10));
+      edit.refreshAfterEdit(r.mesh);
+      const want = 24000 - 5000 + 1000 / 3;
+      rel('★★ 內縮 → 沿法向推 10 → 挖掉的體積 ＝ 斜壁凹槽的積分值',
+          before - r.mesh.volume(), want);
+      ok('　　推完仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    }
+  }
+
+  {
+    /**
+     * ⚠ **多個迴圈的區域照樣內縮得了。**
+     * 管的端面是環形（外圈 ＋ 內孔），「面內」的方向由 `n × 邊方向` 決定，
+     * 外圈往內、內孔往外 —— **同一條公式自己就對了**，不必分開判斷。
+     * 〔對照：`mergeCoplanarFaces()` 遇到多迴圈是跳過的，因為一個面裝不下兩圈〕
+     */
+    const tube = baked('tube', { rOuter: 25, rInner: 15, h: 40, seg: 16 });
+    const cap = tube.faces.find(f => Math.abs(f.normal.y) > 0.99)
+             || tube.faces.find(f => Math.abs(f.normal.z) > 0.99);
+    const vol0 = tube.volume(), area0 = tube.area(), chi0 = chiOf(tube);
+    const r = edit.insetFaces(tube, cap, 2);
+    ok('★ 環形的端面（外圈＋內孔）內縮得了', r.ok);
+    eq('　　兩個迴圈都內縮了', r.loops, 2);
+    eq(`　　χ 仍然是 ${chi0}（管是穿孔的，本來就不是 2）`, chiOf(r.mesh), chi0);
+    rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+    rel('★★ 面積精確不變', r.mesh.area(), area0);
+  }
+
+  {
+    /** 16 段圓柱的端面是 16 邊形 —— n 邊形也要內縮得了 */
+    const cyl = baked('cylinder', { r: 25, h: 60, seg: 16 });
+    const cap = cyl.faces.find(f => f.normal.y > 0.99) || cyl.faces.find(f => f.normal.z > 0.99);
+    const vol0 = cyl.volume();
+    const r = edit.insetFaces(cyl, cap, 3);
+    ok('★ 16 邊形的端面內縮得了', r.ok);
+    eq('　　新的一圈 16 條邊', r.ring, 16);
+    eq('　　χ 仍是 2', chiOf(r.mesh), 2);
+    rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  }
+
+  {
+    /** 擋下來的情形 */
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const top = box.faces.find(f => f.normal.z > 0.99);
+    ok('寬度 0 擋下來並說原因',
+       !edit.insetFaces(box, top, 0).ok && /大於 0/.test(edit.insetFaces(box, top, 0).reason || ''));
+    ok('沒給面擋下來', !edit.insetFaces(box, null, 5).ok);
+  }
+
+  {
+    /** 標記要活過內縮（走拆掉重建，所以是必驗的一條） */
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    const e0 = [...box.edges()][0];
+    box.setRole(e0, EDGE_ROLE.CUT);
+    box.setSmooth(e0, true);
+    const top = box.faces.find(f => f.normal.z > 0.99);
+    const r = edit.insetFaces(box, top, 5);
+    marksSurvive('★ 內縮之後每一樣標記都還在', box, r.mesh, r.remap);
+  }
+}
+
 section('法向：重算外側 ／ 翻面');
 
 /**

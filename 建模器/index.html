@@ -413,6 +413,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         環切已經把走訪寫好了，這顆按鈕幾乎是免費的。
       -->
       <button id="selRing" disabled title="選一圈：從選到的那條邊繞出一整圈邊，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個">選一圈</button>
+      <!--
+        內縮：沿著面的外緣往面內長一圈邊。只加線、形狀不變。
+        內圈那個新面會自動選中 → 接著用「拉面」沿法向推，就是凹槽／面板開口／邊框。
+        （不做 Blender 的 Depth，理由同擠出方案 C：一個動作一件事）
+      -->
+      <button id="inset" disabled title="內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。只加線、形狀不變。內圈那個新面會自動選中，接著用箭頭沿法向推就是凹槽、面板開口、邊框">內縮</button>
+      <input id="insetW" type="number" min="0.1" step="0.1" value="1"
+             title="內縮寬度（cm）：新的一圈離原本的邊多遠。四個角會自動做尖角接合（miter），實際牆距就是這個數字">
     </div>
 
     <!--

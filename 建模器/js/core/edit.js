@@ -1260,6 +1260,166 @@ export function loopCut(mesh, he0, opt = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  內縮（Inset）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **內縮：沿著一個面的外緣往面內長出一圈新的邊。**
+ *
+ * ── 它是「加線」，不是新功能 ──────────────────────────
+ * ⭐ **這一支沒有一行新的數學**：
+ * miter 是 `mesh.js` `shell()` 現成的、外緣是 `boundaryLoops()`、
+ * 重建是 `fromFaceList()`、新邊標 `hard` 是環切那一輪定的規則。
+ *
+ * 它是「**加線 × 面的內縮輪廓**」—— 2026-08-25 kang 批准的四動作框架
+ * （加線／加面／移除／移動）的第一個試金石，而且**框架成立**。
+ *
+ * 🔴 **只加線，形狀一格都不變** —— 體積與面積**精確不變**，
+ * 那是可以對答案的（跟環切同一條斷言）。要凹下去是下一步「拉面」的事。
+ *
+ * ── 為什麼不做 Blender 的 Depth（內縮同時往法向推）────────
+ * kang 2026-08-25 選的，**跟擠出的方案 C 同一個形狀**：
+ * 內縮只負責加線 → **內圈那個新面自動選中** → 用已經驗過的
+ * 「拉面 × 法向」推到想要的深度（還可以打精確數字）。
+ * **一個動作一件事，零行新程式**，而凹槽、面板開口、邊框全都做得出來。
+ *
+ * ── 🔴 miter：只推角平分線會不夠寬 ────────────────────
+ * 沿角平分線推 d，實際牆距只有 `d × cos(半夾角)` ——
+ * **方塊頂面內縮 5，實測只有 3.5355**（＝5×cos45°）。
+ * 除以 cos 之後是 **5.0000**，精確。
+ * 上限 5 倍：夾角接近 180 度時 cos 趨近 0，推距會爆掉（`shell()` 的老規矩）。
+ *
+ * ── ⚠ 多個迴圈的區域照樣可以內縮 ──────────────────────
+ * 管的端面是**環形**（外圈 ＋ 內孔），兩個迴圈各自往「面內」推 ——
+ * 而「面內」的方向由 `n × 邊方向` 決定，外圈往內、內孔往外，
+ * **同一條公式自己就對了**，不必分開判斷（實測 χ 仍是 0）。
+ * 〔對照：`mergeCoplanarFaces()` 遇到多迴圈是**跳過**的，因為一個面
+ * 　裝不下兩個迴圈；內縮不受這個限制，它不合併面〕
+ *
+ * @param {Mesh} mesh
+ * @param {Face} face 選到的那個面（會自動擴成整個共面區域）
+ * @param {number} w 內縮寬度，cm
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            loops?:number, ring?:number, innerFace?:Face}}
+ *          `innerFace` ＝ 內縮之後**內圈**那個面，呼叫端拿它去自動選中
+ */
+export function insetFaces(mesh, face, w, tolDeg = 0.5) {
+  if (!mesh || !face) return { ok: false, reason: '沒有選到面' };
+  if (!(w > 0)) return { ok: false, reason: '內縮寬度要大於 0' };
+
+  mesh.computeNormals();
+  const reg = regionOf(mesh, face, tolDeg);
+  if (!reg.faces.length) return { ok: false, reason: '找不到這個面所屬的共面區域' };
+
+  const loops = boundaryLoops(mesh, reg.faces);
+  if (!loops.length) {
+    return { ok: false, reason: '這個面走不出完整的外緣（區域可能在某個頂點上捏成一點）' };
+  }
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const n = face.normal.clone().normalize();
+  const inner = new Map();          // 舊頂點索引 → 內圈新頂點索引
+  const ringPairs = [];
+  let clamped = 0;
+
+  /** 一條邊在面內「往面內」的方向 ＝ 面法向 × 邊方向（左手邊就是內側） */
+  const dirIn = he => {
+    const d = new THREE.Vector3().subVectors(he.to.p, he.v.p).normalize();
+    return new THREE.Vector3().crossVectors(n, d).normalize();
+  };
+
+  for (const loop of loops) {
+    for (let i = 0; i < loop.length; i++) {
+      const cur = loop[i], prv = loop[(i - 1 + loop.length) % loop.length];
+      const a = vi.get(cur.v.id);
+      if (inner.has(a)) continue;              // 同一個頂點只做一次
+      const i1 = dirIn(cur), i2 = dirIn(prv);
+      const bis = i1.clone().add(i2);
+      let p;
+      if (bis.lengthSq() < 1e-16) {
+        p = cur.v.p.clone().addScaledVector(i1, w);      // 兩條邊剛好反向（退化）
+      } else {
+        bis.normalize();
+        const cos = bis.dot(i1);
+        if (cos < 0.2) clamped++;                        // 上限 5 倍，跟 shell() 同一個規矩
+        p = cur.v.p.clone().addScaledVector(bis, w / Math.max(cos, 0.2));
+      }
+      inner.set(a, points.length);
+      points.push(p);
+    }
+  }
+
+  const inSet = new Set(reg.faces);
+  const faces = [];
+  for (const f of mesh.faces) {
+    const idx = mesh.faceVerts(f).map(v => vi.get(v.id));
+    // 區域內的面：外緣上的頂點換成內圈的；區域外的面一個字都不動
+    faces.push(inSet.has(f) ? idx.map(i => (inner.has(i) ? inner.get(i) : i)) : idx);
+  }
+  for (const loop of loops) {
+    for (const he of loop) {
+      const a = vi.get(he.v.id), b = vi.get(he.to.id);
+      faces.push([a, b, inner.get(b), inner.get(a)]);     // 一圈側面
+      ringPairs.push([inner.get(a), inner.get(b)]);
+    }
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `內縮做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, clean.remap);
+
+  /**
+   * 🔴 **新的一圈一定要標 `hard`。**
+   * 它是**共面**的（就在原本那個面的平面上），而這個專案的規則是
+   * 「共面的邊 ＝ 畫面上看不見的邊 ＝ 不該存在的邊」——
+   * 不標的話**畫面上看不見、點不到、內圈那個面選不動、按壓平就被併回去**。
+   * 〔環切那一輪的教訓，四個出口見 `HalfEdge.hard` 的說明〕
+   */
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const want = new Set();
+  for (const [a, b] of ringPairs) {
+    const x = to(a), y = to(b);
+    if (x !== undefined && y !== undefined) want.add(kOf(x, y));
+  }
+  let ring = 0;
+  for (const he of out.edges()) {
+    if (!want.has(kOf(di.get(he.v.id), di.get(he.to.id)))) continue;
+    out.setHard(he, true);
+    ring++;
+  }
+
+  /** 內圈那個面：拿「原本區域的第一個面，頂點換成內圈之後」去找回來 */
+  let innerFace = null;
+  {
+    const wantSet = new Set();
+    for (const v of mesh.faceVerts(reg.faces[0])) {
+      const i = vi.get(v.id);
+      const j = to(inner.has(i) ? inner.get(i) : i);
+      if (j !== undefined) wantSet.add(j);
+    }
+    for (const f of out.faces) {
+      const s = new Set(out.faceVerts(f).map(v => di.get(v.id)));
+      if (s.size !== wantSet.size) continue;
+      let same = true;
+      for (const k of wantSet) if (!s.has(k)) { same = false; break; }
+      if (same) { innerFace = f; break; }
+    }
+  }
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    loops: loops.length, ring, clamped, innerFace
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  法向：重算外側 ／ 翻面
 // ═══════════════════════════════════════════════════════
 

@@ -30,7 +30,7 @@ import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
-         recalcNormalsOutside, flipNormals } from './core/edit.js';
+         recalcNormalsOutside, flipNormals, insetFaces } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -358,6 +358,7 @@ $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
+$('inset').onclick = () => insetSelected();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
 $('flipNormals').onclick = () => flipNormalsOnSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
@@ -1035,6 +1036,66 @@ function selectRingFromEdge() {
 }
 
 /**
+ * 內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。
+ *
+ * ── 它只加線，形狀一格都不變 ────────────────────────────
+ * 體積與面積**精確不變**（測試釘著）。要凹下去是下一步「拉面」的事。
+ *
+ * ── 為什麼不做 Blender 的 Depth（內縮同時往法向推）────────
+ * kang 2026-08-25 選的，**跟擠出的方案 C 同一個形狀**：
+ * 內縮只負責加線 → 內圈那個新面**自動選中** → 用已經驗過的
+ * 「拉面 × 法向」推到想要的深度（還可以打精確數字）。
+ * **一個動作一件事，零行新的拖曳邏輯**，而凹槽、面板開口、邊框全做得出來。
+ *
+ * 實測（方塊頂面 60×40）：內縮 5 再沿法向推 10，挖掉的體積是
+ * ∫₀¹⁰(60−u)(40−u)du ＝ **19333.3333**，程式報的一模一樣 ——
+ * 那是斜壁凹槽的真值，連牆是斜的都算進去了。
+ */
+function insetSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'face') {
+    toast('先在編輯模式下選一個面，再按「內縮」', true);
+    return;
+  }
+  /**
+   * ⚠ **一次只能一個面**（跟擠出同一條界線）。
+   * 選了好幾個面時擋下來並講清楚 —— 多個不共面的面各自內縮是
+   * Blender 的 Individual 模式，那是另一件事，還沒做。
+   */
+  if (sel.editCount > 1) {
+    toast(`內縮一次只能一個面（現在選了 ${sel.editCount} 個）。點一下那個面單獨選它`, true);
+    return;
+  }
+  const w = +$('insetW').value;
+  if (!(w > 0)) { toast('內縮寬度要大於 0', true); return; }
+
+  const obj = el.obj;
+  const r = insetFaces(obj.mesh(), el.face, w);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(`內縮 ${w} cm`);
+
+  /** ⚠ 一定要在 commit() 之後才選（跟擠出、環切同一條理由） */
+  const got = r.innerFace ? sel.selectFace(obj, r.innerFace) : false;
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已內縮 ${w} cm（新增 ${r.ring} 條邊${r.loops > 1 ? `、${r.loops} 圈` : ''}）`];
+  /**
+   * ⚠ 夾角接近 180 度時 miter 會爆掉，所以有 5 倍上限（`shell()` 的老規矩）。
+   * 被夾住代表那幾個角**沒有推到你要求的寬度** —— 那是他驗得出來的差異，要講。
+   */
+  if (r.clamped) bits.push(`⚠ ${r.clamped} 個角太平（接近 180°），推距被限制在 5 倍以內`);
+  if (got) bits.push('內圈那個面已選起來，用箭頭沿法向推就是凹槽');
+  toast(bits.join('　'));
+}
+
+/**
  * 🔴 修法向：把整個物件的面朝向重算成「一致而且朝外」。
  *
  * ── 為什麼這顆按鈕該存在 ────────────────────────────────
@@ -1331,6 +1392,18 @@ function updateBar() {
    * 它動的是選取那幾片的頂點，跟擠出「一次只能一個」不同 ——
    * 壓平多個面本來就是它的主要用途（把好幾片 seg 壓成一個平面）。
    */
+  /**
+   * 內縮：**選到一個面才給按**（一次一個，跟擠出同一條界線）。
+   */
+  $('inset').disabled = !face;
+  $('insetW').disabled = !face;
+  $('inset').title = face
+    ? (sel.editCount > 1
+        ? `內縮一次只能一個面（現在選了 ${sel.editCount} 個）`
+        : '沿著這個面的外緣往面內長一圈邊。只加線、形狀不變，內圈那個面會自動選中')
+    : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
+                    : '先按「拉點線面」進入編輯模式，再選一個面');
+
   $('flatten').disabled = !face;
   $('flatten').title = face
     ? (sel.editCount > 1
