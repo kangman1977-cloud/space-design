@@ -5949,6 +5949,203 @@ section('法向：重算外側 ／ 翻面');
   }
 }
 
+section('刪除面 ＋ 補洞（一對）');
+
+/**
+ * 🔴 **這兩個是一對，不是先後。**
+ * 沒有刪除面就做不出洞，沒有補洞就補不回去。
+ * 〔原本排的順序是「補面先做，因為它是刪除面的前提」——**那個說法有問題**：
+ * 　補洞當時根本沒有輸入。是 kang 2026-08-25 問「不懂意思」才發現的〕
+ *
+ * ⭐ 這一組最有價值的斷言是**來回**：刪掉再補回來，
+ * **體積、面數、頂點數要精確還原** —— 那是可以對答案的。
+ */
+{
+  const baked = (type, params) => {
+    const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+    const m = r.ok ? r.mesh : buildPrim(type, params);
+    m.computeNormals();
+    return m;
+  };
+  const chiOf = m => m.validate().euler;
+  const topOf = m => {
+    m.computeNormals();
+    return m.faces.find(f => f.normal.z > 0.99) || m.faces.find(f => f.normal.y > 0.99);
+  };
+
+  {
+    /** ① 刪一個面 → χ 2→1、變開放 */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const r = edit.deleteFaces(m, [{ kind: 'face', face: topOf(m) }]);
+    ok('刪除成功', r.ok);
+    eq('★ 刪掉 1 個面（共面區域，不是一個三角形）', r.removed, 1);
+    eq('★★ χ 2 → 1', chiOf(r.mesh), 1);
+    ok('★★ 從封閉變成開放（那是它最大的代價，畫面上看不出來）',
+       r.wasClosed && !r.nowClosed);
+    ok('　　結構仍然沒問題', r.mesh.validate().ok);
+  }
+
+  {
+    /**
+     * ② 🔴 **來回：刪掉再補回來，要精確還原。**
+     * 這一條同時驗兩支，而且是可以對答案的量。
+     */
+    const m0 = baked('box', { w: 60, d: 45, h: 40 });
+    const want = { v: m0.volume(), f: m0.faces.length, vt: m0.verts.length };
+    const d = edit.deleteFaces(m0, [{ kind: 'face', face: topOf(m0) }]);
+    const f = edit.fillHoles(d.mesh);
+    ok('補洞成功', f.ok);
+    eq('★ 補了 1 個洞，而且是 4 邊形', `${f.holes}/${f.sizes.join(',')}`, '1/4');
+    rel('★★ 體積精確還原', f.mesh.volume(), want.v);
+    eq('★★ 面數精確還原', f.mesh.faces.length, want.f);
+    eq('★★ 頂點數精確還原', f.mesh.verts.length, want.vt);
+    ok('　　表面回到封閉、χ 回到 2', f.mesh.isClosed() && chiOf(f.mesh) === 2);
+  }
+
+  {
+    /**
+     * ③ ⚠ **刪一個角落周圍的三個面會產生孤點** —— 那個角只被那三個面用著。
+     * `cleanRebuild()` 會清掉，而清掉就會讓索引位移，所以標記一定要走 remap。
+     */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const b = m.bounds();
+    const c = m.verts.find(v => Math.abs(v.p.x - b.max.x) < 1e-6
+      && Math.abs(v.p.y - b.max.y) < 1e-6 && Math.abs(v.p.z - b.max.z) < 1e-6);
+    const around = m.faces.filter(f => m.faceVerts(f).includes(c));
+    const r = edit.deleteFaces(m, around.map(face => ({ kind: 'face', face })));
+    ok('刪一個角落周圍的三個面：成功', r.ok);
+    eq('★★ 真的會產生孤點，而且被清掉了', r.orphans, 1);
+    ok('　　結構仍然沒問題', r.mesh.validate().ok);
+  }
+
+  {
+    /** ④ 16 邊形的洞（圓柱端面）也補得回來 */
+    const m0 = baked('cylinder', { r: 25, h: 60, seg: 16 });
+    const v0 = m0.volume();
+    const d = edit.deleteFaces(m0, [{ kind: 'face', face: topOf(m0) }]);
+    const f = edit.fillHoles(d.mesh);
+    eq('★ 補出一個 16 邊形', f.sizes.join(','), '16');
+    rel('★★ 體積精確還原', f.mesh.volume(), v0);
+  }
+
+  {
+    /** ⑤ 兩個不相鄰的洞，一次補回來 */
+    const m0 = baked('box', { w: 60, d: 45, h: 40 });
+    m0.computeNormals();
+    const v0 = m0.volume();
+    const two = [m0.faces.find(f => f.normal.z > 0.99), m0.faces.find(f => f.normal.z < -0.99)];
+    const d = edit.deleteFaces(m0, two.map(face => ({ kind: 'face', face })));
+    eq('（前置）刪掉兩個面之後 χ 是 0', chiOf(d.mesh), 0);
+    const f = edit.fillHoles(d.mesh);
+    eq('★ 一次補回兩個洞', f.holes, 2);
+    rel('★★ 體積精確還原', f.mesh.volume(), v0);
+  }
+
+  {
+    /**
+     * ⑥ 🔴 **標記要活過「刪除 → 補洞」，而且不可以憑空多出來。**
+     *
+     * ⚠ 這一條抓到兩個漏洞（2026-08-25 沙箱）：
+     * ① `deleteFaces()` 忘了搬標記 → `smooth` 掉光
+     * ② **假邊界**：刪面留下的邊界被 `_buildBoundaryLoops()` 自動標成 CUT，
+     *    補回去之後那些 CUT 留著 → **CUT 從 1 條變成 4 條**
+     */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const side = [...m.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.z) > 1e-6 && Math.hypot(d.x, d.y) < 1e-6;
+    });
+    m.setRole(side, EDGE_ROLE.CUT);
+    m.setSmooth(side, true);
+    const d = edit.deleteFaces(m, [{ kind: 'face', face: topOf(m) }]);
+    const f = edit.fillHoles(d.mesh);
+    eq('★★ CUT 還是 1 條（不多不少）',
+       [...f.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 1);
+    eq('★★ smooth 還是 1 條（deleteFaces 原本忘了搬）',
+       [...f.mesh.edges()].filter(he => he.smooth).length, 1);
+  }
+
+  {
+    /** ⑦⑧ 擋下來的兩種情形 */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const f = edit.fillHoles(m);
+    ok('★ 沒有洞的時候按補洞 → 擋下來並說原因', !f.ok && /沒有洞/.test(f.reason || ''), f.reason);
+    const r = edit.deleteFaces(m, m.faces.map(face => ({ kind: 'face', face })));
+    ok('★ 想把面刪光 → 擋下來，而且講出出路（用工具列的「刪除」）',
+       !r.ok && /刪光/.test(r.reason || ''), r.reason);
+  }
+
+  {
+    /**
+     * ⑨ 🔴 **「洞在一個頂點上捏成一點」要擋下來。**
+     *
+     * 那是 `mesh.js` 的既有限制：`_buildBoundaryLoops()` 用
+     * 「頂點 → 邊界半邊」的 Map 串迴圈，**一個頂點只放得下一條**。
+     * 刪掉的面只在一個頂點相接時，那個頂點會同時落在兩個洞上 → 迴圈斷掉。
+     * 〔2026-08-25 壓力測試抓到：球 seg8 隨機刪 4 個面就會踩到，
+     * 　症狀是「半邊沒有 next」、χ −2〕
+     */
+    const sph = baked('sphere', { r: 25, seg: 8 });
+    sph.computeNormals();
+    // 找兩個「只共用一個頂點」的面
+    let pair = null;
+    outer:
+    for (const a of sph.faces) {
+      const va = new Set(sph.faceVerts(a));
+      for (const b of sph.faces) {
+        if (a === b) continue;
+        const shared = sph.faceVerts(b).filter(v => va.has(v));
+        if (shared.length === 1) { pair = [a, b]; break outer; }
+      }
+    }
+    ok('（前置）球上找得到「只共用一個頂點」的兩個面', !!pair);
+    if (pair) {
+      const r = edit.deleteFaces(sph, pair.map(face => ({ kind: 'face', face })));
+      ok('★★ 擋下來並說原因（不要做出邊界斷掉的網格）',
+         !r.ok && /捏/.test(r.reason || ''), r.reason);
+    }
+  }
+
+  {
+    /**
+     * ⑩ ⚠ **補洞不知道原本那裡是什麼形狀** —— 它只把每個邊界迴圈補成一個面。
+     *
+     * 管的端面是**環形**（外圈 ＋ 內孔）。刪掉之後有兩個邊界迴圈，
+     * 補洞把兩個各補一個面 → **內孔被塞住，管變成實心**。
+     *
+     * 🔴 那是**資料結構的限制**，不是 bug：**一個面裝不下兩個迴圈**
+     * （`mergeCoplanarFaces()` 也正是為此跳過環形區域）。
+     * ⛔ 所以「刪掉再補回來」對環形的面**不成立**，不要拿它當回歸斷言。
+     */
+    const tube = baked('tube', { rOuter: 25, rInner: 15, h: 40, seg: 12 });
+    tube.computeNormals();
+    const cap = tube.faces.find(f => Math.abs(f.normal.y) > 0.99)
+             || tube.faces.find(f => Math.abs(f.normal.z) > 0.99);
+    const chi0 = chiOf(tube);
+    const d = edit.deleteFaces(tube, [{ kind: 'face', face: cap }]);
+    ok('管的端面刪得掉', d.ok);
+    const f = edit.fillHoles(d.mesh);
+    ok('補得回來（但不是原本的形狀）', f.ok);
+    ok('★★ 內孔被塞住了 —— χ 從 0 變成 2（那是限制，不是 bug）',
+       chi0 === 0 && chiOf(f.mesh) === 2, `χ ${chi0} → ${chiOf(f.mesh)}`);
+  }
+
+  {
+    /**
+     * ⑪ ⚠ **板件的「邊界」不是洞，是它本來的外輪廓。**
+     * 補了會把它封成一個**零體積**的殼 —— 而畫面上看起來一模一樣。
+     * ⛔ 不擋（幾何上分不出「洞」與「外輪廓」），但呼叫端要把體積講出來。
+     */
+    const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+    plate.computeNormals();
+    const f = edit.fillHoles(plate);
+    ok('板件按補洞：做得出來（不擋）', f.ok);
+    ok('★ 但補完是一個零體積的殼 —— 所以呼叫端一定要把體積講出來',
+       f.ok && f.mesh.isClosed() && Math.abs(f.mesh.volume()) < 1e-9,
+       f.ok ? `體積 ${f.mesh.volume()}` : '');
+  }
+}
+
 section('導角（Bevel，單段）：內縮 ＋ 加面');
 
 /**

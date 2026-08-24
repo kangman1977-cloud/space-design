@@ -430,6 +430,12 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="bevel" disabled title="導角：把選到的邊換成一片斜切面（45 度斜切）。相鄰的邊一起導時，角落會自動長出一個面。可以一次選好幾條邊">導角</button>
       <input id="bevelW" type="number" min="0.1" step="0.1" value="1"
              title="導角寬度（cm）：斜切面離原本那條邊多遠。⚠ 太大會跟旁邊的邊打架，做出怪形狀">
+      <!--
+        刪除面 ＋ 補洞：一對。沒有刪除面就做不出洞，沒有補洞就補不回去。
+        ⚠ 刪除面會讓網格變開放 → 不能再做布林，展開與 STL 行為也會變。
+      -->
+      <button id="delFace" disabled title="刪除面：把選到的面拿掉，那裡會變成一個洞。⚠ 網格會變成開放的，之後不能再做布林運算。補得回來 —— 用旁邊的「補洞」">刪除面</button>
+      <button id="fillHoles" disabled title="補洞：把這個物件上所有的洞補起來。⚠ 板件（本來就是一張沒有厚度的面）按了會被封起來，那時體積會是 0">補洞</button>
     </div>
 
     <!--

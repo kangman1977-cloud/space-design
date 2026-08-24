@@ -1421,6 +1421,235 @@ export function insetFaces(mesh, face, w, tolDeg = 0.5) {
   };
 }
 
+/**
+ * 🔴 **把「假邊界」帶進來的 CUT 清掉。**
+ *
+ * `mesh.js` 的 `_buildBoundaryLoops()` 有一條規則：**邊界天生就是切割線**，
+ * 所以沒有 twin 的半邊會自動被標成 `CUT`。**那條規則本身是對的。**
+ *
+ * 但有兩種情況，那些邊只是**暫時**是邊界：
+ *
+ * | 情況 | 誰造成的 |
+ * |---|---|
+ * | 繞向不一致 → twin 配不起來 → 被當成邊界 | `recalcNormalsOutside()` 修好之後它們變回內部邊 |
+ * | 刪掉一個面留下的洞 → 邊界 | `fillHoles()` 補回去之後它們變回內部邊 |
+ *
+ * 兩種情況下 CUT 都已經跟著搬進成品了 ——
+ * **症狀是畫面上憑空多出幾條分片線，而使用者從來沒標過。**
+ *
+ * ⚠ **只清「原本是邊界、現在變成內部」的那些。**
+ * 真正的邊界（開放的殼）照樣該是 CUT；使用者自己標的也不會落進這個集合
+ * （他標的在原網格上是內部邊）。
+ *
+ * @returns {number} 清掉幾條
+ */
+function clearBoundaryOnlySeams(src, dst, remap) {
+  const si = src._vertIndex(), di = dst._vertIndex();
+  const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+  const to = i => (remap ? remap.get(i) : i);
+
+  const wasBoundary = new Set();
+  for (const he of src.halfEdges) {
+    if (he.face && he.twin && he.twin.face) continue;       // 原本就是內部邊
+    const a = to(si.get(he.v.id)), b = to(si.get(he.to.id));
+    if (a !== undefined && b !== undefined) wasBoundary.add(key(a, b));
+  }
+  if (!wasBoundary.size) return 0;
+
+  let n = 0;
+  for (const he of dst.edges()) {
+    if (!he.face || !he.twin || !he.twin.face) continue;     // 現在還是邊界 → 該留著
+    if (he.role !== EDGE_ROLE.CUT) continue;
+    if (wasBoundary.has(key(di.get(he.v.id), di.get(he.to.id)))) {
+      dst.setRole(he, EDGE_ROLE.FREE);
+      n++;
+    }
+  }
+  return n;
+}
+
+// ═══════════════════════════════════════════════════════
+//  刪除面 ／ 補洞（一對）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **刪除面：把選到的面拿掉，那裡就變成一個洞。**
+ *
+ * ── 它跟「補洞」是一對，不是先後 ──────────────────────
+ * 沒有刪除面就做不出洞，沒有補洞就補不回去。所以兩個一起做。
+ * 〔原本排的順序是「補面先做，因為它是刪除面的前提」——**那個說法有問題**：
+ * 　補洞當時根本沒有輸入。是 kang 2026-08-25 問「不懂意思」才發現的〕
+ *
+ * ⚠ **一個面 ＝ 共面區域**（鐵律二）。點方塊的頂面刪掉的是那一整片，
+ * 不是命中的那一個三角形。
+ *
+ * ⚠ **會產生孤點** —— 實測「刪一個角落周圍的三個面」會留下 1 個孤點
+ * （那個角只被那三個面用著）。`cleanRebuild()` 清掉，索引會位移，
+ * 所以標記一定要走 remap 搬。
+ *
+ * ⚠ **代價要講清楚**：網格會變**開放** → 不能再做布林（`canBool` 擋開放件），
+ * 展開與 STL 的行為也會變。呼叫端負責講。
+ *
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            removed?:number, orphans?:number, wasClosed?:boolean, nowClosed?:boolean}}
+ */
+export function deleteFaces(mesh, els, tolDeg = 0.5) {
+  const list = (Array.isArray(els) ? els : [els]).filter(Boolean);
+  if (!mesh || !list.length) return { ok: false, reason: '沒有選到面' };
+
+  const drop = new Set();
+  for (const el of list) {
+    if (el.kind !== 'face' || !el.face) return { ok: false, reason: '只能刪除「面」' };
+    for (const f of regionOf(mesh, el.face, tolDeg).faces) drop.add(f);
+  }
+  /**
+   * ⚠ **不能把面刪光** —— 那會留下一個沒有任何面的「物件」，
+   * 而畫面上什麼都沒有、參數面板還在，看起來像壞掉。
+   * 要刪整個物件有工具列那顆「刪除」。〔坑第 11 條：擋下來要講清楚出路〕
+   */
+  if (drop.size >= mesh.faces.length) {
+    return {
+      ok: false,
+      reason: `那樣會把整個物件的面刪光（${drop.size}/${mesh.faces.length} 個）。`
+            + `要刪掉整個物件請用工具列的「刪除」`
+    };
+  }
+
+  const wasClosed = mesh.isClosed();
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.filter(f => !drop.has(f))
+                          .map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `刪出壞掉的網格：${pre.fatal[0]}` };
+
+  /**
+   * 🔴 **擋掉「洞在一個頂點上捏在一起」的情形。**
+   *
+   * ── 這是 `mesh.js` 的一個既有限制，不是這一支的問題 ──────
+   * `_buildBoundaryLoops()` 用一個 **`頂點 → 邊界半邊` 的 Map** 把邊界串成迴圈，
+   * 所以**一個頂點只放得下一條**。刪掉的面如果**只在一個頂點相接**，
+   * 那個頂點會同時落在兩個洞的邊界上 → Map 被覆蓋 → **迴圈斷掉**。
+   * 〔`mesh.js` 自己也知道，那裡寫著 `邊界迴圈在頂點 N 斷開` 這個 issue〕
+   *
+   * 實測（2026-08-25 壓力測試）：球 seg8 隨機刪 4 個面就會踩到 ——
+   * `半邊 X 沒有 next`、χ −2、結構壞掉。
+   *
+   * ⚠ **判準**：一個頂點上「只被用到一次的邊」超過 2 條，就是有兩個洞
+   * 從它身上穿過（一個洞經過一個頂點只會貢獻 2 條）。
+   *
+   * ⛔ **不要在這裡偷偷改 `mesh.js`** —— 那是核心，而且這一題有獨立的解
+   * （讓邊界迴圈支援「一個頂點多條」）。先擋下來並講清楚，記進待辦。
+   */
+  {
+    const use = new Map();          // 無向邊 → 用了幾次
+    const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+    for (const f of faces) {
+      for (let i = 0; i < f.length; i++) {
+        const k = kOf(f[i], f[(i + 1) % f.length]);
+        use.set(k, (use.get(k) || 0) + 1);
+      }
+    }
+    const atVert = new Map();
+    for (const [k, n] of use) {
+      if (n !== 1) continue;                       // 只有「用一次」的才是洞的邊界
+      const [a, b] = k.split('-').map(Number);
+      atVert.set(a, (atVert.get(a) || 0) + 1);
+      atVert.set(b, (atVert.get(b) || 0) + 1);
+    }
+    let pinched = 0;
+    for (const n of atVert.values()) if (n > 2) pinched++;
+    if (pinched) {
+      return {
+        ok: false,
+        reason: `這樣刪會讓 ${pinched} 個頂點同時落在兩個洞的邊界上（洞在那裡「捏」成一點），`
+              + `而目前的網格結構撐不住那種形狀。`
+              + `改成刪「連在一起」的面，或一次少刪幾個`
+      };
+    }
+  }
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, clean.remap);
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    removed: drop.size, orphans: clean.dropped.orphans,
+    wasClosed, nowClosed: out.isClosed()
+  };
+}
+
+/**
+ * 🔴 **補洞：把物件上所有的洞補起來。**（＝ Blender Cleanup 的 Fill Holes）
+ *
+ * ── 洞在我們的資料結構裡本來就串好了 ────────────────────
+ * ⭐ **一行新的走訪都不用寫** —— `_buildBoundaryLoops()` 在建網格時
+ * 就把「沒有 twin 的半邊」補成 `face` 為 null 的邊界半邊，
+ * 並且**串成迴圈**（`next`／`prev`）。所以繞一圈就是洞的輪廓。
+ *
+ * ── 為什麼不做成「選一個洞補一個」──────────────────────
+ * 🔴 **邊界邊在編輯模式下點不到** —— 挑邊走 `nearestMarkableEdge()`，
+ * 而它明文排除邊界邊（「邊界本來就是外輪廓，標了也沒有意義」，
+ * 那對分片是對的）。所以使用者選不到洞。
+ * → 做成「全部補起來」，跟 Blender 的 Fill Holes 一樣。
+ * 〔要做成精準版就得在 `select.js` 另外加一支「找最近的邊界邊」，
+ * 　不能改 `isMarkable` —— 那支被分片與貼合共用〕
+ *
+ * ⚠ **板件（本來就開放）按下去會被封起來** —— 它的「邊界」不是洞，
+ * 是它本來的外輪廓。那時補完體積會是 0，呼叫端要把體積講出來讓使用者看得見。
+ *
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            holes?:number, sizes?:number[], nowClosed?:boolean, fakeSeams?:number}}
+ */
+export function fillHoles(mesh) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  const naked = mesh.halfEdges.filter(he => !he.face);
+  if (!naked.length) {
+    return { ok: false, reason: '這個物件沒有洞（表面已經是封閉的）' };
+  }
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+
+  const seen = new Set();
+  const sizes = [];
+  for (const b of naked) {
+    if (seen.has(b)) continue;
+    const loop = [];
+    let c = b, guard = 0;
+    do { seen.add(c); loop.push(vi.get(c.v.id)); c = c.next; }
+    while (c && c !== b && guard++ < 1e5);
+    if (c !== b) return { ok: false, reason: '洞的邊界沒有繞回來（迴圈斷了）' };
+    if (loop.length < 3) continue;      // 兩條邊繞不成面
+    faces.push(loop);
+    sizes.push(loop.length);
+  }
+  if (!sizes.length) return { ok: false, reason: '找到邊界，但沒有一個繞得成面' };
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `補出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, clean.remap);
+  /**
+   * 🔴 補回去的那幾條邊**原本是邊界**，所以身上有自動標的 CUT。
+   * 現在它們變回內部邊了，那些 CUT 是假的，要清掉 ——
+   * 不清的話**畫面上會憑空多出幾條分片線**（見 `clearBoundaryOnlySeams`）。
+   */
+  const fakeSeams = clearBoundaryOnlySeams(mesh, out, clean.remap);
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    holes: sizes.length, sizes, nowClosed: out.isClosed(), fakeSeams
+  };
+}
+
 // ═══════════════════════════════════════════════════════
 //  導角（Bevel，單段斜切）
 // ═══════════════════════════════════════════════════════
@@ -1990,37 +2219,15 @@ export function recalcNormalsOutside(mesh) {
   /**
    * 🔴 **把「假邊界」帶進來的 CUT 清掉。**
    *
-   * `mesh.js` 的 `_buildBoundaryLoops()` 有一條規則：**邊界天生就是切割線**，
-   * 所以沒有 twin 的半邊會自動被標成 `CUT`。那條規則本身是對的。
+   * 繞向不一致時，`fromFaceList()` 配不到 twin（它只配 `a→b` 與 `b→a`，
+   * 同方向就配不上），那些邊被當成邊界、自動標了 CUT。
+   * 這一支把繞向修好之後它們變回內部邊，**而 CUT 已經跟著搬進來了** ——
+   * 症狀是**修一個繞向壞掉的模型，畫面上憑空多出幾條分片線**（實測方塊多 4 條）。
    *
-   * 但**繞向不一致的網格，那些邊只是「暫時配不到 twin」，不是真的邊界** ——
-   * `fromFaceList()` 只配 `a→b` 與 `b→a`，同方向就配不上，於是被當成邊界標了 CUT。
-   * 這一支把繞向修好之後那些邊會變回內部邊，**但 CUT 已經跟著搬進來了**。
-   *
-   * 症狀：修一個繞向壞掉的模型，**畫面上憑空多出幾條分片線**，
-   * 而使用者從來沒標過。〔2026-08-25 導角那一輪抓到的，實測方塊多出 4 條〕
-   *
-   * ⚠ **只清「原本是邊界、現在變成內部」的那些** ——
-   * 真正的邊界（開放的殼）照樣該是 CUT，使用者自己標的也不能動
-   * （使用者標的在原網格上是內部邊，不會落進這個集合）。
+   * ⚠ 規則與「補洞」共用同一支（`clearBoundaryOnlySeams`）——
+   * **同一條規則只寫一次**，兩邊對不上時不會有第二份可以讀錯。
    */
-  {
-    const si = mesh._vertIndex(), di = out._vertIndex();
-    const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
-    const wasBoundary = new Set();
-    for (const he of mesh.halfEdges) {
-      if (he.face && he.twin && he.twin.face) continue;      // 原本就是內部邊
-      const a = si.get(he.v.id), b = si.get(he.to.id);
-      if (a !== undefined && b !== undefined) wasBoundary.add(key(a, b));
-    }
-    for (const he of out.edges()) {
-      if (!he.face || !he.twin || !he.twin.face) continue;   // 現在還是邊界 → 該留著
-      if (he.role !== EDGE_ROLE.CUT) continue;
-      if (wasBoundary.has(key(di.get(he.v.id), di.get(he.to.id)))) {
-        out.setRole(he, EDGE_ROLE.FREE);
-      }
-    }
-  }
+  clearBoundaryOnlySeams(mesh, out, null);
 
   return { ...info, ok: true, mesh: out };
 }

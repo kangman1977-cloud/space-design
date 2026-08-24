@@ -30,7 +30,8 @@ import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
-         recalcNormalsOutside, flipNormals, insetFaces, bevelEdges } from './core/edit.js';
+         recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
+         deleteFaces, fillHoles } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -360,6 +361,8 @@ $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
 $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
+$('delFace').onclick = () => deleteFacesSelected();
+$('fillHoles').onclick = () => fillHolesOnSelected();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
 $('flipNormals').onclick = () => flipNormalsOnSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
@@ -1171,6 +1174,91 @@ function bevelSelected() {
 }
 
 /**
+ * 刪除面：把選到的面拿掉，那裡就變成一個洞。
+ *
+ * ⚠ **代價一定要講清楚**：網格會變**開放**，之後不能再做布林運算
+ * （`canBool` 擋開放件），展開與 STL 的行為也會變。
+ * 而那件事**畫面上看不出來** —— 少一片的方塊從外面看跟完整的一模一樣。
+ * 〔坑第 24 條的家族：使用者要知道自己付了什麼代價〕
+ */
+function deleteFacesSelected() {
+  const els = sel.editSels.filter(e => e.kind === 'face');
+  if (!els.length) {
+    toast('先在編輯模式下選一個面（可以開「加選」選好幾個），再按「刪除面」', true);
+    return;
+  }
+  if (els.length !== sel.editCount) {
+    toast('刪除面只吃「面」，選取裡混到了點或邊。請只選面', true);
+    return;
+  }
+  const obj = els[0].obj;
+  const r = deleteFaces(obj.mesh(), els);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(els.length > 1 ? `刪除 ${els.length} 個面` : '刪除面');
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已刪除 ${r.removed} 個面`];
+  if (r.orphans) bits.push(`順手清掉 ${r.orphans} 個沒人用的頂點`);
+  /**
+   * 🔴 **「從封閉變成開放」是這個動作最大的代價，而且畫面上看不出來。**
+   * 一定要講，而且要講出出路（「補洞」補得回來）。
+   */
+  if (r.wasClosed && !r.nowClosed) {
+    bits.push('⚠ 現在是開放的（有洞）→ 不能再做布林運算，展開與 STL 的行為也會變。'
+            + '要補回去按「補洞」');
+  }
+  toast(bits.join('　'));
+}
+
+/**
+ * 補洞：把物件上**所有**的洞補起來。
+ *
+ * ── 為什麼不是「選一個洞補一個」──────────────────────
+ * 🔴 **邊界邊在編輯模式下點不到** —— 挑邊走 `nearestMarkableEdge()`，
+ * 而它明文排除邊界邊（對分片而言那是對的）。所以使用者選不到洞。
+ * → 做成「全部補起來」，跟 Blender 的 Fill Holes 一樣。
+ *
+ * ⚠ **不需要進編輯模式**，選到物件就能按 —— 它處理的是整個物件。
+ */
+function fillHolesOnSelected() {
+  const obj = sel.active;
+  if (!obj) { toast('先選一個物件', true); return; }
+  if (obj.isParametric) {
+    toast('參數物件補了也留不住（開檔會照參數重新生成）。請先按「轉成可編輯網格」', true);
+    return;
+  }
+  const before = obj.mesh().volume();
+  const r = fillHoles(obj.mesh());
+  if (!r.ok) { toast(r.reason); return; }      // 藍色：這是說明，不是錯誤
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(r.holes > 1 ? `補 ${r.holes} 個洞` : '補洞');
+  panel.refresh();
+  updateBar();
+
+  const bits = [`已補 ${r.holes} 個洞（${r.sizes.map(n => `${n} 邊形`).join('、')}）`];
+  if (r.nowClosed) bits.push('表面現在是封閉的');
+  if (r.fakeSeams) bits.push(`順手清掉 ${r.fakeSeams} 條假的分片線（那是洞的邊界自動標的）`);
+  /**
+   * 🔴 **把體積講出來** —— 板件（本來就是一張沒有厚度的面）按了會被封起來，
+   * 那時體積是 0，而**畫面上看起來跟原本一模一樣**。
+   * 讓他看到那個 0，他自己就知道要 Undo（鐵律三）。
+   */
+  bits.push(`體積 ${before.toFixed(2)} → ${r.mesh.volume().toFixed(2)} cm³`);
+  toast(bits.join('　'));
+}
+
+/**
  * 🔴 修法向：把整個物件的面朝向重算成「一致而且朝外」。
  *
  * ── 為什麼這顆按鈕該存在 ────────────────────────────────
@@ -1478,6 +1566,26 @@ function updateBar() {
         : '沿著這個面的外緣往面內長一圈邊。只加線、形狀不變，內圈那個面會自動選中')
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
                     : '先按「拉點線面」進入編輯模式，再選一個面');
+
+  /**
+   * 刪除面：**選到面就給按**（一個或多個都行）。
+   * 補洞：**不需要進編輯模式**，選到非參數物件就能按 —— 它處理整個物件。
+   */
+  $('delFace').disabled = !face;
+  $('delFace').title = face
+    ? (sel.editCount > 1
+        ? `把選到的 ${sel.editCount} 個面拿掉。⚠ 網格會變開放，之後不能做布林（可以用「補洞」補回來）`
+        : '把這個面拿掉，那裡會變成一個洞。⚠ 網格會變開放（可以用「補洞」補回來）')
+    : (sel.editMode ? '先選一個面（可以開「加選」選好幾個）'
+                    : '先按「拉點線面」進入編輯模式，再選面');
+
+  const canFill = sel.active && !sel.active.isParametric;
+  $('fillHoles').disabled = !canFill;
+  $('fillHoles').title = !sel.active
+    ? '先選一個物件'
+    : (sel.active.isParametric
+        ? '參數物件補了也留不住（開檔會照參數重新生成）。要補請先按「轉成可編輯網格」'
+        : '把這個物件上所有的洞補起來。⚠ 板件（一張沒有厚度的面）按了會被封起來，那時體積會是 0');
 
   $('flatten').disabled = !face;
   $('flatten').title = face
