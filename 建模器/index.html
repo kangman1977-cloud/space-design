@@ -436,6 +436,26 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="delFace" disabled title="刪除面：把選到的面拿掉，那裡會變成一個洞。⚠ 網格會變成開放的，之後不能再做布林運算。補得回來 —— 用旁邊的「補洞」">刪除面</button>
       <button id="fillHoles" disabled title="補洞：把這個物件上所有的洞補起來。⚠ 板件（本來就是一張沒有厚度的面）按了會被封起來，那時體積會是 0">補洞</button>
+      <!--
+        任意切線：用一個平面把整個物件切開，只加線、不改形狀。
+
+        ⚠ **不需要選任何元素** —— 環切、內縮、導角都是「對選到的東西動手」，
+        這一顆是「對整個物件動手」，位置由旁邊的軸與座標決定。
+
+        🔴 座標框旁邊那個 bisectRange 一定要留著：
+        數字打多少才切得到，使用者不看範圍是猜不出來的
+        （而且物件被搬過位置之後更猜不到）。鐵律三：
+        「讓兩個數字互相對得起來，錯誤才會自己現形」。
+      -->
+      <button id="bisect" disabled title="切一刀：在指定的位置用一個平面把整個物件切開，加上一圈新的線。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做收腰、階梯、斜面。跟「環切」的差別：環切順著形狀繞，這一顆是你指定位置直接橫切">切一刀</button>
+      <select id="bisectAxis" title="從哪個方向切。座標是空間裡的實際位置，跟對齊、貼合、剖面分切看到的是同一套數字">
+        <option value="x">X</option>
+        <option value="y" selected>Y</option>
+        <option value="z">Z</option>
+      </select>
+      <input id="bisectAt" type="number" step="0.5" value="0"
+             title="切在哪裡（cm）：空間裡的實際座標，不是離物件邊緣多遠。旁邊寫著這個物件的範圍，打在範圍以外會擋下來">
+      <span id="bisectRange" class="lbl" title="這個物件在該方向的範圍。座標要打在這中間才切得到"></span>
     </div>
 
     <!--

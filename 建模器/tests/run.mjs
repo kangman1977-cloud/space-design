@@ -6623,6 +6623,23 @@ function marksSurvive(name, src, dst, remap) {
        Object.keys(b0).every(k => a0[k] >= b0[k]),
        Object.keys(b0).map(k => `${k} ${b0[k]}→${a0[k]}`).join('、'));
   }
+
+  /**
+   * 任意切線：**第五條**「拆掉重建」的路。
+   * 跟環切同一個形狀 —— 一條邊被切成兩段，兩段都繼承，所以數量只會變多。
+   * ⭐ 放進這一組的意義是**日後加第四個標記時會自動涵蓋它**，
+   * 不必有人記得回來補（`marksOf()` 自動展開）。
+   */
+  {
+    const m = base.clone();
+    m.computeNormals();
+    const r = edit.bisect(m, { n: new THREE.Vector3(1, 0, 0), d: 3.7 });
+    ok('　　（前置）任意切線切得下去', r.ok, r.reason);
+    const b0 = markCount(m), a0 = markCount(r.mesh);
+    ok('★ 任意切線之後，沒有任何一樣標記變少',
+       Object.keys(b0).every(k => a0[k] >= b0[k]),
+       Object.keys(b0).map(k => `${k} ${b0[k]}→${a0[k]}`).join('、'));
+  }
 }
 
 {
@@ -6632,6 +6649,229 @@ function marksSurvive(name, src, dst, remap) {
   const bnd = [...plate.edges()].find(he => !he.face || !he.twin || !he.twin.face);
   const r = edit.loopCut(plate, bnd);
   ok('外輪廓的邊擋下來並說原因', !r.ok && /外輪廓/.test(r.reason || ''));
+}
+
+// ═══════════════════════════════════════════════════════
+//  任意切線（Bisect）＝ 加線 × 平面
+// ═══════════════════════════════════════════════════════
+
+section('任意切線：切下去之後的網格');
+
+/**
+ * 🔴 **這一節是「先建驗證集再改程式」的產物**（2026-08-25）。
+ *
+ * 那是第四次才解出導角角落的關鍵 —— 前三次的共同點是
+ * 「每次都通過了一部分案例，看起來對，騙了我」。
+ *
+ * ── 這一組跟環切、內縮共用同一條主斷言 ──────────────────
+ * **只加線，體積與面積精確不變。** 那是可以對答案的量（鐵律三）。
+ *
+ * ── ⚠ 跟日誌沙箱原型不同的一點，而且是刻意的 ──────────────
+ * 原型照 `slice/section.js` 的做法「距離 0 一律推到正側」。
+ * **那條規則在出 DXF 是對的，拿來改網格會出事**：
+ * 頂點剛好落在平面上時，`s = dA/(dA−dB)` 會算出 0 或 1，
+ * 於是**在既有頂點上插一個重複的點**，長出一條零長度的邊。
+ * 2D 線段可以事後濾掉，網格不行 —— 那是退化幾何。
+ *
+ * → 改成三態，但用**有物理意義的容許值**（`PLANAR_TOL_CM` ＝ 0.1mm）：
+ *   離平面比 0.1mm 更近的頂點**就當它在平面上，直接拿來用、不插新點**。
+ *   比 0.1mm 更近的兩個點本來就切不出來（坑 25／26 同一條理由）。
+ *
+ * 下面那個八角柱案例就是這一條的機械斷言：**頂點數完全不變。**
+ */
+const bisectPlane = (nx, ny, nz, d) => ({ n: new THREE.Vector3(nx, ny, nz), d });
+
+{
+  /** 案例一：方塊 x=0。最基本的一刀 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const r = edit.bisect(box, bisectPlane(1, 0, 0, 0));
+  ok('方塊 x=0 切得下去', r.ok, r.reason);
+  const m = r.mesh;
+
+  eq('V 8 → 12', m.verts.length, 12);
+  eq('E 12 → 20', edgeCount(m), 20);
+  eq('F 6 → 10', m.faces.length, 10);
+  eq('★★ χ 仍然是 2', chi(m), 2);
+  ok('　　仍然封閉', m.isClosed());
+  ok('　　結構沒有問題', m.validate().ok);
+
+  /** 🔴 主斷言：只加線 */
+  rel('★★ 體積精確不變', m.volume(), vol0);
+  rel('★★ 面積精確不變', m.area(), area0);
+
+  eq('★ 孤點 0 個（只加不減）', r.orphans, 0);
+  eq('穿過 4 條邊、切開 4 個面', `${r.crossed}/${r.split}`, '4/4');
+  eq('新切出來的邊 4 條', r.newEdges.length, 4);
+  eq('　　而且全部標成 hard', [...m.edges()].filter(he => he.hard).length, 4);
+
+  /** 新的頂點必須真的落在平面上 */
+  const off = Math.max(...m.verts.slice(8).map(v => Math.abs(v.p.x)));
+  near('★ 新頂點都落在平面上', off, 0, 1e-9);
+
+  /** 出口：不標 hard 的話這一刀會被併回去，等於一顆按了沒反應的按鈕 */
+  ok('★★ 再跑一次併面不會把切線併回去', !edit.mergeCoplanarFaces(m).ok);
+  eq('★★ 共面區域被切開了（6 → 10）',
+     new Set(m.faces.map(f => edit.regionOf(m, f).rid)).size, 10);
+}
+
+{
+  /** 案例二：16 段圓柱攔腰切。日誌沙箱那組數字 */
+  const cyl = baked('cylinder', { r: 25, h: 60, seg: 16 });
+  const vol0 = cyl.volume(), area0 = cyl.area();
+  eq('前提：16 段圓柱 V32 F18', `${cyl.verts.length}/${cyl.faces.length}`, '32/18');
+
+  const r = edit.bisect(cyl, bisectPlane(0, 1, 0, 0));
+  ok('圓柱 y=0 攔腰切得下去', r.ok, r.reason);
+  eq('★ 穿過 16 條邊、切開 16 個面', `${r.crossed}/${r.split}`, '16/16');
+  eq('★ V32→48 F18→34',
+     `${r.mesh.verts.length}/${r.mesh.faces.length}`, '48/34');
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+  eq('★ 新的那一圈 16 條，全部 hard', r.newEdges.length, 16);
+}
+
+{
+  /**
+   * 案例三：球。**面最多、最可能出現非凸的面**，所以是「跳過幾個」
+   * 這條斷言最有意義的地方 —— 日誌沙箱實測跳過 0 個。
+   */
+  const ball = baked('sphere', { r: 30, segW: 12, segH: 12 });
+  const vol0 = ball.volume(), area0 = ball.area();
+  /**
+   * ⚠ **刻意不切 y＝0。** segH 是偶數，赤道上剛好有一整圈既有頂點 ——
+   * 那一刀會「每個面的兩個交點都相鄰」，結果**一個面都不會被切開**，
+   * 而 χ、體積、面積、跳過數**全部照樣通過**。
+   * 那是一條看起來很漂亮、其實什麼都沒驗到的測試（前三次導角就是這樣被騙的）。
+   * → 挑一個不對齊的高度，並且**明確斷言真的有切開東西**。
+   */
+  const r = edit.bisect(ball, bisectPlane(0, 1, 0, 7.3));
+  ok('球切得下去', r.ok, r.reason);
+  ok('★ （防假通過）真的有面被切開', r.split > 0, `切開 ${r.split} 個`);
+  eq('★★ 跳過 0 個面（沒有被穿超過兩次的面）', r.skipped, 0);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+  eq('★ 穿過幾條邊就切開幾個面', r.crossed, r.split);
+}
+
+{
+  /**
+   * 🔴 **案例四：平面剛好通過既有頂點。**
+   *
+   * 八角柱 r=30 的頂點落在 0°、45°、90°… 而 `CylinderGeometry` 的
+   * 第一個頂點在 +z 軸上，所以 **x=0 這個平面剛好穿過兩個頂點**。
+   *
+   * ⭐ **斷言是「頂點數完全不變」** —— 那兩個頂點要被**直接拿來用**，
+   * 不可以在它們身上再插一個幾乎重合的新點。
+   * 插了的話會長出零長度的邊，而**體積、面積、χ 全部照樣正確**，
+   * 只有 `validate()` 或日後的布林會露餡（坑第 17 條：中途的量是對的）。
+   */
+  const oct = baked('prism', { r: 30, h: 50, sides: 8 });
+  const vol0 = oct.volume(), area0 = oct.area();
+  const v0 = oct.verts.length;
+  eq('前提：八角柱有兩個頂點剛好落在 x=0 上',
+     oct.verts.filter(v => Math.abs(v.p.x) < 1e-9).length, 4);
+
+  const r = edit.bisect(oct, bisectPlane(1, 0, 0, 0));
+  ok('通過頂點的平面切得下去', r.ok, r.reason);
+  eq('★★ 頂點數完全不變（用既有的點，不插重複點）', r.mesh.verts.length, v0);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+  eq('★ 只有上下兩個端面被切開（側面沒有真的跨過去）', r.split, 2);
+  eq('　　所以面數 10 → 12', r.mesh.faces.length, 12);
+  ok('★ 沒有長出零長度的邊',
+     [...r.mesh.edges()].every(he => he.to.p.distanceTo(he.v.p) > 1e-6));
+}
+
+{
+  /** 案例五：平面在物件外面 → 擋下來並說原因。⛔ 不可以沉默退回（坑第 11 條） */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const r = edit.bisect(box, bisectPlane(1, 0, 0, 100));
+  ok('★ 平面在物件外面，擋下來並說原因', !r.ok && /沒有|外面|範圍/.test(r.reason || ''));
+
+  /**
+   * 剛好貼在表面上也一樣 —— 按下去畫面不會變，就必須說話（坑第 21 條）。
+   * ⚠ 方塊的**高度是 y**（h:40 → y ∈ −20…20），z 是深度（d:45 → ±22.5）。
+   * 〔第一版寫 z=20，那其實在物件**內部**，測試當然不會過 ——
+   * 　挑樣本要先去量，不要照參數名推〕
+   */
+  const r2 = edit.bisect(box, bisectPlane(0, 1, 0, 20));
+  ok('★ 平面剛好貼在表面上，也擋下來並說原因', !r2.ok && !!r2.reason);
+}
+
+{
+  /**
+   * 🔴 **案例六：被旋轉、被搬過位置的物件。**
+   *
+   * 這一條是**讀程式才發現要加的**（推不出來）：網格存的是物件自己的
+   * 座標，物件另外帶著位置與旋轉（`align.js` 的 `worldBounds()` 就是
+   * 為此存在的）。所以使用者打的「x＝0」是**世界**座標，
+   * 而它在網格自己的座標裡是一個**斜**平面。
+   *
+   * 不轉換的話，切出來的位置會跟畫面上看到的對不起來 ——
+   * 而且**形狀完全正常**，只是切錯地方。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const mtx = new THREE.Matrix4()
+    .makeRotationZ(Math.PI / 5)
+    .premultiply(new THREE.Matrix4().makeTranslation(12, -7, 3));
+
+  const pl = edit.worldAxisPlane(mtx, 'x', 5);
+  const r = edit.bisect(box, pl);
+  ok('旋轉＋位移過的物件切得下去', r.ok, r.reason);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  rel('★★ 體積精確不變', r.mesh.volume(), 108000);
+
+  /** 🔴 真正的斷言：新頂點搬回世界座標之後，必須落在 x＝5 上 */
+  const worst = Math.max(...r.mesh.verts.slice(8)
+    .map(v => Math.abs(v.p.clone().applyMatrix4(mtx).x - 5)));
+  near('★★ 新頂點回到世界座標剛好在 x＝5 上', worst, 0, 1e-9);
+}
+
+{
+  /**
+   * 標記繼承：一條邊被切成兩段，**兩段都要繼承**。
+   * 不做的話索引配對落空，而**使用者標的 CUT 會安靜消失**
+   * （環切那一輪的實測：切完 CUT 0 條）。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const along = findEdge(box, d => Math.abs(d.x) > 1e-9 && Math.hypot(d.y, d.z) < 1e-9);
+  box.setRole(along, EDGE_ROLE.CUT);
+  box.setSmooth(along, true);
+  const r = edit.bisect(box, bisectPlane(1, 0, 0, 0));
+  eq('★★ 標了 CUT 的邊被切成兩段，兩段都還是 CUT',
+     [...r.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 2);
+  eq('★★ smooth 也一樣兩段都繼承',
+     [...r.mesh.edges()].filter(he => he.smooth).length, 2);
+}
+
+{
+  /**
+   * 🔴 展開不可以被影響（跟環切同一條）。
+   * `hard` 會讓 `planarRegions()` 斷開，而展開有沒有用到它是關鍵風險。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const rule = makeRule('acrylic', 0.3);
+  const before = unfoldMesh(box, rule);
+  const r = edit.bisect(box, bisectPlane(1, 0, 0, 0));
+  const after = unfoldMesh(r.mesh, rule);
+  eq('★★ 切完之後展開片數一樣', after.pieces.length, before.pieces.length);
+  eq('　　警告數也一樣', after.warnings.length, before.warnings.length);
+}
+
+{
+  /** 存讀檔：不存的話開檔之後切線就沒了，而形狀還在 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const r = edit.bisect(box, bisectPlane(1, 0, 0, 0));
+  const round = Mesh.fromJSON(JSON.parse(JSON.stringify(r.mesh.toJSON())));
+  eq('★ 存檔再開，hard 邊還在',
+     [...round.edges()].filter(he => he.hard).length, 4);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

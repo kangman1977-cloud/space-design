@@ -1262,6 +1262,255 @@ export function loopCut(mesh, he0, opt = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  任意切線（Bisect）＝ 加線 × 平面
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 「離平面這麼近就當它在平面上」的容許值，單位 cm。
+ *
+ * 🔴 **這個常數是這一支跟 `slice/section.js` 唯一實質不同的地方，
+ * 　　而它非有不可。**
+ *
+ * `section.js` 算的是 2D 線段（給 DXF 用），它的做法是
+ * 「距離剛好 0 的頂點一律往正側推 1e-9」—— 這樣每條邊只剩
+ * 「跨」與「不跨」兩態，漏掉任何一種組合就會少一段線。
+ * **那條規則在出圖是對的，拿來改網格會出事**：
+ * 頂點剛好落在平面上時 `s = dA/(dA−dB)` 會算出 0 或 1，
+ * 於是**在既有頂點上再插一個幾乎重合的新點**，長出一條零長度的邊。
+ * 2D 可以事後濾掉，網格不行 —— 那是退化幾何，會一路帶到布林與 STL。
+ *
+ * ⚠ 而且它**不會報錯**：體積、面積、χ 全部照樣正確
+ * （坑第 17 條：中途的量一直都是對的，末端才錯）。
+ *
+ * → 所以這裡改成三態，判準用**講得出物理意義的量**：
+ *   離平面比 0.1mm 更近的頂點就**直接拿它當交點**，不插新點。
+ *   比 0.1mm 更近的兩個點本來就切不出來（坑 25／26 同一條理由）。
+ *   借用 `PLANAR_TOL_CM` 而不是另定一個 —— 它問的是同一件事：
+ *   「這個東西算不算貼在這個平面上」。
+ */
+const ON_PLANE_CM = PLANAR_TOL_CM;
+
+/**
+ * 把「世界座標的軸平面」換算成這個物件**自己座標**裡的平面。
+ *
+ * 🔴 **不做這件事就會切錯位置，而且形狀完全正常。**
+ *
+ * 網格存的是物件自己的座標，物件另外帶著位置與旋轉
+ * （`align.js` 的 `worldBounds()` 就是為此存在的）。
+ * 使用者在畫面上打的「x＝5」是**世界**座標，物件被轉過的話，
+ * 那個平面在網格自己的座標裡是**斜的**。
+ *
+ * 推導：世界點 `P = M·p + t`。要 `P[軸] = coord`，
+ * 展開就是 `(M 的第「軸」列)·p = coord − t[軸]`，
+ * 所以本地法向就是 M 的那一**列**（不是行），偏移是 `coord − t[軸]`。
+ * 有縮放時法向不是單位長度，`bisect()` 自己會歸一化。
+ *
+ * ⭐ 副產品：日後要做「拿選到的那個面當平面」不必動這裡 ——
+ * 那條路直接給 `{ n: 面法向, d: n·面上任一點 }` 就好。
+ *
+ * @param {THREE.Matrix4} matrix 物件的變換矩陣
+ * @param {'x'|'y'|'z'} axis
+ * @param {number} coord 世界座標，cm
+ * @returns {{n: THREE.Vector3, d: number}} 本地平面 `n·p = d`
+ */
+export function worldAxisPlane(matrix, axis, coord) {
+  const e = matrix.elements;                 // three.js 是 column-major
+  const row = { x: 0, y: 1, z: 2 }[axis];
+  if (row === undefined) throw new Error(`worldAxisPlane：不認得的軸「${axis}」`);
+  return {
+    n: new THREE.Vector3(e[row], e[4 + row], e[8 + row]),
+    d: coord - e[12 + row]
+  };
+}
+
+/**
+ * 🔴 **任意切線：用一個平面把網格切開，只加線、不改形狀。**
+ *
+ * ── 它是「加線 × 平面」，不是新功能 ──────────────────────
+ * 2026-08-25 kang 批准的四動作框架（加線／加面／移除／移動）的第三個案例：
+ * 環切是「加線 × 一圈邊」、內縮是「加線 × 面的內縮輪廓」、
+ * 這一支是「加線 × 平面」。**骨架跟 `loopCut()` 逐項對應**
+ * （帳本 → `preflightRebuild` → `cleanRebuild` → `applyMarks`）。
+ *
+ * 🔴 **只加線，體積與面積精確不變** —— 跟環切、內縮同一條主斷言。
+ * 要改形狀是下一步「拉那一圈邊」的事。
+ *
+ * ── ⚠ `sectionAt()` 不能重用，但它踩過的坑要沿用 ────────────
+ * `slice/section.js` 算的是 2D 線段，不是改網格。
+ * 它那條「頂點落在平面上怎麼辦」的坑這裡照樣會踩，
+ * 但**解法必須不同** —— 見 `ON_PLANE_CM` 的說明。
+ *
+ * ── 新的那一圈要標 `hard` ─────────────────────────────
+ * 切開的兩半是**共面**的，而這個專案有一條貫穿全域的規則
+ * 「共面的邊 ＝ 看不見的邊 ＝ 不該存在的邊」。不標 `hard` 的話
+ * 四個出口全中（畫不出來、點不到、半塊面拉不動、按壓平被併掉），
+ * 這顆按鈕按下去畫面上什麼都不會變（坑第 21 條）。
+ *
+ * ── ⚠ 一個面被穿超過兩次：不切，但要講 ──────────────────
+ * 凸的面一定只被穿兩次。非凸的面可能被穿 4 次以上，
+ * 那要切成 3 片以上 —— **還沒做**。這種面**原樣保留並計入 `skipped`**，
+ * 由呼叫端講出來。⛔ 不可以沉默跳過（坑第 11 條）。
+ * 〔實測球 segW12/segH12 跳過 0 個，所以先這樣做〕
+ *
+ * @param {Mesh} mesh
+ * @param {{n: THREE.Vector3, d: number}} plane 本地平面 `n·p = d`；
+ *        世界的軸平面請先過 `worldAxisPlane()`
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            crossed?:number, split?:number, pierced?:number,
+ *            skipped?:number, newEdges?:Array, orphans?:number}}
+ */
+export function bisect(mesh, plane) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!plane || !plane.n) return { ok: false, reason: '沒有給切割平面' };
+
+  const n = plane.n.clone();
+  const len = n.length();
+  if (!(len > 1e-12)) return { ok: false, reason: '切割平面的方向是 0，指不出方向' };
+  n.divideScalar(len);
+  const d = plane.d / len;
+
+  mesh.computeNormals();
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+
+  /**
+   * 三態：`+1` 正側、`-1` 負側、`0` 就在平面上（見 `ON_PLANE_CM`）。
+   * `0` 的頂點**直接當交點用**，不插新點。
+   */
+  const dist = points.map(p => p.dot(n) - d);
+  const side = dist.map(x => (Math.abs(x) < ON_PLANE_CM ? 0 : (x > 0 ? 1 : -1)));
+
+  if (!side.some(s => s > 0) || !side.some(s => s < 0)) {
+    return {
+      ok: false,
+      reason: '這個位置沒有切到東西 —— 整個物件都在平面的同一側，'
+            + '或是平面剛好貼在表面上。看一下輸入框旁邊寫的範圍'
+    };
+  }
+
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+  /** 跨過平面的邊，各插一個點。同一條邊只插一次（`edges()` 已經去重） */
+  const cross = new Map();
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if (side[a] * side[b] >= 0) continue;       // 不跨（含任一端在平面上）
+    const k = kOf(a, b);
+    if (cross.has(k)) continue;
+    const s = dist[a] / (dist[a] - dist[b]);
+    cross.set(k, points.length);
+    points.push(points[a].clone().lerp(points[b], s));
+  }
+
+  /**
+   * 標記帳本，記在**重建前**的索引空間，最後透過 `remap` 一次搬過去。
+   * 🔴 **被切成兩段的邊，兩段都要繼承** —— 不做的話
+   * `1-3` 變成 `1-8` 與 `8-3`，索引配對落空，**標記會安靜消失**。
+   */
+  const marks = new Map();
+  const mark = (a, b, m) => {
+    const k = kOf(a, b);
+    marks.set(k, Object.assign({}, marks.get(k), m));
+  };
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    // 🔴 整包讀，不要手寫「有哪幾樣」—— 見 copyMarksThroughRemap() 的說明
+    const m = mesh.marksOf(he);
+    const mid = cross.get(kOf(a, b));
+    if (mid === undefined) { mark(a, b, m); continue; }
+    mark(a, mid, m);
+    mark(mid, b, m);
+  }
+
+  const faces = [];
+  const newEdgePairs = [];
+  let split = 0, pierced = 0, skipped = 0;
+
+  for (const f of mesh.faces) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+
+    /**
+     * 沿著這個面的迴圈走一圈，展開成「切完之後的頂點序列」，
+     * 同時記下序列裡哪幾個位置落在平面上 —— 那些就是切線的端點。
+     * 兩種來源合在同一個清單裡：既有頂點（`side === 0`）與新插的點。
+     */
+    const seq = [];
+    const onIdx = [];
+    for (let i = 0; i < idx.length; i++) {
+      const a = idx[i], b = idx[(i + 1) % idx.length];
+      if (side[a] === 0) onIdx.push(seq.length);
+      seq.push(a);
+      const mid = cross.get(kOf(a, b));
+      if (mid !== undefined) { onIdx.push(seq.length); seq.push(mid); }
+    }
+
+    if (onIdx.length !== 2) {
+      /**
+       * 0 個：這個面整片在一側，原樣。
+       * 1 個：只碰到一個角，切不開，原樣（但點已經在序列裡了）。
+       * 3 個以上：非凸的面被穿多次，要切成 3 片以上 —— 還沒做，計入 skipped。
+       */
+      faces.push(seq);
+      if (onIdx.length > 2) skipped++;
+      else if (seq.length !== idx.length) pierced++;
+      continue;
+    }
+
+    const [p, q] = onIdx;
+    /**
+     * ⚠ 兩個交點**相鄰**時不能切 —— 那條「切線」就是既有的那條邊，
+     * 切下去會生出一個只有兩個點的面，而 `fromFaceList()` 會直接跳過它
+     * （靜默掉一個面，形狀就破了）。
+     * 兩側都要檢查：迴圈是繞回來的，「相鄰」可能發生在接縫那一頭。
+     */
+    if (q - p < 2 || seq.length - (q - p) < 2) { faces.push(seq); continue; }
+
+    faces.push(seq.slice(p, q + 1));
+    faces.push([...seq.slice(q), ...seq.slice(0, p + 1)]);
+    mark(seq[p], seq[q], { hard: true });
+    newEdgePairs.push([seq[p], seq[q]]);
+    split++;
+  }
+
+  if (!split) {
+    return {
+      ok: false,
+      reason: '這個位置切不出新的線 —— 平面剛好落在既有的邊上，'
+            + '那裡本來就已經是斷開的了'
+    };
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `切下去做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const want = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x === undefined || y === undefined) continue;
+    want.set(kOf(x, y), m);
+  }
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  }
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    crossed: cross.size, split, pierced, skipped,
+    newEdges: newEdgePairs
+      .map(([a, b]) => [to(a), to(b)])
+      .filter(([a, b]) => a !== undefined && b !== undefined),
+    orphans: clean.dropped.orphans
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  內縮（Inset）
 // ═══════════════════════════════════════════════════════
 

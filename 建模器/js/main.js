@@ -31,7 +31,8 @@ import { faceFrame, edgeFrame, vertexPoint,
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
-         deleteFaces, fillHoles } from './core/edit.js';
+         deleteFaces, fillHoles, bisect, worldAxisPlane } from './core/edit.js';
+import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -363,6 +364,9 @@ $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
+$('bisect').onclick = () => bisectSelected();
+/** 換軸要立刻換範圍提示 —— 不換的話那行字會變成謊話（鐵律三） */
+$('bisectAxis').onchange = () => updateBisectRange();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
 $('flipNormals').onclick = () => flipNormalsOnSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
@@ -1008,6 +1012,91 @@ function loopCutSelected() {
 }
 
 /**
+ * 任意切線：用一個平面把整個物件切開，只加線、不改形狀。
+ *
+ * ⚠ **跟這一組其他按鈕不同，它不需要選任何元素** ——
+ * 環切、內縮、導角都是「對選到的東西動手」，這一顆是「對整個物件動手」，
+ * 位置由工具列的軸與座標決定。
+ *
+ * 🔴 **世界座標 → 物件自己的座標，一定要轉。**
+ * 使用者打的是空間裡的位置（跟對齊、貼合、剖面分切同一套），
+ * 而網格存的是物件自己的座標。物件被轉過的話，那個平面在網格裡是斜的。
+ * 不轉就會切錯地方，**而且形狀完全正常**（`worldAxisPlane()` 的說明）。
+ */
+function bisectSelected() {
+  const obj = sel.active;
+  if (!sel.editMode || !obj) {
+    toast('先按「拉點線面」進入編輯模式，選到物件再按「切一刀」', true);
+    return;
+  }
+  const axis = $('bisectAxis').value;
+  const at = +$('bisectAt').value;
+  if (!Number.isFinite(at)) { toast('切割位置要打一個數字', true); return; }
+
+  const oldMesh = obj.mesh();
+  const r = bisect(oldMesh, worldAxisPlane(obj.matrix(), axis, at));
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 被切成兩段的邊如果標過 CUT，線段變兩截了
+  commit(`切一刀（${axis.toUpperCase()}＝${at}）`);
+
+  /**
+   * ⚠ 一定要在 commit() 之後才選 —— 跟環切、擠出同一條理由：
+   * commit() 會走 revalidate()，而這裡換掉了整個網格物件，
+   * 那裡會把子元素選取清掉。先選後 commit 等於白做。
+   */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  const got = sel.selectEdges(obj, hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 講出「切開幾個面」——**那個數字使用者自己驗得出來**
+   * （16 段圓柱攔腰切應該是 16）。只講「切好了」等於沒講。
+   *
+   * ⛔ 跳過的面一定要講（坑第 11 條：沉默地退回是最糟的做法）——
+   * 那是「非凸的面被穿超過兩次」，切線會在那裡斷掉，
+   * 使用者看到不完整的一圈線會以為程式壞了。
+   */
+  const bits = [`已切一刀　切開 ${r.split} 個面`];
+  if (got) bits.push(`新的 ${got} 條邊已選起來，用箭頭直接拉`);
+  if (r.skipped) {
+    bits.push(`⚠ 有 ${r.skipped} 個面形狀太複雜（凹進去的）沒切開，`
+            + '那裡的線會斷開 —— 換個位置切多半就過了');
+  }
+  toast(bits.join('　'));
+}
+
+/**
+ * 座標框旁邊那行範圍字。
+ *
+ * 🔴 **這不是裝飾。** 沒有它，使用者根本不知道該打什麼數字 ——
+ * 座標是空間裡的實際位置，而物件被搬過之後更猜不到。
+ * 鐵律三：「讓兩個數字互相對得起來，錯誤才會自己現形」——
+ * 打的數字跟旁邊的範圍對不起來，當場就看得出來，不必按下去才知道。
+ */
+function updateBisectRange() {
+  const span = $('bisectRange');
+  const obj = sel.active;
+  if (!obj) { span.textContent = ''; return; }
+  const b = worldBounds(obj);
+  if (b.isEmpty()) { span.textContent = ''; return; }
+  const ax = $('bisectAxis').value;
+  const f = x => (Math.round(x * 100) / 100);
+  span.textContent = `${ax.toUpperCase()}：${f(b.min[ax])} ～ ${f(b.max[ax])}`;
+}
+
+/**
  * 選一圈：從選到的那條邊繞出一整圈 edge ring，全部選起來。
  *
  * ⭐ **這顆按鈕幾乎是免費的** —— 走訪（`edgeRing()`）是環切那一輪寫好的，
@@ -1625,6 +1714,20 @@ function updateBar() {
   $('selRing').title = edge1
     ? '從這條邊繞出一整圈邊全部選起來（也可以先按它看環切會切在哪）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
+
+  /**
+   * 任意切線：**選到物件就給按，不必選任何元素** ——
+   * 它切的是整個物件，位置由旁邊的軸與座標決定。
+   */
+  const canBisect = sel.editMode && !!sel.active;
+  $('bisect').disabled = !canBisect;
+  $('bisectAxis').disabled = !canBisect;
+  $('bisectAt').disabled = !canBisect;
+  $('bisect').title = canBisect
+    ? '在旁邊指定的位置用一個平面把整個物件切開，加上一圈新的線。'
+      + '只加線不改形狀，切完那一圈會自動選中'
+    : '先按「拉點線面」進入編輯模式，再選一個物件';
+  updateBisectRange();
 
   /**
    * 法向那一組：**不需要進編輯模式**，選到物件就能按 ——
