@@ -5949,6 +5949,174 @@ section('法向：重算外側 ／ 翻面');
   }
 }
 
+section('導角（Bevel，單段）：內縮 ＋ 加面');
+
+/**
+ * 🔴 **這一組守的是「角落」** —— `外部參考-Blender編輯.md` 第 9.6／9.10 節
+ * 原本都寫著「角落斜接完全沒驗」。
+ *
+ * 結論（第 11 節）：**「不唯一」只對多段導角（圓角）成立**；
+ * 單段（斜切）在 **3 價頂點**上角落是唯一的，而我們的頂點全是 3 價。
+ */
+{
+  const baked = (type, params) => {
+    const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+    const m = r.ok ? r.mesh : buildPrim(type, params);
+    m.computeNormals();
+    return m;
+  };
+  const edgeCnt = m => [...m.edges()].length;
+  const chiOf = m => m.verts.length - edgeCnt(m) + m.faces.length;
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+
+  {
+    /** ① 一條邊。🔴 這一項可以**手算對答案** */
+    const t = [...box.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.x) > 50 && Math.hypot(d.y, d.z) < 1e-9;
+    });
+    const r = edit.bevelEdges(box, [t], 5);
+    ok('導角成功', r.ok);
+    eq('★ 1 片斜切面、0 個角落面', `${r.walls}/${r.corners}`, '1/0');
+    eq('★★ χ 仍然是 2', chiOf(r.mesh), 2);
+    ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    rel('★★ 體積 ＝ 108000 − (5²/2)×60（手算精確吻合）', r.mesh.volume(), 108000 - 12.5 * 60);
+  }
+
+  {
+    /**
+     * ② 🔴 **一個角落的三條邊一起導 —— 這就是原本寫「完全沒驗」的那一項。**
+     * 角落**自己長出一個三角形**，沒有任何「要怎麼接」的分支。
+     * 體積用蒙地卡羅獨立算過（把結果當成一堆半空間的交集）：106271.03。
+     */
+    const b = box.bounds();
+    const corner = box.verts.find(v => Math.abs(v.p.x - b.max.x) < 1e-9
+      && Math.abs(v.p.y - b.max.y) < 1e-9 && Math.abs(v.p.z - b.max.z) < 1e-9);
+    const es = [...box.edges()].filter(he => he.v === corner || he.to === corner);
+    eq('（前置）那個角落有 3 條邊', es.length, 3);
+    const r = edit.bevelEdges(box, es, 5);
+    eq('★ 3 片斜切面、**1 個角落面**', `${r.walls}/${r.corners}`, '3/1');
+    eq('★★ χ 仍然是 2', chiOf(r.mesh), 2);
+    ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    near('★★ 體積跟蒙地卡羅獨立算的對得起來', r.mesh.volume(), 106271.03, 1.0);
+  }
+
+  {
+    /** ③ 12 條邊全導：每個頂點三條邊都被導 → 8 個角落三角形 */
+    const r = edit.bevelEdges(box, [...box.edges()], 5);
+    eq('★ 12 片斜切面、8 個角落面', `${r.walls}/${r.corners}`, '12/8');
+    eq('★★ χ 仍然是 2', chiOf(r.mesh), 2);
+    ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    near('★★ 體積跟蒙地卡羅獨立算的對得起來', r.mesh.volume(), 101414.95, 3.0);
+  }
+
+  {
+    /**
+     * ④ 🔴 16 段圓柱上下兩圈：**每個頂點都是「2 條被導 ＋ 1 條沒被導」**。
+     * 這個案例翻掉過一次 —— 共用「沒被導的邊」的兩個面代表點沒併，
+     * 網格從那裡裂開（χ −14、不封閉）。用併查集解，**不用容許值**。
+     */
+    const cyl = baked('cylinder', { r: 25, h: 60, seg: 16 });
+    const es = [...cyl.edges()].filter(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.hypot(d.x, d.z) > 1e-9 && Math.abs(d.y) < 1e-9;
+    });
+    const r = edit.bevelEdges(cyl, es, 2);
+    eq('★ 32 片斜切面、0 個角落面（併完只剩 2 點，兩片自己接起來）',
+       `${r.walls}/${r.corners}`, '32/0');
+    eq('★★ χ 仍然是 2（沒有裂開）', chiOf(r.mesh), 2);
+    ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    ok('　　體積有變小（真的削掉了東西）', r.mesh.volume() < cyl.volume());
+  }
+
+  {
+    /**
+     * ⑤ 🔴 **標記：沒被導的邊要照搬，被導掉的才該消失。**
+     *
+     * 這一項抓到兩個 bug（2026-08-25）：
+     * ① 端點被「吸收」掉的邊配對會落空 → **4 條沒被導的邊標記直接消失**
+     * ② 見下一個區塊的「假邊界」
+     */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const es = [...m.edges()];
+    m.setRole(es[0], EDGE_ROLE.CUT);
+    m.setSmooth(es[0], true);
+    m.setRole(es[5], EDGE_ROLE.CUT);
+    const t = [...m.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.x) > 50 && Math.hypot(d.y, d.z) < 1e-9;
+    });
+    const r = edit.bevelEdges(m, [t], 5);
+    eq('★★ 沒被導的邊，CUT 一條都沒少',
+       [...r.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 2);
+    eq('★★ smooth 也還在', [...r.mesh.edges()].filter(he => he.smooth).length, 1);
+    eq('★ 只有被導掉的那一條標記消失（它真的不存在了）', r.lostMarks, 1);
+  }
+
+  {
+    /** 擋下來的情形 */
+    ok('沒選邊擋下來', !edit.bevelEdges(box, [], 5).ok);
+    ok('寬度 0 擋下來', !edit.bevelEdges(box, [[...box.edges()][0]], 0).ok);
+  }
+}
+
+section('🔴 假邊界不可以變成分片線（recalcNormalsOutside）');
+
+/**
+ * 🔴 **這一組守的是一個「憑空多出東西」的 bug。**
+ *
+ * `mesh.js` `_buildBoundaryLoops()` 有一條規則：**邊界天生就是切割線**，
+ * 所以沒有 twin 的半邊會自動標成 CUT。那條規則本身是對的。
+ *
+ * 但**繞向不一致的網格，那些邊只是「暫時配不到 twin」，不是真的邊界**
+ * （`fromFaceList()` 只配 `a→b` 與 `b→a`，同方向就配不上）。
+ * 把繞向修好之後它們會變回內部邊，**而 CUT 已經跟著搬進來了**。
+ *
+ * 症狀：**修一個繞向壞掉的模型，畫面上憑空多出幾條分片線**，
+ * 而使用者從來沒標過。〔2026-08-25 導角那一輪抓到，實測方塊多出 4 條〕
+ */
+{
+  const baked = (() => {
+    const r = edit.mergeCoplanarFaces(buildPrim('box', { w: 60, d: 45, h: 40 }));
+    const m = r.ok ? r.mesh : buildPrim('box', { w: 60, d: 45, h: 40 });
+    m.computeNormals();
+    return m;
+  })();
+
+  /** 故意把一個面的繞向反過來 → 相鄰面矛盾 → 那幾條邊被當成邊界標了 CUT */
+  const vi = baked._vertIndex();
+  const pts = baked.verts.map(v => v.p.clone());
+  const fs = baked.faces.map((f, i) => {
+    const idx = baked.faceVerts(f).map(v => vi.get(v.id));
+    return i === 0 ? idx.slice().reverse() : idx;
+  });
+  const broken = Mesh.fromFaceList(pts, fs);
+  broken.computeNormals();
+
+  const cutBefore = [...broken.edges()].filter(he => he.role === EDGE_ROLE.CUT).length;
+  ok('（前置）繞向壞掉的網格真的被自動標了 CUT', cutBefore > 0, `${cutBefore} 條`);
+
+  const r = edit.recalcNormalsOutside(broken);
+  ok('修得動', r.ok);
+  ok('　　修完是封閉的', r.mesh.isClosed());
+  eq('★★ 修完之後不應該留下任何 CUT（那些都是假邊界）',
+     [...r.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 0);
+
+  /**
+   * ⚠ **但真正的邊界照樣要是 CUT，使用者標的也不能被清掉。**
+   * 拿一片開放的板子驗：它的 4 條外輪廓是真邊界。
+   */
+  {
+    const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+    plate.computeNormals();
+    const want = [...plate.edges()].filter(he => he.role === EDGE_ROLE.CUT).length;
+    ok('（前置）板子的外輪廓本來就是 CUT', want > 0, `${want} 條`);
+    const rp = edit.recalcNormalsOutside(plate);
+    // 本來就一致 → 不動它，那也代表 CUT 一條都沒被碰
+    ok('★ 開放的板子：不動它，真邊界的 CUT 一條都沒少', !rp.ok);
+  }
+}
+
 section('邊上的標記：每一樣都要活過每一條「拆掉重建」的路');
 
 /**

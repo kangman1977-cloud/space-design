@@ -421,6 +421,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="inset" disabled title="內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。只加線、形狀不變。內圈那個新面會自動選中，接著用箭頭沿法向推就是凹槽、面板開口、邊框">內縮</button>
       <input id="insetW" type="number" min="0.1" step="0.1" value="1"
              title="內縮寬度（cm）：新的一圈離原本的邊多遠。四個角會自動做尖角接合（miter），實際牆距就是這個數字">
+      <!--
+        導角：把選到的邊換成一片斜切面，角落自己會長出來。
+        ⚠ 刻意不自動選中新面 —— 導角完形狀就完成了（寬度已經在輸入框給了），
+        而且它可能一次產生很多片（12 條邊全導 ＝ 20 片），
+        gizmo 會停在它們的共同重心，也就是模型內部，反而擋住你看形狀。
+      -->
+      <button id="bevel" disabled title="導角：把選到的邊換成一片斜切面（45 度斜切）。相鄰的邊一起導時，角落會自動長出一個面。可以一次選好幾條邊">導角</button>
+      <input id="bevelW" type="number" min="0.1" step="0.1" value="1"
+             title="導角寬度（cm）：斜切面離原本那條邊多遠。⚠ 太大會跟旁邊的邊打架，做出怪形狀">
     </div>
 
     <!--

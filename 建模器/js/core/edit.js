@@ -1420,6 +1420,244 @@ export function insetFaces(mesh, face, w, tolDeg = 0.5) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  導角（Bevel，單段斜切）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **導角：把選到的邊換成一片斜切面，角落自己會長出來。**
+ *
+ * ── 它是「內縮 ＋ 加面」，沒有專用的數學 ────────────────
+ * ⭐ 每個面沿「被導的邊」往面內縮（**跟 `insetFaces()` 同一段 miter**），
+ * 縮出來的縫隙就是斜切面與角落面。四動作框架的第二個成品。
+ *
+ * ── 🔴 「角落不唯一」是有條件的，而那個條件我們不滿足 ────
+ * Blender 為角落開了 Miter（Sharp／Patch／Arc）三個選項，**那是因為
+ * 多段導角（圓角）** —— 角落要用弧面接，接法真的有好幾種。
+ * **但單段（斜切）在 3 價頂點上，角落是唯一的**：就是那幾個偏移點圍成的
+ * 多邊形，沒得選。而**我們的頂點全是 3 價**（已釘成回歸測試）。
+ * → 完整推導與四個案例的數字見 `外部參考-Blender編輯.md` **第 11 節**。
+ *
+ * ── 🔴 三個「推理會錯、實測才對」的地方（每一個都會讓網格壞掉）──
+ *
+ * **① 往面內的方向是 `n × d`。** 反了的話體積不減反增（實測 108000 → 117000）。
+ *
+ * **② 沒被導到的面要「吸收」鄰居的代表點。**
+ * 只導一部分的邊時，斜切線會**橫過**旁邊那個面的角，
+ * 所以它要從 n 邊形變成 n+1 邊形。不吸收的話網格不封閉（實測 χ −2）。
+ * 〔`外部參考-Blender編輯.md` 第 9.6 節其實提過這件事，
+ * 　**但寫成一句觀察、沒寫成規則，所以實作時照樣踩進去** —— 坑第 33 條的家族〕
+ *
+ * **③ 共用「沒被導的邊」的兩個面，代表點必須是同一個。**
+ * 它們在幾何上本來就是同一點（那條邊沒被動，只是變短），
+ * 但逐面算會給出兩個不同的索引 → **網格從那裡裂開**
+ * （實測 16 段圓柱上下兩圈導角：χ −14、不封閉）。
+ * 🔴 **用併查集解，不要用容許值** —— 它是結構問題，不是數值問題。
+ *
+ * ── ⚠ 被導掉的那條邊上的標記會消失 ──────────────────
+ * 那條邊**真的不存在了**（換成一片斜切面），所以標記跟著走是正確的。
+ * 呼叫端要講一句，不要讓它安靜消失。沒被導的邊照樣搬。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} hes 要導的邊（任一條半邊即可）
+ * @param {number} w 導角寬度，cm
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh,
+ *            edges?:number, walls?:number, corners?:number,
+ *            clamped?:number, lostMarks?:number}}
+ */
+export function bevelEdges(mesh, hes, w) {
+  const list = (Array.isArray(hes) ? hes : [hes]).filter(Boolean);
+  if (!mesh || !list.length) return { ok: false, reason: '沒有選到邊' };
+  if (!(w > 0)) return { ok: false, reason: '導角寬度要大於 0' };
+
+  mesh.computeNormals();
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const pts = mesh.verts.map(v => v.p.clone());
+
+  const cut = new Set();
+  for (const he of list) {
+    if (!he.face || !he.twin || !he.twin.face) {
+      return { ok: false, reason: '外輪廓的邊不能導角（它只有一側有面）' };
+    }
+    cut.add(kOf(vi.get(he.v.id), vi.get(he.to.id)));
+  }
+  const isCut = (a, b) => cut.has(kOf(vi.get(a.id), vi.get(b.id)));
+
+  /** 面 f 的迴圈裡，頂點 V 那一格的 {cur, prv} */
+  const at = (f, V) => {
+    const loop = mesh.faceLoop(f);
+    const i = loop.findIndex(he => he.v === V);
+    return i < 0 ? null : { cur: loop[i], prv: loop[(i - 1 + loop.length) % loop.length] };
+  };
+  const hasBev = (f, V) => {
+    const c = at(f, V);
+    return c ? (isCut(V, c.cur.to) || isCut(c.prv.v, V)) : false;
+  };
+
+  // ── ① 只有「在這個頂點有被導的邊」的面才產生代表點 ──
+  const R = new Map();                     // `面id:頂點id` → 代表點索引
+  let clamped = 0;
+  for (const f of mesh.faces) {
+    const n = f.normal.clone().normalize();
+    for (const V of mesh.faceVerts(f)) {
+      const c = at(f, V);
+      if (!c) continue;
+      const bNext = isCut(V, c.cur.to), bPrev = isCut(c.prv.v, V);
+      if (!bNext && !bPrev) continue;
+      /** 往面內 ＝ 面法向 × 邊方向（左手邊就是內側）。⚠ 反了體積會不減反增 */
+      const inward = he => {
+        const d = new THREE.Vector3().subVectors(he.to.p, he.v.p).normalize();
+        return new THREE.Vector3().crossVectors(n, d).normalize();
+      };
+      let p;
+      if (bNext && bPrev) {
+        const i1 = inward(c.cur), i2 = inward(c.prv);
+        const bis = i1.clone().add(i2);
+        if (bis.lengthSq() < 1e-16) p = V.p.clone().addScaledVector(i1, w);
+        else {
+          bis.normalize();
+          const cos = bis.dot(i1);
+          if (cos < 0.2) clamped++;        // 上限 5 倍，跟 shell()／內縮同一個規矩
+          p = V.p.clone().addScaledVector(bis, w / Math.max(cos, 0.2));
+        }
+      } else {
+        p = V.p.clone().addScaledVector(inward(bNext ? c.cur : c.prv), w);
+      }
+      R.set(`${f.id}:${V.id}`, pts.length);
+      pts.push(p);
+    }
+  }
+
+  // ── ①b 共用「沒被導的邊」的兩個面，代表點併成同一個（見檔頭 ③）──
+  {
+    const par = new Map();
+    const find = k => { while (par.get(k) !== k) { par.set(k, par.get(par.get(k))); k = par.get(k); } return k; };
+    for (const key of R.keys()) par.set(key, key);
+    for (const V of mesh.verts) {
+      for (const he of mesh.vertOutgoing(V)) {
+        if (!he.face || !he.twin || !he.twin.face) continue;
+        if (isCut(V, he.to)) continue;                 // 這條邊被導了 → 本來就該分開
+        const a = `${he.face.id}:${V.id}`, b = `${he.twin.face.id}:${V.id}`;
+        if (!R.has(a) || !R.has(b)) continue;          // 有一邊沒代表點 → 那一邊會去吸收
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) par.set(ra, rb);
+      }
+    }
+    const canon = new Map();
+    for (const key of R.keys()) { const root = find(key); if (!canon.has(root)) canon.set(root, R.get(key)); }
+    for (const key of [...R.keys()]) R.set(key, canon.get(find(key)));
+  }
+
+  /**
+   * 🔴 **「這條邊在這個面上，現在從哪一點出發」。**
+   *
+   * ⚠ **不能只問「這個面在這個頂點的代表點」** —— 那個面如果是
+   * 「吸收型」的（在這個頂點沒有被導到的邊），它根本沒有自己的代表點，
+   * 而是把**兩側鄰居的**代表點各吸收一個。那時候這條邊的新起點是
+   * **它自己那一側**的那個，不是原本的頂點。
+   *
+   * 不分這一層的話，標記會落空：實測方塊導一條邊，**4 條沒被導的邊
+   * 標記直接消失**（它們的端點被吸收掉了，配對配到一個已經不存在的索引）。
+   *
+   * @param {Face} f 這條半邊所屬的面
+   * @param {HalfEdge} he 這條半邊（用來決定是「出發側」還是「到達側」）
+   * @param {Vertex} V `he` 的兩個端點之一
+   */
+  const repForEdge = (f, he, V) => {
+    const own = R.get(`${f.id}:${V.id}`);
+    if (own !== undefined) return own;
+    const c = at(f, V);
+    if (!c) return vi.get(V.id);
+    // V 是這條邊的起點 → 用「跨過這條邊」的那個鄰居的代表點；是終點就用另一側
+    const side = (c.cur === he) ? c.cur : c.prv;
+    const g = side.twin && side.twin.face;
+    const k = g ? R.get(`${g.id}:${V.id}`) : undefined;
+    return k === undefined ? vi.get(V.id) : k;
+  };
+
+  const faces = [];
+  // ── ② 原面：有代表點就換掉；沒有的要吸收鄰居的（見檔頭 ②）──
+  for (const f of mesh.faces) {
+    const out = [];
+    for (const V of mesh.faceVerts(f)) {
+      const own = R.get(`${f.id}:${V.id}`);
+      if (own !== undefined) { out.push(own); continue; }
+      const c = at(f, V);
+      const a1 = repForEdge(f, c.prv, V), a2 = repForEdge(f, c.cur, V);
+      out.push(a1);
+      if (a2 !== a1) out.push(a2);
+    }
+    faces.push(out);
+  }
+
+  // ── ③ 每條被導的邊 → 一片斜切面 ──
+  let walls = 0;
+  for (const he of mesh.edges()) {
+    if (!isCut(he.v, he.to) || !he.face || !he.twin || !he.twin.face) continue;
+    const F = he.face, G = he.twin.face;
+    faces.push([R.get(`${F.id}:${he.v.id}`),  R.get(`${F.id}:${he.to.id}`),
+                R.get(`${G.id}:${he.to.id}`), R.get(`${G.id}:${he.v.id}`)]);
+    walls++;
+  }
+
+  // ── ④ 角落面：只有當這個頂點周圍每一個面都被導到時才需要（V 沒人用了）──
+  let corners = 0;
+  for (const V of mesh.verts) {
+    const around = mesh.vertOutgoing(V).filter(he => he.face);
+    if (!around.length) continue;
+    if (!around.every(he => hasBev(he.face, V))) continue;
+    const ring = [];
+    for (const he of around) {
+      const k = R.get(`${he.face.id}:${V.id}`);
+      if (k !== undefined && !ring.includes(k)) ring.push(k);
+    }
+    if (ring.length < 3) continue;      // 併完只剩 2 個 → 兩片斜切面自己接起來，不必補
+    faces.push(ring);
+    corners++;
+  }
+
+  const pre = preflightRebuild(pts, faces);
+  if (!pre.ok) return { ok: false, reason: `導角做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(pts, faces);
+  let out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  /**
+   * 🔴 **繞向交給已經驗過的那一支修，不要在這裡手工判斷。**
+   * 角落面的繞向取決於 `vertOutgoing()` 繞的方向，而**繞向錯了畫面上
+   * 完全看不出來**（坑第 29 條），只有體積會露餡。
+   * `recalcNormalsOutside()` 是為這件事做的，而且它自己有回歸測試守著。
+   */
+  const fix = recalcNormalsOutside(out);
+  if (fix.ok) out = fix.mesh;
+
+  /**
+   * 標記搬移：**沒被導的邊照搬，被導掉的邊上的標記會消失** ——
+   * 那條邊真的不存在了（換成一片斜切面），所以跟著走是正確的。
+   * ⚠ 但要數出來讓呼叫端講一句，不要安靜消失。
+   */
+  const di = out._vertIndex();
+  const have = new Map();
+  for (const he of out.edges()) have.set(kOf(di.get(he.v.id), di.get(he.to.id)), he);
+  const to = i => clean.remap.get(i);
+  let lostMarks = 0;
+  for (const he of mesh.edges()) {
+    const m = mesh.marksOf(he);
+    if (Mesh.marksEmpty(m)) continue;
+    if (isCut(he.v, he.to)) { lostMarks++; continue; }        // 這條邊被導掉了
+    const f = he.face || (he.twin && he.twin.face);
+    if (!f) { lostMarks++; continue; }
+    const side = (he.face === f) ? he : he.twin;
+    const a = to(repForEdge(f, side, side.v)), b = to(repForEdge(f, side, side.to));
+    const dst = (a === undefined || b === undefined) ? null : have.get(kOf(a, b));
+    if (dst) out.applyMarks(dst, m); else lostMarks++;
+  }
+
+  return { ok: true, mesh: out, edges: cut.size, walls, corners, clamped, lostMarks };
+}
+
+// ═══════════════════════════════════════════════════════
 //  法向：重算外側 ／ 翻面
 // ═══════════════════════════════════════════════════════
 
@@ -1606,6 +1844,42 @@ export function recalcNormalsOutside(mesh) {
   const out = Mesh.fromFaceList(points, oriented);
   out.computeNormals();
   mesh._copyMarksTo(out);
+
+  /**
+   * 🔴 **把「假邊界」帶進來的 CUT 清掉。**
+   *
+   * `mesh.js` 的 `_buildBoundaryLoops()` 有一條規則：**邊界天生就是切割線**，
+   * 所以沒有 twin 的半邊會自動被標成 `CUT`。那條規則本身是對的。
+   *
+   * 但**繞向不一致的網格，那些邊只是「暫時配不到 twin」，不是真的邊界** ——
+   * `fromFaceList()` 只配 `a→b` 與 `b→a`，同方向就配不上，於是被當成邊界標了 CUT。
+   * 這一支把繞向修好之後那些邊會變回內部邊，**但 CUT 已經跟著搬進來了**。
+   *
+   * 症狀：修一個繞向壞掉的模型，**畫面上憑空多出幾條分片線**，
+   * 而使用者從來沒標過。〔2026-08-25 導角那一輪抓到的，實測方塊多出 4 條〕
+   *
+   * ⚠ **只清「原本是邊界、現在變成內部」的那些** ——
+   * 真正的邊界（開放的殼）照樣該是 CUT，使用者自己標的也不能動
+   * （使用者標的在原網格上是內部邊，不會落進這個集合）。
+   */
+  {
+    const si = mesh._vertIndex(), di = out._vertIndex();
+    const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+    const wasBoundary = new Set();
+    for (const he of mesh.halfEdges) {
+      if (he.face && he.twin && he.twin.face) continue;      // 原本就是內部邊
+      const a = si.get(he.v.id), b = si.get(he.to.id);
+      if (a !== undefined && b !== undefined) wasBoundary.add(key(a, b));
+    }
+    for (const he of out.edges()) {
+      if (!he.face || !he.twin || !he.twin.face) continue;   // 現在還是邊界 → 該留著
+      if (he.role !== EDGE_ROLE.CUT) continue;
+      if (wasBoundary.has(key(di.get(he.v.id), di.get(he.to.id)))) {
+        out.setRole(he, EDGE_ROLE.FREE);
+      }
+    }
+  }
+
   return { ...info, ok: true, mesh: out };
 }
 

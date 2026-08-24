@@ -30,7 +30,7 @@ import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
-         recalcNormalsOutside, flipNormals, insetFaces } from './core/edit.js';
+         recalcNormalsOutside, flipNormals, insetFaces, bevelEdges } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -359,6 +359,7 @@ $('flatten').onclick = () => flattenSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
 $('inset').onclick = () => insetSelected();
+$('bevel').onclick = () => bevelSelected();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
 $('flipNormals').onclick = () => flipNormalsOnSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
@@ -1096,6 +1097,69 @@ function insetSelected() {
 }
 
 /**
+ * 導角：把選到的邊換成一片斜切面，角落自己會長出來。
+ *
+ * ── ⚠ 刻意**不**自動選中新長出來的面 ──────────────────
+ * 擠出／環切／內縮都會自動選中，但那條規則其實不是「一律自動選中」，
+ * 而是「**自動選中你接下來八成要動的那個東西**」：
+ * 擠出的初始距離只是佔位一定要調、環切的那一圈是拿來拉斜面的、
+ * 內縮的內圈面是拿來推凹槽的。
+ *
+ * **導角不一樣**：寬度已經在輸入框給了，按下去形狀就完成了。
+ * 而且它**一次可能長出很多片**（12 條邊全導 ＝ 12 片斜切 ＋ 8 個角落），
+ * gizmo 會停在它們的共同重心 —— **也就是模型正中央，在裡面**，
+ * 那不只是沒幫助，是擋住使用者看形狀。
+ * 〔kang 2026-08-25 同意這個判斷〕
+ *
+ * ── 角落是唯一的，不必問使用者 ────────────────────────
+ * Blender 為角落開了 Miter 三個選項，**那是因為多段導角（圓角）**。
+ * 單段（斜切）在 3 價頂點上角落唯一 —— 而我們的頂點全是 3 價。
+ * 推導與四個案例的數字見 `外部參考-Blender編輯.md` 第 11 節。
+ */
+function bevelSelected() {
+  const els = sel.editSels.filter(e => e.kind === 'edge');
+  if (!els.length) {
+    toast('先在編輯模式下選一條邊（可以開「加選」選好幾條），再按「導角」', true);
+    return;
+  }
+  if (els.length !== sel.editCount) {
+    toast('導角只吃邊，選取裡混到了點或面。請只選邊', true);
+    return;
+  }
+  const w = +$('bevelW').value;
+  if (!(w > 0)) { toast('導角寬度要大於 0', true); return; }
+
+  const obj = els[0].obj;
+  const r = bevelEdges(obj.mesh(), els.map(e => e.he), w);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(els.length > 1 ? `導角 ${els.length} 條邊 ${w} cm` : `導角 ${w} cm`);
+
+  /**
+   * ⚠ 選取一定要清掉 —— 舊的 HalfEdge 參考已經不在文件裡了。
+   * `commit()` 會走 `revalidate()` 自己清，這裡不再選新的東西（見檔頭）。
+   */
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 🔴 **講出可以對答案的數字**：導了幾條邊、長出幾片斜切面、幾個角落面。
+   * 使用者自己數得出來（一個角落三條邊一起導 → 3 片 ＋ 1 個角落），
+   * 而**兩個數字互相對得起來，錯誤才會自己現形**（鐵律三）。
+   */
+  const bits = [`已導角 ${r.edges} 條邊（${w} cm）　新增 ${r.walls} 片斜切面`];
+  if (r.corners) bits.push(`${r.corners} 個角落面`);
+  if (r.clamped) bits.push(`⚠ ${r.clamped} 個角太平（接近 180°），推距被限制在 5 倍以內`);
+  if (r.lostMarks) bits.push(`⚠ ${r.lostMarks} 條被導掉的邊，上面的標記跟著消失了（那條邊已經不存在）`);
+  toast(bits.join('　'));
+}
+
+/**
  * 🔴 修法向：把整個物件的面朝向重算成「一致而且朝外」。
  *
  * ── 為什麼這顆按鈕該存在 ────────────────────────────────
@@ -1422,6 +1486,22 @@ function updateBar() {
              && sel.editCount === 1;
   $('loopCut').disabled = !edge1;
   $('loopCutN').disabled = !edge1;
+  /**
+   * 導角：**選到邊就給按**（一條或好幾條都行）。
+   * 跟環切「一次只能一條」不同 —— 相鄰的邊一起導才有角落，
+   * 那正是它主要的用途。
+   */
+  const edgeAny = sel.editMode && sel.editCount > 0
+    && sel.editSels.every(e => e.kind === 'edge');
+  $('bevel').disabled = !edgeAny;
+  $('bevelW').disabled = !edgeAny;
+  $('bevel').title = edgeAny
+    ? (sel.editCount > 1
+        ? `把選到的 ${sel.editCount} 條邊都換成斜切面，相鄰的地方角落會自動長出來`
+        : '把這條邊換成一片斜切面。相鄰的邊一起選，角落會自動長出來')
+    : (sel.editMode ? '先選邊（可以開「加選」選好幾條）'
+                    : '先按「拉點線面」進入編輯模式，再選邊');
+
   $('selRing').disabled = !edge1;
   $('selRing').title = edge1
     ? '從這條邊繞出一整圈邊全部選起來（也可以先按它看環切會切在哪）'
