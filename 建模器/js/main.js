@@ -31,7 +31,8 @@ import { faceFrame, edgeFrame, vertexPoint,
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
-         deleteFaces, fillHoles, bisect, worldAxisPlane } from './core/edit.js';
+         deleteFaces, fillHoles, bisect, worldAxisPlane,
+         BEVEL_MAX_SEG } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -1220,16 +1221,19 @@ function bevelSelected() {
   }
   const w = +$('bevelW').value;
   if (!(w > 0)) { toast('導角寬度要大於 0', true); return; }
+  /** 段數：1 ＝ 斜切邊，2 以上 ＝ 圓角。**同一個功能的兩端，不是兩顆按鈕** */
+  const segs = Math.max(1, Math.min(BEVEL_MAX_SEG, Math.round(+$('bevelSeg').value || 1)));
 
   const obj = els[0].obj;
-  const r = bevelEdges(obj.mesh(), els.map(e => e.he), w);
+  const r = bevelEdges(obj.mesh(), els.map(e => e.he), w, { segments: segs });
   if (!r.ok) { toast(r.reason, true); return; }
 
   obj.setMesh(r.mesh);
   refreshAfterEdit(r.mesh);
   view.markGeomDirty();
   view.markSeamsDirty();
-  commit(els.length > 1 ? `導角 ${els.length} 條邊 ${w} cm` : `導角 ${w} cm`);
+  const what = segs > 1 ? `導圓角（${segs} 段）` : '導角';
+  commit(els.length > 1 ? `${what} ${els.length} 條邊 ${w} cm` : `${what} ${w} cm`);
 
   /**
    * ⚠ 選取一定要清掉 —— 舊的 HalfEdge 參考已經不在文件裡了。
@@ -1244,8 +1248,17 @@ function bevelSelected() {
    * 使用者自己數得出來（一個角落三條邊一起導 → 3 片 ＋ 1 個角落），
    * 而**兩個數字互相對得起來，錯誤才會自己現形**（鐵律三）。
    */
-  const bits = [`已導角 ${r.edges} 條邊（${w} cm）　新增 ${r.walls} 片斜切面`];
-  if (r.corners) bits.push(`${r.corners} 個角落面`);
+  const bits = segs > 1
+    ? [`已導圓角 ${r.edges} 條邊（${w} cm、${segs} 段）　新增 ${r.walls} 片`]
+    : [`已導角 ${r.edges} 條邊（${w} cm）　新增 ${r.walls} 片斜切面`];
+  if (r.corners) bits.push(`${r.corners} 個角落`);
+  /**
+   * 🔴 **段數越高越接近真圓，但量出來的永遠是網格真值。**
+   * 這句跟「尺寸的依據」是同一條規則（第 12.3 節）——
+   * ⛔ 不要拿理想圓去「修正」圓角尺寸。段數是**建模階段的決定**。
+   * 講出來是為了讓使用者知道「不夠圓就把段數開高」，而不是回頭懷疑尺寸。
+   */
+  if (segs > 1) bits.push('要更圓就把段數調高（尺寸一律是量得到的真值）');
   if (r.clamped) bits.push(`⚠ ${r.clamped} 個角太平（接近 180°），推距被限制在 5 倍以內`);
   if (r.lostMarks) bits.push(`⚠ ${r.lostMarks} 條被導掉的邊，上面的標記跟著消失了（那條邊已經不存在）`);
   /**
@@ -1703,6 +1716,7 @@ function updateBar() {
     && sel.editSels.every(e => e.kind === 'edge');
   $('bevel').disabled = !edgeAny;
   $('bevelW').disabled = !edgeAny;
+  $('bevelSeg').disabled = !edgeAny;
   $('bevel').title = edgeAny
     ? (sel.editCount > 1
         ? `把選到的 ${sel.editCount} 條邊都換成斜切面，相鄰的地方角落會自動長出來`

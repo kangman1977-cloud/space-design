@@ -1291,6 +1291,14 @@ export function loopCut(mesh, he0, opt = {}) {
 const ON_PLANE_CM = PLANAR_TOL_CM;
 
 /**
+ * 導角段數的上限（kang 2026-08-25 選的，跟環切的刀數對齊）。
+ * ⚠ 段數 16 的方塊全導已經是 2000 多個點，32 只會更多 ——
+ * 對實際加工沒有差別（誤差 0.016% 已遠低於任何切得出來的東西），
+ * 上限給高只是為了**跟環切一致好記**，不是鼓勵用。
+ */
+export const BEVEL_MAX_SEG = 32;
+
+/**
  * 把「世界座標的軸平面」換算成這個物件**自己座標**裡的平面。
  *
  * 🔴 **不做這件事就會切錯位置，而且形狀完全正常。**
@@ -1947,10 +1955,12 @@ export function fillHoles(mesh) {
  *            edges?:number, walls?:number, corners?:number,
  *            clamped?:number, lostMarks?:number}}
  */
-export function bevelEdges(mesh, hes, w) {
+export function bevelEdges(mesh, hes, w, opt = {}) {
   const list = (Array.isArray(hes) ? hes : [hes]).filter(Boolean);
   if (!mesh || !list.length) return { ok: false, reason: '沒有選到邊' };
   if (!(w > 0)) return { ok: false, reason: '導角寬度要大於 0' };
+  /** 段數：1 ＝ 現在的斜切邊。⚠ 0 或負的一律當 1（跟環切的刀數同一條規矩）*/
+  const segs = Math.max(1, Math.min(BEVEL_MAX_SEG, Math.round(opt.segments || 1)));
 
   mesh.computeNormals();
   const vi = mesh._vertIndex();
@@ -2127,6 +2137,125 @@ export function bevelEdges(mesh, hes, w) {
     return k === undefined ? vi.get(V.id) : k;
   };
 
+  /**
+   * ═══ 多段（圓角）用的四個零件 ═══════════════════════════
+   *
+   * 🔴 **段數 1 完全不走這裡** —— ③④ 的單段那條路一行都沒改，
+   * 所以「舊行為完全沒變」是**結構保證**，不是靠人記得。
+   * 測試釘的是更強的版本：段數 1 跟原本**逐個頂點完全相同**。
+   *
+   * ⚠ **定義的位置很重要** —— 要放在 ② 前面。
+   * ② 也會用到 `arcPt()`（沒被導到的面要吸收整條弧），
+   * 放在 ③ 前面的話 ② 那邊會取到還沒初始化的 const。
+   * 〔第一版就是放在 ③ 前面，於是 ② 沒吸收到弧，網格裂開 —— kang 實測抓到〕
+   *
+   * ── ⭐ 「推到弧上」不必事後推 ──────────────────────────
+   * 第 12.4 節寫的路徑是「導角 ＋ 環切那片斜切面 ＋ **把新的點推到弧上**」。
+   * 實際做下去發現第三步是免費的：
+   *
+   * > **弧上的點 ＝ 兩個面法向的球面插值，乘上半徑，加上圓心。**
+   *
+   * 因為圓角面跟原本兩個面**相切**，所以 `圓心 = 代表點 − w × 面法向`，
+   * 而代表點到圓心的方向**就是那個面的法向**。於是整條弧是
+   * `c + w × slerp(nF, nG, t)` —— **精確落在弧上，不需要任何修正**。
+   *
+   * ⭐ 這也順帶解掉「圓心在哪」：**從哪個面算都要得到同一個圓心**，
+   * 而那正是第 12.5 節說的「非直角時可能沒有一個球同時相切」的判準本身。
+   * ⛔ 所以不要去判斷「是不是直角」—— 直接算圓心，對不上就擋下來。
+   */
+
+  /** 球面插值：沿大圓等角度走，兩端與中間都精確落在弧上 */
+  const slerpDir = (a, b, t) => {
+    const d = Math.min(1, Math.max(-1, a.dot(b)));
+    const ang = Math.acos(d);
+    if (ang < 1e-9) return a.clone();
+    const s = Math.sin(ang);
+    return a.clone().multiplyScalar(Math.sin((1 - t) * ang) / s)
+      .add(b.clone().multiplyScalar(Math.sin(t * ang) / s));
+  };
+
+  /**
+   * 這個頂點在這幾個面上的**共同圓心**。
+   * 🔴 **對不上就是「沒有一個球同時相切」** —— 回 null，由呼叫端擋下來。
+   */
+  const centerAt = (V, fs) => {
+    let c = null;
+    for (const f of fs) {
+      const rep = R.get(`${f.id}:${V.id}`);
+      if (rep === undefined) return null;
+      const ci = pts[rep].clone().addScaledVector(f.normal, -w);
+      if (!c) { c = ci; continue; }
+      if (c.distanceTo(ci) > PLANAR_TOL_CM) return null;   // 半徑對不起來
+    }
+    return c;
+  };
+
+  /**
+   * 這個頂點**只導了一部分的邊**嗎（有被導的，也有沒被導的）。
+   *
+   * 🔴 **這是圓角最常撞到的一種情形，而且訊息說錯會很誤導。**
+   * kang 2026-08-25 實測：方塊選頂面四條邊導圓角 → 跳「這個角落不是直角」，
+   * **可是方塊明明是直角**。真正的原因是那個角落的垂直邊沒被導，
+   * 於是兩條弧的圓心差了一個 w，接不起來。
+   *
+   * → 分開講：**只導一部分**要告訴他「全部一起選就可以」（那是做得到的），
+   * 「不是直角」才是真的還沒解。⛔ 兩種混成一句話，他會往錯的方向試。
+   */
+  const partialAtVert = V => {
+    let bev = 0, plain = 0;
+    for (const he of mesh.vertOutgoing(V)) {
+      if (!he.face || !he.twin || !he.twin.face) continue;
+      if (isCut(he.v, he.to)) bev++; else plain++;
+    }
+    return bev > 0 && plain > 0;
+  };
+
+  /**
+   * 圓角接不起來時，講**這個頂點**真正的原因，而且要講得出路。
+   * 〔坑第 11 條：沉默地退回最糟；坑第 18 條：訊息錯了比沒訊息更糟〕
+   */
+  const bevelBlockReason = V => (partialAtVert(V)
+    ? '這個角落只導了一部分的邊，圓角在那裡接不起來。'
+      + '把這個角落的邊**全部一起選**就可以了（例如方塊要整個圓角，12 條邊一起選）。'
+      + '只想導幾條的話，段數改成 1 的斜切邊可以做'
+    : '這個角落不是直角，圓角還做不出來（找不到一個球同時貼合每個面）。'
+      + '段數改成 1 的斜切邊可以做');
+
+  /** 這兩個面之間，有沒有一條**被導的**邊通過 V —— 有才存在一條弧 */
+  const sharedBevelEdge = (V, g1, g2) => {
+    for (const he of mesh.vertOutgoing(V)) {
+      if (!he.face || !he.twin || !he.twin.face) continue;
+      if (!isCut(he.v, he.to)) continue;
+      const a = he.face, b = he.twin.face;
+      if ((a === g1 && b === g2) || (a === g2 && b === g1)) return true;
+    }
+    return false;
+  };
+
+  /**
+   * 弧上第 k 個點的索引（k ＝ 0…segs，0 在 F 側、segs 在 G 側）。
+   * ⚠ **一定要快取而且 key 要正規化** —— 同一條弧會被斜切面、角落、
+   * 以及「吸收的面」各要一次，各生一次的話接縫上會出現重合但不共用的點，
+   * `cleanRebuild()` 併不掉（它併的是孤點不是重點），網格就裂開了。
+   */
+  const arcCache = new Map();
+  const arcPt = (V, F, G, k) => {
+    const flip = F.id > G.id;
+    const [A, B] = flip ? [G, F] : [F, G];
+    const kk = flip ? segs - k : k;
+    const key = `${V.id}|${A.id}|${B.id}|${kk}`;
+    if (arcCache.has(key)) return arcCache.get(key);
+    if (kk === 0)     { const i = R.get(`${A.id}:${V.id}`); arcCache.set(key, i); return i; }
+    if (kk === segs)  { const i = R.get(`${B.id}:${V.id}`); arcCache.set(key, i); return i; }
+    const c = centerAt(V, [A, B]);
+    if (!c) return undefined;
+    const idx = pts.length;
+    pts.push(c.clone().addScaledVector(
+      slerpDir(A.normal, B.normal, kk / segs), w));
+    arcCache.set(key, idx);
+    return idx;
+  };
+
   const faces = [];
   // ── ② 原面：有代表點就換掉；沒有的要吸收鄰居的（見檔頭 ②）──
   for (const f of mesh.faces) {
@@ -2137,19 +2266,66 @@ export function bevelEdges(mesh, hes, w) {
       const c = at(f, V);
       const a1 = repForEdge(f, c.prv, V), a2 = repForEdge(f, c.cur, V);
       out.push(a1);
-      if (a2 !== a1) out.push(a2);
+      if (a2 !== a1) {
+        /**
+         * 🔴 **多段時，這個面要吸收的是「整條弧」，不是只有兩端。**
+         *
+         * ⚠ **kang 2026-08-25 實測抓到的**：選一條邊導圓角，
+         * 側面上冒出一堆奇怪的線 —— 那是弧上的中間點在這個面這邊
+         * **配不到對應的邊**，半邊配不到 twin，網格就裂開了
+         * （χ 2 → 0、`isClosed()` false、邊界半邊 2n+2 條）。
+         *
+         * 🔴 **而 `validate()` 抓不到** —— 跟「清孤點」那次一樣，只有 χ 露餡。
+         *
+         * ⚠ **沙箱測試沒抓到，因為當時只驗「12 條邊全導」** ——
+         * 那時每個面都有自己的代表點，**沒有任何面需要吸收**，
+         * 這條路根本沒被走到。〔坑第 17 條的又一次重演：
+         * 挑樣本要涵蓋不同的**網格結構**，不只是不同的形狀〕
+         */
+        if (segs > 1) {
+          const g1 = c.prv.twin && c.prv.twin.face;
+          const g2 = c.cur.twin && c.cur.twin.face;
+          if (g1 && g2 && g1 !== g2 && sharedBevelEdge(V, g1, g2)) {
+            for (let k = 1; k < segs; k++) {
+              const p = arcPt(V, g1, g2, k);
+              if (p !== undefined) out.push(p);
+            }
+          }
+        }
+        out.push(a2);
+      }
     }
     faces.push(out);
   }
 
-  // ── ③ 每條被導的邊 → 一片斜切面 ──
+  // ── ③ 每條被導的邊 → 一片斜切面（多段時 segs 片）──
   let walls = 0;
   for (const he of mesh.edges()) {
     if (!isCut(he.v, he.to) || !he.face || !he.twin || !he.twin.face) continue;
     const F = he.face, G = he.twin.face;
-    faces.push([R.get(`${F.id}:${he.v.id}`),  R.get(`${F.id}:${he.to.id}`),
-                R.get(`${G.id}:${he.to.id}`), R.get(`${G.id}:${he.v.id}`)]);
-    walls++;
+
+    if (segs === 1) {
+      faces.push([R.get(`${F.id}:${he.v.id}`),  R.get(`${F.id}:${he.to.id}`),
+                  R.get(`${G.id}:${he.to.id}`), R.get(`${G.id}:${he.v.id}`)]);
+      walls++;
+      continue;
+    }
+
+    /**
+     * 多段：兩端各走一條弧，把對應的點串成 segs 片四邊形。
+     * ⚠ 兩端的弧**方向要一致**（都從 F 走到 G），否則四邊形會扭成沙漏
+     * —— 那是坑第 29 條，畫面上完全看不出來。
+     */
+    for (let k = 0; k < segs; k++) {
+      const a0 = arcPt(he.v,  F, G, k),     a1 = arcPt(he.to, F, G, k);
+      const b1 = arcPt(he.to, F, G, k + 1), b0 = arcPt(he.v,  F, G, k + 1);
+      if ([a0, a1, b1, b0].some(x => x === undefined)) {
+        const V = (a0 === undefined || b0 === undefined) ? he.v : he.to;
+        return { ok: false, reason: bevelBlockReason(V) };
+      }
+      faces.push([a0, a1, b1, b0]);
+      walls++;
+    }
   }
 
   /**
@@ -2208,7 +2384,68 @@ export function bevelEdges(mesh, hes, w) {
      * | 3 價、三條全導 | 3 | 要補 |
      */
     if (ring.length < 3) continue;
-    faces.push(ring);
+
+    if (segs === 1) { faces.push(ring); corners++; continue; }
+
+    /**
+     * ── 多段的角落 ＝ **球面的一塊**（第 12.2 節）───────────────
+     *
+     * 三片圓柱面跟中間這塊球面接得水密，**沒有任何「要怎麼接」的選擇** ——
+     * Blender 開 Miter（Sharp／Patch／Arc）是為了一般情況，
+     * 在「均勻半徑 ＋ 角落有共同球心」這個條件下答案唯一。
+     *
+     * ⚠ **只做三個面的角落。** 四個以上的球面多邊形怎麼分割**不唯一**，
+     * 而不唯一就不猜（鐵律三，坑第 24 條）—— 擋下來說原因。
+     * 〔單段不受影響：它 2026-08-25 就解掉 4～6 價了，走上面那條路〕
+     */
+    const fs = around.map(he => he.face)
+      .filter((f, i, a) => a.indexOf(f) === i)
+      .filter(f => R.get(`${f.id}:${V.id}`) !== undefined);
+    if (fs.length !== 3) {
+      return {
+        ok: false,
+        reason: `這個角落有 ${fs.length} 個面，圓角目前只做得出三個面的角落。`
+              + `段數改成 1 的斜切邊可以做`
+      };
+    }
+    const c = centerAt(V, fs);
+    if (!c) return { ok: false, reason: bevelBlockReason(V) };
+
+    /**
+     * 🔴 **列的起訖用 `arcPt()`，內部才自己生。**
+     * 三條邊界（A→B、A→C、B→C）因此**逐點等於斜切面用的那三條弧**，
+     * 而不是「算出來剛好一樣」—— 接縫是結構保證的，不是靠精度。
+     * 〔坑第 31 條：與其讓兩條路對齊，不如換一個只有一條路的定義〕
+     */
+    const [A, B, C] = fs;
+    const rows = [];
+    for (let r = 0; r <= segs; r++) {
+      const row = [];
+      const s0 = arcPt(V, A, B, r), s1 = arcPt(V, A, C, r);
+      if (s0 === undefined || s1 === undefined) {
+        return { ok: false, reason: '這個角落的圓弧算不出來（半徑對不起來）' };
+      }
+      if (r === 0) { rows.push([s0]); continue; }
+      const d0 = pts[s0].clone().sub(c).normalize();
+      const d1 = pts[s1].clone().sub(c).normalize();
+      for (let s = 0; s <= r; s++) {
+        if (s === 0)      { row.push(s0); continue; }
+        if (s === r)      { row.push(s1); continue; }
+        if (r === segs)   { row.push(arcPt(V, B, C, s)); continue; }  // B→C 邊界
+        row.push(pts.length);
+        pts.push(c.clone().addScaledVector(slerpDir(d0, d1, s / r), w));
+      }
+      rows.push(row);
+    }
+
+    /** 標準三角形細分：第 r 列有 r+1 個點，跟第 r−1 列串成 2r−1 個三角形 */
+    for (let r = 1; r <= segs; r++) {
+      const up = rows[r - 1], dn = rows[r];
+      for (let s = 0; s < r; s++) {
+        faces.push([up[s], dn[s], dn[s + 1]]);
+        if (s > 0) faces.push([up[s - 1], dn[s], up[s]]);
+      }
+    }
     corners++;
   }
 

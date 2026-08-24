@@ -6420,6 +6420,287 @@ section('導角（Bevel，單段）：內縮 ＋ 加面');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  導圓角（多段導角）＝ 導角的「段數 N」
+// ═══════════════════════════════════════════════════════
+
+section('導圓角：段數 1 就是現在的斜切邊');
+
+/**
+ * 🔴 **這一節的目標數字不是我們算的，是 `外部參考-Blender編輯.md`
+ * 　　第 12 節先驗好的**（2026-08-25 沙箱，直接造出目標幾何）。
+ *
+ * ⚠ **所以它是「目標」，不是「我們一定會長出來的東西」** ——
+ * 第 12.5 節明寫著沒驗過「我們的管線真的做得出它」。
+ * → 斷言分兩級（kang 2026-08-25 同意）：
+ *   **一定要對**：封閉、χ＝2、體積收斂到解析解、段數加倍誤差縮到四分之一
+ *   **希望對**：點／邊／面完全吻合。對不上**先查原因，不要硬改成一樣**
+ *   （角落的三角化切法不同也會讓面數不同，而幾何仍然正確）
+ *
+ * ── ⭐ 最強的一條斷言在最後面 ────────────────────────────
+ * 圓角表面上**每一個新頂點到內盒的距離都必須精確等於 r**。
+ * 那是「真的被推到弧上」的直接證明 —— 比體積強得多，
+ * 因為體積是積分，局部歪掉會被平均掉（坑第 17 條：中途的量是對的）。
+ */
+{
+  const bx = (type, params) => {
+    const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+    const m = r.ok ? r.mesh : buildPrim(type, params);
+    m.computeNormals();
+    return m;
+  };
+  const eCnt = m => [...m.edges()].length;
+  const chiOf = m => m.verts.length - eCnt(m) + m.faces.length;
+
+  const box = bx('box', { w: 60, d: 45, h: 40 });
+  const R = 5;
+  /** 內盒 ＝ 原方塊各面往內縮 r。圓角表面上每一點到它的距離都該是 r */
+  const INNER_MIN = new THREE.Vector3(-25, -15, -17.5);
+  const INNER_MAX = new THREE.Vector3(25, 15, 17.5);
+  const ANALYTIC = 105055.6777;
+  const distToInner = p => {
+    const c = new THREE.Vector3(
+      Math.min(Math.max(p.x, INNER_MIN.x), INNER_MAX.x),
+      Math.min(Math.max(p.y, INNER_MIN.y), INNER_MAX.y),
+      Math.min(Math.max(p.z, INNER_MIN.z), INNER_MAX.z));
+    return c.distanceTo(p);
+  };
+
+  {
+    /**
+     * 🔴 **最重要的一條：段數 1 必須跟現在的導角逐個頂點完全相同。**
+     *
+     * 這是耳切那一輪用過的招 —— 「舊行為完全沒變」不靠人保證，靠測試保證。
+     * 〔那一輪的說法：既有 1219 項一項都沒掉，就是「凸的行為逐字相同」的機械斷言〕
+     */
+    const a = edit.bevelEdges(box, [...box.edges()], R);
+    const b = edit.bevelEdges(box, [...box.edges()], R, { segments: 1 });
+    ok('兩邊都成功', a.ok && b.ok, b.reason || '');
+    eq('★★ 段數 1 的點數跟現在的導角一樣', b.mesh.verts.length, a.mesh.verts.length);
+    eq('　　面數也一樣', b.mesh.faces.length, a.mesh.faces.length);
+    const worst = Math.max(...a.mesh.verts.map((v, i) =>
+      v.p.distanceTo(b.mesh.verts[i].p)));
+    near('★★ 而且是逐個頂點完全相同（不是只有總量一樣）', worst, 0, 1e-12);
+    rel('★★ 體積也完全一樣', b.mesh.volume(), a.mesh.volume());
+  }
+
+  {
+    /** 段數 0 或負的：一律當成 1，不報錯（跟環切的刀數同一條規矩） */
+    const r = edit.bevelEdges(box, [...box.edges()], R, { segments: 0 });
+    ok('段數 0 當成 1，不報錯', r.ok && r.mesh.verts.length === 24, r.reason || '');
+  }
+
+  /**
+   * 第 12.1 節那張表。**目標數字，不是我們算的。**
+   * 〔解析解 ＝ 內盒 50×30×35 ＋ 6 片板 ＋ 12 個 1/4 圓柱 ＋ 8 個 1/8 球〕
+   */
+  /**
+   * 🔴 **面數是表上的數字（逐項吻合），點數是我們自己的公式。**
+   *
+   * ── 為什麼不去湊表上的點數（2026-08-25 查清楚之後的決定）─────────
+   * 第 12 節那張表的角落有 **n²+n+1** 個點，我們是 **(n+1)(n+2)/2**，
+   * 而**面數兩邊完全一樣**（`6 + 12n + 8n²`，五個段數逐項吻合）。
+   *
+   * 差別在**角落那塊球面的三角形怎麼排**：
+   * 表上的模型是「6 片板 ＋ 12 個 1/4 圓柱 ＋ 8 個 1/8 球」**直接拼出來**的，
+   * 接縫上的點各算各的；我們是從導角長出來、**接縫共用點**，所以點少。
+   *
+   * → 表因此逼近得稍好（段數 16：0.0158% vs 我們 0.0166%，
+   *   差 0.0008 個百分點）。**兩個都對，不是誰錯。**
+   *
+   * ⛔ **所以不要把這裡改成表上的點數** —— 那會變成為了湊數字而改結構。
+   * 正確性由底下四條**獨立於那張表**的斷言保證：
+   *   每個頂點精確在弧上／體積收斂到解析解／誤差縮四分之一／χ 與封閉性。
+   * 〔第 12 節的沙箱腳本沒進版控，無法重現它的分割方式〕
+   */
+  const V_OF = n => 4 * (n + 1) * (n + 2);
+  const F_OF = n => 6 + 12 * n + 8 * n * n;
+  const TABLE = [
+    [1,  V_OF(1),  V_OF(1)  + F_OF(1)  - 2, F_OF(1),  101416.6667],
+    [2,  V_OF(2),  V_OF(2)  + F_OF(2)  - 2, F_OF(2),  103999.5791],
+    [4,  V_OF(4),  V_OF(4)  + F_OF(4)  - 2, F_OF(4),  104780.2349],
+    [8,  V_OF(8),  V_OF(8)  + F_OF(8)  - 2, F_OF(8),  104986.0696],
+    [16, V_OF(16), V_OF(16) + F_OF(16) - 2, F_OF(16), 105038.2282]
+  ];
+  /** 面數必須跟第 12 節那張表對得上 —— 那一項是真的吻合，要守住 */
+  eq('★★ 面數跟第 12 節那張表逐項吻合（6＋12n＋8n²）',
+     TABLE.map(t => t[3]).join('/'), '26/62/182/614/2246');
+  const errs = [];
+  const vols = [];
+
+  for (const [n, V, E, F, vol] of TABLE) {
+    const r = edit.bevelEdges(box, [...box.edges()], R, { segments: n });
+    ok(`段數 ${n} 導得出來`, r.ok, r.reason || '');
+    if (!r.ok) { errs.push(null); continue; }
+    const m = r.mesh;
+
+    // ── 一定要對的 ──
+    eq(`★★ 段數 ${n}：χ 仍然是 2`, chiOf(m), 2);
+    ok(`　　段數 ${n}：仍然封閉、結構沒問題`, m.isClosed() && m.validate().ok);
+    near(`★★ 段數 ${n}：體積 ${vol}`, m.volume(), vol, 0.01);
+
+    /** ⭐ 最強的一條：真的被推到弧上 */
+    const worst = Math.max(...m.verts.map(v => Math.abs(distToInner(v.p) - R)));
+    near(`★★ 段數 ${n}：每個頂點到內盒的距離都精確是 ${R}`, worst, 0, 1e-9);
+
+    eq(`★ 段數 ${n}：V${V} E${E} F${F}`,
+       `${m.verts.length}/${eCnt(m)}/${m.faces.length}`, `${V}/${E}/${F}`);
+
+    errs.push(Math.abs(m.volume() - ANALYTIC) / ANALYTIC);
+    vols.push(m.volume());
+  }
+
+  {
+    /**
+     * 🔴 **兩條「內接」的斷言 —— 表給不了，但它們比表更根本。**
+     *
+     * 圓角是用平面片**內接**在圓柱與球面上，所以：
+     * 一、體積**永遠小於**解析解（切掉的比真圓角多）
+     * 二、段數越高**體積單調遞增**（越來越貼近）
+     *
+     * 任何一條破掉，就是有頂點跑到弧的外面去了 ——
+     * 而那種錯誤**體積看起來還是很接近**，只有這兩條抓得到。
+     */
+    ok('★★ 體積永遠小於解析解（內接，不可能超過）',
+       vols.every(v => v < ANALYTIC),
+       vols.map(v => v.toFixed(2)).join(' < '));
+    ok('★★ 段數越高，體積單調遞增',
+       vols.every((v, i) => i === 0 || v > vols[i - 1]));
+  }
+
+  {
+    /**
+     * 🔴 **收斂：段數加倍，誤差縮到四分之一。**
+     * 這一條比任何單一個體積數字都強 —— 它驗的是**整族**行為對不對，
+     * 而不是某一個值湊巧對上。
+     * 〔第 12.3 節：這跟「尺寸的依據」那張 seg 表是同一件事〕
+     */
+    const ratios = [];
+    for (let i = 0; i + 1 < errs.length; i++) {
+      if (errs[i] == null || errs[i + 1] == null) continue;
+      ratios.push(errs[i] / errs[i + 1]);
+    }
+    ok('★★ 段數加倍，誤差縮到約四分之一',
+       ratios.length === 4 && ratios.every(x => x > 3.3 && x < 4.3),
+       ratios.map(x => x.toFixed(2)).join('、'));
+  }
+
+  {
+    /**
+     * ⚠ **圓角不可以被 `bake()` 壓平。**
+     * 段與段之間的夾角在段數 32 時只有 2.8 度，而 `planarRegions()`
+     * 的容許值是 0.5 度 —— 還有餘裕，但**這是要盯著的邊界**：
+     * 日後誰把容許值調鬆，圓角會安靜地被併成斜切邊。
+     */
+    const r = edit.bevelEdges(box, [...box.edges()], R, { segments: 8 });
+    const g = edit.mergeCoplanarFaces(r.mesh);
+    ok('★★ 再跑一次併面，圓角不會被壓回斜切邊',
+       !g.ok || g.mesh.faces.length === r.mesh.faces.length,
+       g.ok ? `${r.mesh.faces.length} → ${g.mesh.faces.length}` : '併不動');
+  }
+
+  {
+    /**
+     * 🔴 **kang 2026-08-25 實測抓到的：只導一條邊，網格會裂開。**
+     *
+     * 症狀是側面上冒出一堆奇怪的線 —— 那是弧上的中間點在**沒被導到的那個面**
+     * 那邊配不到對應的邊，半邊配不到 twin。
+     * 實測沒修之前：χ 2 → **0**、`isClosed()` false、邊界半邊 2n+2 條。
+     * 🔴 **而 `validate()` 是 true** —— 抓不到，只有 χ 露餡。
+     *
+     * ⚠ **原本的測試沒抓到，因為只驗了「12 條邊全導」** ——
+     * 那時每個面都有自己的代表點，**沒有任何面需要吸收**，那條路根本沒走到。
+     * 〔坑第 17 條的又一次重演：挑樣本要涵蓋不同的**網格結構**，
+     * 　不只是不同的形狀。⛔ 日後加新的導角行為，這一組一定要一起跑〕
+     */
+    const one = () => {
+      const b = bx('box', { w: 60, d: 45, h: 40 });
+      const t = [...b.edges()].find(he => {
+        const d = he.to.p.clone().sub(he.v.p);
+        return Math.abs(d.x) > 50 && Math.hypot(d.y, d.z) < 1e-9;
+      });
+      return [b, t];
+    };
+    const vols = [];
+    for (const n of [1, 2, 4, 5, 8]) {
+      const [b, t] = one();
+      const r = edit.bevelEdges(b, [t], 5, { segments: n });
+      ok(`只導一條邊 段數 ${n}：導得出來`, r.ok, r.reason || '');
+      if (!r.ok) continue;
+      eq(`★★ 只導一條邊 段數 ${n}：χ 仍然是 2`, chiOf(r.mesh), 2);
+      ok(`★★ 　　仍然封閉、一條邊界半邊都沒有`,
+         r.mesh.isClosed()
+         && [...r.mesh.edges()].every(he => he.face && he.twin && he.twin.face));
+      vols.push(r.mesh.volume());
+    }
+    /** 一條邊導圓角的解析解 ＝ 108000 − 60×(r² − πr²/4) */
+    const AN1 = 108000 - 60 * (25 - Math.PI * 25 / 4);
+    ok('★★ 只導一條邊：體積單調遞增且永遠小於解析解 107678.10',
+       vols.every((v, i) => (i === 0 || v > vols[i - 1]) && v < AN1),
+       vols.map(v => v.toFixed(2)).join(' < ') + ` < ${AN1.toFixed(2)}`);
+  }
+
+  {
+    /**
+     * 🔴 **kang 2026-08-25 實測抓到的第二件：選頂面四條邊，跳「不是直角」。**
+     *
+     * **可是方塊明明是直角。** 真正的原因是那個角落的**垂直邊沒被導** ——
+     * 只導一部分時，兩條弧的圓心差了一個 w，接不起來。
+     *
+     * ⚠ **擋下來是對的，錯的是訊息** —— 講「不是直角」會讓人往
+     * 「換個形狀試試」的方向走，而正解是「**把那個角落的邊全部一起選**」。
+     * 〔坑第 18 條：誤報比漏報更糟。訊息說錯了，比不講更糟〕
+     */
+    const top = box.faces.find(f => f.normal.y > 0.99);
+    const four = box.faceLoop(top);
+    eq('（前置）頂面有四條邊', four.length, 4);
+
+    const r1 = edit.bevelEdges(box, four, 5, { segments: 1 });
+    ok('★ 頂面四條邊：段數 1 的斜切邊本來就做得到', r1.ok, r1.reason || '');
+
+    const r4 = edit.bevelEdges(box, four, 5, { segments: 4 });
+    ok('★★ 頂面四條邊：多段擋下來，而且說的是「只導了一部分的邊」',
+       !r4.ok && /一部分/.test(r4.reason || ''), r4.reason || '(沒擋)');
+    ok('★★ 　　而且不可以再說「不是直角」（方塊明明是直角）',
+       !r4.ok && !/不是直角/.test(r4.reason || ''));
+    ok('　　訊息要講得出路（全部一起選）',
+       !r4.ok && /全部一起選/.test(r4.reason || ''));
+
+    /** 而「全部一起選」真的做得到 —— 出路不可以是假的（坑第 34 條）*/
+    const rAll = edit.bevelEdges(box, [...box.edges()], 5, { segments: 4 });
+    ok('★★ 訊息講的那條出路真的走得通（12 條全選就成功）', rAll.ok, rAll.reason || '');
+  }
+
+  {
+    /**
+     * ⚠ **非直角的角落：先擋下來，不猜。**
+     * 三條邊夾角不同時，三個面的偏移距離不一樣，**可能沒有一個球同時相切**
+     * —— 那才是 Blender 開 Miter 選項的真正理由（第 12.5 節）。
+     * 單段不受影響（它本來就解掉了 4～6 價的角落）。
+     */
+    const cone = bx('cone', { r: 30, h: 70, seg: 12 });
+    const es = [...cone.edges()].slice(0, 3);
+    const r1 = edit.bevelEdges(cone, es, 2, { segments: 1 });
+    ok('　　（前置）圓錐單段導角本來就做得到', r1.ok, r1.reason || '');
+    const r8 = edit.bevelEdges(cone, es, 2, { segments: 8 });
+    ok('★ 非直角的角落，多段先擋下來並說原因',
+       !r8.ok && /直角|角落/.test(r8.reason || ''), r8.reason || '(沒擋)');
+  }
+
+  {
+    /**
+     * 展開會變成什麼樣 —— 第 12.5 節第三個「沒驗」。
+     * ⚠ 這裡**不斷言片數是多少**（那取決於材料規則），
+     * 只斷言**展開不會爆掉或報錯**，並把數字印出來讓人看得到。
+     */
+    const rule = makeRule('acrylic', 0.3);
+    const r = edit.bevelEdges(box, [...box.edges()], R, { segments: 4 });
+    const u = unfoldMesh(r.mesh, rule);
+    ok('★ 圓角之後展開不會爆掉',
+       u.pieces.length > 0, `${u.pieces.length} 片、${u.warnings.length} 則警告`);
+  }
+}
+
 section('🔴 假邊界不可以變成分片線（recalcNormalsOutside）');
 
 /**
