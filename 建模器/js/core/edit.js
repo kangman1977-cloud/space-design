@@ -56,6 +56,33 @@ const DEG = 180 / Math.PI;
  */
 export const PLANAR_TOL_CM = 0.01;
 
+/**
+ * 「這一批三角形是不是**真的**躺在同一個平面上」的容許值，單位 cm。
+ * 1e-4 cm ＝ **1 微米**。
+ *
+ * 🔴 **它跟 `PLANAR_TOL_CM` 是兩條完全不同的規則，不可以共用一個常數。**
+ *
+ * | 常數 | 回答什麼 | 尺度 |
+ * |---|---|---|
+ * | `PLANAR_TOL_CM` (0.01) | **這個面做不做得出來** —— 製造問題 | 珍珠板與壓克力，0.1mm |
+ * | `MERGE_FLAT_TOL_CM` (1e-4) | **這些三角形是不是同一個平面** —— 數值問題 | 浮點雜訊之上 |
+ *
+ * ── 為什麼是 1 微米（實測挑的，不是猜的）────────────────
+ * 2026-08-24 量過「真的共面」的區域，Newell 平面偏離：
+ * 方塊 0、圓柱 seg32 4.4e-16、seg128 1.1e-16、圓錐 1.9e-11、
+ * **球 seg16 是 1.0e-6**（最糟的一個）。
+ * 而要擋掉的 seg=720 圓柱是 **1.9e-3**。
+ *
+ * 1e-4 落在中間：比真正共面的大 **100 倍**（不會誤擋），
+ * 比要擋的小 **19 倍**（擋得住）。
+ *
+ * ⚠ 一開始這裡用的是 `PLANAR_TOL_CM`，**太鬆了三個數量級**，
+ * seg=719／720 照樣溜過去、展開面積跟著變。
+ * 〔坑第 25／26 條的同一家族：容許值要挑一個**這條規則自己**講得出意義的量，
+ * 　不是隨手借一個看起來差不多的〕
+ */
+export const MERGE_FLAT_TOL_CM = 1e-4;
+
 // ═══════════════════════════════════════════════════════
 //  選到的元素 → 涉及哪些頂點
 // ═══════════════════════════════════════════════════════
@@ -437,25 +464,142 @@ export function pushFace(mesh, face, dist, tolDeg = 0.5) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  網格被拆掉重建之後，把選取搬過去 —— ⛔ 刻意還沒有
+//  拆掉重建這條路的三個必要配件
 // ═══════════════════════════════════════════════════════
 
 /**
- * 🔴 **這裡本來要放 `remapElements()`（＝ Blender 的 targetmap），2026-08-24 決定不放。**
+ * 🔴 **這三支（預檢／清乾淨／搬選取）是同一件事的三面，不能只做一個。**
  *
- * 理由很簡單：**現在沒有任何一條路需要它。**
- * 我們唯一改變拓撲的路徑是拆掉重建，而目前只有一個工具走那條路
- * （`extrudeFace`），它一次只擠一個面，而且**新蓋子由 `capFace` 直接回傳** ——
- * 那已經是一個夠用的、一次性的 targetmap。
- * Undo／讀檔換上來的是**另一個模型狀態**，那裡就該老實清掉，不該搬。
+ * 我們唯一改變拓撲的路徑是「拆掉重建」（湊出 `points[]` 與 `faces[][]`
+ * 再叫 `Mesh.fromFaceList()`）。2026-08-24 沙箱實測照出三件事：
  *
- * ⛔ **所以不要「先寫好等著用」。** 寫了它就會變成第二個 `pushFace()`：
- * 函式在、測試在、沒有介面在呼叫，而下一個人讀文件會以為那條路是通的
- * （鐵律六：不要在日誌裡寫一個不存在的退路）。
+ * 1. **`fromFaceList()` 對壞資料一律照建，不報錯。**
+ *    把方塊的頂點 1 併到頂點 0（最天真的「合併頂點」寫法）之後，
+ *    12 個面裡有 2 個退化成一條線、1 個頂點變孤點 ——
+ *    而它照樣建出 `V8 E20 F12 χ0 closed=false`。
  *
- * ⏳ **什麼時候才真的需要**：第一個「會拆掉重建、而且使用者可能同時選著
- * 好幾個元素」的工具 —— 合併頂點、刪除面／溶解面、環切。
- * 那時再寫，而且配對規則已經想好了（寫在這裡當規格，不是當程式）：
+ * 2. **`validate()` 抓不到孤點。** 面合併之後的圓柱是
+ *    `V66 E96 F34 χ4 closed=true ok=true　issues:（無）`——
+ *    `ok` 說沒事，**唯一露餡的是尤拉數**（封閉實體應該是 2，卻是 4）。
+ *    這正是鐵律三「讓兩個數字互相對得起來，錯誤才會自己現形」：
+ *    `ok` 是孤零零的布林值沒人驗得了，χ 是由 V／E／F 推得出來的。
+ *
+ * 3. **清掉孤點就要重新編號**，而那會打破
+ *    「既有頂點保持原索引」這個契約 —— `role`、`smooth`、選取搬移全靠它。
+ *    所以清乾淨的那一支**必須把 remap 交出來**，讓呼叫端有辦法補救。
+ *
+ * ⚠ 四個工具（面合併、刪除面、導角、合併頂點）**全部**會產生孤點。
+ * 實測過的，不是推的。
+ */
+
+/**
+ * 拆掉重建之前先檢查。**不修，只回報。**
+ *
+ * 分成「一定壞掉」與「可以修掉」兩類 —— 因為呼叫端的處理方式不同：
+ * 前者要擋下來並說原因，後者交給 `cleanRebuild()` 清掉就好。
+ *
+ * @param {THREE.Vector3[]} points
+ * @param {number[][]} faces
+ * @returns {{ok:boolean, fatal:string[], fixable:string[],
+ *            orphans:number[], degenerate:number[], dupFaces:number[]}}
+ */
+export function preflightRebuild(points, faces) {
+  const fatal = [], fixable = [];
+  const orphans = [], degenerate = [], dupFaces = [];
+
+  if (!Array.isArray(points) || !Array.isArray(faces)) {
+    return { ok: false, fatal: ['沒有給 points 或 faces'], fixable, orphans, degenerate, dupFaces };
+  }
+
+  const used = new Set();
+  const seenFace = new Map();
+
+  faces.forEach((f, fi) => {
+    if (!Array.isArray(f)) { fatal.push(`第 ${fi} 個面不是陣列`); return; }
+    for (const i of f) {
+      if (!Number.isInteger(i) || i < 0 || i >= points.length) {
+        fatal.push(`第 ${fi} 個面指到不存在的頂點 ${i}`);
+        return;
+      }
+      used.add(i);
+    }
+    // 退化：去重之後不足 3 個點 —— 那是一條線或一個點，不是面
+    if (new Set(f).size < 3) { degenerate.push(fi); return; }
+    // 重複的面：同一組頂點出現兩次（繞向不同也算，那是「兩面貼在一起」）
+    const key = [...new Set(f)].sort((a, b) => a - b).join(',');
+    if (seenFace.has(key)) dupFaces.push(fi);
+    else seenFace.set(key, fi);
+  });
+
+  for (let i = 0; i < points.length; i++) if (!used.has(i)) orphans.push(i);
+
+  if (degenerate.length) fixable.push(`${degenerate.length} 個面退化成線或點`);
+  if (orphans.length) fixable.push(`${orphans.length} 個頂點沒有被任何面用到（孤點）`);
+  if (dupFaces.length) fixable.push(`${dupFaces.length} 個面跟別的面完全重複`);
+
+  return { ok: fatal.length === 0, fatal, fixable, orphans, degenerate, dupFaces };
+}
+
+/**
+ * 把 `points`／`faces` 清乾淨，並**交出索引對照表**。
+ *
+ * 清三種：退化的面、重複的面、孤點。清完之後重新編號 ——
+ * 🔴 **而 `remap` 就是那筆「誰變成誰」的帳**，呼叫端要拿它去搬
+ * `role`／`smooth`／使用者的選取。沒有它，那些東西會安靜地消失。
+ *
+ * ⚠ **孤點剛好都在最後面時 remap 是恆等的**（實測圓柱那個案例位移 0 個），
+ * 但那是運氣。孤點在中間時一定會位移（實測合併頂點：原索引 7 → 6）。
+ * ⛔ **不要因為「大部分時候不會動」就跳過搬移。**
+ *
+ * @returns {{points:THREE.Vector3[], faces:number[][],
+ *            remap:Map<number,number>, dropped:{orphans:number, degenerate:number, dup:number}}}
+ */
+export function cleanRebuild(points, faces) {
+  const pre = preflightRebuild(points, faces);
+  const bad = new Set([...pre.degenerate, ...pre.dupFaces]);
+
+  const keep = [];
+  faces.forEach((f, fi) => {
+    if (bad.has(fi)) return;
+    // 連續重複的點也要拿掉（`a,a,b,c` → `a,b,c`），否則會生出零長度的邊
+    const clean = f.filter((v, i) => v !== f[(i + 1) % f.length]);
+    if (new Set(clean).size >= 3) keep.push(clean);
+  });
+
+  const used = new Set();
+  for (const f of keep) for (const i of f) used.add(i);
+
+  const remap = new Map();
+  const pts = [];
+  for (let i = 0; i < points.length; i++) {
+    if (!used.has(i)) continue;
+    remap.set(i, pts.length);
+    pts.push(points[i]);
+  }
+
+  return {
+    points: pts,
+    faces: keep.map(f => f.map(i => remap.get(i))),
+    remap,
+    dropped: {
+      orphans: points.length - pts.length,
+      degenerate: pre.degenerate.length,
+      dup: pre.dupFaces.length
+    }
+  };
+}
+
+/**
+ * 🔴 **把一份選取從舊網格搬到新網格上**（＝ Blender 的 targetmap）。
+ *
+ * ── 為什麼非做不可 ──────────────────────────────────
+ * 重建之後舊的 `Vertex`／`HalfEdge`／`Face` 物件**還活著**
+ * （JS 不會回收被引用的東西）—— 拖曳照樣「成功」，只是改的是一份
+ * **已經不在文件裡的網格**。畫面沒反應、資料也沒錯，最難查的那一種。
+ *
+ * ── 配對一律走頂點索引，不走 `id` ────────────────────
+ * `id` 每次重建都重新編號，所以不能用。索引可以 ——
+ * 而且 `cleanRebuild()` 已經把 `remap` 交出來了，配對是**精確的**，不是猜的。
  *
  * | kind | 拿什麼配 |
  * |---|---|
@@ -463,9 +607,310 @@ export function pushFace(mesh, face, dist, tolDeg = 0.5) {
  * | 邊 | （起點索引、終點索引）那一對 |
  * | 面 | 共面區域的**頂點索引集合** |
  *
- * 一律走**頂點索引**不走 `id`（id 每次重建都重新編號），靠的是拆掉重建那條路
- * 的既有契約：「**既有頂點保持原索引、新頂點往後追加**」——
- * 跟 `mesh.js` 的 `_copyMarksTo()` 同一套做法。
+ * ⚠ **這一支不適用於 Undo／讀檔。** 那兩條路換上來的是**另一個模型狀態**，
+ * 索引根本不保證對得起來 —— 那裡就該老實清掉（`select.js` 的 `revalidate()` 在做）。
+ *
+ * ⚠ 搬不過去的會**掉掉**（例如那個面已經被合併進別的面了）。
+ * 呼叫端要比對數量，少掉時講一句 —— 選取安靜地變少最讓人不敢相信工具。
+ *
+ * @param {Mesh} oldMesh
+ * @param {Mesh} newMesh
+ * @param {object|object[]} els
+ * @param {Map<number,number>} remap 舊頂點索引 → 新頂點索引（`cleanRebuild()` 給的）
+ * @returns {object[]} 搬得過去的那些
+ */
+export function remapElements(oldMesh, newMesh, els, remap, tolDeg = 0.5) {
+  const list = Array.isArray(els) ? els : (els ? [els] : []);
+  if (!oldMesh || !newMesh || !list.length) return [];
+
+  const oi = new Map();
+  oldMesh.verts.forEach((v, i) => oi.set(v, i));
+  const ni = new Map();
+  newMesh.verts.forEach((v, i) => ni.set(v, i));
+
+  /** 舊索引 → 新索引。沒給 remap 就當成恆等（頂點沒被清掉的情形） */
+  const to = i => (remap ? remap.get(i) : i);
+
+  /** 新網格上「連接索引 a 與 b」的那條半邊 */
+  const findEdge = (a, b) => {
+    for (const he of newMesh.edges()) {
+      const x = ni.get(he.v), y = ni.get(he.to);
+      if ((x === a && y === b) || (x === b && y === a)) return he;
+    }
+    return null;
+  };
+
+  /** 新網格上「共面區域的頂點索引集合剛好等於 want」的那個面 */
+  let regionCache = null;
+  const findRegionFace = want => {
+    if (!regionCache) {
+      planarRegions(newMesh, tolDeg);
+      regionCache = new Map();
+      for (const f of newMesh.faces) {
+        const rid = f.region;
+        if (rid === undefined || rid < 0) continue;
+        if (!regionCache.has(rid)) regionCache.set(rid, { first: f, set: new Set() });
+        const g = regionCache.get(rid);
+        for (const v of newMesh.faceVerts(f)) g.set.add(ni.get(v));
+      }
+    }
+    for (const g of regionCache.values()) {
+      if (g.set.size !== want.size) continue;
+      let same = true;
+      for (const k of want) if (!g.set.has(k)) { same = false; break; }
+      if (same) return g.first;
+    }
+    return null;
+  };
+
+  const out = [];
+  for (const el of list) {
+    if (!el) continue;
+
+    if (el.kind === 'vertex') {
+      const i = to(oi.get(el.vert));
+      if (i !== undefined && newMesh.verts[i]) {
+        out.push({ ...el, vert: newMesh.verts[i], mesh: newMesh });
+      }
+
+    } else if (el.kind === 'edge') {
+      const a = to(oi.get(el.he && el.he.v)), b = to(oi.get(el.he && el.he.to));
+      if (a === undefined || b === undefined) continue;
+      const he = findEdge(a, b);
+      if (he) out.push({ ...el, he, mesh: newMesh });
+
+    } else if (el.kind === 'face') {
+      if (!el.face) continue;
+      const want = new Set();
+      let lost = false;
+      for (const v of regionOf(oldMesh, el.face, tolDeg).verts) {
+        const i = to(oi.get(v));
+        if (i === undefined) { lost = true; break; }
+        want.add(i);
+      }
+      if (lost || !want.size) continue;
+      const f = findRegionFace(want);
+      if (f) out.push({ ...el, face: f, mesh: newMesh });
+    }
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════
+//  面合併（＝ Blender 的「限制性溶解」）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **把每一個共面區域合併成一個 n 邊形。**
+ *
+ * ── 為什麼這一支這麼重要 ────────────────────────────
+ * 它一口氣解掉三件本來各自要做的事：
+ *
+ * 1. **`box` 四邊形化** —— 待辦裡那條原本只是「整齊」的小項，
+ *    而這是**通用解**：不只 box，所有參數體一起。
+ * 2. 🔴 **環切的前提。** 實測：16 段圓柱是 **64 個三角形、0 個四邊形**，
+ *    而環切的 ring walker 穿的是四邊形 —— **沒有東西可以走**。
+ *    合併之後圓柱變成 32 個四邊形 ＋ 2 個 32 邊形，ring 立刻走得通
+ *    （實測：垂直邊的 ring 是 32 條的**閉環**）。
+ * 3. 它本身就是第 6 期要做的「溶解」。
+ *
+ * ── 零件全部是現成的 ────────────────────────────────
+ * `planarRegions()`（哪些面共面，就是 Blender 那個「量夾角低於門檻就合併」）
+ * ＋ `boundaryLoops()`（有序的外緣）＋ `cleanRebuild()`（清孤點與重新編號）。
+ * **這一支自己只做「把它們接起來」。**
+ *
+ * ── 合併不動幾何，所以可以對答案 ────────────────────
+ * 它只是把三角形併回它本來就屬於的那個平面。實測（小數點後 6 位全同）：
+ *
+ * | | 面數 | 體積 | 面積 |
+ * |---|---|---|---|
+ * | 方塊 | 12 → **6** | 108000 → 108000 | 13800 → 13800 |
+ * | 32 段圓柱 | 128 → **34** | 78036.130979 → 78036.130979 | 10174.903617 → 10174.903617 |
+ *
+ * ⚠ **多迴圈的區域不能合併，要原樣留著。** 管的兩個端面是**環形**
+ * （外圈＋內圈兩個迴圈），一個面裝不下兩個迴圈。
+ * 實測 66 個區域裡剛好 2 個是這種。
+ *
+ * ⚠ **一定會產生孤點。** 圓柱端面扇形的中心點合併之後就沒人用了 ——
+ * 不清的話 χ 會從 2 變成 4，而 `validate()` 照樣回 `ok=true`。
+ * 所以走 `cleanRebuild()`，並把 `remap` 交出去。
+ *
+ * ⚠ **合併出來的 n 邊形不保證是平的**：`tolDeg` 容許 0.5°，
+ * 所以「幾乎共面」的一批三角形會被併成一個**略微不平**的 n 邊形。
+ * 那對展開有影響（`nonPlanarFaces()` 會抓到）。**這一項還沒實測**，
+ * 見 `外部參考-Blender編輯.md` 第 9.10 節。
+ *
+ * @param {Mesh} mesh 不會被改動，回傳一個新的
+ * @param {number} tolDeg 共面容許值
+ * @returns {{ok:boolean, mesh?:Mesh, reason?:string, remap?:Map<number,number>,
+ *            before:number, after:number, skipped:number, orphans:number}}
+ */
+export function mergeCoplanarFaces(mesh, tolDeg = 0.5) {
+  if (!mesh || !mesh.faces.length) {
+    return { ok: false, reason: '沒有網格可以合併', before: 0, after: 0, skipped: 0, orphans: 0 };
+  }
+
+  mesh.computeNormals();
+  planarRegions(mesh, tolDeg);
+
+  const byRid = new Map();
+  for (const f of mesh.faces) {
+    const rid = f.region;
+    if (!byRid.has(rid)) byRid.set(rid, []);
+    byRid.get(rid).push(f);
+  }
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = [];
+  let skipped = 0, unflat = 0;
+
+  for (const group of byRid.values()) {
+    const loops = boundaryLoops(mesh, group);
+    /**
+     * 迴圈不是剛好一圈就**原樣留著**，不要硬合。
+     * 0 圈 ＝ 走不出來（區域在某個頂點上「捏」成一點，`boundaryLoops` 會放棄）；
+     * 2 圈以上 ＝ 環形（管的端面），一個面裝不下兩個迴圈。
+     */
+    if (loops.length !== 1) {
+      skipped++;
+      for (const f of group) faces.push(mesh.faceVerts(f).map(v => vi.get(v.id)));
+      continue;
+    }
+
+    /**
+     * 🔴 **併出來的多邊形要真的是平的，不然就不要併。**
+     *
+     * `tolDeg` 只看**相鄰兩個面**的夾角，而共面區域是**泛洪**出來的 ——
+     * 一路上每一步都在容許值內，累積起來卻可能歪掉一大截。
+     *
+     * 實測（2026-08-24）：seg=720 的圓柱，相鄰 seg 夾角剛好 0.500°，
+     * 整條側面被串成一區，併出來的多邊形**偏離 0.0019 cm**，
+     * 而**展開總面積跟著從 10210.106 變成 10210.182** —— 下料尺寸會錯。
+     *
+     * 參數體碰不到（介面 seg 上限 128 → 夾角 2.813°，有 5.6 倍餘裕），
+     * 但**匯入的線稿不保證** —— 擠出件的側牆角度取決於 SVG 取樣的精細度，
+     * 那不在我們控制之下。
+     *
+     * 🔴 判準用 `MERGE_FLAT_TOL_CM`（1 微米），**不是** `PLANAR_TOL_CM`（0.1mm）——
+     * 那兩條規則問的是不同的問題，理由見那個常數的說明。
+     * 借用 0.1mm 會鬆三個數量級，seg=719／720 照樣溜過去。
+     *
+     * ⚠ 不平就**原樣留著**，不是硬併之後再警告 ——
+     * 併下去尺寸就已經錯了，警告救不回來。
+     */
+    const idx = loops[0].map(he => vi.get(he.v.id));
+    if (group.length > 1 && !isPlanarLoop(points, idx)) {
+      unflat++;
+      for (const f of group) faces.push(mesh.faceVerts(f).map(v => vi.get(v.id)));
+      continue;
+    }
+    faces.push(idx);
+  }
+
+  const before = mesh.faces.length;
+  if (faces.length === before) {
+    /**
+     * ⚠ **理由要講對，不要一句「沒得合併」蓋過去。**
+     * 面數沒變有兩種完全不同的原因，而使用者的下一步不一樣：
+     * 「本來就都是單一面」是好消息（已經是乾淨的），
+     * 「有區域因為是環形而被跳過」是**限制**，他該知道那幾片還是三角形。
+     * 〔坑第 20 條的同一家族：正確的結果，錯誤的意思〕
+     */
+    const why = [];
+    if (skipped) why.push(`${skipped} 個區域是環形的（像管的端面），一個面裝不下兩圈`);
+    if (unflat) why.push(`${unflat} 個區域的三角形其實不共面（超過 ${MERGE_FLAT_TOL_CM} cm），併了展開尺寸會錯`);
+    return {
+      ok: false,
+      reason: why.length
+        ? `沒有合併任何面：${why.join('；')}，只能維持原狀`
+        : '沒有可以合併的面 —— 每個面本來就自成一區，已經是乾淨的',
+      before, after: before, skipped, unflat, orphans: 0
+    };
+  }
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  /**
+   * ⚠ 標記要搬。合併只是把三角形併起來，**使用者標的 CUT 一條都不該少** ——
+   * 而共面區域內部那些對角線本來就標不了（`nearestMarkableEdge` 擋著），
+   * 所以會被合併掉的邊上不會有 CUT。
+   * 索引若沒位移（孤點都在最後面）`_copyMarksTo()` 直接就對；
+   * 位移了就要走 remap —— 所以底下用重新編號後的座標自己配一次。
+   */
+  copyMarksThroughRemap(mesh, out, clean.remap);
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    before, after: out.faces.length, skipped, unflat,
+    orphans: clean.dropped.orphans
+  };
+}
+
+/**
+ * 這一圈頂點是不是共平面（在 `PLANAR_TOL_CM` 之內）。
+ *
+ * 用 Newell 法定一個平面，量最遠的點離平面多少 ——
+ * 跟 `facePlanarity()` 同一套算法，但它吃的是 `Face`，
+ * 而這裡要在**面還沒建出來之前**就先問，所以直接吃索引。
+ *
+ * ⚠ 兩支要用**同一個容許值**，否則會出現「合併時說平的、
+ * 建出來之後 `nonPlanarFaces()` 又說不平」這種自相矛盾的狀態。
+ */
+function isPlanarLoop(points, idx) {
+  if (idx.length < 4) return true;               // 三角形恆為平面（幾何事實）
+  const n = new THREE.Vector3();
+  for (let i = 0; i < idx.length; i++) {
+    const a = points[idx[i]], b = points[idx[(i + 1) % idx.length]];
+    n.x += (a.y - b.y) * (a.z + b.z);
+    n.y += (a.z - b.z) * (a.x + b.x);
+    n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  if (n.lengthSq() < 1e-20) return false;        // 算不出平面就別併
+  n.normalize();
+  const o = points[idx[0]];
+  let dev = 0;
+  for (const i of idx) {
+    dev = Math.max(dev, Math.abs(n.dot(new THREE.Vector3().subVectors(points[i], o))));
+  }
+  return dev <= MERGE_FLAT_TOL_CM;
+}
+
+/**
+ * 把 `role` 與 `smooth` 透過索引對照表搬到新網格上。
+ *
+ * `mesh.js` 的 `_copyMarksTo()` 假設**索引完全一樣**，
+ * 而清孤點之後索引會位移 —— 所以這裡自己配一次。
+ *
+ * ⚠ **`role` 與 `smooth` 兩樣都要搬。** 只搬 `role` 的話，
+ * 匯入的 S 字擠出之後展開圖會從 12 處變回 196 道折彎，
+ * 而且座標完全正確、看不出哪裡不對。
+ */
+function copyMarksThroughRemap(src, dst, remap) {
+  const si = src._vertIndex(), di = dst._vertIndex();
+  const to = i => (remap ? remap.get(i) : i);
+
+  const wantRole = new Map(), wantSmooth = new Set();
+  for (const he of src.edges()) {
+    const a = to(si.get(he.v.id)), b = to(si.get(he.to.id));
+    if (a === undefined || b === undefined) continue;
+    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+    if (he.role !== EDGE_ROLE.FREE) wantRole.set(key, he.role);
+    if (he.smooth) wantSmooth.add(key);
+  }
+  if (!wantRole.size && !wantSmooth.size) return dst;
+
+  for (const he of dst.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+    const r = wantRole.get(key);
+    if (r !== undefined) dst.setRole(he, r);
+    if (wantSmooth.has(key)) dst.setSmooth(he, true);
+  }
+  return dst;
+}
 
 // ═══════════════════════════════════════════════════════
 //  變換：記下初始座標，每一幀從初始值重算

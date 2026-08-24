@@ -18,7 +18,8 @@ import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
 import { objectsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
-         snapshotVerts, restoreVerts, applyElementTransform, regionOf }
+         snapshotVerts, restoreVerts, applyElementTransform, regionOf,
+         remapElements }
   from '../core/edit.js';
 
 const TAP_MOVE = 8;      // px
@@ -735,6 +736,35 @@ export class Selection {
       else this._drawEditMark();      // 座標可能變了，標示要跟著走
     }
     this._refresh();
+  }
+
+  /**
+   * 網格被拆掉重建之後，把整份選取搬到新網格上。
+   *
+   * 🔴 **這一支只給「拆掉重建」那條路用**（面合併，日後的刪除面／環切／導角）。
+   * 配對規則在 `edit.js` 的 `remapElements()`，靠的是重建時交出來的 `remap`
+   * （舊索引 → 新索引），所以是**精確配對**，不是猜的。
+   *
+   * ⛔ **不要拿它救 Undo／讀檔。** 那兩條路換上來的是**另一個模型狀態**，
+   * 索引不保證對得起來 —— 那裡就該老實清掉（`revalidate()` 在做）。
+   *
+   * ⚠ 搬不過去的會掉掉（例如那個面已經被合併進別的面了）。
+   * 所以回傳少掉幾個，呼叫端要在少掉時講一句 ——
+   * **選取安靜地變少最讓人不敢相信工具**（坑第 11、21 條）。
+   *
+   * @returns {{kept:number, dropped:number}}
+   */
+  remapEditSels(obj, oldMesh, newMesh, remap) {
+    const before = this.editSels.length;
+    if (!before || !obj || !oldMesh || !newMesh) return { kept: 0, dropped: 0 };
+
+    const moved = remapElements(oldMesh, newMesh, this.editSels, remap)
+      .map(e => ({ ...e, obj }));
+    this.editSels = moved;
+    this._drag = null;
+    if (moved.length) { this._attachEditProxy(); this._drawEditMark(); }
+    else this.clearEditSel();
+    return { kept: moved.length, dropped: before - moved.length };
   }
 
   /**

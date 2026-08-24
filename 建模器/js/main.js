@@ -126,6 +126,23 @@ function addPrim(type) {
 }
 
 function deleteSelected() {
+  /**
+   * 🔴 **編輯模式下 `Delete` 一律擋下來。**
+   *
+   * 這是 2026-08-24 查程式時發現的地雷：使用者在編輯模式選了一個**面**，
+   * 按 Delete 想刪那個面 —— 而這一支刪的是**整個物件**。
+   * 可以 Undo，但那絕對不是他要的結果，而且他會嚇一跳。
+   *
+   * 擋下來並講清楚，比「刪掉再叫他 Undo」好得多 ——
+   * 而「刪除面」本身還沒做（那是第 6 期剩下的工具之一，
+   * 而且「刪除」與「溶解」是兩個不同的指令，結果不唯一就不要猜）。
+   */
+  if (sel.editMode) {
+    toast(sel.editSel
+      ? '編輯模式下不能用 Delete —— 它刪的是整個物件。「刪除面」還沒做，先按一次「拉點線面」離開編輯模式'
+      : '編輯模式下不能用 Delete（它刪的是整個物件）。要刪物件請先離開編輯模式', true);
+    return;
+  }
   const list = sel.objects;
   if (!list.length) return;
   for (const o of list) doc.remove(o);

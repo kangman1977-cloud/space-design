@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
+import { mergeCoplanarFaces } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape }
   from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
@@ -210,10 +211,33 @@ export class ModelObject {
     return this;
   }
 
-  /** 把參數物件轉成可自由編輯的網格（不可逆，跟 Blender 的 Convert to Mesh 一樣） */
+  /**
+   * 把參數物件轉成可自由編輯的網格（不可逆，跟 Blender 的 Convert to Mesh 一樣）。
+   *
+   * 🔴 **順便把三角化還原成多邊形**（2026-08-24 加）。
+   *
+   * ── 為什麼放在這裡，而不是給使用者一顆按鈕 ────────────────
+   * 參數體全是跟 three.js 借的三角形（方塊 12 個、32 段圓柱 128 個），
+   * 而使用者眼中方塊是 6 個面。那個落差平常由 `planarRegions()` 每次現算補掉，
+   * **只有環切例外** —— 它要「從一條邊跨到對面那條邊」，而三角形沒有「對面」。
+   *
+   * 本來做成一顆「面合併」按鈕，**那是錯的判斷**：
+   * 它按下去**畫面上沒有任何地方會變**（線框畫的是送給顯示卡的三角形，
+   * 而 GPU 只吃三角形，四邊形一定會被拆開；稜線檢視則兩邊都濾掉共面的邊）。
+   * 一個看不出作用的按鈕就是坑第 21 條 —— kang 實測當場被它騙到。
+   *
+   * **它是程式內部的整理，不是使用者的功能。** 而「轉成可編輯網格」
+   * 的意思本來就是「從現在起這是一個可以自由編輯的網格」——
+   * 順手整理乾淨完全合理，而且**它不改變幾何**（體積面積實測精確不變）。
+   *
+   * ⚠ 併不動就維持原狀（環形區域、三角形其實不共面的區域），
+   * 那是 `mergeCoplanarFaces()` 自己的兩道防護，這裡不必判斷。
+   */
   bake() {
-    this.mesh();                 // 先確保算出來了
+    const m = this.mesh();       // 先確保算出來了
     this.src = { type: 'mesh' };
+    const r = mergeCoplanarFaces(m);
+    if (r.ok) this._mesh = r.mesh;
     return this;
   }
 

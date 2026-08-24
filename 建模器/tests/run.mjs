@@ -2795,15 +2795,24 @@ section('指定分片（seam.js）');
   ok('烘成網格後可以標', seam.canMarkSeams(o));
 
   const m = o.mesh();
-  eq('方塊總邊數', [...m.edges()].length, 18);
   /**
-   * 18 條邊裡有 6 條是三角化產生的共面對角線，畫面上看不到
-   * （scene.js 畫稜線用 EdgesGeometry(geometry, 1)，只畫轉折 > 1 度的）。
-   * 可標記的必須剛好是看得見的那 12 條 ——
-   * 讓人標到看不見的邊，結果會是「一個面被斜切成兩半」，
-   * 正確但絕對不是他要的，而且他不知道自己點了什麼。
+   * 🔴 **這個數字在 2026-08-24 從 18 變成 12，而且那是進步。**
+   *
+   * 以前 `bake()` 只是把 src 換成 `mesh`，網格還是 three.js 給的 12 個三角形，
+   * 所以有 18 條邊 —— 其中 **6 條是三角化的共面對角線，畫面上看不到**
+   * （`scene.js` 畫稜線用 `EdgesGeometry(geometry, 1)`，只畫轉折 > 1 度的）。
+   * 那時要靠 `markableEdges()` **過濾掉**那 6 條，才不會讓人標到看不見的邊。
+   *
+   * 現在 `bake()` 會順手把三角化還原成多邊形，所以那 6 條**根本不存在了**。
+   *
+   * ⭐ 意義：「**畫面上看得見的，才是可以標的**」這條規則，
+   * 從「靠過濾維持」變成「**結構保證**」——
+   * 而鐵律二說過：需要兩邊算出同一個答案時，
+   * **與其小心地讓兩條路對齊，不如換一個只有一條路的定義。**
    */
-  eq('可標記的邊 ＝ 看得見的稜線', seam.markableEdges(m).length, 12);
+  eq('★ 方塊總邊數 ＝ 看得見的 12 條（bake 已還原多邊形，不再有隱形對角線）',
+     [...m.edges()].length, 12);
+  eq('可標記的邊 ＝ 全部（過濾器現在沒有東西要濾）', seam.markableEdges(m).length, 12);
 
   // ── 一鍵切出一個面 ──
   const before = un(o);
@@ -4970,6 +4979,246 @@ section('第 6 期地基：多選一起變換');
   // 取消照樣把整份還原
   edit.restoreVerts(verts, base);
   near('多選取消之後 體積回到 108000', m.volume(), 108000, 1e-9);
+}
+
+// ═══════════════════════════════════════════════════════
+//  拆掉重建的三個配件 ＋ 面合併（限制性溶解）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 這一組守的是 2026-08-24 實測照出來的那件事：
+ * **`fromFaceList()` 對壞資料一律照建不報錯，而 `validate()` 抓不到孤點** ——
+ * 唯一露餡的是尤拉數。四個拆掉重建的工具**全部**會產生孤點。
+ */
+
+section('拆掉重建：預檢（preflightRebuild）');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  const pts = m.verts.map(v => v.p.clone());
+  const fl = m._faceList();
+
+  const good = edit.preflightRebuild(pts, fl);
+  ok('乾淨的方塊 → 沒有問題', good.ok && !good.fixable.length,
+     `fatal ${good.fatal.length} / fixable ${good.fixable.length}`);
+
+  // ★ 最天真的「合併頂點」寫法：把索引 1 全部換成 0
+  const merged = fl.map(f => f.map(i => (i === 1 ? 0 : i)));
+  const bad = edit.preflightRebuild(pts, merged);
+  eq('★ 合併頂點 → 抓到 2 個退化成線的面', bad.degenerate.length, 2);
+  eq('★ 合併頂點 → 抓到 1 個孤點', bad.orphans.length, 1);
+  ok('　　而且 fatal 是空的（這些都修得掉）', bad.fatal.length === 0);
+
+  // 指到不存在的頂點 ＝ 修不掉，要擋
+  const broken = edit.preflightRebuild(pts, [[0, 1, 999]]);
+  ok('★ 指到不存在的頂點 → fatal（修不掉，要擋下來）',
+     !broken.ok && broken.fatal.length > 0, broken.fatal[0]);
+
+  // 重複的面
+  const dup = edit.preflightRebuild(pts, fl.concat([fl[0].slice()]));
+  eq('重複的面抓得到', dup.dupFaces.length, 1);
+}
+
+section('拆掉重建：清乾淨並交出索引對照表（cleanRebuild）');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  const pts = m.verts.map(v => v.p.clone());
+  const fl = m._faceList().map(f => f.map(i => (i === 1 ? 0 : i)));
+
+  const c = edit.cleanRebuild(pts, fl);
+  eq('清掉 2 個退化面 → 剩 10 個面', c.faces.length, 10);
+  eq('清掉 1 個孤點 → 剩 7 個頂點', c.points.length, 7);
+
+  const m2 = Mesh.fromFaceList(c.points, c.faces);
+  m2.computeNormals();
+  const v = m2.validate();
+  eq('★ 清乾淨之後 尤拉數回到 2', v.euler, 2);
+  ok('　　而且封閉、結構無誤', v.closed && v.ok);
+  near('體積 72000（那個角被抹掉了，手算得出來）', m2.volume(), 72000, 1e-6);
+
+  /**
+   * 🔴 **這一條是整組的重點**：清孤點會讓索引位移，
+   * 而「既有頂點保持原索引」是拆掉重建那條路的契約。
+   * remap 就是那筆帳 —— 沒有它，role／smooth／選取會安靜地消失。
+   */
+  eq('★ 原頂點 7 → 新索引 6（索引真的位移了）', c.remap.get(7), 6);
+  eq('　　原頂點 0 沒動', c.remap.get(0), 0);
+  eq('　　被清掉的頂點 1 沒有對應', c.remap.get(1), undefined);
+}
+
+section('面合併（限制性溶解）');
+
+{
+  // ★ 合併不改變幾何，所以可以拿體積與面積對答案
+  const cases = [
+    ['方塊', 'box', { w: 60, h: 45, d: 40 }, 12, 6, 6],
+    ['32 段圓柱', 'cylinder', { r: 25, h: 40, seg: 32 }, 128, 34, 32],
+    ['球 seg16', 'sphere', { r: 30, seg: 16 }, 960, 512, 448],
+  ];
+  for (const [name, type, p, before, after, quads] of cases) {
+    const m = buildPrim(type, p);
+    m.computeNormals();
+    const v0 = m.volume(), a0 = m.area();
+
+    const r = edit.mergeCoplanarFaces(m);
+    ok(`${name} 合併成功`, r.ok, r.reason || '');
+    if (!r.ok) continue;
+
+    eq(`${name} 面數 ${before} → ${after}`, `${r.before}/${r.after}`, `${before}/${after}`);
+    rel(`★ ${name} 體積精確不變`, r.mesh.volume(), v0);
+    rel(`★ ${name} 面積精確不變`, r.mesh.area(), a0);
+
+    const vv = r.mesh.validate();
+    eq(`★ ${name} 尤拉數仍是 2（孤點有清掉）`, vv.euler, 2);
+    ok(`　　${name} 封閉且結構無誤`, vv.closed && vv.ok);
+    eq(`　　${name} 沒有 issues`, r.mesh.issues.length, 0);
+
+    let q = 0;
+    for (const f of r.mesh.faces) if (r.mesh.faceVerts(f).length === 4) q++;
+    eq(`★ ${name} 四邊形面 ${quads} 個（環切要走的東西）`, q, quads);
+  }
+}
+
+{
+  /**
+   * ⚠ **環形的區域不能合併，要原樣留著。**
+   * 管的兩個端面是環形（外圈＋內圈兩個迴圈），一個面裝不下兩個迴圈。
+   */
+  const m = buildPrim('tube', { r: 25, ri: 20, h: 40, seg: 32 });
+  m.computeNormals();
+  const r = edit.mergeCoplanarFaces(m);
+  ok('★ 管：沒有合併任何面（側面本來就是四邊形，兩個端面是環形）', !r.ok);
+  eq('　　而且跳過的環形區域數是 2', r.skipped, 2);
+  ok('　　理由要講出「環形」這件事，不是一句「沒得合併」帶過',
+     /環形/.test(r.reason), r.reason);
+}
+
+{
+  // 圓柱：孤點確實產生了，而且被清掉了
+  const m = buildPrim('cylinder', { r: 25, h: 40, seg: 32 });
+  m.computeNormals();
+  const r = edit.mergeCoplanarFaces(m);
+  eq('★ 圓柱合併後清掉 2 個孤點（端面扇形的中心點）', r.orphans, 2);
+  eq('頂點 66 → 64', `${m.verts.length}/${r.mesh.verts.length}`, '66/64');
+}
+
+{
+  // ★ 使用者標的 CUT 一條都不能少
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  summarize(m);                          // 讓 region 有值
+  const marks = [...m.edges()].filter(h =>
+    h.twin && h.face && h.twin.face && h.face.region !== h.twin.face.region).slice(0, 3);
+  for (const he of marks) m.setRole(he, EDGE_ROLE.CUT);
+  const before = [...m.edges()].filter(h => h.role === EDGE_ROLE.CUT).length;
+
+  const r = edit.mergeCoplanarFaces(m);
+  const after = [...r.mesh.edges()].filter(h => h.role === EDGE_ROLE.CUT).length;
+  eq('★ 合併之後 使用者標的 CUT 一條都沒少', after, before);
+}
+
+section('拆掉重建：把選取搬過去（remapElements）');
+
+{
+  const m = buildPrim('cylinder', { r: 25, h: 40, seg: 32 });
+  m.computeNormals();
+  const v0 = m.verts[0], v5 = m.verts[5];
+  const he0 = [...m.edges()][0];
+  const side = m.faces.find(f => Math.abs(f.normal.y) < 0.01);
+
+  const sels = [
+    { kind: 'vertex', vert: v0 },
+    { kind: 'vertex', vert: v5 },
+    { kind: 'edge', he: he0 },
+  ];
+  const r = edit.mergeCoplanarFaces(m);
+  const moved = edit.remapElements(m, r.mesh, sels, r.remap);
+  eq('★ 三個選取全部搬得過去', moved.length, 3);
+  ok('　　搬過去的是新網格的頂點（不是舊的那份）',
+     moved[0].vert !== v0 && r.mesh.verts.includes(moved[0].vert));
+  near('　　而且座標一樣（搬的是同一個點）', moved[0].vert.p.distanceTo(v0.p), 0, 1e-12);
+  ok('　　邊也搬得過去', moved[2].kind === 'edge' && !!moved[2].he);
+
+  // 面：合併之後那個三角形已經不在了，但它所在的「區域」變成一個四邊形
+  const faceSel = [{ kind: 'face', face: side }];
+  const movedFace = edit.remapElements(m, r.mesh, faceSel, r.remap);
+  eq('★ 面也搬得過去（用共面區域的頂點索引集合配對）', movedFace.length, 1);
+  if (movedFace.length) {
+    eq('　　而且搬到的是一個四邊形', r.mesh.faceVerts(movedFace[0].face).length, 4);
+  }
+
+  // 搬不過去的要安靜地掉掉，不能丟例外
+  const ghost = edit.remapElements(m, r.mesh, [{ kind: 'vertex', vert: m.verts[64] }], r.remap);
+  eq('被清掉的孤點 → 搬不過去（掉掉，不丟例外）', ghost.length, 0);
+}
+
+section('bake 順手還原多邊形 ＋ 平面性防護');
+
+{
+  /**
+   * 🔴 「轉成可編輯網格」現在會順手把三角化還原。
+   * 它不是使用者的功能，是程式內部的整理 —— 而唯一需要它的是環切。
+   */
+  const o = new io.ModelObject({ src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid' });
+  const before = o.mesh().faces.length;
+  const v0 = o.mesh().volume(), a0 = o.mesh().area();
+  o.bake();
+  const m = o.mesh();
+  eq('★ bake 之後 方塊面數 12 → 6', `${before}/${m.faces.length}`, '12/6');
+  rel('★ 體積精確不變', m.volume(), v0);
+  rel('★ 面積精確不變', m.area(), a0);
+  eq('　　src 有換成 mesh', o.src.type, 'mesh');
+  let q = 0;
+  for (const f of m.faces) if (m.faceVerts(f).length === 4) q++;
+  eq('★ 六個面全是四邊形（環切要走的東西）', q, 6);
+}
+
+{
+  // 圓柱走同一條路，而且孤點要被清掉（χ 回到 2）
+  const o = new io.ModelObject({ src: { type: 'cylinder', r: 25, h: 40, seg: 32 }, kind: 'solid' });
+  const v0 = o.mesh().volume();
+  o.bake();
+  const v = o.mesh().validate();
+  eq('★ bake 之後 圓柱 F 34、χ 2', `${v.F}/${v.euler}`, '34/2');
+  rel('　　體積精確不變', o.mesh().volume(), v0);
+}
+
+{
+  /**
+   * 🔴 **平面性防護**：夾角剛好卡在容許值附近時，泛洪會把整條側面串成一區，
+   * 併出來的多邊形其實不平，而**展開面積會跟著變** —— 下料尺寸就錯了。
+   *
+   * 判準用 `MERGE_FLAT_TOL_CM`（1 微米），**不是** `PLANAR_TOL_CM`（0.1mm）。
+   * 借用後者會鬆三個數量級，seg 719／720 照樣溜過去（實測過）。
+   */
+  ok('MERGE_FLAT_TOL_CM 比 PLANAR_TOL_CM 嚴兩個數量級',
+     edit.MERGE_FLAT_TOL_CM < edit.PLANAR_TOL_CM / 50,
+     `${edit.MERGE_FLAT_TOL_CM} vs ${edit.PLANAR_TOL_CM}`);
+
+  for (const seg of [128, 719, 720, 721]) {
+    const m = buildPrim('cylinder', { r: 25, h: 40, seg });
+    m.computeNormals();
+    const u0 = unfoldMesh(m, makeRule('foamboard', 0.5));
+    const r = edit.mergeCoplanarFaces(m);
+    if (!r.ok) { ok(`seg=${seg} 沒合併（也可以接受）`, true, r.reason.slice(0, 24)); continue; }
+    const u1 = unfoldMesh(r.mesh, makeRule('foamboard', 0.5));
+    // ★ 這一條才是重點：合併絕對不可以改變展開尺寸
+    near(`★ seg=${seg}（夾角 ${(360 / seg).toFixed(3)}°）展開總面積完全不變`,
+         u1.stats.area, u0.stats.area, 1e-9);
+    let worst = 0;
+    for (const f of r.mesh.faces) worst = Math.max(worst, edit.facePlanarity(r.mesh, f).dev);
+    ok(`　　而且沒有不平的面（最大偏離 ${worst.toExponential(1)}）`,
+       worst <= edit.MERGE_FLAT_TOL_CM);
+  }
+
+  // 正常的參數體一個都不能被誤擋
+  for (const [t, p] of [['box', { w: 60, h: 45, d: 40 }], ['sphere', { r: 30, seg: 16 }],
+                        ['cone', { r: 30, h: 70, seg: 32 }], ['prism', { r: 25, h: 40, seg: 6 }]]) {
+    const m = buildPrim(t, p); m.computeNormals();
+    const r = edit.mergeCoplanarFaces(m);
+    eq(`${t} 沒有區域被平面性防護誤擋`, r.unflat, 0);
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
