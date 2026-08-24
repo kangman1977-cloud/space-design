@@ -1509,27 +1509,24 @@ export function bevelEdges(mesh, hes, w) {
    * ✅ **不受影響的**：頂點全被導到時（例如 12 條邊全導）照樣可以，
    * 因為那時沒有面需要吸收。方塊、圓柱、圓角方塊都在範圍內。
    */
-  {
-    const bad = [];
-    for (const V of mesh.verts) {
-      const around = mesh.vertOutgoing(V).filter(he => he.face);
-      if (around.length <= 3) continue;                       // 3 價以下沒問題
-      const touched = around.some(he => cut.has(kOf(vi.get(V.id), vi.get(he.to.id))));
-      if (!touched) continue;                                 // 這個頂點沒被碰到
-      const allBev = around.every(he =>
-        cut.has(kOf(vi.get(V.id), vi.get(he.to.id))));
-      if (!allBev) bad.push(around.length);
-    }
-    if (bad.length) {
-      return {
-        ok: false,
-        reason: `有 ${bad.length} 個頂點連著 ${Math.min(...bad)} 條以上的邊，`
-              + `而你只導了其中一部分 —— 那個角落現在補不起來（會留一個洞）。`
-              + `把那個頂點連著的邊「全部」一起選，或改導別的邊。`
-              + `〔方塊與圓柱的頂點都是 3 條，不會遇到這個〕`
-      };
-    }
-  }
+  /**
+   * 🔴 **角落規則的歷史（2026-08-25，第四次才解出來）**
+   *
+   * 這裡原本有一道防護，把「4 價以上的頂點只導一部分」擋掉 ——
+   * 因為那時的角落規則是「**每個面都被導到才補**」，而它**只對 3 價成立**。
+   *
+   * ⚠ 那個限制比當初估的嚴重得多：**導角自己就會製造 4 價頂點**
+   * （方塊導完頂面四條，價數從 {3:8} 變成 {3:8, 4:4}），
+   * 所以它擋掉的不是「圓錐那種特殊形狀」，而是
+   * **「先導一組、再導旁邊那一組」這種日常操作**（kang 2026-08-25 實測踩到）。
+   *
+   * **現在解掉了，防護已移除。** 解法見底下 ④ 那一段 ——
+   * 真正的難處只有一個：**繞一圈的順序跟面迴圈的順序是相反的**。
+   * ⛔ 要再動那一段之前，先讀 `外部參考-Blender編輯.md` 第 11.7 節
+   * （四次嘗試分別錯在哪），並且**先跑驗證集**：
+   * 方塊一條邊／方塊一個角落／12 條全導／圓柱兩圈／圓角方塊一條一條／
+   * 圓錐（4～6 價）／先頂面四條再垂直四條／順序無關。
+   */
 
   /** 面 f 的迴圈裡，頂點 V 那一格的 {cur, prv} */
   const at = (f, V) => {
@@ -1694,13 +1691,45 @@ export function bevelEdges(mesh, hes, w) {
   for (const V of mesh.verts) {
     const around = mesh.vertOutgoing(V).filter(he => he.face);
     if (!around.length) continue;
-    if (!around.every(he => hasBev(he.face, V))) continue;
-    const ring = [];
+    if (!around.some(he => hasBev(he.face, V))) continue;   // 這個頂點完全沒被碰到
+
+    /**
+     * 🔴 **繞著 V 走一圈，收集「每個面在這一角現在用的是哪一點」。**
+     *
+     * ⚠ **順序是這一段唯一的難處，而且它反過來了。**
+     * `vertOutgoing()` 走的是 `he.prev.twin` —— 也就是**從這個面的 `prv` 邊
+     * 跨到下一個面**。所以繞一圈時，每個面要**先放 `cur` 側、後放 `prv` 側**。
+     * 而**面迴圈裡剛好相反**（`prv` 先、`cur` 後，因為是沿 prv 進來、沿 cur 出去）。
+     *
+     * 🔴 **第二次嘗試就是死在這裡** —— 邏輯完全正確，兩個順序寫反了，
+     * 串出來的環就亂掉（方塊多出假的角落面、圓錐 χ −35）。
+     * 〔三次失敗的完整經過見 `外部參考-Blender編輯.md` 第 11.7 節〕
+     */
+    const seq = [];
     for (const he of around) {
-      const k = R.get(`${he.face.id}:${V.id}`);
-      if (k !== undefined && !ring.includes(k)) ring.push(k);
+      const f = he.face;
+      const own = R.get(`${f.id}:${V.id}`);
+      if (own !== undefined) { seq.push(own); continue; }   // 有自己的代表點 → 一個點
+      const c = at(f, V);
+      if (!c) continue;
+      seq.push(repForEdge(f, c.cur, V), repForEdge(f, c.prv, V));
     }
-    if (ring.length < 3) continue;      // 併完只剩 2 個 → 兩片斜切面自己接起來，不必補
+    // 連續去重（含頭尾相接）
+    const ring = [];
+    for (const k of seq) if (ring[ring.length - 1] !== k) ring.push(k);
+    while (ring.length > 1 && ring[0] === ring[ring.length - 1]) ring.pop();
+
+    /**
+     * 剩幾個相異點就決定要不要補：
+     *
+     * | 情形 | 相異點 | 補嗎 |
+     * |---|---|---|
+     * | 圓柱邊緣：2 條被導、代表點併掉了 | 2 | 不補（兩片斜切面自己接起來）|
+     * | **3 價、只導一條** | **2** | **不補** —— 那個沒被導到的面同時吸收了兩邊，自己補起來了 |
+     * | **4 價、只導一條** | **3** | **要補** ← 就是這一格讓 kang 的流程壞掉 |
+     * | 3 價、三條全導 | 3 | 要補 |
+     */
+    if (ring.length < 3) continue;
     faces.push(ring);
     corners++;
   }
@@ -1743,7 +1772,31 @@ export function bevelEdges(mesh, hes, w) {
     if (dst) out.applyMarks(dst, m); else lostMarks++;
   }
 
-  return { ok: true, mesh: out, edges: cut.size, walls, corners, clamped, lostMarks };
+  /**
+   * 🔴 **曲面上導角，斜切面本身不會是平的 —— 那是取捨，不是 bug。**
+   *
+   * 斜切面的四個角是「兩個相鄰面各自的偏移點」。而偏移是**沿著沒被導的那條邊滑**
+   * （見上方那則說明），所以相鄰邊不垂直於被導的邊時，
+   * 兩端滑的距離不一樣 → 那四個點**不共面**。
+   *
+   * ⚠ **不可能兩邊都平**：改成「垂直偏移」的話斜切面會變平，
+   * 但**旁邊那個吸收它的面會不平** —— 而弄壞一個使用者沒碰過的既有面，
+   * 比新長出來的斜切面不平糟得多。所以選現在這個。
+   *
+   * 實測佐證（320 組隨機選法）：**不平的面全部是 4 邊形（斜切面），
+   * 被吸收的 n 邊形一個都沒有不平**。最大偏離 0.11 cm ＝ 可切容許值的 11 倍。
+   *
+   * ⛔ **不要擋掉** —— 方塊、圓柱那些常見情形本來就是平的（實測 0 個），
+   * 只有真的曲面才會遇到，而那時使用者需要的是**知道**，不是被拒絕。
+   * 〔坑第 18 條：誤報比漏報更糟；鐵律三：把數字講出來讓他自己判斷〕
+   */
+  const np = nonPlanarFaces(out);
+  const npWorst = np.reduce((a, x) => Math.max(a, x.dev), 0);
+
+  return {
+    ok: true, mesh: out, edges: cut.size, walls, corners, clamped, lostMarks,
+    nonPlanar: np.length, nonPlanarWorst: npWorst
+  };
 }
 
 // ═══════════════════════════════════════════════════════

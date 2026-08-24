@@ -6136,15 +6136,18 @@ section('導角（Bevel，單段）：內縮 ＋ 加面');
 
   {
     /**
-     * 🔴 **「我們的頂點全是 3 價」那句話是錯的，而角落規則建在它上面。**
+     * 🔴 **「我們的頂點全是 3 價」那句話是錯的，而角落規則曾經建在它上面。**
      *
      * 實測圓錐 seg12 的價數分布是 **{3:10, 4:2, 5:2, 6:2}** ——
      * 那句話只對**方塊與圓柱**成立，被當成了全域事實。
-     * 4 價以上只導一部分的邊，角落會留一個三角形的洞
-     * （實測導一條邊：χ 1、邊界半邊 3 條）。
      *
-     * 通用的角落規則**試了三次都沒解出來**，所以先擋下來 ——
-     * **做出一個破洞的網格比擋下來糟得多**（坑第 11 條）。
+     * ⚠ **而這個限制比當初估的嚴重得多：導角自己就會製造 4 價頂點**
+     * （方塊導完頂面四條，價數從 {3:8} 變成 {3:8, 4:4}），所以它擋掉的
+     * 不是「圓錐那種特殊形狀」，而是「先導一組再導旁邊那一組」這種日常操作。
+     *
+     * ✅ **2026-08-25 第四次解出來了。** 真正的難處只有一個：
+     * **繞一圈的順序（`vertOutgoing`）跟面迴圈的順序是相反的。**
+     * 四次嘗試分別錯在哪，見 `外部參考-Blender編輯.md` 第 11.7 節。
      */
     const cone = baked('cone', { rTop: 0, rBottom: 30, h: 70, seg: 12 });
     const val = {};
@@ -6160,12 +6163,63 @@ section('導角（Bevel，單段）：內縮 ＋ 加面');
       return Math.abs(d.y) < 1e-6 && he.face && he.twin && he.twin.face;
     });
     const r = edit.bevelEdges(cone, [e], 3);
-    ok('★★ 4 價以上只導一部分 → 擋下來並說原因（不要做出破洞的網格）',
-       !r.ok && /補不起來/.test(r.reason || ''), r.reason);
+    ok('★★ 4 價以上只導一部分：做得出來了（原本會留一個三角形的洞）', r.ok, r.reason);
+    ok('　　而且封閉、χ 仍是 2', r.ok && r.mesh.isClosed() && chiOf(r.mesh) === 2,
+       r.ok ? `χ=${chiOf(r.mesh)} closed=${r.mesh.isClosed()}` : '');
 
-    /** ✅ 但頂點被「全部導到」時不受影響 —— 那時沒有面需要吸收 */
+    /**
+     * 🔴 **kang 2026-08-25 實測踩到的那條路：先導一組，再導旁邊那一組。**
+     * 第一步本身就會把方塊的價數從 {3:8} 變成 {3:8, 4:4}。
+     */
+    {
+      const m = baked('box', { w: 60, d: 45, h: 40 });
+      const bb = m.bounds();
+      const top = [...m.edges()].filter(he =>
+        Math.abs(he.v.p.z - bb.max.z) < 1e-6 && Math.abs(he.to.p.z - bb.max.z) < 1e-6);
+      const r1 = edit.bevelEdges(m, top, 5);
+      ok('（前置）先導頂面四條 —— 成功', r1.ok);
+      const val1 = {};
+      for (const v of r1.mesh.verts) {
+        const n = r1.mesh.vertOutgoing(v).length;
+        val1[n] = (val1[n] || 0) + 1;
+      }
+      ok('★★ （前置）導角自己就製造出 4 價頂點',
+         Object.keys(val1).some(k => +k > 3), JSON.stringify(val1));
+      const vert = [...r1.mesh.edges()].filter(he => {
+        const d = he.to.p.clone().sub(he.v.p);
+        return Math.abs(d.z) > 1e-6 && Math.hypot(d.x, d.y) < 1e-6;
+      });
+      const r2 = edit.bevelEdges(r1.mesh, vert, 5);
+      ok('★★ 再導垂直四條（kang 踩到的那一步）：做得出來了', r2.ok, r2.reason);
+      ok('　　封閉、χ2、沒有非平面的面',
+         r2.ok && r2.mesh.isClosed() && chiOf(r2.mesh) === 2
+           && edit.nonPlanarFaces(r2.mesh).length === 0);
+    }
+
+    /** ✅ 頂點被「全部導到」時照樣可以 */
     const allOk = edit.bevelEdges(box, [...box.edges()], 5);
-    ok('★ 方塊 12 條全導照樣可以（沒有被這道防護誤擋）', allOk.ok);
+    ok('★ 方塊 12 條全導照樣可以', allOk.ok);
+
+    /**
+     * ⚠ **曲面上的斜切面不會是平的 —— 那是取捨，不是壞掉。**
+     * 不可能兩邊都平：改成垂直偏移的話，旁邊那個既有的面反而會不平。
+     * 實測 320 組隨機選法：**不平的全部是 4 邊形（斜切面），
+     * 被吸收的 n 邊形一個都沒有不平**。所以不擋，但要回報數字。
+     */
+    {
+      const cyl = baked('cylinder', { r: 25, h: 60, seg: 8 });
+      const es = [...cyl.edges()].filter(he => he.face && he.twin && he.twin.face);
+      const r3 = edit.bevelEdges(cyl, [es[0], es[3], es[7]], 1);
+      ok('★ 曲面導角做得出來（拓撲正確）',
+         r3.ok && r3.mesh.isClosed() && chiOf(r3.mesh) === 2);
+      ok('★★ 而且會回報「有幾片不是平的、最大偏離多少」（不擋，但要講）',
+         typeof r3.nonPlanar === 'number' && typeof r3.nonPlanarWorst === 'number',
+         `${r3.nonPlanar} 片、最大 ${(r3.nonPlanarWorst || 0).toFixed(4)} cm`);
+      if (r3.nonPlanar) {
+        eq('★★ 不平的全部是 4 邊形（斜切面），被吸收的 n 邊形都是平的',
+           edit.nonPlanarFaces(r3.mesh).every(x => r3.mesh.faceVerts(x.face).length === 4), true);
+      }
+    }
   }
 }
 

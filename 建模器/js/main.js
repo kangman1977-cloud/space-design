@@ -1156,6 +1156,17 @@ function bevelSelected() {
   if (r.corners) bits.push(`${r.corners} 個角落面`);
   if (r.clamped) bits.push(`⚠ ${r.clamped} 個角太平（接近 180°），推距被限制在 5 倍以內`);
   if (r.lostMarks) bits.push(`⚠ ${r.lostMarks} 條被導掉的邊，上面的標記跟著消失了（那條邊已經不存在）`);
+  /**
+   * 🔴 **曲面上導角，斜切面本身不會是平的 —— 那是取捨，不是壞掉。**
+   * 不可能兩邊都平：改成垂直偏移的話，旁邊那個既有的面反而會不平，那更糟。
+   * ⛔ **所以不擋，但一定要講** —— 板材要切的話那幾片得先壓平或改用剖面分切。
+   * 方塊、圓柱那些常見情形本來就是平的，不會看到這句。
+   * 〔坑第 18 條：誤報比漏報糟；鐵律三：把數字講出來讓他自己判斷〕
+   */
+  if (r.nonPlanar) {
+    bits.push(`⚠ ${r.nonPlanar} 片斜切面不是平的（最大偏離 ${r.nonPlanarWorst.toFixed(3)} cm）`
+            + ` —— 曲面導角本來就會這樣，要拿去切板材的話先壓平`);
+  }
   toast(bits.join('　'));
 }
 
