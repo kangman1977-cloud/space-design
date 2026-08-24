@@ -961,37 +961,302 @@ function isPlanarLoop(points, idx) {
 }
 
 /**
- * 把 `role` 與 `smooth` 透過索引對照表搬到新網格上。
+ * 把邊上的標記透過索引對照表搬到新網格上。
  *
  * `mesh.js` 的 `_copyMarksTo()` 假設**索引完全一樣**，
  * 而清孤點之後索引會位移 —— 所以這裡自己配一次。
  *
- * ⚠ **`role` 與 `smooth` 兩樣都要搬。** 只搬 `role` 的話，
- * 匯入的 S 字擠出之後展開圖會從 12 處變回 196 道折彎，
- * 而且座標完全正確、看不出哪裡不對。
+ * 🔴 **一律走 `marksOf()` / `applyMarks()`，不要手寫「搬哪幾樣」。**
+ * 這一支就是那個教訓的現場：它原本手寫成「搬 `role` 與 `smooth`」，
+ * 而 2026-08-24 加了 `hard` 之後**沒有人記得回來改這裡** ——
+ * 結果是**按一次「壓平」，環切的線 48 條全部歸零**
+ * （壓平會跑一次併面，而併面走的正是這一條路）。
+ *
+ * ⚠ 這已經是同一個病的第二次：`smooth` 在 2026-08-23 也是這樣漏掉的
+ * （匯入的 S 字擠出後展開圖從 12 處變回 196 道折彎，座標完全正確）。
+ * 兩次都是「東西安靜地不見了，而形狀完全正常」。
+ * 〔坑第 31 條：與其讓好幾條路各自對齊，不如換一個只有一條路的定義〕
  */
 function copyMarksThroughRemap(src, dst, remap) {
   const si = src._vertIndex(), di = dst._vertIndex();
   const to = i => (remap ? remap.get(i) : i);
+  const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
 
-  const wantRole = new Map(), wantSmooth = new Set();
+  const want = new Map();
   for (const he of src.edges()) {
+    const m = src.marksOf(he);
+    if (Mesh.marksEmpty(m)) continue;
     const a = to(si.get(he.v.id)), b = to(si.get(he.to.id));
     if (a === undefined || b === undefined) continue;
-    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
-    if (he.role !== EDGE_ROLE.FREE) wantRole.set(key, he.role);
-    if (he.smooth) wantSmooth.add(key);
+    want.set(key(a, b), m);
   }
-  if (!wantRole.size && !wantSmooth.size) return dst;
+  if (!want.size) return dst;
 
   for (const he of dst.edges()) {
-    const a = di.get(he.v.id), b = di.get(he.to.id);
-    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
-    const r = wantRole.get(key);
-    if (r !== undefined) dst.setRole(he, r);
-    if (wantSmooth.has(key)) dst.setSmooth(he, true);
+    dst.applyMarks(he, want.get(key(di.get(he.v.id), di.get(he.to.id))));
   }
   return dst;
+}
+
+// ═══════════════════════════════════════════════════════
+//  環切（Loop Cut）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **從一條邊出發，穿過四邊形走到「對面那條邊」，串出一圈 edge ring。**
+ *
+ * ── edge ring 不是 edge loop，這兩個一直被搞混 ────────────
+ * **edge loop**：在**四價頂點**上走「中間那條邊」，選出一整圈邊。
+ * **edge ring**：穿過**四邊形**走「對面那條邊」，環切用的是這個。
+ *
+ * 🔴 **我們的網格頂點全是 3 價**（實測：方塊、32 段圓柱都是），
+ * 所以 Blender 的 edge-loop walker 在上面**一步都走不了**。
+ * 而 ring walker 走得非常好 —— 實測 32 段圓柱的 32 條垂直邊剛好繞成一個閉環。
+ *
+ * ── 停止條件 ──────────────────────────────────────────
+ * 碰到**不是四邊形的面**就停（三角形與 n 邊形沒有「對面那條邊」，
+ * 路徑不唯一，而**不唯一就不猜** —— 鐵律三）。碰到邊界也停。
+ * 兩個方向各走一次，繞回起點就是閉環。
+ *
+ * 實測 ring 長度：方塊 **4（閉）**、32 段圓柱垂直邊 **32（閉）**、
+ * 圓柱水平邊 **2**（撞到端面的 32 邊形就停 —— **那是對的行為**，不是缺陷）。
+ *
+ * ⚠ 前提是網格已經四邊形化。參數體借的是 three.js 的三角形
+ * （16 段圓柱 ＝ 64 個三角形、**0 個四邊形**，一步都走不了），
+ * 靠 `bake()` 時的 `mergeCoplanarFaces()` 補上。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge} he0 起點那條邊（任一條半邊）
+ * @returns {{hes:HalfEdge[], keys:string[], closed:boolean}}
+ *          `hes` 每條邊只出現一次；`keys` 是「小索引-大索引」字串
+ */
+export function edgeRing(mesh, he0) {
+  const out = { hes: [], keys: [], closed: false };
+  if (!mesh || !he0) return out;
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const keyOf = h => kOf(vi.get(h.v.id), vi.get(h.to.id));
+
+  const seen = new Set();
+  const startKey = keyOf(he0);
+
+  for (const start of [he0, he0.twin]) {
+    if (!start) continue;
+    let h = start, guard = 0;
+    while (h && h.face && guard++ < 1e6) {
+      const k = keyOf(h);
+      if (seen.has(k)) {
+        // 走回起點 ＝ 閉環（第一步就撞到自己不算，那是還沒走）
+        if (k === startKey && out.hes.length > 1) out.closed = true;
+        break;
+      }
+      seen.add(k);
+      out.hes.push(h);
+      out.keys.push(k);
+
+      const loop = mesh.faceLoop(h.face);
+      if (loop.length !== 4) break;           // 只穿得過四邊形
+      const i = loop.indexOf(h);
+      if (i < 0) break;
+      const opp = loop[(i + 2) % 4];
+      if (!opp.twin) break;                   // 對面那條是邊界，走不過去
+      h = opp.twin;
+    }
+    if (out.closed) break;
+  }
+  return out;
+}
+
+/**
+ * 🔴 **環切：在一整圈 edge ring 上插點，把穿過的四邊形切成好幾片。**
+ *
+ * ── 它做什麼、不做什麼 ────────────────────────────────
+ * **做**：加線。**不動任何既有頂點的位置** —— 所以體積、面積、展開尺寸
+ * 全部**精確不變**，那是可以對答案的（實測方塊 108000.000000 →
+ * 108000.000000、圓柱 117054.196468 → 117054.196468）。
+ * **不做**：改變形狀。要改形狀是接下來「拉那一圈邊」的事。
+ *
+ * ⚠ **加線本身就是目的。** 「加線」是整個編輯循環現在斷掉的地方 ——
+ * 沒有它，一個方塊永遠只有 8 個頂點可以拉。
+ *
+ * ── 三個一定要一起做的配件（少一個就會出事）────────────
+ *
+ * | 配件 | 不做的症狀 |
+ * |---|---|
+ * | 新的邊標 **`hard`** | 畫面上看不見、點不到、半塊面拉不動、壓平會併掉（四個出口全中）|
+ * | **被切成兩半的邊要繼承標記** | 實測：標了 CUT 的邊切完之後 **CUT 0 條**，安靜消失 |
+ * | `preflightRebuild` / `cleanRebuild` | 拆掉重建這條路的必要配件 |
+ *
+ * ⭐ **環切是四個「拆掉重建」的工具裡唯一不產生孤點的**
+ * （實測方塊、圓柱、半條 ring 都是 0 個）—— 因為它只加不減。
+ * 但 `cleanRebuild()` 照走，那是這條路的規矩，不是看情況跳過的檢查。
+ *
+ * ── 撞到非四邊形停下來的那半條 ring ────────────────────
+ * 停下來的地方那個面（例如圓柱端面的 32 邊形）**只插點、不切開** ——
+ * 切開它才是不唯一的猜測，而只插點是唯一解：那個點本來就在它的邊上，
+ * 不插進去反而會變成 T 型接點（一邊一條邊、另一邊兩條）。
+ * 實測圓柱水平邊：32 邊形變 33 邊形，**χ 仍是 2、ok=true、體積精確不變**。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge} he0 起點那條邊
+ * @param {{cuts?:number}} opt `cuts` ＝ 刀數（預設 1），切點取 i/(cuts+1)
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            ringLen?:number, closed?:boolean, cuts?:number,
+ *            newEdges?:Array<[number,number]>, orphans?:number}}
+ *          `newEdges` 是新那幾圈邊在**新網格**上的頂點索引對，
+ *          呼叫端拿它去把那幾條邊選起來。
+ */
+export function loopCut(mesh, he0, opt = {}) {
+  const cuts = Math.max(1, Math.round(opt.cuts || 1));
+  if (!mesh || !he0) return { ok: false, reason: '沒有網格或沒有選到邊' };
+  if (!he0.face || !he0.twin || !he0.twin.face) {
+    return { ok: false, reason: '這是外輪廓的邊，環切要從兩側都有面的邊出發' };
+  }
+
+  mesh.computeNormals();
+  const ring = edgeRing(mesh, he0);
+  if (!ring.hes.length) return { ok: false, reason: '從這條邊走不出一圈可以切的邊' };
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const cutKeys = new Set(ring.keys);
+
+  /**
+   * 每條要切的邊插 `cuts` 個點。
+   * ⚠ **存的順序一律是「小索引 → 大索引」**，取用時再照走的方向翻過來 ——
+   * 邊沒有方向，而面有；不定一個標準的話，同一條邊在兩個面裡會插出
+   * 相反的順序，切出來的四邊形就會自交（畫面上看不出來，體積才會露餡）。
+   */
+  const points = mesh.verts.map(v => v.p.clone());
+  const mids = new Map();
+  for (const k of cutKeys) {
+    const [a, b] = k.split('-').map(Number);
+    const arr = [];
+    for (let i = 1; i <= cuts; i++) {
+      arr.push(points.length);
+      points.push(points[a].clone().lerp(points[b], i / (cuts + 1)));
+    }
+    mids.set(k, arr);
+  }
+  /** 從 u 走向 w 時，這條邊上的插點由近到遠 */
+  const midsAlong = (u, w) => {
+    const arr = mids.get(kOf(u, w));
+    return u < w ? arr : [...arr].reverse();
+  };
+
+  /**
+   * 標記帳本，記在**重建前**的索引空間，最後透過 `remap` 一次搬過去。
+   * 三種來源：既有邊照抄、被切成兩半（n+1 段）的每一段都繼承、新的那幾圈標 hard。
+   */
+  const marks = new Map();
+  const mark = (a, b, m) => {
+    const k = kOf(a, b);
+    marks.set(k, Object.assign({}, marks.get(k), m));
+  };
+
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    // 🔴 整包讀，不要手寫「有哪幾樣」—— 見 copyMarksThroughRemap() 的說明
+    const m = mesh.marksOf(he);
+    if (!cutKeys.has(kOf(a, b))) { mark(a, b, m); continue; }
+    /**
+     * 🔴 **一條變 n+1 條，每一段都要繼承。**
+     * 不做的話 `copyMarksThroughRemap()` 那種「起點-終點索引對」的配對
+     * 一定落空（`1-3` 被切成 `1-8` 與 `8-3`），而**標記會安靜消失**。
+     * 實測：標了 CUT ＋ smooth 的邊切完之後 CUT 0 條、smooth 0 條。
+     */
+    const chain = [a, ...midsAlong(a, b), b];
+    for (let i = 0; i + 1 < chain.length; i++) mark(chain[i], chain[i + 1], m);
+  }
+
+  const faces = [];
+  const newEdgePairs = [];
+  let split = 0, pierced = 0;
+
+  for (const f of mesh.faces) {
+    const loop = mesh.faceLoop(f);
+    const idx = loop.map(he => vi.get(he.v.id));
+    const hit = [];
+    for (let i = 0; i < loop.length; i++) {
+      if (cutKeys.has(kOf(idx[i], idx[(i + 1) % loop.length]))) hit.push(i);
+    }
+    if (!hit.length) { faces.push(idx); continue; }
+
+    if (loop.length === 4 && hit.length === 2 && hit[1] - hit[0] === 2) {
+      /**
+       * 正常情形：四邊形被一對**對面的邊**穿過 → 切成 cuts+1 條。
+       *
+       * 面的繞向是 v0→v1→v2→v3。切線 k 連的是「v0 那條邊上第 k 個點」
+       * 與「v2 那條邊上第 (n+1-k) 個點」—— 因為 v2 那一側的參數是反過來數的
+       * （v2 挨著 v1，所以「離 v0 t 遠」＝「離 v2 (1−t) 遠」）。
+       * ⚠ 配錯的話四邊形會扭成沙漏，而**畫面上完全看不出來**（坑第 29 條）。
+       */
+      const i0 = hit[0];
+      const v = k => idx[(i0 + k) % 4];
+      const A = midsAlong(v(0), v(1));        // v0 → v1 上的點，由近到遠
+      const B = midsAlong(v(2), v(3));        // v2 → v3 上的點，由近到遠
+      const n = cuts;
+      for (let k = 0; k <= n; k++) {
+        const left  = k === 0 ? v(0) : A[k - 1];
+        const right = k === 0 ? v(3) : B[n - k];
+        const nl = k === n ? v(1) : A[k];
+        const nr = k === n ? v(2) : B[n - k - 1];
+        faces.push([left, nl, nr, right]);
+      }
+      for (let k = 0; k < n; k++) {
+        mark(A[k], B[n - 1 - k], { hard: true });
+        newEdgePairs.push([A[k], B[n - 1 - k]]);
+      }
+      split++;
+      continue;
+    }
+
+    /**
+     * 半條 ring 停下來的地方：這個面被切到但穿不過去（三角形、n 邊形，
+     * 或只被切到一條邊）。**只把點插進迴圈，不切開它。**
+     * 不插的話那條邊會變成一邊一條、另一邊兩條 —— T 型接點。
+     */
+    const out = [];
+    for (let i = 0; i < loop.length; i++) {
+      const u = idx[i], w = idx[(i + 1) % loop.length];
+      out.push(u);
+      if (cutKeys.has(kOf(u, w))) out.push(...midsAlong(u, w));
+    }
+    faces.push(out);
+    pierced++;
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `環切做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  // 標記搬過去（順便把新的那幾圈標成 hard）
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const want = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x === undefined || y === undefined) continue;
+    want.set(kOf(x, y), m);
+  }
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  }
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    ringLen: ring.hes.length, closed: ring.closed, cuts,
+    split, pierced,
+    newEdges: newEdgePairs
+      .map(([a, b]) => [to(a), to(b)])
+      .filter(([a, b]) => a !== undefined && b !== undefined),
+    orphans: clean.dropped.orphans
+  };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1329,8 +1594,8 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
     if (!inRegion.has(he.face) || !inRegion.has(he.twin.face)) continue;   // 只有蓋子內部
     const to = byPair.get(key(idxOf(he.v), idxOf(he.to)));
     if (!to) continue;
-    if (he.role !== EDGE_ROLE.FREE) out.setRole(to, he.role);
-    if (he.smooth) out.setSmooth(to, true);
+    // 🔴 整包搬，不要手寫「搬哪幾樣」—— 見 copyMarksThroughRemap() 的說明
+    out.applyMarks(to, mesh.marksOf(he));
   }
 
   /**
@@ -1361,9 +1626,22 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
       const src = mesh.vertOutgoing(cur.v).find(h =>
         h.twin && ((h.face === N1 && h.twin.face === N2) ||
                    (h.face === N2 && h.twin.face === N1)));
-      if (!src || !src.smooth) continue;
+      if (!src) continue;
+      /**
+       * ⚠ **繼承 `smooth` 與 `hard`，但不繼承 `role`。**
+       *
+       * `smooth`／`hard` 講的是「這條邊是什麼」（造型的一部分／使用者刻意
+       * 加的），被延長之後仍然成立。`role` 講的是「這條邊要怎麼加工」——
+       * 那是使用者對**某一條特定的邊**下的決定，不該自己長到新的邊上去
+       * （擠出一個標了 CUT 的頂面，側牆的垂直邊不該憑空變成切割線）。
+       *
+       * 🔴 `hard` 這一項是 2026-08-24 補的：環切過的邊被擠出延長時，
+       * 新的那一段一樣是共面的 —— 不繼承的話它會看不見、點不到，
+       * 而且兩片側牆會被併成一片。
+       */
+      if (!src.smooth && !src.hard) continue;
       const he = byPair.get(key(vi.get(cur.v.id), dup.get(cur.v)));
-      if (he) out.setSmooth(he, true);
+      if (he) out.applyMarks(he, { smooth: src.smooth, hard: src.hard });
     }
   }
 

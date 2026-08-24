@@ -75,6 +75,44 @@ export class HalfEdge {
      * 從 STL 匯進來的也從來沒有 —— 那些情況只能回頭用角度猜。
      */
     this.smooth = false;
+    /**
+     * 🔴 **這條邊是使用者刻意加上去的，即使兩側共面也要當它存在。**
+     *
+     * ── 為什麼非有這個旗標不可（2026-08-24 環切逼出來的）──────
+     * 這個專案有一條貫穿全域的規則：
+     * **「共面的邊 ＝ 畫面上看不見的邊 ＝ 不該存在的邊」**。
+     * 它有四個出口，而且四個都對：
+     *
+     *   1. `scene.js` 畫稜線用 `EdgesGeometry(geometry, 1)`，只畫轉折 >1° 的
+     *   2. `seam.js` 的 `isMarkable()` 明文排除共面邊
+     *   3. `region.js` 的 `planarRegions()` 把共面的面併成一區
+     *   4. `edit.js` 的 `mergeCoplanarFaces()` 把共面的面真的併掉
+     *
+     * 那條規則本來是為了擋掉**三角化的對角線** —— 一個正方形在網格裡是
+     * 兩個三角形，中間那條斜線畫面上看不到，讓人標到它只會莫名其妙。
+     *
+     * 🔴 **環切是第一個產生「共面但刻意存在」的邊的功能，它是這條規則的
+     * 第一個例外。** 不開這個例外，環切切下去的線**畫面上看不見、點不到、
+     * 半塊面拉不動、按一次壓平就被併回去** —— 四個出口全中，
+     * 等於一顆按了什麼都不會發生的按鈕（坑第 21 條，面合併那顆已經中過一次）。
+     *
+     * ── 為什麼不塞進 `role`，也不借用 `smooth` ──────────────
+     * 三個旗標回答三個不同的問題，混在一起下游就得用猜的：
+     *
+     * | 旗標 | 回答什麼 |
+     * |---|---|
+     * | `role` | **製造**問題：這條邊要切、要折、還是不管 |
+     * | `smooth` | **形狀**問題：它是造型的一部分，還是離散化的產物 |
+     * | `hard` | **存在**問題：它共面，但它該不該被當成一條邊 |
+     *
+     * ⚠ `smooth` 剛好是它的反面（「共面所以不算折線」），
+     * 但反面不等於同一個欄位 —— `smooth` 的答案來自**上游**（曲線的錨點），
+     * `hard` 的答案來自**使用者的動作**。
+     *
+     * ⚠ **要進存檔。** 不存的話開檔之後切線就沒了，而形狀還在 ——
+     * 那是「安靜地少掉東西」，最難查的一種。
+     */
+    this.hard = false;
   }
   /** 終點 ＝ 反向半邊的起點 */
   get to() { return this.twin ? this.twin.v : this.next.v; }
@@ -318,6 +356,55 @@ export class Mesh {
     he.smooth = !!on;
     if (he.twin) he.twin.smooth = !!on;
     return this;
+  }
+
+  /**
+   * 設定「這條邊是刻意加的，共面也要當它存在」（環切用）。
+   * 跟 `setRole`／`setSmooth` 一樣，兩條半邊要一起設。
+   */
+  setHard(he, on = true) {
+    he.hard = !!on;
+    if (he.twin) he.twin.hard = !!on;
+    return this;
+  }
+
+  /**
+   * 🔴 **一條邊身上「要跟著它走」的全部標記，一次讀完／一次寫回。**
+   *
+   * ── 為什麼要有這一對（2026-08-24，同一個病發作第二次之後補的）──────
+   * 邊上的標記已經有三個（`role`／`smooth`／`hard`），而「拆掉重建」的路徑
+   * 有**四條**（`_copyMarksTo`、`copyMarksThroughRemap`、`extrudeFace` 的
+   * 蓋子內部、`loopCut` 的標記帳），每一條都各自手寫一次「搬哪幾樣」。
+   *
+   * **那個結構保證會漏。** 而且實際漏了兩次：
+   *   · 2026-08-23 加 `smooth` 時漏掉 → 展開圖從 5 處折彎變成 45 處
+   *   · 2026-08-24 加 `hard` 時漏掉 → 按一次壓平，環切的線全部消失（48 → 0）
+   * 兩次的症狀都一樣：**東西安靜地不見了，而形狀完全正常。**
+   *
+   * 🔴 這正是鐵律二那條：「需要『兩邊算出同一個答案』時，與其小心地讓
+   * 兩條路對齊，不如換一個**只有一條路**的定義。前者靠紀律維持，
+   * 後者靠結構保證。」（坑第 31 條）
+   *
+   * ⛔ **日後再加第四個標記，只改這一對，不要再去找那四條路。**
+   * 而測試是照 `marksOf()` 回傳的欄位**自動展開**的 —— 加了新欄位，
+   * 那一組回歸測試會自己把它涵蓋進去。
+   */
+  marksOf(he) {
+    return { role: he.role, smooth: he.smooth, hard: he.hard };
+  }
+
+  /** 把 `marksOf()` 讀出來的那一包寫回另一條邊。空的（預設值）不寫。 */
+  applyMarks(he, m) {
+    if (!m) return this;
+    if (m.role !== undefined && m.role !== EDGE_ROLE.FREE) this.setRole(he, m.role);
+    if (m.smooth) this.setSmooth(he, true);
+    if (m.hard) this.setHard(he, true);
+    return this;
+  }
+
+  /** 這一包標記是不是全空（全空就不必搬，省一趟走訪） */
+  static marksEmpty(m) {
+    return !m || (m.role === EDGE_ROLE.FREE && !m.smooth && !m.hard);
   }
 
   /** 設定邊的角色。一定要兩條半邊一起設，不然走另一邊會讀到舊值。 */
@@ -641,16 +728,55 @@ export class Mesh {
   }
 
   /**
-   * 邊上的兩個標記一起搬。**凡是「拆掉重建」的路徑都該叫這一支**，
-   * 不要只叫 `_copyRolesTo()` —— 漏掉 `smooth` 不會報錯，
-   * 只會讓展開圖在**匯入的自由曲線**上突然變得讀不懂（見 `_copySmoothTo`）。
+   * 把 `hard` 旗標搬到另一個網格上。做法跟上面兩支一樣，用頂點索引配對。
    *
-   * 兩個標記回答的是兩個不同的問題（`role` ＝ 製造問題、`smooth` ＝ 形狀問題），
-   * 但它們一起活、一起死，所以給一個入口。
+   * ⚠ **漏搬的症狀跟 `smooth` 同一家族，而且更難查**：
+   * 環切出來的線會**整條消失**（畫面上看不見、點不到），
+   * 而形狀完全沒變 —— 使用者只會覺得「剛剛切的那條不見了」。
+   * `clone()`／`transformed()` 走的是同樣的路徑，所以一起掛進 `_copyMarksTo()`。
+   */
+  _copyHardTo(other) {
+    const src = this._vertIndex(), dst = other._vertIndex();
+    const pairs = new Set();
+    for (const he of this.edges()) {
+      if (!he.hard) continue;
+      const a = src.get(he.v.id), b = src.get(he.to.id);
+      pairs.add(`${Math.min(a, b)}-${Math.max(a, b)}`);
+    }
+    if (!pairs.size) return other;
+    for (const he of other.edges()) {
+      const a = dst.get(he.v.id), b = dst.get(he.to.id);
+      if (pairs.has(`${Math.min(a, b)}-${Math.max(a, b)}`)) other.setHard(he, true);
+    }
+    return other;
+  }
+
+  /**
+   * 邊上的標記**整包**搬到另一個「頂點索引相同」的網格上。
+   * **凡是「拆掉重建」的路徑都該叫這一支。**
+   *
+   * 🔴 **2026-08-24 改寫成走 `marksOf()` / `applyMarks()` 那一對。**
+   * 上面那三支 `_copyXxxTo()` 是它的歷史，**現在沒有人叫它們了** ——
+   * 留著是因為註解裡的實測數字（漏搬會怎樣）還有價值。
+   * ⛔ **不要再新增第四支 `_copyXxxTo()`。** 加新標記只要改
+   * `marksOf()` / `applyMarks()`，這裡與另外三條路會一起跟上。
+   *
+   * 三個標記回答的是三個不同的問題（`role` ＝ 製造、`smooth` ＝ 形狀、
+   * `hard` ＝ 存在），但它們一起活、一起死，所以只給一個入口。
    */
   _copyMarksTo(other) {
-    this._copyRolesTo(other);
-    this._copySmoothTo(other);
+    const src = this._vertIndex(), dst = other._vertIndex();
+    const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+    const pairs = new Map();
+    for (const he of this.edges()) {
+      const m = this.marksOf(he);
+      if (Mesh.marksEmpty(m)) continue;
+      pairs.set(key(src.get(he.v.id), src.get(he.to.id)), m);
+    }
+    if (!pairs.size) return other;
+    for (const he of other.edges()) {
+      other.applyMarks(he, pairs.get(key(dst.get(he.v.id), dst.get(he.to.id))));
+    }
     return other;
   }
 
@@ -855,6 +981,14 @@ export class Mesh {
       // id 每次載入都會重新編號，存了也對不回來
       smooth: [...this.edges()]
         .filter(he => he.smooth)
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id)]),
+      /**
+       * 環切加出來的邊。**不存的話開檔之後切線就沒了，而形狀還在** ——
+       * 那是「安靜地少掉東西」，最難查的一種。
+       * 跟上面兩個一樣用頂點索引配對，不用 id。
+       */
+      hard: [...this.edges()]
+        .filter(he => he.hard)
         .map(he => [vi.get(he.v.id), vi.get(he.to.id)])
     };
   }
@@ -866,7 +1000,8 @@ export class Mesh {
     }
     const m = Mesh.fromFaceList(points, d.faces);
 
-    if ((d.roles && d.roles.length) || (d.smooth && d.smooth.length)) {
+    if ((d.roles && d.roles.length) || (d.smooth && d.smooth.length)
+        || (d.hard && d.hard.length)) {
       const idx = new Map(m.verts.map((v, i) => [v.id, i]));
       const byPair = new Map();
       for (const he of m.edges()) {
@@ -880,6 +1015,10 @@ export class Mesh {
       for (const [a, b] of (d.smooth || [])) {
         const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
         if (he) m.setSmooth(he, true);
+      }
+      for (const [a, b] of (d.hard || [])) {
+        const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+        if (he) m.setHard(he, true);
       }
     }
     return m;

@@ -1004,6 +1004,33 @@ export class Selection {
   }
 
   /**
+   * 直接指定要選哪幾條邊（不經過點選）。
+   *
+   * 環切之後用它把**新切出來的那一圈邊**整圈選起來，箭頭立刻停在上面，
+   * 使用者可以無縫接著拉 —— 跟擠出之後自動選中新蓋子（方案 C）同一個分工：
+   * **環切只負責加線，改形狀交給已經驗過的「拉邊」。**
+   *
+   * ⚠ 跟 `selectFace()` 一樣，一定要在 `commit()` **之後**呼叫 ——
+   * `commit()` 會走 `revalidate()`，而環切換掉了整個網格物件，
+   * 那裡會把子元素選取清掉（本來就該清，舊的 HalfEdge 參考已經不在文件裡了）。
+   *
+   * @param {object} obj
+   * @param {HalfEdge[]} hes
+   * @returns {number} 實際選起來的條數
+   */
+  selectEdges(obj, hes) {
+    const list = (hes || []).filter(Boolean);
+    if (!obj || !list.length) { this.clearEditSel(); return 0; }
+    const mesh = obj.mesh();
+    this.editSels = list.map(he => ({ obj, kind: 'edge', he, mesh }));
+    this._drag = null;
+    this._attachEditProxy();
+    this._drawEditMark();
+    if (this.hooks.onChange) this.hooks.onChange(this);
+    return this.editSels.length;
+  }
+
+  /**
    * 把替身擺到元素重心上、轉成目前選的方向，並把 gizmo 掛過去。
    *
    * ── 方向是怎麼做到的（而且沒有動 TransformControls）────────

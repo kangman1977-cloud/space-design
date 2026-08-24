@@ -302,6 +302,41 @@ export class SceneView {
       edges.geometry.dispose();
       edges.geometry = new THREE.EdgesGeometry(node.geometry, 1);
 
+      /**
+       * 🔴 **環切加出來的邊要另外補畫。**
+       *
+       * `EdgesGeometry(geometry, 1)` 只畫轉折超過 1 度的邊 —— 那條規則
+       * 本來是對的（它擋掉三角化的對角線，那些線畫面上本來就不存在）。
+       * 但環切的線是**共面**的，所以一條都畫不出來。
+       *
+       * ⚠ 不補的話環切就是坑第 21 條：按下去畫面上沒有任何地方會變。
+       * 「面合併」那顆按鈕已經被同一個坑騙過一次。
+       *
+       * **顏色跟一般稜線一樣**（kang 2026-08-24 決定）——
+       * 它就是一條真的邊，跟方塊的棱線同等地位，沒有理由特別標起來。
+       * 所以直接接在同一份 geometry 後面，不另開一層。
+       *
+       * ⚠ 加厚（板件）時不畫：那時畫面上是 `shell()` 出來的另一個網格，
+       * 原網格的座標對不上。板件本來就不在第 6 期的支援範圍。
+       */
+      if (shellT === 0) {
+        const extra = [];
+        for (const he of mesh.edges()) {
+          if (!he.hard) continue;
+          extra.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
+        }
+        if (extra.length) {
+          const base = edges.geometry.getAttribute('position').array;
+          const all = new Float32Array(base.length + extra.length);
+          all.set(base, 0);
+          all.set(extra, base.length);
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.BufferAttribute(all, 3));
+          edges.geometry.dispose();
+          edges.geometry = g;
+        }
+      }
+
       node.userData.geomKey = mesh;
       node.userData.shellT = shellT;
     }

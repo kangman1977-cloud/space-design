@@ -400,6 +400,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="efFace" class="efBtn" data-f="face" title="只選面（整個共面區域，不是單一三角形）">面</button>
       <button id="extrude" disabled title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
       <button id="flatten" disabled title="壓平：把選到的面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變（圓柱那一段會被削平）。想把好幾片 seg 變成一個平面就用它">壓平</button>
+      <!--
+        環切：選一條邊，程式沿著它繞出一整圈，在中間加上新的線。
+        它只加線、不改形狀（體積精確不變），改形狀是接著「拉那一圈邊」的事。
+        刀數放在按鈕旁邊而不是另開面板 —— 它是這顆按鈕的參數，不是一個模式。
+      -->
+      <button id="loopCut" disabled title="環切：選一條邊，沿著它繞一整圈加上新的線（方塊繞 4 條、32 段圓柱繞 32 條）。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做斜面、收腰、階梯">環切</button>
+      <input id="loopCutN" type="number" min="1" max="32" step="1" value="1"
+             title="刀數：一次要切幾刀。切點平均分佈（1 刀在中點、2 刀在 1/3 與 2/3）">
     </div>
 
     <!--

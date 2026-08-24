@@ -29,7 +29,7 @@ import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
-         flattenElements, mergeCoplanarFaces } from './core/edit.js';
+         flattenElements, mergeCoplanarFaces, loopCut } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -355,6 +355,7 @@ $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
+$('loopCut').onclick = () => loopCutSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
   b.onclick = () => setEditFilter(b.dataset.f);
 }
@@ -927,6 +928,76 @@ function flattenSelected() {
   toast(bits.join('　'));
 }
 
+/**
+ * 環切：沿著選到的那條邊繞一整圈，在中間加上新的線。
+ *
+ * ── 它只加線，不改形狀 ──────────────────────────────────
+ * 體積、面積、展開尺寸**精確不變**（實測方塊 108000.000000 →
+ * 108000.000000）—— 那是可以對答案的，測試釘住了。
+ * 改形狀是接下來「拉那一圈邊」的事。
+ *
+ * ── 跟擠出方案 C 同一個分工 ──────────────────────────────
+ * 環切只負責加線，切完**自動把那一圈選起來**，接著用已經驗過的「拉邊」
+ * 調到想要的位置。一個動作一件事，不需要新的拖曳邏輯。
+ *
+ * ⚠ **切完之後畫面上真的會多幾條線**（`scene.js` 特別補畫的），
+ * 而且**半塊面點得到、拉得動**（`planarRegions()` 在 hard 邊斷開）——
+ * 這三件事任何一件沒做，環切就是一顆按了什麼都不會發生的按鈕（坑第 21 條）。
+ */
+function loopCutSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一條邊，再按「環切」', true);
+    return;
+  }
+  if (sel.editCount > 1) {
+    toast(`環切一次只能從一條邊出發（現在選了 ${sel.editCount} 個）。點一下那條邊單獨選它`, true);
+    return;
+  }
+  const cuts = Math.max(1, Math.min(32, Math.round(+$('loopCutN').value || 1)));
+  const obj = el.obj;
+  const oldMesh = obj.mesh();
+
+  const r = loopCut(oldMesh, el.he, { cuts });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 被切成兩半的邊如果標過 CUT，線段變兩截了
+  commit(cuts > 1 ? `環切 ${cuts} 刀` : '環切');
+
+  /**
+   * ⚠ 一定要在 commit() 之後才選 —— 跟擠出同一條理由：
+   * commit() 會走 revalidate()，而環切換掉了整個網格物件，
+   * 那裡會把子元素選取清掉。先選後 commit 等於白做。
+   *
+   * 選的是**新切出來的那幾圈邊**，不是原本那條 —— 使用者接著要拉的是它們。
+   */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  const got = sel.selectEdges(obj, hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 講出「繞了幾條、是不是繞回來」——**那兩個數字使用者自己驗得出來**
+   * （方塊應該是 4、32 段圓柱應該是 32）。只講「切好了」等於沒講。
+   * 沒繞回來要特別說一句：那多半是撞到三角形或多邊形停下來了，
+   * **那是對的行為**，但看起來很像壞掉。
+   */
+  const bits = [`已環切${cuts > 1 ? ` ${cuts} 刀` : ''}　繞過 ${r.ringLen} 條邊`];
+  if (!r.closed) bits.push('（沒有繞回來 —— 撞到不是四邊形的面就會停，那是正常的）');
+  if (got) bits.push(`新的 ${got} 條邊已選起來，用箭頭直接拉`);
+  toast(bits.join('　'));
+}
+
 // ═══════════════════════════════════════════════════════
 //  分片
 // ═══════════════════════════════════════════════════════
@@ -1149,6 +1220,23 @@ function updateBar() {
         : '把這個面壓平。⚠ 本來就是平的話不會有動作')
     : (sel.editMode ? '先選一個面（可以開「加選」選好幾個）'
                     : '先按「拉點線面」進入編輯模式，再選面');
+
+  /**
+   * 環切：**選到一條邊才給按**。
+   *
+   * ⚠ 一次只能一條 —— 起點不同，繞出來的圈就不同，
+   * 選了三條要繞哪一圈**結果不唯一，而不唯一就不猜**（鐵律三，坑第 24 條）。
+   */
+  const edge1 = sel.editMode && sel.editSel && sel.editSel.kind === 'edge'
+             && sel.editCount === 1;
+  $('loopCut').disabled = !edge1;
+  $('loopCutN').disabled = !edge1;
+  $('loopCut').title = edge1
+    ? '沿著這條邊繞一整圈加上新的線。只加線不改形狀，切完那一圈會自動選中'
+    : (sel.editMode
+        ? (sel.editCount > 1 ? '環切一次只能從一條邊出發（現在選了好幾個）'
+                             : '先選一條邊（把過濾器切到「邊」比較好點）')
+        : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   const vtx = sel.editMode && sel.editSel && sel.editSel.kind === 'vertex';
   for (const id of ['mRot', 'mScale']) {

@@ -80,6 +80,22 @@ export function planarRegions(mesh, tolDeg = 0.5) {
       for (const he of mesh.faceLoop(f)) {
         const nb = he.twin && he.twin.face;
         if (!nb || nb.region !== -1) continue;
+        /**
+         * 🔴 **環切加出來的邊要擋住泛洪，即使兩側是共面的。**
+         *
+         * 沒有這一行，環切在畫面上會完全沒有作用：切完的上下兩塊仍然是
+         * 「同一個共面區域」，點下半塊會連上半塊一起選中，箭頭一拉整片
+         * 側面一起走 —— 那條切線只是跟著平移，形狀一點都沒變。
+         * 〔2026-08-24 實測：方塊側面切一刀後點下半塊，選到 2 個面 6 個頂點〕
+         *
+         * 順帶免費解掉另一件事：`mergeCoplanarFaces()` 是照區域併的，
+         * 區域在這裡斷開，**按「壓平」就不會把切線併回去**
+         * （實測沒擋的話方塊 F10 → F6，切線消失）。
+         *
+         * ⚠ 展開不受影響 —— `flatten.js` 從頭到尾沒有用 `planarRegions()`。
+         * 實測方塊環切前後：片數都是 3、尺寸完全一樣、警告數一樣。
+         */
+        if (he.hard) continue;
         if (!mesh.isFlat(he, tolDeg)) continue;
         nb.region = r.id;
         stack.push(nb);

@@ -70,6 +70,18 @@ import { FLAT_TOL_DEG } from './flatten.js';
  */
 export function isMarkable(mesh, he, tolDeg = FLAT_TOL_DEG) {
   if (!he.twin || !he.face || !he.twin.face) return false;   // 邊界
+  /**
+   * 🔴 **環切加出來的邊是這條規則的第一個例外。**
+   *
+   * 上面那句「共面 → 看不見」擋的是**三角化的對角線** —— 沒有人加它、
+   * 畫面上也沒有它。而環切的線是**使用者自己切的**，`scene.js` 也會把它
+   * 畫出來，所以「畫面上看得見的稜線才是可以標的邊」這條判準仍然成立 ——
+   * 只是「看得見」的定義多了一種來源。
+   *
+   * ⚠ 不放行的話環切等於白做：實測方塊切完，新的一圈 4 條邊
+   * **「點得到」的 0 條**，連選都選不到，更別說拉。
+   */
+  if (he.hard) return true;
   return !mesh.isFlat(he, tolDeg);                           // 共面 → 看不見
 }
 

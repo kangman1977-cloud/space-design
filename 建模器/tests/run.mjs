@@ -5494,6 +5494,354 @@ function trueFaceArea(m, f) {
   ok(`★★ 凸的情況跟扇形逐字相同（檢查 ${checked} 個面）`, same);
 }
 
+// ═══════════════════════════════════════════════════════
+//  環切（Loop Cut）
+// ═══════════════════════════════════════════════════════
+
+section('環切：ring 走訪');
+
+/** 轉成可編輯網格（＝ io.js 的 bake()：還原多邊形），環切的前提 */
+function baked(type, params) {
+  const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+  const m = r.ok ? r.mesh : buildPrim(type, params);
+  m.computeNormals();
+  return m;
+}
+const edgeCount = m => [...m.edges()].length;
+const chi = m => m.verts.length - edgeCount(m) + m.faces.length;
+/** 找一條方向大致等於 dir 的邊 */
+function findEdge(m, pick) {
+  for (const he of m.edges()) {
+    const d = he.to.p.clone().sub(he.v.p);
+    if (pick(d)) return he;
+  }
+  return null;
+}
+
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  eq('前提：方塊 bake 之後是 6 個四邊形', box.faces.length, 6);
+  const v = findEdge(box, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9);
+  const r = edit.edgeRing(box, v);
+  eq('★ 方塊的垂直邊繞出 4 條 ring', r.hes.length, 4);
+  ok('　　而且是繞回來的閉環', r.closed);
+
+  /**
+   * 🔴 我們的頂點**全是 3 價** —— Blender 的 edge-loop walker（要四價）
+   * 在上面一步都走不了。**環切用的是 edge ring 不是 edge loop**，
+   * 這一項是那個區別的機械斷言，不要再把兩者搞混。
+   */
+  let maxVal = 0;
+  for (const vert of box.verts) maxVal = Math.max(maxVal, box.vertOutgoing(vert).length);
+  eq('★★ 方塊的頂點最高才 3 價（所以 edge loop 走不動、ring 才走得動）', maxVal, 3);
+
+  const cyl = baked('cylinder', { r: 25, h: 60, seg: 32 });
+  const cv = findEdge(cyl, d => Math.abs(d.y) > 1e-9 && Math.hypot(d.x, d.z) < 1e-9);
+  const rc = edit.edgeRing(cyl, cv);
+  eq('★ 32 段圓柱的垂直邊繞出 32 條 ring', rc.hes.length, 32);
+  ok('　　閉環', rc.closed);
+
+  const ch = findEdge(cyl, d => Math.hypot(d.x, d.z) > 1e-9 && Math.abs(d.y) < 1e-9);
+  const rh = edit.edgeRing(cyl, ch);
+  eq('★ 水平邊只繞到 2 條就停（撞到端面的 32 邊形）', rh.hes.length, 2);
+
+  /**
+   * 前提檢查：**沒有 bake 就一步都走不了。**
+   * 參數體借的是 three.js 的三角形，16 段圓柱是 64 個三角形、0 個四邊形。
+   */
+  const raw = buildPrim('cylinder', { r: 25, h: 60, seg: 16 });
+  raw.computeNormals();
+  eq('★★ 沒 bake 的 16 段圓柱有幾個四邊形',
+     raw.faces.filter(f => raw.faceVerts(f).length === 4).length, 0);
+  const rr = edit.edgeRing(raw, [...raw.edges()][0]);
+  eq('　　所以 ring 走一步就停', rr.hes.length, 1);
+}
+
+section('環切：切下去之後的網格');
+
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const v0 = findEdge(box, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9);
+  const vol0 = box.volume(), area0 = box.area();
+  const r = edit.loopCut(box, v0);
+  ok('環切成功', r.ok);
+  const m = r.mesh;
+
+  eq('V 8 → 12', m.verts.length, 12);
+  eq('E 12 → 20', edgeCount(m), 20);
+  eq('F 6 → 10', m.faces.length, 10);
+  eq('★★ χ 仍然是 2', chi(m), 2);
+  ok('　　仍然封閉', m.isClosed());
+  ok('　　結構沒有問題', m.validate().ok);
+
+  /**
+   * 🔴 **這一條是環切最重要的斷言。**
+   * 環切只加線、不動任何既有頂點的位置 —— 所以體積與面積
+   * **必須精確不變**。那是可以對答案的量（鐵律三）。
+   */
+  rel('★★ 體積精確不變', m.volume(), vol0);
+  rel('★★ 面積精確不變', m.area(), area0);
+
+  /** ⭐ 四個「拆掉重建」的工具裡，只有環切不產生孤點 —— 它只加不減 */
+  eq('★ 孤點 0 個（只加不減）', r.orphans, 0);
+  eq('新切出來的邊 4 條', r.newEdges.length, 4);
+  eq('　　而且全部標成 hard', [...m.edges()].filter(he => he.hard).length, 4);
+
+  /**
+   * 🔴 **四個出口都要通，少一個環切就是一顆按了沒反應的按鈕。**
+   */
+  eq('★★ 出口一：新的邊點得到（isMarkable 對 hard 放行）',
+     [...m.edges()].filter(he => he.hard && seam.isMarkable(m, he)).length, 4);
+
+  const rid = new Set();
+  for (const f of m.faces) rid.add(edit.regionOf(m, f).rid);
+  eq('★★ 出口二：共面區域被切開了（6 → 10）', rid.size, 10);
+  eq('★★ 出口三：點半塊側面只選到那半塊',
+     edit.regionOf(m, m.faces[0]).faces.length, 1);
+  ok('★★ 出口四：再跑一次併面不會把切線併回去',
+     !edit.mergeCoplanarFaces(m).ok);
+
+  /** 出口五：存讀檔。不存的話開檔之後切線就沒了，而形狀還在 */
+  const round = Mesh.fromJSON(JSON.parse(JSON.stringify(m.toJSON())));
+  eq('★ 出口五：存檔再開，hard 邊還在',
+     [...round.edges()].filter(he => he.hard).length, 4);
+}
+
+{
+  /**
+   * 🔴 **被切成兩半的邊要繼承標記。**
+   * 不做的話 `1-3` 被切成 `1-8` 與 `8-3`，索引配對一定落空，
+   * 而**使用者標的 CUT 會安靜消失**（實測切完 CUT 0 條）。
+   */
+  const m0 = baked('box', { w: 60, d: 45, h: 40 });
+  const t = findEdge(m0, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9);
+  m0.setRole(t, EDGE_ROLE.CUT);
+  m0.setSmooth(t, true);
+  const r2 = edit.loopCut(m0, findEdge(m0, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9), { cuts: 2 });
+  eq('★★ 標了 CUT 的邊切 2 刀之後，三段都還是 CUT',
+     [...r2.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 3);
+  eq('★★ smooth 也一樣三段都繼承',
+     [...r2.mesh.edges()].filter(he => he.smooth).length, 3);
+}
+
+{
+  /** 多刀：n 刀就是 n+1 片，切點取 i/(n+1)。形狀一樣不能變 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const pick = () => findEdge(box, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9);
+  for (const [n, V, E, F] of [[1, 12, 20, 10], [2, 16, 28, 14], [3, 20, 36, 18]]) {
+    const r = edit.loopCut(box, pick(), { cuts: n });
+    eq(`${n} 刀 → V${V} E${E} F${F}`,
+       `${r.mesh.verts.length}/${edgeCount(r.mesh)}/${r.mesh.faces.length}`, `${V}/${E}/${F}`);
+    eq(`　　χ 仍是 2`, chi(r.mesh), 2);
+    rel(`　　體積精確不變`, r.mesh.volume(), 108000);
+  }
+  /** 切點位置：1 刀在中點 → 新頂點的 z 必須剛好在正中間 */
+  const one = edit.loopCut(box, pick(), { cuts: 1 });
+  const zs = one.mesh.verts.map(v => v.p.z);
+  near('★ 一刀切在正中間', zs.slice(8).reduce((a, b) => a + b, 0) / 4,
+       (Math.max(...zs) + Math.min(...zs)) / 2, 1e-9);
+}
+
+{
+  /**
+   * 半條 ring：撞到不是四邊形的面就停，那個面**只插點、不切開**。
+   * 不插的話會變成 T 型接點（一邊一條邊、另一邊兩條）。
+   */
+  const cyl = baked('cylinder', { r: 25, h: 60, seg: 32 });
+  const vol0 = cyl.volume();
+  const ch = findEdge(cyl, d => Math.hypot(d.x, d.z) > 1e-9 && Math.abs(d.y) < 1e-9);
+  const r = edit.loopCut(cyl, ch);
+  ok('★ 半條 ring 也切得下去', r.ok);
+  eq('　　切開 1 個四邊形、2 個端面只插點', `${r.split}/${r.pierced}`, '1/2');
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  eq('★ 端面從 32 邊形變成 33 邊形',
+     r.mesh.faces.filter(f => r.mesh.faceVerts(f).length === 33).length, 2);
+
+  /** 圓柱的垂直邊：整整一圈 32 條 */
+  const cv = findEdge(cyl, d => Math.abs(d.y) > 1e-9 && Math.hypot(d.x, d.z) < 1e-9);
+  const rv = edit.loopCut(cyl, cv);
+  eq('★ 圓柱垂直邊環切：V64→96 E96→160 F34→66',
+     `${rv.mesh.verts.length}/${edgeCount(rv.mesh)}/${rv.mesh.faces.length}`, '96/160/66');
+  eq('　　χ 仍是 2', chi(rv.mesh), 2);
+  rel('★★ 體積精確不變', rv.mesh.volume(), vol0);
+}
+
+{
+  /**
+   * 🔴 **展開不可以被影響。**
+   * `hard` 讓 `planarRegions()` 斷開，而展開有沒有用到它是關鍵風險 ——
+   * 實查是沒有（`flatten.js` 從頭到尾沒有 `planarRegions`），
+   * 這一條把它釘成機械斷言，日後誰改了就會被叫出來。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const rule = makeRule('acrylic', 0.3);
+  const before = unfoldMesh(box, rule);
+  const r = edit.loopCut(box,
+    findEdge(box, d => Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9));
+  const after = unfoldMesh(r.mesh, rule);
+  eq('★★ 環切前後展開片數一樣', after.pieces.length, before.pieces.length);
+  eq('　　警告數也一樣', after.warnings.length, before.warnings.length);
+}
+
+section('邊上的標記：每一樣都要活過每一條「拆掉重建」的路');
+
+/**
+ * 🔴 **這一組是機械斷言，而且會自動涵蓋日後新增的標記。**
+ *
+ * 計數是照 `mesh.marksOf()` **回傳的欄位自動展開**的 ——
+ * 誰在 `marksOf()` 加了第四個標記，這一組測試會立刻開始檢查它，
+ * 不必有人記得回來補測試。
+ *
+ * ── 為什麼非有這一組不可 ────────────────────────────────
+ * 同一個病已經發作兩次，兩次都是「加了新標記，但忘了某一條搬移的路」：
+ *   · 2026-08-23 `smooth`：展開圖從 5 處折彎變成 45 處
+ *   · 2026-08-24 `hard`：**按一次「壓平」，環切的線 48 條全部歸零**
+ *     （kang 實測抓到的 —— 沙箱的測試當時只驗了「併不動」那條路，
+ *     　沒有驗「真的併下去」那條）
+ * 兩次的症狀都一樣：**東西安靜地不見了，而形狀完全正常。**
+ */
+function markCount(m) {
+  const out = {};
+  for (const he of m.edges()) {
+    const marks = m.marksOf(he);
+    for (const [k, v] of Object.entries(marks)) {
+      const on = (k === 'role') ? (v !== EDGE_ROLE.FREE) : !!v;
+      out[k] = (out[k] || 0) + (on ? 1 : 0);
+    }
+  }
+  return out;
+}
+/**
+ * 🔴 **逐條邊比對，不比總數。**
+ *
+ * ⚠ **「總數一樣」是錯的斷言** —— 併面會把兩個面之間那條邊**真的併掉**，
+ * 那條邊上的 `role` 跟著消失是**對的**（邊都不在了）。
+ * 拿總數去比會把正確行為報成失敗（第一版就是這樣，`role` 104→103）。
+ *
+ * 正確的斷言是：**還活著的那些邊，身上的標記一樣都不能少。**
+ * 比對的欄位照 `marksOf()` 自動展開，日後加第四個標記會自動被涵蓋。
+ */
+function marksSurvive(name, src, dst, remap) {
+  const si = src._vertIndex(), di = dst._vertIndex();
+  const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+  const to = i => (remap ? remap.get(i) : i);
+
+  const have = new Map();
+  for (const he of dst.edges()) {
+    have.set(key(di.get(he.v.id), di.get(he.to.id)), dst.marksOf(he));
+  }
+
+  const lost = {};
+  let gone = 0, kept = 0;
+  for (const he of src.edges()) {
+    const m = src.marksOf(he);
+    if (Mesh.marksEmpty(m)) continue;
+    const a = to(si.get(he.v.id)), b = to(si.get(he.to.id));
+    if (a === undefined || b === undefined) { gone++; continue; }
+    const got = have.get(key(a, b));
+    if (!got) { gone++; continue; }          // 這條邊本身被併掉了 —— 合法
+    kept++;
+    for (const [k, v] of Object.entries(m)) {
+      const on = (k === 'role') ? (v !== EDGE_ROLE.FREE) : !!v;
+      const now = (k === 'role') ? (got[k] !== EDGE_ROLE.FREE) : !!got[k];
+      if (on && !now) lost[k] = (lost[k] || 0) + 1;
+    }
+  }
+  const bad = Object.keys(lost);
+  report(bad.length === 0, name,
+    bad.length ? '掉了 ' + bad.map(k => `${k} ${lost[k]} 條`).join('、')
+               : `${kept} 條還在的邊全部保住${gone ? `（另有 ${gone} 條邊本身被併掉了）` : ''}`,
+    '一樣都不少');
+}
+
+{
+  /** 準備一個三樣標記都有的網格：baked 圓柱 → 環切 3 刀（hard）→ 手動標 CUT 與 smooth */
+  const base = (() => {
+    const b = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 60, seg: 16 }));
+    const m0 = b.ok ? b.mesh : buildPrim('cylinder', { r: 25, h: 60, seg: 16 });
+    m0.computeNormals();
+    const cv = [...m0.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.y) > 1e-9 && Math.hypot(d.x, d.z) < 1e-9;
+    });
+    const m = edit.loopCut(m0, cv, { cuts: 3 }).mesh;
+    m.computeNormals();
+    const pick = [...m.edges()].filter(he => !he.hard).slice(0, 5);
+    m.setRole(pick[0], EDGE_ROLE.CUT);
+    m.setRole(pick[1], EDGE_ROLE.CUT);
+    m.setSmooth(pick[2], true);
+    return m;
+  })();
+
+  const want = markCount(base);
+  ok(`準備好的網格三樣標記都有（${Object.entries(want).map(([k, v]) => k + ' ' + v).join('、')}）`,
+     Object.values(want).every(v => v > 0));
+
+  marksSurvive('★ clone() 之後每一樣都還在', base, base.clone());
+  marksSurvive('★ transformed() 之後每一樣都還在', base,
+               base.transformed(new THREE.Matrix4().makeTranslation(1, 2, 3)));
+  marksSurvive('★ 存檔再開之後每一樣都還在', base,
+               Mesh.fromJSON(JSON.parse(JSON.stringify(base.toJSON()))));
+
+  /**
+   * 🔴 **kang 2026-08-24 實測抓到的那一條：壓平 → 併面。**
+   * 壓平會跑一次併面，而併面走 `copyMarksThroughRemap()` ——
+   * 那一支原本手寫成「搬 role 與 smooth」，`hard` 48 條全部歸零。
+   * ⚠ 一定要挑**真的不共面**的兩個面，不然併不動、這條路根本沒走到。
+   */
+  {
+    const m = base.clone();
+    m.computeNormals();
+    const side = m.faces.filter(f => Math.abs(f.normal.y) < 0.01);
+    const a = side[0];
+    const b = side.find(f => f !== a && f.normal.dot(a.normal) < 0.999
+      && m.faceVerts(f).filter(v => m.faceVerts(a).includes(v)).length === 2);
+    const fr = edit.flattenElements(m, [a, b].map(face => ({ kind: 'face', face })));
+    ok('　　（前置）兩個面真的不共面，壓平有動到東西', fr.ok && fr.before > 0.1);
+    edit.refreshAfterEdit(m);
+    const g = edit.mergeCoplanarFaces(m);
+    ok('　　（前置）而且併面真的併下去了，不是併不動', g.ok && g.after < g.before);
+    marksSurvive('★★ 壓平 → 併面之後每一樣都還在（kang 實測抓到的那條）',
+                 m, g.mesh, g.remap);
+  }
+
+  /** 擠出：蓋子內部的邊索引整組換掉，是另一條手寫的搬移路徑 */
+  {
+    const m = base.clone();
+    m.computeNormals();
+    const cap = m.faces.find(f => f.normal.y > 0.99);
+    const r = edit.extrudeFace(m, cap, 5);
+    ok('　　（前置）擠出成功', r.ok);
+    marksSurvive('★ 擠出之後，原網格上還在的邊每一樣都還在', m, r.mesh);
+  }
+
+  /** 環切自己：一條被切成 n+1 段，每一段都繼承 → 數量會變多，但不能變少 */
+  {
+    const m = base.clone();
+    m.computeNormals();
+    const cv = [...m.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.y) > 1e-9 && Math.hypot(d.x, d.z) < 1e-9 && !he.hard;
+    });
+    const r = edit.loopCut(m, cv, { cuts: 1 });
+    const b0 = markCount(m), a0 = markCount(r.mesh);
+    ok('★ 再環切一次，沒有任何一樣標記變少',
+       Object.keys(b0).every(k => a0[k] >= b0[k]),
+       Object.keys(b0).map(k => `${k} ${b0[k]}→${a0[k]}`).join('、'));
+  }
+}
+
+{
+  /** 擋下來的情形：邊界邊不能當起點 */
+  const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+  plate.computeNormals();
+  const bnd = [...plate.edges()].find(he => !he.face || !he.twin || !he.twin.face);
+  const r = edit.loopCut(plate, bnd);
+  ok('外輪廓的邊擋下來並說原因', !r.ok && /外輪廓/.test(r.reason || ''));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
