@@ -5527,7 +5527,7 @@ function findEdge(m, pick) {
   ok('　　而且是繞回來的閉環', r.closed);
 
   /**
-   * 🔴 我們的頂點**全是 3 價** —— Blender 的 edge-loop walker（要四價）
+   * 🔴 方塊與圓柱的頂點**全是 3 價** —— Blender 的 edge-loop walker（要四價）
    * 在上面一步都走不了。**環切用的是 edge ring 不是 edge loop**，
    * 這一項是那個區別的機械斷言，不要再把兩者搞混。
    */
@@ -5956,7 +5956,8 @@ section('導角（Bevel，單段）：內縮 ＋ 加面');
  * 原本都寫著「角落斜接完全沒驗」。
  *
  * 結論（第 11 節）：**「不唯一」只對多段導角（圓角）成立**；
- * 單段（斜切）在 **3 價頂點**上角落是唯一的，而我們的頂點全是 3 價。
+ * 單段（斜切）在 **3 價頂點**上角落是唯一的。
+ * ⚠ 而「我們的頂點全是 3 價」**是錯的** —— 圓錐有 4～6 價的，見底下那一組。
  */
 {
   const baked = (type, params) => {
@@ -6057,6 +6058,114 @@ section('導角（Bevel，單段）：內縮 ＋ 加面');
     /** 擋下來的情形 */
     ok('沒選邊擋下來', !edit.bevelEdges(box, [], 5).ok);
     ok('寬度 0 擋下來', !edit.bevelEdges(box, [[...box.edges()][0]], 0).ok);
+  }
+
+  /**
+   * 🔴 **kang 2026-08-25 實測抓到的：一條一條導會做出奇怪的形狀。**
+   *
+   * 病因**不是**「一次導幾條」，是**偏移的方向算錯了**：
+   * 只有一條邊被導時，旁邊那個面的角要**沿著「沒被導的那條邊」滑**，
+   * 才會留在鄰居的平面上。原本寫成「垂直於被導的邊偏移」——
+   * **方塊的兩條邊互相垂直，兩者剛好同一點**，所以第一刀看起來對，
+   * 一旦形狀不再是直角就分岔，症狀是**吸收它的那個面變成非平面**，
+   * 三角化之後畫面上出現奇怪的形狀。
+   */
+  {
+    const seq = [];
+    let cur = box;
+    const dirs = [d => Math.abs(d.x) > 50, d => Math.abs(d.y) > 30, d => Math.abs(d.z) > 35];
+    for (let i = 0; i < 3; i++) {
+      const e = [...cur.edges()].find(he => {
+        const d = he.to.p.clone().sub(he.v.p);
+        return dirs[i](d) && he.face && he.twin && he.twin.face;
+      });
+      const r = edit.bevelEdges(cur, [e], 5);
+      if (!r.ok) break;
+      cur = r.mesh;
+      seq.push(edit.nonPlanarFaces(cur).length);
+    }
+    eq('★★ 一條一條導三次，一個非平面的面都不該有', JSON.stringify(seq), '[0,0,0]');
+    ok('　　而且每一步都封閉、χ 仍是 2',
+       cur.isClosed() && chiOf(cur) === 2, `χ=${chiOf(cur)} closed=${cur.isClosed()}`);
+
+    /**
+     * 🔴 **順序無關**：一條一條導三次，要跟一次導三條得到同一個東西。
+     * 那是這個 bug 壞掉時第一個會破的性質。
+     */
+    const at1 = (() => {
+      const es = dirs.map(f => [...box.edges()].find(he => {
+        const d = he.to.p.clone().sub(he.v.p);
+        return f(d) && he.face && he.twin && he.twin.face;
+      }));
+      return edit.bevelEdges(box, es, 5);
+    })();
+    rel('★★ 一條一條 ＝ 一次全導（體積完全一樣）', cur.volume(), at1.mesh.volume());
+    eq('　　面數也一樣', cur.faces.length, at1.mesh.faces.length);
+    eq('　　兩邊都是 χ2 封閉',
+       `${chiOf(cur)}/${cur.isClosed()}　${chiOf(at1.mesh)}/${at1.mesh.isClosed()}`,
+       '2/true　2/true');
+    /**
+     * ⚠ **頂點數可以不一樣，那是正常的。**
+     * 一條一條導會在角落留下**多餘但無害的頂點**（實測 14 vs 12，
+     * 邊 21 vs 19，而面數與體積完全相同、χ 都是 2）——
+     * 幾何一模一樣，只是網格沒那麼精簡。
+     * 🔴 **所以這裡驗幾何，不驗頂點數** —— 拿頂點數去比會把正確的結果報成失敗。
+     */
+    ok('　　（頂點數可以不同，那是多餘但無害的點）',
+       cur.verts.length >= at1.mesh.verts.length,
+       `一條一條 ${cur.verts.length} 個、一次全導 ${at1.mesh.verts.length} 個`);
+  }
+
+  {
+    /** 非直角也要成立（圓角方塊的垂直邊已經是圓角，跟頂面不是 90 度）*/
+    const rb = baked('roundBox', { w: 60, d: 45, h: 40, r: 8, seg: 4 });
+    let cur = rb, okAll = true;
+    for (let i = 0; i < 3; i++) {
+      const e = [...cur.edges()].filter(he => {
+        const d = he.to.p.clone().sub(he.v.p);
+        return Math.abs(d.y) < 1e-6 && he.face && he.twin && he.twin.face;
+      })[i * 2];
+      if (!e) break;
+      const r = edit.bevelEdges(cur, [e], 2);
+      if (!r.ok) { okAll = false; break; }
+      cur = r.mesh;
+      if (!cur.isClosed() || chiOf(cur) !== 2 || edit.nonPlanarFaces(cur).length) okAll = false;
+    }
+    ok('★★ 非直角的形狀（圓角方塊）一條一條導三次，全程封閉、χ2、無非平面', okAll);
+  }
+
+  {
+    /**
+     * 🔴 **「我們的頂點全是 3 價」那句話是錯的，而角落規則建在它上面。**
+     *
+     * 實測圓錐 seg12 的價數分布是 **{3:10, 4:2, 5:2, 6:2}** ——
+     * 那句話只對**方塊與圓柱**成立，被當成了全域事實。
+     * 4 價以上只導一部分的邊，角落會留一個三角形的洞
+     * （實測導一條邊：χ 1、邊界半邊 3 條）。
+     *
+     * 通用的角落規則**試了三次都沒解出來**，所以先擋下來 ——
+     * **做出一個破洞的網格比擋下來糟得多**（坑第 11 條）。
+     */
+    const cone = baked('cone', { rTop: 0, rBottom: 30, h: 70, seg: 12 });
+    const val = {};
+    for (const v of cone.verts) {
+      const n = cone.vertOutgoing(v).length;
+      val[n] = (val[n] || 0) + 1;
+    }
+    ok('★★ （前置）圓錐真的有 4 價以上的頂點 —— 「全是 3 價」是錯的',
+       Object.keys(val).some(k => +k > 3), JSON.stringify(val));
+
+    const e = [...cone.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.y) < 1e-6 && he.face && he.twin && he.twin.face;
+    });
+    const r = edit.bevelEdges(cone, [e], 3);
+    ok('★★ 4 價以上只導一部分 → 擋下來並說原因（不要做出破洞的網格）',
+       !r.ok && /補不起來/.test(r.reason || ''), r.reason);
+
+    /** ✅ 但頂點被「全部導到」時不受影響 —— 那時沒有面需要吸收 */
+    const allOk = edit.bevelEdges(box, [...box.edges()], 5);
+    ok('★ 方塊 12 條全導照樣可以（沒有被這道防護誤擋）', allOk.ok);
   }
 }
 

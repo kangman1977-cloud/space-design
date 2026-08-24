@@ -1009,7 +1009,9 @@ function copyMarksThroughRemap(src, dst, remap) {
  * **edge loop**：在**四價頂點**上走「中間那條邊」，選出一整圈邊。
  * **edge ring**：穿過**四邊形**走「對面那條邊」，環切用的是這個。
  *
- * 🔴 **我們的網格頂點全是 3 價**（實測：方塊、32 段圓柱都是），
+ * 🔴 **方塊與 32 段圓柱的頂點全是 3 價**（實測），
+ * ⚠ **但那不是全域事實** —— 圓錐 seg12 的價數是 {3:10, 4:2, 5:2, 6:2}
+ * （2026-08-25 導正，原本這裡寫的是「我們的網格頂點全是 3 價」）。
  * 所以 Blender 的 edge-loop walker 在上面**一步都走不了**。
  * 而 ring walker 走得非常好 —— 實測 32 段圓柱的 32 條垂直邊剛好繞成一個閉環。
  *
@@ -1434,7 +1436,10 @@ export function insetFaces(mesh, face, w, tolDeg = 0.5) {
  * Blender 為角落開了 Miter（Sharp／Patch／Arc）三個選項，**那是因為
  * 多段導角（圓角）** —— 角落要用弧面接，接法真的有好幾種。
  * **但單段（斜切）在 3 價頂點上，角落是唯一的**：就是那幾個偏移點圍成的
- * 多邊形，沒得選。而**我們的頂點全是 3 價**（已釘成回歸測試）。
+ * 多邊形，沒得選。
+ * ⚠ **而「我們的頂點全是 3 價」是錯的** —— 方塊與圓柱是，圓錐不是
+ * （seg12 實測 {3:10, 4:2, 5:2, 6:2}）。**4 價以上的情形被擋下來**，
+ * 見函式開頭那道防護。
  * → 完整推導與四個案例的數字見 `外部參考-Blender編輯.md` **第 11 節**。
  *
  * ── 🔴 三個「推理會錯、實測才對」的地方（每一個都會讓網格壞掉）──
@@ -1483,6 +1488,49 @@ export function bevelEdges(mesh, hes, w) {
   }
   const isCut = (a, b) => cut.has(kOf(vi.get(a.id), vi.get(b.id)));
 
+  /**
+   * 🔴 **擋下來：4 價以上的頂點只導一部分的邊，角落會留一個洞。**
+   *
+   * ── 這一條是 kang 2026-08-25 實測逼出來的 ────────────────
+   * 日誌與第 11 節都寫著「**我們的頂點全是 3 價**」，而角落規則就建在那句話上：
+   * 3 價時，那個沒被導到的面會**同時吸收兩邊的代表點**，自己把縫補起來。
+   *
+   * **但那句話是錯的。** 圓錐 seg12 的頂點價數實測是
+   * **{3 價 10 個、4 價 2 個、5 價 2 個、6 價 2 個}** ——
+   * 它只對**方塊與圓柱**成立，被當成了全域事實。
+   *
+   * 4 價以上時兩個吸收面各自只拿到一邊，中間留下一個三角形的洞
+   * （實測圓錐導一條邊：χ 1、邊界半邊 3 條）。
+   *
+   * ⚠ **通用的角落規則試了三次都沒解出來**（見 `外部參考-Blender編輯.md`
+   * 第 11.7 節），所以先擋下來 —— **做出一個破洞的網格比擋下來糟得多**
+   * （坑第 11 條：沉默地退回是最糟的做法，所以要擋而且要講清楚原因）。
+   *
+   * ✅ **不受影響的**：頂點全被導到時（例如 12 條邊全導）照樣可以，
+   * 因為那時沒有面需要吸收。方塊、圓柱、圓角方塊都在範圍內。
+   */
+  {
+    const bad = [];
+    for (const V of mesh.verts) {
+      const around = mesh.vertOutgoing(V).filter(he => he.face);
+      if (around.length <= 3) continue;                       // 3 價以下沒問題
+      const touched = around.some(he => cut.has(kOf(vi.get(V.id), vi.get(he.to.id))));
+      if (!touched) continue;                                 // 這個頂點沒被碰到
+      const allBev = around.every(he =>
+        cut.has(kOf(vi.get(V.id), vi.get(he.to.id))));
+      if (!allBev) bad.push(around.length);
+    }
+    if (bad.length) {
+      return {
+        ok: false,
+        reason: `有 ${bad.length} 個頂點連著 ${Math.min(...bad)} 條以上的邊，`
+              + `而你只導了其中一部分 —— 那個角落現在補不起來（會留一個洞）。`
+              + `把那個頂點連著的邊「全部」一起選，或改導別的邊。`
+              + `〔方塊與圓柱的頂點都是 3 條，不會遇到這個〕`
+      };
+    }
+  }
+
   /** 面 f 的迴圈裡，頂點 V 那一格的 {cur, prv} */
   const at = (f, V) => {
     const loop = mesh.faceLoop(f);
@@ -1521,7 +1569,36 @@ export function bevelEdges(mesh, hes, w) {
           p = V.p.clone().addScaledVector(bis, w / Math.max(cos, 0.2));
         }
       } else {
-        p = V.p.clone().addScaledVector(inward(bNext ? c.cur : c.prv), w);
+        /**
+         * 🔴 **只有一條邊被導時，角要「沿著沒被導的那條邊滑」，
+         * 不是「垂直於被導的邊偏移」。**
+         *
+         * ── 為什麼（kang 2026-08-25 實測抓到）────────────────
+         * 斜切面會**橫過**旁邊那個面的角，而旁邊那個面要把這個點吸收進去。
+         * 點要留在**它的**平面上，唯一的辦法是讓它待在兩個面的交線上 ——
+         * 也就是**那條沒被導的邊**。
+         *
+         * ⚠ **方塊把這個錯誤藏起來了**：方塊的兩條邊互相垂直，
+         * 「垂直於 A 偏移 w」跟「沿 B 滑 w」剛好是同一點。
+         * 一旦不是直角就分岔 —— 症狀是**吸收它的那個面變成非平面**，
+         * 三角化之後畫面上出現奇怪的形狀。
+         * 〔實測：不相鄰的三條邊一條一條導，非平面面 0 → 1 → 2〕
+         *
+         * 距離換算：沿 B 滑 t，離 A 的垂直距離是 `t·sin(A,B 夾角)`，
+         * 所以 `t = w / sin`。夾角趨近 0 或 180° 時 t 會爆掉，
+         * 沿用 `shell()` 那條上限 5 倍的老規矩。
+         */
+        const bevHe = bNext ? c.cur : c.prv;
+        const oppHe = bNext ? c.prv : c.cur;
+        const dA = new THREE.Vector3()
+          .subVectors(bevHe.to.p, bevHe.v.p).normalize()
+          .multiplyScalar(bNext ? 1 : -1);                  // 一律從 V 出發
+        const dB = (oppHe === c.cur)
+          ? new THREE.Vector3().subVectors(c.cur.to.p, V.p).normalize()
+          : new THREE.Vector3().subVectors(c.prv.v.p, V.p).normalize();
+        const sin = new THREE.Vector3().crossVectors(dA, dB).length();
+        if (sin < 0.2) clamped++;
+        p = V.p.clone().addScaledVector(dB, w / Math.max(sin, 0.2));
       }
       R.set(`${f.id}:${V.id}`, pts.length);
       pts.push(p);
@@ -1600,7 +1677,19 @@ export function bevelEdges(mesh, hes, w) {
     walls++;
   }
 
-  // ── ④ 角落面：只有當這個頂點周圍每一個面都被導到時才需要（V 沒人用了）──
+  /**
+   * ── ④ 角落面：頂點周圍**每一個**面都被導到時才補 ──────────
+   *
+   * 那時 V 沒有任何面在用了，中間會空一個洞，由這些代表點圍起來。
+   * 只導一部分時**不補** —— 3 價的話，那個沒被導到的面會
+   * **同時吸收兩邊的代表點**，自己就把縫補起來了。
+   *
+   * ⚠ **這條規則只對 3 價頂點成立，4 價以上會留一個洞** ——
+   * 所以函式開頭有一道防護把那種情形擋掉（見上方那則說明）。
+   * **通用的角落規則試了三次都沒解出來**，經過見
+   * `外部參考-Blender編輯.md` 第 11.7 節。⛔ 不要憑印象再改這一段，
+   * 先去讀那一節：那裡記了三次分別錯在哪、以及哪些案例會回歸。
+   */
   let corners = 0;
   for (const V of mesh.verts) {
     const around = mesh.vertOutgoing(V).filter(he => he.face);
