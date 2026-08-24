@@ -5685,6 +5685,130 @@ section('環切：切下去之後的網格');
   eq('　　警告數也一樣', after.warnings.length, before.warnings.length);
 }
 
+section('法向：重算外側 ／ 翻面');
+
+/**
+ * 🔴 **這一組守的是「畫面上完全看不出來」的那一類錯。**
+ *
+ * 繞向錯了 three.js 照樣打光、圖看起來完全正常，只有**有號體積**會露餡。
+ * 這個專案已經為它踩過坑第 29 條、導角實測又中一次
+ * （錯的繞向體積 99750、畫面完全正常）。
+ */
+{
+  /** 把面表拿出來，讓測試可以故意做出壞掉的網格 */
+  const rewound = (m, mut) => {
+    const vi = m._vertIndex();
+    const pts = m.verts.map(v => v.p.clone());
+    const fs = m.faces.map((f, i) => mut(m.faceVerts(f).map(v => vi.get(v.id)), i));
+    const x = Mesh.fromFaceList(pts, fs);
+    x.computeNormals();
+    return x;
+  };
+  const box = (() => {
+    const r = edit.mergeCoplanarFaces(buildPrim('box', { w: 60, d: 45, h: 40 }));
+    const m = r.ok ? r.mesh : buildPrim('box', { w: 60, d: 45, h: 40 });
+    m.computeNormals();
+    return m;
+  })();
+
+  /** ① 本來就對 → 什麼都不做，而且要講一句（不能悶著記一步 Undo） */
+  {
+    const r = edit.recalcNormalsOutside(box);
+    ok('★ 本來就對的網格：不動它，而且講出理由',
+       !r.ok && /本來就一致/.test(r.reason || ''), r.reason);
+  }
+
+  /**
+   * ② 整個內外顛倒。
+   * 🔴 **這是最陰險的一種**：`closed=true`、`ok=true`、沒有 issues，
+   * **只有體積是負的**。現有的檢查一個都抓不到。
+   */
+  {
+    const bad = rewound(box, f => f.slice().reverse());
+    const v = bad.validate();
+    ok('★★ （前置）整個顛倒時 closed/ok 都是正常的，只有體積是負的',
+       v.ok && v.closed && bad.volume() < 0, `ok=${v.ok} closed=${v.closed} vol=${bad.volume()}`);
+    const r = edit.recalcNormalsOutside(bad);
+    ok('修得動', r.ok);
+    rel('★★ 體積由負轉正，而且大小完全一樣', r.mesh.volume(), 108000);
+    eq('　　整體翻了 1 組', r.flippedComponents, 1);
+    eq('　　沒有面是「跟鄰居矛盾」', r.fixedInconsistent, 0);
+  }
+
+  /** ③ 只有一個面反 → 相鄰面矛盾。這種 `fromFaceList()` 配不到 twin，會變非流形 */
+  {
+    const bad = rewound(box, (f, i) => (i === 0 ? f.slice().reverse() : f));
+    const v0 = bad.validate();
+    ok('（前置）一個面反掉會變成非流形 ＋ 不封閉',
+       !v0.ok && !v0.closed, `χ=${v0.euler} closed=${v0.closed}`);
+    const r = edit.recalcNormalsOutside(bad);
+    const v1 = r.mesh.validate();
+    ok('★★ 修完之後封閉、χ 回到 2、沒有 issues',
+       v1.ok && v1.closed && v1.euler === 2, `χ=${v1.euler} closed=${v1.closed} ok=${v1.ok}`);
+    rel('★★ 體積回到 108000（原本被算成 72000）', r.mesh.volume(), 108000);
+  }
+
+  /**
+   * ④ 兩個分開的物件一正一反。
+   * 🔴 **總體積剛好是 0**，而 `closed=true ok=true` —— 完全沒有徵兆。
+   * 所以內外一定要**逐個連通元件**判斷，不能看整體體積。
+   */
+  {
+    const b = (() => {
+      const r = edit.mergeCoplanarFaces(buildPrim('box', { w: 20, d: 20, h: 20 }));
+      return r.ok ? r.mesh : buildPrim('box', { w: 20, d: 20, h: 20 });
+    })();
+    b.computeNormals();
+    const vi = b._vertIndex(), n = b.verts.length;
+    const pts = [...b.verts.map(v => v.p.clone()),
+                 ...b.verts.map(v => v.p.clone().add(new THREE.Vector3(50, 0, 0)))];
+    const f1 = b.faces.map(f => b.faceVerts(f).map(v => vi.get(v.id)));
+    const two = Mesh.fromFaceList(pts, [...f1, ...f1.map(f => f.map(i => i + n).reverse())]);
+    two.computeNormals();
+    const v = two.validate();
+    ok('★★ （前置）兩個一正一反：ok/closed 正常，總體積剛好 0',
+       v.ok && v.closed && Math.abs(two.volume()) < 1e-9, `vol=${two.volume()}`);
+    const r = edit.recalcNormalsOutside(two);
+    eq('★ 認出 2 個連通元件', r.components, 2);
+    eq('　　只翻了其中 1 組', r.flippedComponents, 1);
+    rel('★★ 修完體積 ＝ 兩個 20³ 相加', r.mesh.volume(), 16000);
+  }
+
+  /**
+   * ⑤ 開放的網格：**不猜內外，只做一致化，而且要講明白。**
+   * 「外側」對一張沒有厚度的殼在數學上沒有定義 ——
+   * 實測平板體積 0、折板 44929（一個沒有意義的數字）。
+   * 硬猜有一半機率猜反，而猜反的後果跟原本的病一樣嚴重。
+   */
+  {
+    const plate = buildPrim('plate', { w: 100, d: 60 }, 0.2);
+    plate.computeNormals();
+    const r = edit.recalcNormalsOutside(plate);
+    ok('★★ 開放的網格不去猜外側，而且講出理由',
+       !r.ok && r.openComponents === 1 && /沒有定義/.test(r.reason || ''), r.reason);
+  }
+
+  /** ⑥ 翻面：翻兩次要回到原點，而且標記一樣都不能少 */
+  {
+    const r1 = edit.flipNormals(box);
+    rel('★ 翻一次體積變號', r1.mesh.volume(), -108000);
+    rel('★ 再翻一次回到原點', edit.flipNormals(r1.mesh).mesh.volume(), 108000);
+    eq('　　面數不變', r1.mesh.faces.length, box.faces.length);
+
+    /** 翻繞向只改「面裡頂點的順序」，頂點索引沒變 → 標記照樣對得上 */
+    const m = box.clone();
+    const e0 = [...m.edges()][0];
+    m.setRole(e0, EDGE_ROLE.CUT);
+    m.setSmooth(e0, true);
+    const cv = [...m.edges()].find(he => {
+      const d = he.to.p.clone().sub(he.v.p);
+      return Math.abs(d.z) > 1e-9 && Math.hypot(d.x, d.y) < 1e-9;
+    });
+    const withHard = edit.loopCut(m, cv).mesh;
+    marksSurvive('★★ 翻面之後每一樣標記都還在', withHard, edit.flipNormals(withHard).mesh);
+  }
+}
+
 section('邊上的標記：每一樣都要活過每一條「拆掉重建」的路');
 
 /**

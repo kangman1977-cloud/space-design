@@ -408,6 +408,21 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="loopCut" disabled title="環切：選一條邊，沿著它繞一整圈加上新的線（方塊繞 4 條、32 段圓柱繞 32 條）。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做斜面、收腰、階梯">環切</button>
       <input id="loopCutN" type="number" min="1" max="32" step="1" value="1"
              title="刀數：一次要切幾刀。切點平均分佈（1 刀在中點、2 刀在 1/3 與 2/3）">
+      <!--
+        選一圈：跟環切共用同一支 edgeRing()，只是不切、只選。
+        環切已經把走訪寫好了，這顆按鈕幾乎是免費的。
+      -->
+      <button id="selRing" disabled title="選一圈：從選到的那條邊繞出一整圈邊，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個">選一圈</button>
+    </div>
+
+    <!--
+      法向：⚠ 這一組跟「編輯」分開，因為它**不需要進編輯模式**——
+      選到物件就能按。它修的是整個物件，不是某一個元素。
+    -->
+    <div class="grp" id="gNormal">
+      <span class="lbl">法向</span>
+      <button id="fixNormals" disabled title="修法向：把面的朝向重算成「一致而且朝外」。⚠ 繞向錯了畫面上完全看不出來，但 STL 送去列印會被判成非流形。3D 列印面板報「法向朝內」時就按這個">修法向</button>
+      <button id="flipNormals" disabled title="翻面：把整個物件的面朝向全部翻過來。⚠ 板件那種沒有厚度的殼，「外側」在數學上沒有定義，「修法向」不會去猜——那時候用這顆自己決定">翻面</button>
     </div>
 
     <!--

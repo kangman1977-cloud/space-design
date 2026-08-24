@@ -1260,6 +1260,222 @@ export function loopCut(mesh, he0, opt = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  法向：重算外側 ／ 翻面
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **把整個網格的面繞向重算成「一致而且朝外」。**（＝ Blender 的 Recalculate Outside）
+ *
+ * ── 為什麼這一支比路線圖上任何一項都急 ──────────────────
+ * **繞向錯了畫面上完全看不出來**（three.js 預設雙面打光），而它會讓
+ * STL 送去列印時被切片軟體判成非流形。這個專案已經為它踩過坑第 29 條，
+ * 導角實測又中一次（錯的繞向體積 99750、畫面完全正常）。
+ *
+ * 🔴 **而 `out/stl.js` 早就在報這件事**（「法向朝內（體積算出來是負的），
+ * 印出來會內外相反」）—— **卻沒有給任何修法**。
+ * 講了問題卻沒有出路，那是坑第 11 條的近親。這一支就是那個出路。
+ *
+ * ── 兩種完全不同的病，一起治 ────────────────────────────
+ *
+ * | 病 | 現有的檢查抓不抓得到 |
+ * |---|---|
+ * | **① 相鄰面互相矛盾**（同一條邊在兩個面裡同方向）| ✅ 抓得到 —— `fromFaceList()` 會配不到 twin，變成非流形 ＋ 不封閉 |
+ * | **② 一致但整個內外顛倒** | ❌ **完全抓不到** —— `closed=true`、`ok=true`、沒有 issues，**只有體積是負的** |
+ *
+ * ⚠ 實測還有一個更陰險的：**兩個分開的物件一正一反，總體積剛好 0**，
+ * 而 `closed=true ok=true`。所以**內外要逐個連通元件各自判斷**，不能看總體積。
+ *
+ * ── 做法 ────────────────────────────────────────────
+ * 1. 用**無向邊**建鄰接表 —— 這是關鍵：繞向不一致時 twin 根本沒配上，
+ *    走半邊結構走不過去，只有無向邊配得起來
+ * 2. 泛洪，讓每個連通元件內部繞向一致（同方向 ＝ 矛盾 ＝ 要翻）
+ * 3. **每個元件各自**算有號體積，負的就整組翻過來
+ *
+ * ⚠ **開放的元件（板件、被刪過面的）不判內外，只做一致化。**
+ * 「外側」對一張沒有厚度的曲面在數學上沒有定義 ——
+ * 實測平板體積 0、折板 44929（一個沒有意義的數字）。
+ * 硬猜會有一半機率猜反，而**猜反的後果跟原本的病一樣嚴重**。
+ * 那種情形要靠使用者自己按「翻面」。
+ *
+ * @param {Mesh} mesh
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh,
+ *            fixedInconsistent:number, flippedComponents:number,
+ *            components:number, openComponents:number, ambiguousEdges:number}}
+ */
+export function recalcNormalsOutside(mesh) {
+  const base = {
+    fixedInconsistent: 0, flippedComponents: 0,
+    components: 0, openComponents: 0, ambiguousEdges: 0
+  };
+  if (!mesh || !mesh.faces.length) {
+    return { ...base, ok: false, reason: '沒有網格可以重算' };
+  }
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+  /**
+   * 🔴 **一定要用無向邊。**
+   * 繞向不一致時 `fromFaceList()` 配不到 twin（它只配 `a→b` 與 `b→a`），
+   * 那兩個面在半邊結構裡是**走不過去的**。而這一支要修的正是那種網格 ——
+   * 所以不能靠 `he.twin`，要自己用無向邊配一次。
+   */
+  const byEdge = new Map();
+  faces.forEach((f, fi) => {
+    for (let i = 0; i < f.length; i++) {
+      const k = kOf(f[i], f[(i + 1) % f.length]);
+      if (!byEdge.has(k)) byEdge.set(k, []);
+      byEdge.get(k).push(fi);
+    }
+  });
+
+  /** 面 fi 上這條無向邊往哪個方向走：+1 ＝ a→b、−1 ＝ b→a、0 ＝ 不在這個面上 */
+  const dirIn = (fi, a, b) => {
+    const f = faces[fi];
+    for (let i = 0; i < f.length; i++) {
+      const x = f[i], y = f[(i + 1) % f.length];
+      if (x === a && y === b) return 1;
+      if (x === b && y === a) return -1;
+    }
+    return 0;
+  };
+
+  const comp = new Array(faces.length).fill(-1);
+  const flip = new Array(faces.length).fill(false);
+  const groups = [];
+  const ambiguous = new Set();
+  let fixedInconsistent = 0;
+
+  for (let seed = 0; seed < faces.length; seed++) {
+    if (comp[seed] !== -1) continue;
+    const id = groups.length;
+    const members = [seed];
+    comp[seed] = id;
+    const stack = [seed];
+
+    while (stack.length) {
+      const fi = stack.pop();
+      const f = faces[fi];
+      for (let i = 0; i < f.length; i++) {
+        const a = f[i], b = f[(i + 1) % f.length];
+        const key = kOf(a, b);
+        const share = byEdge.get(key) || [];
+        /**
+         * 3 個以上的面共用一條邊 ＝ **真的非流形**，不是繞向問題。
+         * 這一支修不了它（「外側」在那種邊上沒有定義），**記下來並回報**，
+         * 不要假裝處理過了。〔查不到就明寫查不到〕
+         */
+        if (share.length > 2) ambiguous.add(key);
+        for (const nb of share) {
+          if (nb === fi || comp[nb] !== -1) continue;
+          // 一致 ＝ 鄰居走反方向。同方向就是矛盾，要把鄰居翻過來。
+          const needFlip = (dirIn(nb, a, b) * (flip[fi] ? -1 : 1)) === 1;
+          comp[nb] = id;
+          flip[nb] = needFlip;
+          if (needFlip) fixedInconsistent++;
+          members.push(nb);
+          stack.push(nb);
+        }
+      }
+    }
+    groups.push(members);
+  }
+
+  const oriented = faces.map((f, i) => (flip[i] ? f.slice().reverse() : f));
+
+  let flippedComponents = 0, openComponents = 0;
+  for (const members of groups) {
+    /**
+     * 這個元件封不封閉：**元件內部**每條邊都剛好被兩個面用到才算。
+     * ⚠ 用元件自己的邊數判斷，不要問 `mesh.isClosed()` —— 那是整個網格的事，
+     * 而「兩個物件其中一個是開放的」時它會回答錯的那一邊。
+     */
+    const count = new Map();
+    for (const fi of members) {
+      const f = oriented[fi];
+      for (let i = 0; i < f.length; i++) {
+        const k = kOf(f[i], f[(i + 1) % f.length]);
+        count.set(k, (count.get(k) || 0) + 1);
+      }
+    }
+    let closed = true;
+    for (const n of count.values()) if (n !== 2) { closed = false; break; }
+    if (!closed) { openComponents++; continue; }   // 開放 → 只做一致化，不猜內外
+
+    /** 有號體積（散度定理）。非凸的面照樣對 —— 有號量會自己抵銷掉多算的部分 */
+    let vol = 0;
+    for (const fi of members) {
+      const f = oriented[fi];
+      for (let i = 2; i < f.length; i++) {
+        const a = points[f[0]], b = points[f[i - 1]], c = points[f[i]];
+        vol += a.dot(new THREE.Vector3().crossVectors(b, c)) / 6;
+      }
+    }
+    if (vol < 0) {
+      for (const fi of members) oriented[fi] = oriented[fi].slice().reverse();
+      flippedComponents++;
+    }
+  }
+
+  const info = {
+    fixedInconsistent, flippedComponents,
+    components: groups.length, openComponents,
+    ambiguousEdges: ambiguous.size
+  };
+
+  /**
+   * ⚠ **本來就是對的就什麼都不要做，而且要講一句。**
+   * 悶著記一步「什麼都沒改」的 Undo，使用者會以為壞掉了（跟壓平同一條）。
+   */
+  if (!fixedInconsistent && !flippedComponents) {
+    const why = [];
+    if (openComponents) {
+      why.push(`有 ${openComponents} 個開放的面（沒有厚度的殼），`
+             + `「外側」對它們沒有定義 —— 方向不對請按「翻面」`);
+    }
+    if (ambiguous.size) why.push(`${ambiguous.size} 條邊被 3 個以上的面共用（真的非流形），這支修不了`);
+    return {
+      ...info, ok: false,
+      reason: why.length ? `法向本來就是一致的。${why.join('；')}`
+                         : '法向本來就一致而且朝外，沒有東西要修'
+    };
+  }
+
+  const out = Mesh.fromFaceList(points, oriented);
+  out.computeNormals();
+  mesh._copyMarksTo(out);
+  return { ...info, ok: true, mesh: out };
+}
+
+/**
+ * 把整個網格的面繞向**全部翻過來**（＝ Blender 的 Flip Normals，整體版）。
+ *
+ * ⚠ **刻意只做「整個網格」，不做「選取的面」。**
+ * 翻一部分的面會做出「相鄰面互相矛盾」的網格 —— 那正是
+ * `recalcNormalsOutside()` 要修的病，我們沒有理由提供一個製造它的按鈕。
+ * 而實際的痛點本來就是整件事：**匯進來或算出來的東西整個內外相反**。
+ *
+ * 這一支存在的理由是**開放的網格**：「外側」對一張沒有厚度的曲面沒有定義，
+ * 重算那一支不會去猜，所以要留一個讓使用者自己決定的入口。
+ */
+export function flipNormals(mesh) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格可以翻' };
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)).reverse());
+  const out = Mesh.fromFaceList(points, faces);
+  out.computeNormals();
+  /**
+   * ⚠ 標記照樣要搬。翻繞向只改「每個面裡頂點的順序」，**頂點索引沒變**，
+   * 所以索引配對照樣對得上（`transformed()` 的鏡射那條路早就在用同一招）。
+   */
+  mesh._copyMarksTo(out);
+  return { ok: true, mesh: out, faces: faces.length };
+}
+
+// ═══════════════════════════════════════════════════════
 //  變換：記下初始座標，每一幀從初始值重算
 // ═══════════════════════════════════════════════════════
 

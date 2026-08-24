@@ -29,7 +29,8 @@ import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
-         flattenElements, mergeCoplanarFaces, loopCut } from './core/edit.js';
+         flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
+         recalcNormalsOutside, flipNormals } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -356,6 +357,9 @@ $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
 $('loopCut').onclick = () => loopCutSelected();
+$('selRing').onclick = () => selectRingFromEdge();
+$('fixNormals').onclick = () => fixNormalsOnSelected();
+$('flipNormals').onclick = () => flipNormalsOnSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
   b.onclick = () => setEditFilter(b.dataset.f);
 }
@@ -998,6 +1002,120 @@ function loopCutSelected() {
   toast(bits.join('　'));
 }
 
+/**
+ * 選一圈：從選到的那條邊繞出一整圈 edge ring，全部選起來。
+ *
+ * ⭐ **這顆按鈕幾乎是免費的** —— 走訪（`edgeRing()`）是環切那一輪寫好的，
+ * 這裡只是「不切，只選」。而它補的是對照表上那個缺口：
+ * **多選現在只能一個一個點，32 片 seg 要點 32 下。**
+ *
+ * 順帶還有一個用途：**按下去就看得到環切會切在哪** ——
+ * 先看再切，比切完再 Undo 好。
+ */
+function selectRingFromEdge() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一條邊，再按「選一圈」', true);
+    return;
+  }
+  if (sel.editCount > 1) {
+    toast(`選一圈一次只能從一條邊出發（現在選了 ${sel.editCount} 個）`, true);
+    return;
+  }
+  const r = edgeRing(el.obj.mesh(), el.he);
+  if (!r.hes.length) { toast('從這條邊繞不出一圈', true); return; }
+
+  const got = sel.selectEdges(el.obj, r.hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  toast(r.closed
+    ? `已選起一整圈 ${got} 條邊（繞回來了）`
+    : `已選起 ${got} 條邊（沒有繞回來 —— 撞到不是四邊形的面就會停，那是正常的）`);
+}
+
+/**
+ * 🔴 修法向：把整個物件的面朝向重算成「一致而且朝外」。
+ *
+ * ── 為什麼這顆按鈕該存在 ────────────────────────────────
+ * **繞向錯了畫面上完全看不出來**（three.js 雙面打光），但 STL 送去列印
+ * 會被切片軟體判成非流形。而「3D 列印」面板**早就在報**這件事
+ * （「法向朝內（體積算出來是負的），印出來會內外相反」）——
+ * **卻沒有給任何修法**。講了問題卻沒有出路，那是坑第 11 條的近親。
+ *
+ * ⚠ **不需要進編輯模式**：它修的是整個物件，不是某一個元素。
+ * ⚠ **參數物件擋下來** —— 參數體是我們自己生的，繞向本來就對；
+ * 而且改了也留不住（`mesh()` 會照參數重生）。要修的一定是
+ * 匯入的、布林算出來的、或編輯過的網格。
+ */
+function fixNormalsOnSelected() {
+  const obj = sel.active;
+  if (!obj) { toast('先選一個物件', true); return; }
+  if (obj.isParametric) {
+    toast('參數物件的繞向是程式自己生的，本來就正確；'
+        + '而且改了也留不住（開檔會照參數重新生成）。'
+        + '真的要修請先按「轉成可編輯網格」', true);
+    return;
+  }
+
+  const oldMesh = obj.mesh();
+  const r = recalcNormalsOutside(oldMesh);
+  if (!r.ok) { toast(r.reason); return; }      // 藍色：這是說明，不是錯誤
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('修正法向');
+  panel.refresh();
+  updateBar();
+
+  /**
+   * 🔴 **把「改了什麼」講出來，而且要讓兩個數字互相對得起來**（鐵律三）。
+   * 使用者看不見繞向，所以他唯一能驗的就是**體積由負轉正** ——
+   * 那個數字結構分析面板上就有，他自己對得起來。
+   */
+  const bits = [];
+  if (r.fixedInconsistent) bits.push(`${r.fixedInconsistent} 個面的朝向跟鄰居互相矛盾，已經轉正`);
+  if (r.flippedComponents) bits.push(`${r.flippedComponents} 個實體整個內外顛倒，已經翻回來`);
+  if (r.openComponents) bits.push(`另有 ${r.openComponents} 個開放的殼沒有「外側」可言，只做了一致化`);
+  if (r.ambiguousEdges) bits.push(`⚠ ${r.ambiguousEdges} 條邊被 3 個以上的面共用（真的非流形），這支修不了`);
+  toast(`已修正法向：${bits.join('；')}　現在體積 ${r.mesh.volume().toFixed(2)} cm³`);
+}
+
+/**
+ * 翻面：把整個物件的面朝向全部翻過來。
+ *
+ * ⚠ **刻意只做整個物件，不做選取的面** —— 翻一部分會做出
+ * 「相鄰面互相矛盾」的網格，那正是「修法向」要修的病，
+ * 沒有理由提供一顆製造它的按鈕。
+ *
+ * 它存在的理由是**開放的網格**：「外側」對一張沒有厚度的殼在數學上
+ * 沒有定義，「修法向」不會去猜（猜反的後果跟原本的病一樣嚴重），
+ * 所以留一個讓使用者自己決定的入口。
+ */
+function flipNormalsOnSelected() {
+  const obj = sel.active;
+  if (!obj) { toast('先選一個物件', true); return; }
+  if (obj.isParametric) {
+    toast('參數物件翻了也留不住（開檔會照參數重新生成）。'
+        + '請先按「轉成可編輯網格」', true);
+    return;
+  }
+  const r = flipNormals(obj.mesh());
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('翻面');
+  panel.refresh();
+  updateBar();
+  toast(`已把 ${r.faces} 個面全部翻過來　現在體積 ${r.mesh.volume().toFixed(2)} cm³`
+      + '（負的代表朝內，再按一次就翻回去）');
+}
+
 // ═══════════════════════════════════════════════════════
 //  分片
 // ═══════════════════════════════════════════════════════
@@ -1231,6 +1349,31 @@ function updateBar() {
              && sel.editCount === 1;
   $('loopCut').disabled = !edge1;
   $('loopCutN').disabled = !edge1;
+  $('selRing').disabled = !edge1;
+  $('selRing').title = edge1
+    ? '從這條邊繞出一整圈邊全部選起來（也可以先按它看環切會切在哪）'
+    : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
+
+  /**
+   * 法向那一組：**不需要進編輯模式**，選到物件就能按 ——
+   * 它修的是整個物件，不是某一個元素。
+   * ⚠ 參數物件灰掉：它的繞向是程式自己生的，而且改了也留不住。
+   */
+  const fixable = sel.active && !sel.active.isParametric;
+  $('fixNormals').disabled = !fixable;
+  $('flipNormals').disabled = !fixable;
+  if (!sel.active) {
+    $('fixNormals').title = $('flipNormals').title = '先選一個物件';
+  } else if (sel.active.isParametric) {
+    $('fixNormals').title = $('flipNormals').title =
+      '參數物件的繞向本來就正確，而且改了也留不住（開檔會照參數重新生成）。'
+      + '要修請先按「轉成可編輯網格」';
+  } else {
+    $('fixNormals').title = '把面的朝向重算成「一致而且朝外」。'
+      + '⚠ 繞向錯了畫面上看不出來，但 STL 送去列印會被判成非流形';
+    $('flipNormals').title = '把整個物件的面朝向全部翻過來。'
+      + '板件那種沒有厚度的殼「外側」沒有定義，「修法向」不會猜，用這顆自己決定';
+  }
   $('loopCut').title = edge1
     ? '沿著這條邊繞一整圈加上新的線。只加線不改形狀，切完那一圈會自動選中'
     : (sel.editMode
