@@ -412,7 +412,23 @@ export class SceneView {
     g.name = 'pickMarks';
 
     for (const m of marks) {
-      const col = m.role === 'dst' ? 0x3ad07a : 0xffd23f;   // 目標綠、來源黃
+      /**
+       * 三種角色三個顏色：
+       *   `src`（黃）　　貼合的來源／編輯選到的元素
+       *   `dst`（綠）　　貼合的目標
+       *   `active`（橘）**多選裡最後點的那一個**
+       *
+       * ⚠ **active 不能借用綠色。** 綠色在貼合模式已經有意思了（目標），
+       * 同一個顏色在兩個模式代表不同的東西，畫面就開始騙人 ——
+       * 而使用者不會記得自己現在在哪個模式。多一個顏色比省一個顏色便宜。
+       *
+       * ⚠ **active 一定要看得出來，這不是裝飾。** 中心（「最後選的」那個模式）
+       * 與法向的切線**都只看 active** —— 分不出哪一個是 active，
+       * 「箭頭為什麼朝那邊」就變成一個沒有答案的問題（坑第 24 條）。
+       */
+      const col = m.role === 'dst' ? 0x3ad07a
+                : m.role === 'active' ? 0xff8c1a
+                : 0xffd23f;
 
       if (m.kind === 'vertex') {
         // 點要畫得夠大才看得見，但太大會蓋住旁邊的角

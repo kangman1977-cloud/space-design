@@ -18,7 +18,7 @@ import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
 import { objectsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
-         snapshotVerts, restoreVerts, applyElementTransform }
+         snapshotVerts, restoreVerts, applyElementTransform, regionOf }
   from '../core/edit.js';
 
 const TAP_MOVE = 8;      // px
@@ -88,8 +88,32 @@ export class Selection {
     this.editMode = false;
     /** 'auto' | 'vertex' | 'edge' | 'face' —— 選取過濾器 */
     this.editFilter = 'auto';
-    /** 目前選到的子元素 {obj, kind, vert|he|face} */
-    this.editSel = null;
+
+    /**
+     * 🔴 **目前選到的子元素，有順序的陣列。順序即 active（最後一筆）。**
+     *
+     * ── 為什麼是陣列而不是一個欄位 ────────────────────────
+     * 物件層本來就是這個寫法（`ids` 有順序、`active` 取最後一個），
+     * 而 Blender 的 select history 也是「最後一筆就是 active」。
+     * 好處是**取消選取時自然退回上一個**，不必寫任何特別處理。
+     *
+     * ⚠ **`editSel` 保留成 getter，回傳最後一筆。**
+     * 外面有五個地方在讀它（`main.js` 四處、`toolbar.js` 一處），
+     * 而它們要的一直都是「active 那一個」—— 改成 getter，那五處一行都不用動。
+     *
+     * ⚠ **同一次多選裡型別必須一致**（kang 2026-08-24 拍板）。
+     * 過濾器本來就是四選一互斥的，而混型別會讓法向、中心、面板、
+     * 擠出把關全部要多處理一種情況 —— 而想不出真的會混選的場景。
+     * 點到不同型別就當成**重新開始**。
+     */
+    this.editSels = [];
+
+    /**
+     * 中心（變換三個概念的第三個）：`'median'` ＝ 全部的重心、
+     * `'active'` ＝ 最後點的那一個元素自己的重心。
+     * **單選時兩者是同一個點**，所以它是跟多選一起才有意義的。
+     */
+    this.editPivot = 'median';
 
     /**
      * gizmo 掛的那個替身。
@@ -113,8 +137,7 @@ export class Selection {
      * 變換其實是三個正交的概念 —— **種類 × 方向 × 中心**，這是「方向」。
      * 〔`外部參考-Blender編輯.md` 第 3 節〕
      *
-     * 中心目前只有一種（元素重心）。單選的時候「重心」跟「選取元素本身」
-     * 是同一個點，要等多選才分得出來，所以刻意不先做。
+     * 中心見 `editPivot`（多選做出來之後才有意義，2026-08-24 補上）。
      */
     this.editSpace = 'world';
 
@@ -380,7 +403,11 @@ export class Selection {
       if (dist > TAP_MOVE || dt > TAP_TIME) return;
       if (this.tc.dragging) return;
 
-      if (this.editMode) { this.pickEdit(e.clientX, e.clientY); return; }
+      if (this.editMode) {
+        // 加選重用物件層那一顆「加選」與 Shift —— 同一件事一個入口
+        this.pickEdit(e.clientX, e.clientY, e.shiftKey || this.multi);
+        return;
+      }
       if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
       if (this.mateMode) {
         const el = this.pickElement(e.clientX, e.clientY,
@@ -710,6 +737,17 @@ export class Selection {
     this._refresh();
   }
 
+  /**
+   * 切換中心：`'median'`（全部的重心）／`'active'`（最後點的那一個）。
+   * 單選時兩者是同一個點，所以介面上要講清楚它是給多選用的。
+   */
+  setEditPivot(pivot) {
+    this.editPivot = pivot === 'active' ? 'active' : 'median';
+    this._drag = null;              // 中心變了，上一次拖曳的基準就不同了
+    if (this.editSel) { this._rebaseProxy(); this._drawEditMark(); }
+    return this.editPivot;
+  }
+
   // ── gizmo ─────────────────────────────────────────
 
   setMode(mode) {
@@ -770,17 +808,38 @@ export class Selection {
   /**
    * 選取過濾器：只選點／只選邊／只選面／自動。
    *
-   * 換過濾器就把目前選的清掉 —— 不清的話，按了「面」卻還掛著一個點的
-   * gizmo，畫面在騙人。
+   * 🔴 **清掉「不合這個型別的」，留下合的。**
+   * 原本是**全部清掉**，理由是「按了『面』卻還掛著一個點的 gizmo，畫面在騙人」——
+   * 那個理由只需要清掉不合的那些。多選之後全部清掉不能接受：
+   * **選了六條邊，再按一下「邊」就全沒了。**
+   * 〔照 Blender 的 select mode clean：換模式時清掉「這個模式撐不住的」〕
+   *
+   * @returns {{filter:string, dropped:number}} 少掉幾個，呼叫端要講一句 ——
+   *          選取安靜地變少是最讓人不敢相信工具的事（坑第 11、21 條）
    */
   setEditFilter(kind) {
     this.editFilter = kind || 'auto';
-    this.clearEditSel();
-    return this.editFilter;
+    const before = this.editSels.length;
+    if (this.editFilter !== 'auto') {
+      this.editSels = this.editSels.filter(e => e.kind === this.editFilter);
+    }
+    const dropped = before - this.editSels.length;
+    if (dropped) this._drag = null;               // 成員變了，快照對不上了
+    if (this.editSels.length) { this._attachEditProxy(); this._drawEditMark(); }
+    else this.clearEditSel();
+    return { filter: this.editFilter, dropped };
   }
 
+  /** 最後點的那一個 ＝ active。gizmo 掛它、面板顯示它、擠出用它。 */
+  get editSel() {
+    return this.editSels.length ? this.editSels[this.editSels.length - 1] : null;
+  }
+
+  /** 選了幾個子元素 */
+  get editCount() { return this.editSels.length; }
+
   clearEditSel() {
-    this.editSel = null;
+    this.editSels = [];
     this._drag = null;              // 快照跟著選取走，選取沒了就對不上任何東西
     if (this._proxy.parent) this._proxy.parent.remove(this._proxy);
     this.view.clearPickMarks();
@@ -794,7 +853,7 @@ export class Selection {
    * 開檔時網格重新生成，改過的座標就沒了。而它在同一次開著的時候又是好的
    * —— 這種「用起來正常、存檔重開才發現不見了」是最糟的失敗。
    */
-  pickEdit(clientX, clientY) {
+  pickEdit(clientX, clientY, additive) {
     const f = this.editFilter;
     const el = this.pickElement(clientX, clientY, {
       vertex: f === 'auto' || f === 'vertex',
@@ -802,7 +861,16 @@ export class Selection {
       only: f === 'auto' ? null : f,
     });
 
-    if (!el) { this.clearEditSel(); if (this.hooks.onEditPick) this.hooks.onEditPick(null); return; }
+    if (!el) {
+      /**
+       * 加選開著時點空白處**不要清掉** —— 使用者正在一個一個累積，
+       * 而點空一下多半是沒點準。清掉的話他得從頭再選六條邊。
+       * （物件層的 `pick()` 早就是這個規則：`if (!additive) this.set([])`）
+       */
+      if (!additive) this.clearEditSel();
+      if (this.hooks.onEditPick) this.hooks.onEditPick(null);
+      return;
+    }
     if (el.kind === 'blocked') {
       this.clearEditSel();
       if (this.hooks.onEditPick) this.hooks.onEditPick(el);
@@ -811,11 +879,77 @@ export class Selection {
 
     // 記下當下的網格物件。revalidate() 靠它分辨「網格被換掉了沒」
     el.mesh = el.obj.mesh();
-    this.editSel = el;
-    this._drag = null;              // 換了元素，上一次的快照對不上了
+
+    let note = '';
+    if (additive && this.editSels.length) {
+      const cur = this.editSels[0];
+      if (cur.kind !== el.kind) {
+        /**
+         * 🔴 **同一次多選裡型別必須一致。** 型別不合就當成重新開始，
+         * 並且**講一句** —— 安靜地把六條邊換成一個面，
+         * 使用者會以為加選壞了（坑第 11 條「沉默地退回是最糟的做法」）。
+         */
+        this.editSels = [];
+        note = 'kindReset';
+      } else if (cur.obj !== el.obj) {
+        // 跨物件也不行：變換寫回的是「某一個網格」的頂點座標
+        this.editSels = [];
+        note = 'objReset';
+      } else {
+        const i = this._findEditSel(el);
+        if (i >= 0) {
+          /**
+           * 再點一次同一個 ＝ 取消選它。
+           * **active 因此自然退回上一個**，不必寫任何特別處理 ——
+           * 那正是「順序即 active」這個做法換來的。
+           */
+          this.editSels.splice(i, 1);
+          this._drag = null;
+          if (this.editSels.length) { this._attachEditProxy(); this._drawEditMark(); }
+          else this.clearEditSel();
+          if (this.hooks.onEditPick) this.hooks.onEditPick(null, { removed: true });
+          return;
+        }
+      }
+    } else if (!additive) {
+      this.editSels = [];
+    }
+
+    this.editSels.push(el);
+    this._drag = null;              // 成員變了，上一次的快照對不上了
     this._attachEditProxy();
     this._drawEditMark();
-    if (this.hooks.onEditPick) this.hooks.onEditPick(el);
+    if (this.hooks.onEditPick) this.hooks.onEditPick(el, { note });
+  }
+
+  /**
+   * 這個元素已經在選取裡了嗎（回索引，沒有則 −1）。
+   *
+   * ⚠ **比的是元素物件本身**（`vert`／`he`／`face` 的參考），不是 id 也不是座標。
+   * 邊要連 `twin` 一起比 —— 同一條邊有兩條半邊，而 `nearestMarkableEdge()`
+   * 回哪一條取決於點在哪一側。不比 twin 的話，同一條邊會被選進去兩次，
+   * 而**畫面上完全看不出來**（兩條半邊畫出來是同一條線），
+   * 只有拖的時候發現走了兩倍距離。
+   */
+  _findEditSel(el) {
+    /**
+     * ⚠ **面要比「共面區域」，不能比三角形。**
+     * 方塊的頂面是 2 個三角形 —— 點左半邊與點右半邊會得到**不同的 `Face` 物件**，
+     * 而使用者眼中那是同一個面。比三角形的話同一個面會被選進去兩次，
+     * 而**畫面上完全看不出來**（標示畫的是區域邊界，兩份疊在一起），
+     * 只有「選了幾個」那個數字會說謊（坑第 20 條）。
+     */
+    let sameFaces = null;
+    if (el.kind === 'face' && el.face) {
+      sameFaces = new Set(regionOf(el.obj.mesh(), el.face).faces);
+    }
+    return this.editSels.findIndex(e => {
+      if (e.kind !== el.kind) return false;
+      if (el.kind === 'vertex') return e.vert === el.vert;
+      if (el.kind === 'face') return sameFaces ? sameFaces.has(e.face) : false;
+      // 同一條邊有兩條半邊，`nearestMarkableEdge()` 回哪一條取決於點在哪一側
+      return e.he === el.he || e.he === el.he.twin;
+    });
   }
 
   /**
@@ -831,7 +965,7 @@ export class Selection {
    */
   selectFace(obj, face) {
     if (!obj || !face) { this.clearEditSel(); return false; }
-    this.editSel = { obj, kind: 'face', face, mesh: obj.mesh() };
+    this.editSels = [{ obj, kind: 'face', face, mesh: obj.mesh() }];
     this._drag = null;
     this._attachEditProxy();
     this._drawEditMark();
@@ -854,7 +988,7 @@ export class Selection {
    * 物件本身轉過角度時，那會變成沿**物件的軸**走，不是世界軸。
    */
   _attachEditProxy() {
-    const el = this.editSel;
+    const el = this.editSel;                 // active，決定掛在哪個物件底下
     const node = el && this.view.nodeOf(el.obj.id);
     if (!node) { this.clearEditSel(); return; }
 
@@ -875,12 +1009,19 @@ export class Selection {
     const el = this.editSel;
     if (!el) return;
     const mesh = el.obj.mesh();
+    /**
+     * 🔴 **中心與方向吃的是整份選取，不是 active 那一個。**
+     * `elementCenter()` 依 `editPivot` 決定要不要只看 active，
+     * `elementBasis()` 則是「法向取全部的和、切線照 active」——
+     * 那兩個規則的家在 `edit.js`，這裡只負責把整份傳過去。
+     */
+    const sels = this.editSels;
 
-    this._proxy.position.copy(elementCenter(mesh, el));
+    this._proxy.position.copy(elementCenter(mesh, sels, 0.5, this.editPivot));
     this._proxy.scale.set(1, 1, 1);
 
     if (this.editSpace === 'normal') {
-      const b = elementBasis(mesh, el);
+      const b = elementBasis(mesh, sels);
       /**
        * 算不出法向基底（零面積面、孤立點…）→ **退回世界，並且說出來**。
        * 沉默地退回是最糟的做法：使用者會以為「法向」這顆按鈕壞了。
@@ -923,7 +1064,8 @@ export class Selection {
 
   /** 這個 kind 給不給這種變換（介面拿去決定按鈕要不要灰掉） */
   editModeAllowed(mode) {
-    if (!this.editSel) return false;
+    if (!this.editSels.length) return false;
+    // 型別在同一次多選裡一定一致，所以問 active 就等於問全部
     return this.editSel.kind !== 'vertex' || mode === 'translate';
   }
 
@@ -951,35 +1093,45 @@ export class Selection {
    * （坑第 24 條）：**正確不等於可用，可用的前提是使用者驗得出來。**
    */
   _drawEditMark() {
-    const el = this.editSel;
-    const node = el && this.view.nodeOf(el.obj.id);
+    const act = this.editSel;
+    const node = act && this.view.nodeOf(act.obj.id);
     if (!node) { this.view.clearPickMarks(); return; }
 
     node.updateMatrixWorld(true);
     const toWorld = p => node.localToWorld(p.clone());
-
-    if (el.kind === 'vertex') {
-      this.view.setPickMarks([{ kind: 'vertex', points: [toWorld(el.vert.p)], role: 'src' }]);
-      return;
-    }
-    if (el.kind === 'edge') {
-      this.view.setPickMarks([{
-        kind: 'edge', points: [toWorld(el.he.v.p), toWorld(el.he.to.p)], role: 'src'
-      }]);
-      return;
-    }
+    const mesh = act.obj.mesh();
+    const marks = [];
 
     /**
-     * 面：畫**共面區域的邊界邊**，一條邊一個 mark。
-     *
-     * ⚠ 不可以拿 `elementVerts()` 那份頂點去串成迴圈 —— 它是從 Set 出來的，
-     * **順序是任意的**，方塊的一個正方形面會被畫成蝴蝶結。
-     * 〔2026-08-23 kang 實測截圖抓到。幾何是對的，畫出來的意思是錯的〕
+     * 🔴 **選取的每一個都要畫，而且 active 用不同顏色（橘）。**
+     * 中心（「最後選的」那個模式）與法向的切線**都只看 active** ——
+     * 分不出哪一個是 active，「箭頭為什麼朝那邊」就沒有答案（坑第 24 條）。
      */
-    const segs = regionBoundaryEdges(el.obj.mesh(), el.face);
-    this.view.setPickMarks(segs.map(([a, b]) => ({
-      kind: 'edge', points: [toWorld(a.p), toWorld(b.p)], role: 'src'
-    })));
+    for (const el of this.editSels) {
+      const role = el === act ? 'active' : 'src';
+
+      if (el.kind === 'vertex') {
+        marks.push({ kind: 'vertex', points: [toWorld(el.vert.p)], role });
+
+      } else if (el.kind === 'edge') {
+        marks.push({
+          kind: 'edge', points: [toWorld(el.he.v.p), toWorld(el.he.to.p)], role
+        });
+
+      } else if (el.kind === 'face') {
+        /**
+         * 面：畫**共面區域的邊界邊**，一條邊一個 mark。
+         *
+         * ⚠ 不可以拿 `elementVerts()` 那份頂點去串成迴圈 —— 它是從 Set 出來的，
+         * **順序是任意的**，方塊的一個正方形面會被畫成蝴蝶結。
+         * 〔2026-08-23 kang 實測截圖抓到。幾何是對的，畫出來的意思是錯的〕
+         */
+        for (const [a, b] of regionBoundaryEdges(mesh, el.face)) {
+          marks.push({ kind: 'edge', points: [toWorld(a.p), toWorld(b.p)], role });
+        }
+      }
+    }
+    this.view.setPickMarks(marks);
   }
 
   /**
@@ -991,7 +1143,7 @@ export class Selection {
   _beginEditDrag() {
     const el = this.editSel;
     if (!el) { this._drag = null; return; }
-    const verts = elementVerts(el.obj.mesh(), el);
+    const verts = elementVerts(el.obj.mesh(), this.editSels);
     this._drag = {
       verts,
       base: snapshotVerts(verts),

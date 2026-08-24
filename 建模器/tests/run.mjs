@@ -4805,6 +4805,173 @@ function beginXf(m, el) {
   near('　　體積也沒被動到', m.volume(), 108000, 1e-9);
 }
 
+// ═══════════════════════════════════════════════════════
+//  第 6 期地基（下）：子元素多選 ＋ active
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 「三件事」第三件的第一步。多選之後三個純函式都要吃陣列：
+ * `elementVerts`（聯集去重）、`elementCenter`（兩種中心）、
+ * `elementBasis`（法向取和、切線照 active）。
+ *
+ * 測得到的是這三支；**測不到的是「橘色那個是不是畫在對的元素上」**，
+ * 那只能 kang 開來看。
+ */
+
+section('第 6 期地基：多選的聯集與去重');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const side = m.faces.find(f => f.normal.x > 0.999);
+
+  const one = edit.elementVerts(m, { kind: 'face', face: top });
+  eq('單獨一個頂面 4 個頂點', one.length, 4);
+
+  /**
+   * ★ **相鄰的兩個面共用一條邊上的兩個頂點。**
+   * 頂面 4 ＋ 右側面 4，聯集**必須是 6 不是 8** ——
+   * 不去重的話那兩個共用頂點會被平移兩次（走兩倍距離），
+   * 而畫面上看起來只是「拉太多了」，沒有人會想到是重複套用。
+   */
+  const both = edit.elementVerts(m, [
+    { kind: 'face', face: top }, { kind: 'face', face: side }]);
+  eq('★ 頂面 ＋ 右側面 聯集是 6 個頂點（共用 2 個，已去重）', both.length, 6);
+
+  // 同一個元素放兩次也要去重（加選時再點一次是「取消」，但函式本身要撐得住）
+  eq('同一個面放兩次 還是 4 個頂點',
+     edit.elementVerts(m, [{ kind: 'face', face: top }, { kind: 'face', face: top }]).length, 4);
+
+  const es = [...m.edges()].slice(0, 3).map(he => ({ kind: 'edge', he }));
+  ok('三條邊的聯集不超過 6 個頂點', edit.elementVerts(m, es).length <= 6);
+
+  eq('空陣列 → 沒有頂點', edit.elementVerts(m, []).length, 0);
+}
+
+section('第 6 期地基：中心（重心 ／ 最後選的）');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);      // 中心 (0, 22.5, 0)
+  const side = m.faces.find(f => f.normal.x > 0.999);     // 中心 (30, 0, 0)
+  const sels = [{ kind: 'face', face: top }, { kind: 'face', face: side }];
+
+  /**
+   * ★ 兩種中心一定要**差得出來**，否則那顆按鈕等於不存在。
+   *
+   * `median` ＝ 6 個聯集頂點的重心；`active` ＝ 最後一筆（右側面）自己的重心。
+   * 手算：右側面 4 個頂點都是 x=30，重心必定 (30, 0, 0)。
+   */
+  const ca = edit.elementCenter(m, sels, 0.5, 'active');
+  near('★ 中心＝最後選的 → 右側面的重心 x ＝ 30', ca.x, 30, 1e-9);
+  near('　　y ＝ 0', ca.y, 0, 1e-9);
+  near('　　z ＝ 0', ca.z, 0, 1e-9);
+
+  const cm = edit.elementCenter(m, sels, 0.5, 'median');
+  ok('★ 兩種中心真的不一樣', cm.distanceTo(ca) > 1,
+     `相距 ${(+cm.distanceTo(ca).toFixed(3))} cm`);
+
+  // 順序即 active：把兩個對調，`active` 中心就換人
+  const ca2 = edit.elementCenter(m, [sels[1], sels[0]], 0.5, 'active');
+  near('★ 對調順序 → active 中心換成頂面（y ＝ 22.5）', ca2.y, 22.5, 1e-9);
+  near('　　而且 x 回到 0', ca2.x, 0, 1e-9);
+
+  // 單選時兩者必須是同一個點（介面上那句「看不出差別」不是隨口說的）
+  const solo = [{ kind: 'face', face: top }];
+  near('單選時 兩種中心是同一個點',
+       edit.elementCenter(m, solo, 0.5, 'median')
+         .distanceTo(edit.elementCenter(m, solo, 0.5, 'active')), 0, 1e-12);
+}
+
+section('第 6 期地基：多選的方向（法向取和、切線照 active）');
+
+{
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);      // +Y
+  const side = m.faces.find(f => f.normal.x > 0.999);     // +X
+
+  const b = edit.elementBasis(m, [
+    { kind: 'face', face: top }, { kind: 'face', face: side }]);
+  ok('兩個面 算得出基底', b.ok);
+
+  const az = new THREE.Vector3(0, 0, 1).applyQuaternion(b.quat);
+  /**
+   * ★ +Y 與 +X 兩個法向相加正規化 → (1/√2, 1/√2, 0)，**剛好指在兩面中間**。
+   * 「兩個相鄰的斜面一起選，箭頭指向它們中間」就是這件事。
+   */
+  const s = Math.SQRT1_2;
+  near('★ 兩個面的法向和 → Z ＝ (0.7071, 0.7071, 0)　x', az.x, s, 1e-9);
+  near('　　y', az.y, s, 1e-9);
+  near('　　z', az.z, 0, 1e-9);
+
+  // 三軸仍然是一組正交右手基底（合併之後最容易壞的地方）
+  const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(b.quat);
+  const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(b.quat);
+  near('合併後 X·Y ＝ 0', ax.dot(ay), 0, 1e-9);
+  near('合併後 Y·Z ＝ 0', ay.dot(az), 0, 1e-9);
+  near('合併後 右手系', new THREE.Vector3().crossVectors(ax, ay).dot(az), 1, 1e-9);
+
+  /**
+   * ★ **每個元素的 Z 先正規化再相加**，所以權重相同。
+   * 方塊的每個面都是 2 個三角形，測不出差別 —— 拿 `tube` 才驗得到：
+   * 它的側面是 64 個四邊形各自一個區域（1 個面），端面是一整圈。
+   * 這裡改用「同一個面放兩次」來驗權重：放兩次的 Z 方向必須不變。
+   */
+  const b1 = edit.elementBasis(m, [{ kind: 'face', face: top }]);
+  const b2 = edit.elementBasis(m, [
+    { kind: 'face', face: top }, { kind: 'face', face: top }]);
+  near('★ 同一個面放兩次 Z 方向不變（權重相同，不會被壓過）',
+       b1.quat.angleTo(b2.quat), 0, 1e-9);
+
+  /**
+   * ★ 切線只看 active，所以**對調順序，扭轉方向會換**（法向不變）。
+   * 這是「箭頭的扭轉方向照你最後點的那一個」那句規則的機械版。
+   */
+  const bA = edit.elementBasis(m, [
+    { kind: 'face', face: top }, { kind: 'face', face: side }]);
+  const bB = edit.elementBasis(m, [
+    { kind: 'face', face: side }, { kind: 'face', face: top }]);
+  const zA = new THREE.Vector3(0, 0, 1).applyQuaternion(bA.quat);
+  const zB = new THREE.Vector3(0, 0, 1).applyQuaternion(bB.quat);
+  near('對調順序 Z（法向和）完全一樣', zA.distanceTo(zB), 0, 1e-9);
+  ok('★ 但整組基底不同（切線照 active，換人就換）',
+     bA.quat.angleTo(bB.quat) > 1e-6,
+     `夾角 ${(+(bA.quat.angleTo(bB.quat) * 180 / Math.PI).toFixed(2))} 度`);
+
+  ok('空陣列 → ok:false（退回世界）', edit.elementBasis(m, []).ok === false);
+}
+
+section('第 6 期地基：多選一起變換');
+
+{
+  // ★ 兩個相鄰的面一起沿世界 +X 拉，共用的那兩個頂點只能走一次
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const side = m.faces.find(f => f.normal.x > 0.999);
+  const sels = [{ kind: 'face', face: top }, { kind: 'face', face: side }];
+
+  const verts = edit.elementVerts(m, sels);
+  const base = edit.snapshotVerts(verts);
+  const start = { pos: edit.elementCenter(m, sels), quat: new THREE.Quaternion() };
+  const moved = edit.applyElementTransform(verts, base, start,
+    { pos: start.pos.clone().add(new THREE.Vector3(10, 0, 0)), quat: start.quat });
+
+  eq('★ 一起移動 6 個頂點（不是 8 次）', moved, 6);
+  let maxdx = 0;
+  for (let i = 0; i < verts.length; i++) {
+    maxdx = Math.max(maxdx, Math.abs(verts[i].p.x - base[i].x - 10));
+  }
+  near('★ 每一個頂點都剛好走 10（共用的沒有走 20）', maxdx, 0, 1e-9);
+
+  // 取消照樣把整份還原
+  edit.restoreVerts(verts, base);
+  near('多選取消之後 體積回到 108000', m.volume(), 108000, 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

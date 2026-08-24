@@ -393,7 +393,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp" id="gEdit">
       <span class="lbl">編輯</span>
-      <button id="edit" title="編輯造型：選物件裡的一個點／邊／面，用箭頭把它拉到想要的位置。要先把物件「轉成可編輯網格」">拉點線面</button>
+      <button id="edit" title="編輯造型：選物件裡的點／邊／面，用箭頭把它們拉到想要的位置。要一次選好幾個就開「加選」（或按住 Shift）。要先把物件「轉成可編輯網格」">拉點線面</button>
       <button id="efAuto" class="efBtn on" data-f="auto" title="自動：點比邊小、邊比面小，小的優先">自動</button>
       <button id="efVert" class="efBtn" data-f="vertex" title="只選點：點不到就不選，不會掉到邊或面">點</button>
       <button id="efEdge" class="efBtn" data-f="edge" title="只選邊">邊</button>
@@ -411,6 +411,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">方向</span>
       <button id="spWorld" class="spBtn on" data-s="world" title="箭頭朝世界的 X／Y／Z">世界</button>
       <button id="spNormal" class="spBtn" data-s="normal" title="箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個">法向</button>
+      <span class="lbl">中心</span>
+      <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
+      <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
       <span class="lbl">數值</span>
       <input id="editNum" type="number" step="0.1" disabled
              title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">

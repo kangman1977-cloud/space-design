@@ -369,25 +369,39 @@ export class Panel {
       this.form.appendChild(note(
         `現在只選「${FN[sel.editFilter]}」。點物件上的一個元素，`
         + '箭頭會掛到它身上，拖它就是拉它。'
-        + '⚠ 這一刀只移動既有的點，做不出「長出新的一段」（那是擠出面）。'
+        + '要一次選好幾個就開「加選」（或按住 Shift）。'
       ));
       return;
     }
 
     const mesh = el.obj.mesh();
-    const n = elementVerts(mesh, el).length;
-    const c = elementCenter(mesh, el);
+    const many = sel.editCount > 1;
+    // 頂點數一律算**整份選取**的聯集 —— 相鄰的面共用頂點，
+    // 「3 個面」不等於「3×4 個頂點」，而使用者最容易在這裡誤會
+    const n = elementVerts(mesh, sel.editSels).length;
+    const c = elementCenter(mesh, sel.editSels, 0.5, sel.editPivot);
     const f = v => (Math.round(v * 100) / 100).toFixed(2);
 
-    const what = el.kind === 'vertex' ? '一個點'
+    const one = el.kind === 'vertex' ? '一個點'
       : el.kind === 'edge' ? '一條邊（2 個頂點）'
       // 「面」是共面區域不是三角形，這是使用者最容易誤會的一點，要講清楚
       : `一個面（共面區域，${n} 個頂點）`;
+    const what = many
+      ? `${sel.editCount} 個${FN[el.kind]}（共 ${n} 個頂點）`
+      : one;
 
     const box = document.createElement('div');
     box.className = 'note';
+    /**
+     * 多選時一定要寫出**中心是哪一種** —— 「重心」與「最後選的」
+     * 差別很具體（它決定縮放時東西往哪邊收），而畫面上只看得到
+     * 一組箭頭，看不出程式用的是哪一個。
+     */
     box.innerHTML = `選到 <b>${what}</b>，在「${el.obj.name}」上<br>`
-      + `重心 X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`;
+      + `${many ? (sel.editPivot === 'active' ? '中心（最後選的）' : '中心（重心）') : '重心'} `
+      + `X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`
+      + (many ? '<br><span class="dim2">橘色的那個是最後選的（active）——'
+              + '法向的扭轉方向與「最後選的」中心都看它</span>' : '');
     this.form.appendChild(box);
 
     /**

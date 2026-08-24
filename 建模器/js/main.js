@@ -51,7 +51,7 @@ const sel = new Selection(view, {
   },
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
-  onEditPick: el => editPick(el),
+  onEditPick: (el, info) => editPick(el, info),
   onEditDrag: (committing, el) => editDrag(committing, el),
   onEditCancel: () => editCancelled(),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
@@ -342,6 +342,9 @@ for (const b of document.querySelectorAll('.efBtn')) {
 for (const b of document.querySelectorAll('.spBtn')) {
   b.onclick = () => setEditSpace(b.dataset.s);
 }
+for (const b of document.querySelectorAll('.pvBtn')) {
+  b.onclick = () => setEditPivot(b.dataset.p);
+}
 /**
  * 數值輸入：打完按 Enter（或離開欄位）就套上去。
  *
@@ -594,12 +597,41 @@ function updateEditNum() {
 }
 
 function setEditFilter(kind) {
-  sel.setEditFilter(kind);
+  const r = sel.setEditFilter(kind);
   for (const b of document.querySelectorAll('.efBtn')) {
     b.classList.toggle('on', b.dataset.f === kind);
   }
   panel.refresh();      // 面板寫著現在的過濾器與選到什麼，換了要跟著更新
-  if (sel.editMode) toast(`現在只選「${FILTER_NAME[kind]}」`);
+  updateBar();
+  updateEditNum();
+  if (!sel.editMode) return;
+  /**
+   * ⚠ **少掉幾個一定要講。** 換過濾器會清掉「不合這個型別的」選取，
+   * 而選取安靜地變少最讓人不敢相信工具 —— 他會以為加選壞了（坑第 11、21 條）。
+   */
+  toast(r.dropped
+    ? `現在只選「${FILTER_NAME[kind]}」　已取消 ${r.dropped} 個不是${FILTER_NAME[kind]}的選取`
+    : `現在只選「${FILTER_NAME[kind]}」`);
+}
+
+/**
+ * 切換中心（變換三個概念的第三個）：全部的重心 ／ 最後點的那一個。
+ *
+ * **單選時兩者是同一個點**，所以要講清楚它是給多選用的 ——
+ * 不然使用者按了沒看到任何變化，會以為這顆按鈕壞了（坑第 21 條）。
+ */
+function setEditPivot(want) {
+  const got = sel.setEditPivot(want);
+  for (const b of document.querySelectorAll('.pvBtn')) {
+    b.classList.toggle('on', b.dataset.p === got);
+  }
+  updateEditNum();
+  panel.refresh();
+  const many = sel.editCount > 1;
+  toast(got === 'active'
+    ? (many ? '中心改成「最後點的那一個」（畫成橘色的那個）'
+            : '中心改成「最後點的那一個」。⚠ 只選一個時它跟「重心」是同一個點，看不出差別')
+    : '中心改成「全部選取頂點的重心」');
 }
 
 /**
@@ -608,17 +640,49 @@ function setEditFilter(kind) {
  * 沒選到也要講一句 —— 開著過濾器「只選點」的時候，點空一下什麼都不會發生，
  * 而使用者無從分辨「我沒點準」跟「這個功能壞了」（坑第 21 條）。
  */
-function editPick(el) {
-  if (!el) { panel.refresh(); return; }
+function editPick(el, info = {}) {
+  if (!el) {
+    /**
+     * 取消選了一個（加選時再點一次同一個）也要講 ——
+     * 不講的話「選取變少了」看起來跟「點歪了」一樣。
+     */
+    if (info.removed) {
+      toast(sel.editCount
+        ? `取消選了一個，還剩 ${sel.editCount} 個`
+        : '已取消選取');
+    }
+    panel.refresh();
+    updateBar();
+    updateEditNum();
+    return;
+  }
   if (el.kind === 'blocked') { toast(seamBlockReason(el.obj), true); return; }
 
-  let extra = '';
-  if (el.kind === 'face') {
-    const n = elementVerts(el.obj.mesh(), el).length;
-    // 講出頂點數，因為「面」是共面區域不是三角形，這是使用者最容易誤會的地方
-    extra = `（共面區域，${n} 個頂點）`;
+  /**
+   * ⚠ **型別／物件不合而被重設時一定要講。**
+   * 選了六條邊再點一個面，程式會把那六條丟掉重新開始 ——
+   * 安靜地做這件事，使用者會以為加選壞了（坑第 11 條）。
+   */
+  if (info.note === 'kindReset') {
+    toast(`同一次只能選同一種。已改成從這個${EDIT_NAME[el.kind]}重新開始`, true);
+  } else if (info.note === 'objReset') {
+    toast('不能跨物件多選（變換寫回的是某一個網格的座標）。已改成從這裡重新開始', true);
   }
-  toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它`);
+
+  const n = sel.editCount;
+  if (n > 1) {
+    const vs = elementVerts(el.obj.mesh(), sel.editSels).length;
+    // 講頂點數是因為相鄰的面共用頂點 —— 「3 個面」不等於「3×4 個頂點」
+    toast(`已選 ${n} 個${EDIT_NAME[el.kind]}（共 ${vs} 個頂點）　橘色的是最後選的`);
+  } else {
+    let extra = '';
+    if (el.kind === 'face') {
+      const vs = elementVerts(el.obj.mesh(), el).length;
+      // 講出頂點數，因為「面」是共面區域不是三角形，這是使用者最容易誤會的地方
+      extra = `（共面區域，${vs} 個頂點）`;
+    }
+    if (!info.note) toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它`);
+  }
   panel.refresh();
   /**
    * ⚠ 一定要叫 `updateBar()`。「擠出」那顆按鈕的啟用狀態靠它算，
@@ -663,7 +727,8 @@ function editDrag(committing, el) {
    * 現在種類有三種，而 Undo 清單是使用者唯一能回頭對照的東西 ——
    * 三種都寫「拉面」的話，他分不出要退回哪一步。
    */
-  commit(`${XF_NAME[sel.mode] || '拉'}${EDIT_NAME[el.kind]}`);
+  const n = sel.editCount;
+  commit(`${XF_NAME[sel.mode] || '拉'}${n > 1 ? `${n} 個` : ''}${EDIT_NAME[el.kind]}`);
   panel.refresh();
   updateEditNum();
 
@@ -727,6 +792,16 @@ function extrudeSelected() {
     toast('先在編輯模式下選一個面，再按「擠出」', true);
     return;
   }
+  /**
+   * ⚠ **一次只擠一個面**（`extrudeFace()` 的既有範圍）。
+   * 選了好幾個面時**擋下來並講清楚**，不要偷偷只擠 active 那一個 ——
+   * 那會做出一個他沒要求的形狀，而畫面上看起來像「擠出怪怪的」。
+   * 〔坑第 11 條：沉默地做別的事比不做更糟〕
+   */
+  if (sel.editCount > 1) {
+    toast(`擠出一次只能一個面（現在選了 ${sel.editCount} 個）。點一下那個面單獨選它`, true);
+    return;
+  }
   const step = sel.snapStep > 0 ? sel.snapStep : 1;
   const obj = el.obj;
 
@@ -743,6 +818,9 @@ function extrudeSelected() {
    * ⚠ 一定要在 commit() 之後才重選。commit() 會走 revalidate()，
    * 而擠出換掉了整個網格物件，那裡會把子元素選取清掉（本來就該清，
    * 舊的 Face 參考已經不在文件裡了）。先選後 commit 等於白做。
+   *
+   * 選的是**新長出來的蓋子**，不是原本那個面 —— 使用者接著要調的是
+   * 新那一段的長度。〔這就是「擠出只負責長出來、調整交給拉面」的接縫〕
    */
   const got = sel.selectFace(obj, r.capFace);
   panel.refresh();

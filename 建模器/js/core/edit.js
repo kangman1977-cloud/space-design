@@ -125,12 +125,29 @@ export function regionBoundaryEdges(mesh, face, tolDeg = 0.5) {
  * 三種 kind 的差別只在這裡，底下的移動與重算完全共用 ——
  * 又是專案既有的那條「入口分開、動作邏輯共用」。
  *
- * @param {object} el {kind:'vertex'|'edge'|'face', vert?, he?, face?}
+ * 🔴 **`el` 可以是一個元素，也可以是一個陣列（多選）。**
+ * 一個名字、一條規則 —— 呼叫端不必分兩種寫法，
+ * 而底下的移動、變換、重算完全不知道有沒有多選這件事。
+ *
+ * ⚠ 多選時去重**比物件本身，不比 id 也不比座標**。
+ * 相鄰的兩個面共用一條邊上的頂點，那真的是**同一個 `Vertex` 物件** ——
+ * 不去重就會被平移兩次（走兩倍距離），而畫面上看起來只是「拉太多了」。
+ *
+ * @param {object|object[]} el {kind:'vertex'|'edge'|'face', vert?, he?, face?}
  * @param {number} tolDeg 共面容許值（face 才用得到）
  * @returns {Vertex[]} 去重過的頂點清單；認不得的 kind 回傳空陣列
  */
 export function elementVerts(mesh, el, tolDeg = 0.5) {
   if (!el) return [];
+  if (Array.isArray(el)) {
+    const out = [], seen = new Set();
+    for (const e of el) {
+      for (const v of elementVerts(mesh, e, tolDeg)) {
+        if (!seen.has(v)) { seen.add(v); out.push(v); }
+      }
+    }
+    return out;
+  }
   if (el.kind === 'vertex') return el.vert ? [el.vert] : [];
   if (el.kind === 'edge') {
     const he = el.he;
@@ -145,13 +162,35 @@ export function elementVerts(mesh, el, tolDeg = 0.5) {
 }
 
 /**
- * gizmo 要掛在哪裡 ＝ 涉及頂點的重心。
+ * gizmo 要掛在哪裡 ＝ **中心**（變換三個概念裡的第三個）。
  *
  * 用重心而不是「面的中心點」，是因為三種 kind 這樣就能共用同一段 ——
  * 單一頂點的重心就是它自己，一條邊的重心就是中點。
+ *
+ * ── 兩種中心（`pivot`）────────────────────────────────
+ * | 值 | 是什麼 | 什麼時候差得出來 |
+ * |---|---|---|
+ * | `'median'`（預設） | **全部**選取頂點的重心 | — |
+ * | `'active'` | **最後點的那一個元素**自己的重心 | 多選 ＋ 旋轉／縮放 |
+ *
+ * 單選時兩者**是同一個點**，所以這個參數在多選做出來之前沒有意義
+ * （原本刻意沒做，見那一輪的說明）。多選之後差別很具體：
+ * 選兩個面要縮放時，`median` 是兩面中間、`active` 是剛點的那一面 ——
+ * **它決定東西往哪邊長。**
+ *
+ * ⚠ `pivot='active'` 會回過頭影響**方向**：`elementBasis()` 的切線本來就
+ * 只看 active 那一個。兩個概念名義上正交，實作上方向依賴中心 ——
+ * Blender 也是這樣（算方向的函式吃 pivot 當參數）。
+ *
+ * @param {object|object[]} el 一個元素或一個陣列
+ * @param {'median'|'active'} pivot
  */
-export function elementCenter(mesh, el, tolDeg = 0.5) {
-  const vs = elementVerts(mesh, el, tolDeg);
+export function elementCenter(mesh, el, tolDeg = 0.5, pivot = 'median') {
+  let target = el;
+  if (pivot === 'active' && Array.isArray(el) && el.length) {
+    target = el[el.length - 1];                    // 順序即 active：最後一筆
+  }
+  const vs = elementVerts(mesh, target, tolDeg);
   const c = new THREE.Vector3();
   if (!vs.length) return c;
   for (const v of vs) c.add(v.p);
@@ -247,10 +286,50 @@ export function elementBasis(mesh, el, tolDeg = 0.5) {
   const fail = () => ({ quat: new THREE.Quaternion(), ok: false });
   if (!mesh || !el) return fail();
 
+  const list = Array.isArray(el) ? el : [el];
+  if (!list.length) return fail();
+
+  /**
+   * 多選：**法向取全部的和，切線照 active（最後點的）那一個。**
+   *
+   * 法向取和是 Blender 的規則（選了幾個面就把法向相加）——
+   * 兩個相鄰的斜面一起選，箭頭會指向它們中間，那正是要的。
+   *
+   * ⚠ **每一個元素的 Z 先正規化再相加。** 不正規化的話，一個面的 Z 是
+   * 「那個共面區域裡所有三角形法向的和」—— 12 個三角形的區域會
+   * **壓過** 2 個三角形的區域，而使用者眼中那只是「兩個面」。
+   * 正規化之後每個選取元素**權重相同**，結果講得出來。
+   *
+   * 切線只看 active，理由是它必須**唯一**：把好幾條切線平均起來，
+   * 兩個垂直的面就會得到一個零向量（然後退化）。
+   * 而「箭頭的扭轉方向照你最後點的那一個」是一句講得出來的規則。
+   */
+  const z = new THREE.Vector3();
+  for (const e of list) {
+    const r = elementZY(mesh, e, tolDeg);
+    if (r && r.z.lengthSq() > 1e-16) z.add(r.z.clone().normalize());
+  }
+  const act = elementZY(mesh, list[list.length - 1], tolDeg);
+  const y = act ? act.y : null;
+
+  const q = basisFrom(z, y);
+  return q ? { quat: q, ok: true } : fail();
+}
+
+/**
+ * 一個元素的「Z 想朝哪、Y 大概朝哪」（還沒正交化）。
+ *
+ * 抽出來是為了讓多選那一段有東西可以合併 ——
+ * 三種 kind 的規則只寫在這裡一次。
+ *
+ * @returns {{z:THREE.Vector3, y:THREE.Vector3|null}|null}
+ */
+function elementZY(mesh, el, tolDeg = 0.5) {
+  if (!el) return null;
   let z = null, y = null;
 
   if (el.kind === 'vertex') {
-    if (!el.vert) return fail();
+    if (!el.vert) return null;
     z = vertNormal(mesh, el.vert);
     const out = mesh.vertOutgoing(el.vert);
     if (out.length === 2) {
@@ -261,16 +340,16 @@ export function elementBasis(mesh, el, tolDeg = 0.5) {
 
   } else if (el.kind === 'edge') {
     const he = el.he;
-    if (!he || he.v === he.to) return fail();
+    if (!he || he.v === he.to) return null;
     y = new THREE.Vector3().subVectors(he.to.p, he.v.p);
-    if (y.lengthSq() < 1e-20) return fail();
+    if (y.lengthSq() < 1e-20) return null;
     z = vertNormal(mesh, he.v).add(vertNormal(mesh, he.to));
     // 法向要投影到與邊垂直的平面上，否則 Y 與 Z 不正交，基底會被 basisFrom 扭回去
     const d = y.clone().normalize();
     z.addScaledVector(d, -z.dot(d));
 
   } else if (el.kind === 'face') {
-    if (!el.face) return fail();
+    if (!el.face) return null;
     const reg = regionOf(mesh, el.face, tolDeg);
     z = new THREE.Vector3();
     for (const f of (reg.faces.length ? reg.faces : [el.face])) {
@@ -289,11 +368,10 @@ export function elementBasis(mesh, el, tolDeg = 0.5) {
     y = best;
 
   } else {
-    return fail();
+    return null;
   }
 
-  const q = basisFrom(z, y);
-  return q ? { quat: q, ok: true } : fail();
+  return z ? { z, y } : null;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -357,6 +435,37 @@ export function pushFace(mesh, face, dist, tolDeg = 0.5) {
   if (n.lengthSq() < 1e-12) return 0;
   return moveVerts(reg.verts, n.multiplyScalar(dist));
 }
+
+// ═══════════════════════════════════════════════════════
+//  網格被拆掉重建之後，把選取搬過去 —— ⛔ 刻意還沒有
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **這裡本來要放 `remapElements()`（＝ Blender 的 targetmap），2026-08-24 決定不放。**
+ *
+ * 理由很簡單：**現在沒有任何一條路需要它。**
+ * 我們唯一改變拓撲的路徑是拆掉重建，而目前只有一個工具走那條路
+ * （`extrudeFace`），它一次只擠一個面，而且**新蓋子由 `capFace` 直接回傳** ——
+ * 那已經是一個夠用的、一次性的 targetmap。
+ * Undo／讀檔換上來的是**另一個模型狀態**，那裡就該老實清掉，不該搬。
+ *
+ * ⛔ **所以不要「先寫好等著用」。** 寫了它就會變成第二個 `pushFace()`：
+ * 函式在、測試在、沒有介面在呼叫，而下一個人讀文件會以為那條路是通的
+ * （鐵律六：不要在日誌裡寫一個不存在的退路）。
+ *
+ * ⏳ **什麼時候才真的需要**：第一個「會拆掉重建、而且使用者可能同時選著
+ * 好幾個元素」的工具 —— 合併頂點、刪除面／溶解面、環切。
+ * 那時再寫，而且配對規則已經想好了（寫在這裡當規格，不是當程式）：
+ *
+ * | kind | 拿什麼配 |
+ * |---|---|
+ * | 點 | 頂點索引 |
+ * | 邊 | （起點索引、終點索引）那一對 |
+ * | 面 | 共面區域的**頂點索引集合** |
+ *
+ * 一律走**頂點索引**不走 `id`（id 每次重建都重新編號），靠的是拆掉重建那條路
+ * 的既有契約：「**既有頂點保持原索引、新頂點往後追加**」——
+ * 跟 `mesh.js` 的 `_copyMarksTo()` 同一套做法。
 
 // ═══════════════════════════════════════════════════════
 //  變換：記下初始座標，每一幀從初始值重算
