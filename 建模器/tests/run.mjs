@@ -5221,6 +5221,279 @@ section('bake 順手還原多邊形 ＋ 平面性防護');
   }
 }
 
+section('壓平（＝ 縮放 × 法向 × Z 打 0）');
+
+/** 圓柱 → 還原多邊形 → 挑三片相鄰的側面 */
+function threeSides() {
+  const m = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 40, seg: 32 })).mesh;
+  m.computeNormals(); summarize(m);
+  const side = m.faces.filter(f => Math.abs(f.normal.y) < 0.01);
+  const pick = [side[0]];
+  for (const f of side) {
+    if (pick.length >= 3) break;
+    const last = pick[pick.length - 1];
+    if (!pick.includes(f) &&
+        m.faceVerts(f).filter(v => m.faceVerts(last).includes(v)).length === 2) pick.push(f);
+  }
+  return { m, sels: pick.map(face => ({ kind: 'face', face })) };
+}
+
+{
+  const { m, sels } = threeSides();
+  eq('三片相鄰的側面 共 8 個頂點', edit.elementVerts(m, sels).length, 8);
+
+  const u0 = unfoldMesh(m, makeRule('foamboard', 0.5));
+  const r = edit.flattenElements(m, sels);
+  ok('壓平成功', r.ok, r.reason || '');
+  eq('★ 移動了 8 個頂點', r.moved, 8);
+  near('★ 回報壓平前的偏離 0.478（那是使用者要付的代價）', r.before, 0.478055, 1e-5);
+
+  // ★ 壓平之後，那三片真的落在同一個平面上
+  const verts = edit.elementVerts(m, sels);
+  const b = edit.elementBasis(m, sels);
+  const nZ = new THREE.Vector3(0, 0, 1).applyQuaternion(b.quat);
+  const c = edit.elementCenter(m, sels);
+  let dev = 0;
+  for (const v of verts) {
+    dev = Math.max(dev, Math.abs(nZ.dot(new THREE.Vector3().subVectors(v.p, c))));
+  }
+  near('★ 壓平後 8 個點全部落在同一個平面上', dev, 0, 1e-9);
+
+  edit.refreshAfterEdit(m);
+  summarize(m);
+  eq('★ 那三片變成同一個共面區域（34 → 32 區）',
+     new Set(m.faces.map(f => f.region)).size, 32);
+
+  /**
+   * ★★ **壓平之後「併成一個面」是免費的** —— 因為它們真的共面了。
+   * 這一整條就是「溶解面」的替代路徑，而且結果是**真正平的**面。
+   */
+  const g = edit.mergeCoplanarFaces(m);
+  ok('★★ 壓平之後 還原多邊形會自己把它們併掉', g.ok, g.reason || '');
+  eq('　　F 34 → 32', `${g.before}/${g.after}`, '34/32');
+  const big = g.mesh.faces.filter(f => g.mesh.faceVerts(f).length === 8);
+  eq('★ 三片併成一個 8 邊形', big.length, 1);
+
+  let worst = 0;
+  for (const f of g.mesh.faces) worst = Math.max(worst, edit.facePlanarity(g.mesh, f).dev);
+  ok('★ 而且它是真正平的（不平度 < 1 微米）', worst <= edit.MERGE_FLAT_TOL_CM,
+     worst.toExponential(2));
+
+  const v = g.mesh.validate();
+  eq('　　結構完好 χ2 closed', `${v.euler}/${v.closed}/${v.ok}`, '2/true/true');
+
+  const u1 = unfoldMesh(g.mesh, makeRule('foamboard', 0.5));
+  ok('★ 展開總面積變了（形狀真的被削平了，這是預期的）',
+     Math.abs(u1.stats.area - u0.stats.area) > 1, `${u0.stats.area.toFixed(3)} → ${u1.stats.area.toFixed(3)}`);
+
+  // ★ 選取搬過去之後只剩一個面（去重）
+  const moved = edit.remapElements(m, g.mesh, sels, g.remap);
+  eq('★★ 三個舊面搬過去之後**去重成一個**（不去重數字會說謊）', moved.length, 1);
+  eq('　　而且搬到的就是那個 8 邊形', g.mesh.faceVerts(moved[0].face).length, 8);
+}
+
+{
+  /**
+   * 🔴 **對照組：不壓平、直接溶解成一個 n 邊形（Blender 的「溶解面」）。**
+   * 這一條釘住「為什麼那條路在這個專案不做」——
+   * 不是主觀判斷，是**超標 96 倍**。
+   */
+  const { m, sels } = threeSides();
+  const loops = edit.boundaryLoops(m, sels.map(s => s.face));
+  eq('三片的外緣是一圈 8 條', `${loops.length}/${loops[0].length}`, '1/8');
+
+  const vi = m._vertIndex();
+  const pts = m.verts.map(v => v.p.clone());
+  const idx = loops[0].map(he => vi.get(he.v.id));
+  const n = new THREE.Vector3();
+  for (let i = 0; i < idx.length; i++) {
+    const a = pts[idx[i]], b = pts[idx[(i + 1) % idx.length]];
+    n.x += (a.y - b.y) * (a.z + b.z);
+    n.y += (a.z - b.z) * (a.x + b.x);
+    n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  n.normalize();
+  let dev = 0;
+  for (const i of idx) {
+    dev = Math.max(dev, Math.abs(n.dot(new THREE.Vector3().subVectors(pts[i], pts[idx[0]]))));
+  }
+  near('★★ 直接溶解出來的 8 邊形偏離平面 0.956 cm', dev, 0.9561, 1e-3);
+  ok('★★ 那是可切容許值（0.1mm）的 90 倍以上 —— 所以這條路不做',
+     dev / edit.PLANAR_TOL_CM > 90, `${(dev / edit.PLANAR_TOL_CM).toFixed(0)} 倍`);
+}
+
+{
+  // 本來就平的面：壓平要什麼都不做，而且回報 before = 0 讓呼叫端講一句
+  const m = edit.mergeCoplanarFaces(buildPrim('box', { w: 60, h: 45, d: 40 })).mesh;
+  m.computeNormals();
+  const top = m.faces.find(f => f.normal.y > 0.999);
+  const r = edit.flattenElements(m, [{ kind: 'face', face: top }]);
+  eq('★ 本來就平的面 → before = 0（呼叫端據此講「本來就是平的」）', r.before, 0);
+  near('　　體積一格都沒動', m.volume(), 108000, 1e-9);
+
+  // 選不到 3 個頂點就擋下來
+  const bad = edit.flattenElements(m, [{ kind: 'vertex', vert: m.verts[0] }]);
+  ok('只選一個點 → 擋下來並說原因', !bad.ok && /3 個頂點/.test(bad.reason), bad.reason);
+}
+
+// ═══════════════════════════════════════════════════════
+//  非凸的面：扇形三角化不成立
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 2026-08-24 kang 實測回報：圓柱壓平一段再往內拉，畫面上出現一塊奇怪的三角形。
+ *
+ * 原因是 `toGeometry()` 用**扇形三角化**，而那**只對凸多邊形成立** ——
+ * 上蓋一凹，就有三角形跑到多邊形外面而且繞向翻掉。
+ *
+ * ⚠ **這個 bug 一直都在**：n 邊形本來只出現在 `roundBox`（凸）與 `tube`（四邊形），
+ * 匯入的擠出件早就自己耳切了。「還原多邊形」讓它浮出來。
+ * 而全專案有 **8 個地方**在做同一件事（畫面、面積、STL、布林、展開面積…）。
+ */
+
+section('非凸的面：faceTriangles 統一入口');
+
+/** 圓柱 → 還原多邊形 → 壓平三片 → 再併 → 把那一片往內拉，做出一個凹掉的上蓋 */
+function dentedCylinder(pull = -8) {
+  const m0 = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 40, seg: 32 })).mesh;
+  m0.computeNormals(); summarize(m0);
+  const side = m0.faces.filter(f => Math.abs(f.normal.y) < 0.01);
+  const pick = [side[0]];
+  for (const f of side) {
+    if (pick.length >= 3) break;
+    const last = pick[pick.length - 1];
+    if (!pick.includes(f) &&
+        m0.faceVerts(f).filter(v => m0.faceVerts(last).includes(v)).length === 2) pick.push(f);
+  }
+  edit.flattenElements(m0, pick.map(face => ({ kind: 'face', face })));
+  edit.refreshAfterEdit(m0);
+  const g = edit.mergeCoplanarFaces(m0);
+  const m = g.ok ? g.mesh : m0;
+  m.computeNormals(); summarize(m);
+  const flat = m.faces.find(f => m.faceVerts(f).length === 8);
+  edit.moveVerts(edit.elementVerts(m, { kind: 'face', face: flat }),
+                 m.computeFaceNormal(flat).clone().multiplyScalar(pull));
+  edit.refreshAfterEdit(m);
+  return m;
+}
+
+/** 一個面真正的面積（Newell），跟三角化的結果對答案用 */
+function trueFaceArea(m, f) {
+  const vs = m.faceVerts(f);
+  const n = new THREE.Vector3();
+  for (let i = 0; i < vs.length; i++) {
+    const a = vs[i].p, b = vs[(i + 1) % vs.length].p;
+    n.x += (a.y - b.y) * (a.z + b.z);
+    n.y += (a.z - b.z) * (a.x + b.x);
+    n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return n.length() / 2;
+}
+
+{
+  const m = dentedCylinder();
+  const cap = m.faces.find(f => f.normal.y > 0.999);
+  const vs = m.faceVerts(cap);
+  eq('凹掉的上蓋還是 32 邊形', vs.length, 32);
+
+  // 它真的是非凸的（不然這一組測試什麼都沒測到）
+  const n = m.computeFaceNormal(cap).clone();
+  let reflex = 0;
+  for (let i = 0; i < vs.length; i++) {
+    const a = vs[i].p, b = vs[(i + 1) % vs.length].p, c = vs[(i + 2) % vs.length].p;
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(b, a), new THREE.Vector3().subVectors(c, b));
+    if (cr.dot(n) < -1e-9) reflex++;
+  }
+  eq('★ 而且它真的是非凸的（2 個凹角）', reflex, 2);
+
+  const truth = trueFaceArea(m, cap);
+  const tris = m.faceTriangles(cap);
+  eq('★ 耳切出來的三角形數 ＝ n − 2', tris.length, vs.length - 2);
+
+  let abs = 0, flipped = 0;
+  for (const [a, b, c] of tris) {
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(b.p, a.p),
+      new THREE.Vector3().subVectors(c.p, a.p));
+    abs += cr.length() / 2;
+    if (cr.dot(n) < -1e-9) flipped++;
+  }
+  rel('★★ 三角形面積總和 ＝ 多邊形真正的面積（沒有多畫）', abs, truth);
+  eq('★★ 沒有任何一個三角形繞向翻掉', flipped, 0);
+
+  /**
+   * 對照：舊的扇形做法在同一個面上會多算 4.56%、而且翻掉 1 個。
+   * 留著這一條是為了證明**這組測試真的測得到東西** ——
+   * 不然改壞了也不會有人發現（鐵律：要測病因，不只測症狀）。
+   */
+  let fanAbs = 0, fanFlip = 0;
+  for (let i = 2; i < vs.length; i++) {
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(vs[i - 1].p, vs[0].p),
+      new THREE.Vector3().subVectors(vs[i].p, vs[0].p));
+    fanAbs += cr.length() / 2;
+    if (cr.dot(n) < -1e-9) fanFlip++;
+  }
+  ok('★ 對照組：舊的扇形做法確實會多算（證明這組測試測得到東西）',
+     fanAbs - truth > 1, `多算 ${(fanAbs - truth).toFixed(2)} cm²`);
+  ok('　　而且確實會翻掉三角形', fanFlip > 0, `${fanFlip} 個`);
+}
+
+{
+  // ★ 下游那幾條：面積、STL、體積
+  const m = dentedCylinder();
+  let truth = 0;
+  for (const f of m.faces) truth += trueFaceArea(m, f);
+  rel('★★ mesh.area() ＝ 每個面真正的面積相加', m.area(), truth);
+
+  const tris = triangles(m, {});
+  const v = m.validate();
+  eq('　　網格仍然封閉、χ 2', `${v.euler}/${v.closed}`, '2/true');
+  rel('★ STL 體積 ＝ 網格體積', stlVolume(tris), m.volume());
+
+  /**
+   * ★★ **STL 不可以有法向朝內的三角形。**
+   * 體積是**有號**的，翻掉的三角形在裡面也照樣對得上 ——
+   * 所以體積驗不出這件事（坑第 17 條：中途的量一直都是對的）。
+   * 要驗就要**逐個三角形**問它的法向對不對。
+   */
+  let inward = 0;
+  for (const t of tris) {
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(t.b, t.a),
+      new THREE.Vector3().subVectors(t.c, t.a));
+    if (cr.dot(t.n) < 0) inward++;
+  }
+  eq('★★ STL 裡沒有法向跟繞向對不起來的三角形', inward, 0);
+}
+
+{
+  // 凸的情況必須跟舊的扇形做法**逐字相同** —— 1219 項既有測試就是這個斷言的另一半
+  let checked = 0, same = true;
+  for (const [t, p] of [['box', { w: 60, h: 45, d: 40 }],
+                        ['cylinder', { r: 25, h: 40, seg: 32 }],
+                        ['tube', { r: 25, ri: 20, h: 40, seg: 32 }],
+                        ['roundBox', { w: 60, h: 45, d: 40, r: 6 }]]) {
+    const m0 = buildPrim(t, p); m0.computeNormals();
+    const g = edit.mergeCoplanarFaces(m0);
+    for (const m of [m0, g.ok ? g.mesh : null].filter(Boolean)) {
+      m.computeNormals();
+      for (const f of m.faces) {
+        const vs = m.faceVerts(f);
+        const got = m.faceTriangles(f);
+        checked++;
+        if (got.length !== vs.length - 2) { same = false; break; }
+        for (let i = 2; i < vs.length; i++) {
+          const w = got[i - 2];
+          if (w[0] !== vs[0] || w[1] !== vs[i - 1] || w[2] !== vs[i]) { same = false; break; }
+        }
+      }
+    }
+  }
+  ok(`★★ 凸的情況跟扇形逐字相同（檢查 ${checked} 個面）`, same);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

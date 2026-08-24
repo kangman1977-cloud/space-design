@@ -28,7 +28,8 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason }
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
-import { elementVerts, refreshAfterEdit, extrudeFace } from './core/edit.js';
+import { elementVerts, refreshAfterEdit, extrudeFace,
+         flattenElements, mergeCoplanarFaces } from './core/edit.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -353,6 +354,7 @@ $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
+$('flatten').onclick = () => flattenSelected();
 for (const b of document.querySelectorAll('.efBtn')) {
   b.onclick = () => setEditFilter(b.dataset.f);
 }
@@ -847,6 +849,84 @@ function extrudeSelected() {
     : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`);
 }
 
+/**
+ * 壓平：把選到的面壓到同一個平面上，然後**自動併成一個面**。
+ *
+ * ── 為什麼要這一顆（它不是新功能）────────────────────
+ * 底下走的是「**縮放 × 法向 × Z 打 0**」，完全是現成的機制，一行新數學都沒有。
+ * 存在的理由只是**讓它按得到** —— 那個組合沒有人猜得到。
+ * 跟擠出的方案 C 同一個形狀：按一顆做一件固定的事。
+ *
+ * ── 為什麼壓完要自動併面 ────────────────────────────
+ * kang 選了 3 個 seg，想把它們變成一個面。
+ * 「不管夾角直接併成一個 n 邊形」（Blender 的溶解面）**實測偏離平面 0.9561 cm**，
+ * 是可切容許值（0.1mm）的 **96 倍** —— 那不是近似，是做不出來。
+ *
+ * 壓平之後那幾片**真的共面**了，`mergeCoplanarFaces()` 就會自己併掉，
+ * 而且是**真正平的**面、展開仍然精確。**所以併面是壓平的免費附贈。**
+ *
+ * ⚠ **形狀會變，這是它的本質。** 所以 toast 一定要講出「壓平前偏離多少」——
+ * 那個數字就是他即將付出的代價，而且他自己驗得出來（坑第 24 條）。
+ */
+function flattenSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'face') {
+    toast('先在編輯模式下選面（可以開「加選」選好幾個），再按「壓平」', true);
+    return;
+  }
+  const obj = el.obj;
+  const oldMesh = obj.mesh();
+  const n = sel.editCount;
+
+  const r = flattenElements(oldMesh, sel.editSels, sel.editPivot);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  /**
+   * ⚠ 本來就在同一個平面上時**什麼都不要做**，而且要講一句。
+   * 悶著記一步「什麼都沒改」的 Undo，使用者會以為壞掉了。
+   */
+  if (r.before === 0) {
+    toast(n > 1 ? `這 ${n} 個面本來就在同一個平面上，沒有東西要壓`
+                : '這個面本來就是平的，沒有東西要壓');
+    return;
+  }
+
+  refreshAfterEdit(oldMesh);
+
+  /**
+   * 壓平之後那幾片真的共面了 → 併掉它們。
+   * ⚠ 併面會**換掉整個網格物件**，所以要走 `setMesh()` ＋ 搬選取，
+   * 而且一定要在 `commit()` 之後才搬（擠出那一輪學到的）。
+   */
+  const g = mergeCoplanarFaces(oldMesh);
+  let merged = 0;
+  if (g.ok) {
+    obj.setMesh(g.mesh);
+    refreshAfterEdit(g.mesh);
+    merged = g.before - g.after;
+  }
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(n > 1 ? `壓平 ${n} 個面` : '壓平一個面');
+
+  if (g.ok) sel.remapEditSels(obj, oldMesh, g.mesh, g.remap);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 講出「壓平前偏離多少」—— 那是他付出的代價，而且是他驗得出來的數字。
+   * 只講「壓平了」等於沒講：形狀變了多少他看不出來。
+   */
+  const bits = [`已壓平${n > 1 ? ` ${n} 個面` : ''}（原本最遠偏離 ${r.before.toFixed(3)} cm）`];
+  if (merged > 0) {
+    const now = sel.editSel && sel.editSel.face
+      ? obj.mesh().faceVerts(sel.editSel.face).length : 0;
+    bits.push(now ? `已併成一個 ${now} 邊形` : `已併掉 ${merged} 個面`);
+  }
+  toast(bits.join('　'));
+}
+
 // ═══════════════════════════════════════════════════════
 //  分片
 // ═══════════════════════════════════════════════════════
@@ -1057,6 +1137,19 @@ function updateBar() {
    *
    * 用灰掉而不是按了跳訊息：一眼就看得出「這個 kind 沒有這種變換」。
    */
+  /**
+   * 壓平：**選到面就給按**（一個或多個都行）。
+   * 它動的是選取那幾片的頂點，跟擠出「一次只能一個」不同 ——
+   * 壓平多個面本來就是它的主要用途（把好幾片 seg 壓成一個平面）。
+   */
+  $('flatten').disabled = !face;
+  $('flatten').title = face
+    ? (sel.editCount > 1
+        ? `把選到的 ${sel.editCount} 個面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變`
+        : '把這個面壓平。⚠ 本來就是平的話不會有動作')
+    : (sel.editMode ? '先選一個面（可以開「加選」選好幾個）'
+                    : '先按「拉點線面」進入編輯模式，再選面');
+
   const vtx = sel.editMode && sel.editSel && sel.editSel.kind === 'vertex';
   for (const id of ['mRot', 'mScale']) {
     $(id).disabled = vtx;

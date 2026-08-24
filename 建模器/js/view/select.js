@@ -1298,7 +1298,17 @@ export class Selection {
       this._proxy.position.copy(d.start.pos)
         .addScaledVector(this._axisDir(info.axis, d.start.quat), num);
     } else if (info.mode === 'scale') {
-      if (num === 0) return false;                 // 縮到 0 ＝ 把面壓成零面積
+      /**
+       * ⚠ **0 是合法的，不要擋。**
+       * 沿**法向**縮到 0 就是「壓平」—— 一個完全合理而且有用的操作
+       * （工具列那顆「壓平」底下走的就是這條路）。
+       * 沿切線縮到 0 才可能把面壓成零面積，而那件事已經有人管：
+       * `refreshAfterEdit()` 會回報 `degenerate` 並跳提醒。
+       *
+       * 〔原本這裡有一行 `if (num === 0) return false`，而且是**沉默地拒絕** ——
+       * 　打了 0 按 Enter 什麼都不會發生，也不講為什麼（坑第 11 條）。
+       * 　**程式沒資格替人決定做不做得出來**（跟 `nonPlanarFaces()` 只提醒不擋同一條）。〕
+       */
       this._proxy.scale.set(1, 1, 1);
       this._proxy.scale[k] = num;
     } else {

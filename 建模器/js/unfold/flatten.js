@@ -1478,10 +1478,10 @@ function measure(piece, mesh, faces) {
   // 而且不必為了輪廓有沒有孔傷腦筋
   let a = 0;
   for (const f of faces) {
-    const vs = mesh.faceVerts(f);
-    for (let i = 2; i < vs.length; i++) {
-      const ab = new THREE.Vector3().subVectors(vs[i - 1].p, vs[0].p);
-      const ac = new THREE.Vector3().subVectors(vs[i].p, vs[0].p);
+    // ⚠ 非凸的面用扇形切會多算面積，而這個數字會變成備料表上的數字
+    for (const [x, y, z] of mesh.faceTriangles(f)) {
+      const ab = new THREE.Vector3().subVectors(y.p, x.p);
+      const ac = new THREE.Vector3().subVectors(z.p, x.p);
       a += ab.cross(ac).length() / 2;
     }
   }

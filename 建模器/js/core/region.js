@@ -100,8 +100,10 @@ function finishRegion(mesh, r) {
   const centroid = new THREE.Vector3();
 
   for (const f of r.faces) {
-    const vs = mesh.faceVerts(f);
-    for (let i = 2; i < vs.length; i++) {
+    // 非凸的面要走耳切，不然面積與重心都會多算（見 mesh.faceTriangles）
+    for (const [v0, v1, v2] of mesh.faceTriangles(f)) {
+      const vs = [v0, v1, v2];
+      const i = 2;
       const ab = new THREE.Vector3().subVectors(vs[i - 1].p, vs[0].p);
       const ac = new THREE.Vector3().subVectors(vs[i].p, vs[0].p);
       const cr = new THREE.Vector3().crossVectors(ab, ac);

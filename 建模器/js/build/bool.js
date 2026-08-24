@@ -159,9 +159,9 @@ function toManifold(mesh, label = '物件') {
 
   const tri = [];
   for (const f of mesh.faces) {
-    const vs = mesh.faceVerts(f);
-    for (let i = 2; i < vs.length; i++) {
-      tri.push(vi.get(vs[0].id), vi.get(vs[i - 1].id), vi.get(vs[i].id));
+    // ⚠ 非凸的面用扇形切會送出繞向翻掉的三角形，Manifold 會拿到一個壞掉的實體
+    for (const [a, b, c] of mesh.faceTriangles(f)) {
+      tri.push(vi.get(a.id), vi.get(b.id), vi.get(c.id));
     }
   }
 

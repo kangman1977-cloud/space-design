@@ -27,6 +27,7 @@
  */
 
 import * as THREE from 'three';
+import { earClip } from './triangulate.js';
 
 /** 邊的角色。展開時才會用到，但欄位從第 1 期就存在。 */
 export const EDGE_ROLE = {
@@ -203,14 +204,85 @@ export class Mesh {
     return d !== null && Math.abs(d) <= THREE.MathUtils.degToRad(tolDeg);
   }
 
+  /**
+   * 🔴 **一個面拆成哪幾個三角形。全專案唯一的入口。**
+   *
+   * ── 為什麼要有這一支 ────────────────────────────────
+   * 顯示卡、STL、布林函式庫都只吃三角形，所以 n 邊形一定要拆。
+   * 而**扇形三角化（從第一個點拉到每一組相鄰邊）只對凸多邊形成立** ——
+   * 凹進去的多邊形用扇形切，會產生**跑到多邊形外面、而且繞向翻掉**的三角形。
+   *
+   * 實測（2026-08-24，kang 回報的畫面）：圓柱壓平一段再往內拉，
+   * 上蓋變成非凸的 32 邊形，扇形切出來**多畫了 81.95 cm²（4.56%）**，
+   * 其中 1 個三角形繞向是反的。
+   *
+   * ⚠ **這個 bug 一直都在，只是以前叫不出來。**
+   * n 邊形本來只出現在 `roundBox`（20 邊形，凸）與 `tube`（四邊形），
+   * 而匯入的擠出件早就自己耳切成三角形了。
+   * 「還原多邊形」讓每個共面區域都變成 n 邊形之後，它才浮出來。
+   *
+   * ── 為什麼不一律耳切 ────────────────────────────────
+   * 絕大多數的面都是凸的（三角形、四邊形、參數體的每一個面），
+   * 而扇形是 O(n)、耳切是 O(n²)。**先問凸不凸，凸的走快的那條。**
+   * ⭐ 而且這樣一來，**凸的情況跟改之前逐字相同** ——
+   * 1219 項既有測試就是那個斷言。
+   *
+   * ⛔ **不要再自己寫 `for (let i = 2; i < vs.length; i++)`。**
+   * 那個模式在這個專案出現過 8 次，每一次都是同一個 bug 的一個出口。
+   *
+   * @returns {Array<[Vertex,Vertex,Vertex]>} 繞向跟面一致
+   */
+  faceTriangles(face) {
+    const vs = this.faceVerts(face);
+    if (vs.length < 3) return [];
+    if (vs.length === 3) return [[vs[0], vs[1], vs[2]]];
+
+    const fan = () => {
+      const out = [];
+      for (let i = 2; i < vs.length; i++) out.push([vs[0], vs[i - 1], vs[i]]);
+      return out;
+    };
+    if (vs.length === 4 || isConvexLoop(vs, this.computeFaceNormal(face))) return fan();
+
+    /**
+     * 非凸 → 投影到面自己的平面，用耳切。
+     *
+     * 投影的基底：Z ＝ 面法向，X 取第一條邊，Y ＝ Z×X。
+     * 繞向會因此保持一致 —— 在那個基底裡，面的繞向是逆時針，
+     * 而 `earClip()` 吃的就是逆時針。
+     */
+    const n = this.computeFaceNormal(face).clone();
+    if (n.lengthSq() < 1e-20) return fan();      // 零面積，退回扇形（反正也畫不出來）
+    n.normalize();
+    const ex = new THREE.Vector3().subVectors(vs[1].p, vs[0].p);
+    ex.addScaledVector(n, -ex.dot(n));
+    if (ex.lengthSq() < 1e-20) return fan();
+    ex.normalize();
+    const ey = new THREE.Vector3().crossVectors(n, ex);
+
+    const o = vs[0].p;
+    const flat = vs.map(v => {
+      const d = new THREE.Vector3().subVectors(v.p, o);
+      return { x: d.dot(ex), y: d.dot(ey) };
+    });
+
+    const tris = earClip(flat.map((_, i) => i), flat);
+    /**
+     * ⚠ **耳切失敗（自交、重複點…）就退回扇形，不要回傳空的。**
+     * 回空的話那個面在畫面上與 STL 裡**整片消失**，
+     * 而使用者會以為模型壞了 —— 那比「畫得有點怪」糟得多（坑第 11 條）。
+     */
+    if (tris.length !== vs.length - 2) return fan();
+    return tris.map(t => [vs[t[0]], vs[t[1]], vs[t[2]]]);
+  }
+
   /** 有號體積。封閉網格才有意義，用來對答案。 */
   volume() {
     let v = 0;
     for (const f of this.faces) {
-      const vs = this.faceVerts(f);
-      for (let i = 2; i < vs.length; i++) {
-        const a = vs[0].p, b = vs[i - 1].p, c = vs[i].p;
-        v += a.dot(new THREE.Vector3().crossVectors(b, c)) / 6;
+      // 有號量對非凸也成立，但一律走 faceTriangles() —— 全專案只留一個三角化入口
+      for (const [x, y, z] of this.faceTriangles(f)) {
+        v += x.p.dot(new THREE.Vector3().crossVectors(y.p, z.p)) / 6;
       }
     }
     return v;
@@ -220,10 +292,13 @@ export class Mesh {
   area() {
     let s = 0;
     for (const f of this.faces) {
-      const vs = this.faceVerts(f);
-      for (let i = 2; i < vs.length; i++) {
-        const ab = new THREE.Vector3().subVectors(vs[i - 1].p, vs[0].p);
-        const ac = new THREE.Vector3().subVectors(vs[i].p, vs[0].p);
+      /**
+       * ⚠ 這裡加的是**絕對值**，所以非凸的面用扇形切會多算
+       * （實測凹掉的 32 邊形多算 4.56%）。`faceTriangles()` 擋掉了那件事。
+       */
+      for (const [a, b, c] of this.faceTriangles(f)) {
+        const ab = new THREE.Vector3().subVectors(b.p, a.p);
+        const ac = new THREE.Vector3().subVectors(c.p, a.p);
         s += ab.cross(ac).length() / 2;
       }
     }
@@ -342,10 +417,9 @@ export class Mesh {
   toGeometry() {
     const pos = [], nor = [];
     for (const f of this.faces) {
-      const vs = this.faceVerts(f);
       const n = f.normal;
-      for (let i = 2; i < vs.length; i++) {
-        for (const v of [vs[0], vs[i - 1], vs[i]]) {
+      for (const tri of this.faceTriangles(f)) {
+        for (const v of tri) {
           pos.push(v.p.x, v.p.y, v.p.z);
           nor.push(n.x, n.y, n.z);
         }
@@ -810,4 +884,26 @@ export class Mesh {
     }
     return m;
   }
+}
+
+
+/**
+ * 這一圈頂點是不是凸多邊形（在它自己的平面上看）。
+ *
+ * 判準：沿著繞向走一圈，每一個轉角的叉積都要跟法向同向。
+ * 出現反向就是凹角。
+ *
+ * ⚠ 容許值刻意用 `-1e-9` 而不是 0：**共線的三個點叉積是 0**，
+ * 那不是凹角（一整排共線的點在三角化後的網格上很常見）。
+ * 拿 `< 0` 去比會把它們誤判成凹的，然後每個面都跑去走耳切那條慢路。
+ */
+function isConvexLoop(vs, n) {
+  for (let i = 0; i < vs.length; i++) {
+    const a = vs[i].p, b = vs[(i + 1) % vs.length].p, c = vs[(i + 2) % vs.length].p;
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(b, a),
+      new THREE.Vector3().subVectors(c, b));
+    if (cr.dot(n) < -1e-9) return false;
+  }
+  return true;
 }

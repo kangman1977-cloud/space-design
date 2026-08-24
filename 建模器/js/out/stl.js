@@ -74,11 +74,15 @@ export function triangles(mesh, opt = {}) {
   };
 
   for (const f of mesh.faces) {
-    const vs = mesh.faceVerts(f);
-    if (vs.length < 3) continue;
-    const p0 = put(vs[0].p);
-    for (let i = 2; i < vs.length; i++) {
-      const a = p0, b = put(vs[i - 1].p), c = put(vs[i].p);
+    /**
+     * ⚠ **一律走 `mesh.faceTriangles()`，不要自己扇形切。**
+     * 非凸的面用扇形切會送出**跑到多邊形外面、而且繞向翻掉**的三角形，
+     * 而 STL 的繞向就是法向 —— 切片軟體會報非流形，
+     * 而**體積照樣對得上**（有號量），所以在這裡驗不出來。
+     * 那正是坑第 17 條：**中途的量一直都是對的，末端才錯。**
+     */
+    for (const tri of mesh.faceTriangles(f)) {
+      const a = put(tri[0].p), b = put(tri[1].p), c = put(tri[2].p);
       const n = new THREE.Vector3()
         .subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
       const L = n.length();
@@ -87,14 +91,16 @@ export function triangles(mesh, opt = {}) {
       if (L < 1e-12) continue;
 
       /**
-       * ⚠ 三個頂點都要 clone，**a 也不例外**。
+       * ⚠ 三個頂點都要 clone。
        *
-       * 扇形三角化時 `p0` 是每個面算一次、給所有三角形共用的。
-       * 如果直接把它塞進去，一個四邊形切出來的兩個三角形就會
-       * **共用同一個 Vector3 物件** —— 之後任何「就地」平移
-       * （dropToBed 就是）都會把它減兩次。
+       * 〔2026-08-24 改：原本的理由是「扇形三角化時 `p0` 每個面只算一次、
+       * 　給所有三角形共用，直接塞進去會讓兩個三角形共用同一個
+       * 　`Vector3`」。改走 `faceTriangles()` 之後每個三角形各自 `put()`，
+       * 　而 `put()` 自己就 `clone()` 了 —— **那個共用情形已經不存在**。
+       * 　留著 clone 是**便宜的保險**：這裡是輸出端，
+       * 　而下游的 `dropToBed()` 是「就地」平移，一旦共用就會被減兩次。〕
        *
-       * 實測（100×60 的平板加厚後放在 Y=44cm 處匯出）：
+       * 實測過的症狀（100×60 的平板加厚後放在 Y=44cm 處匯出）：
        *   dropToBed 前  外框 1000×600×2 mm、體積 +1,200,000  ✓
        *   dropToBed 後  外框 1000×600×439 mm、體積 −86,600,000 ✗
        * 面板判定「法向朝內，印出來會內外相反」，但真正的原因是

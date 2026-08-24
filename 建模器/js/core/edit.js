@@ -664,20 +664,37 @@ export function remapElements(oldMesh, newMesh, els, remap, tolDeg = 0.5) {
   };
 
   const out = [];
+  /**
+   * ⚠ **搬過去之後可能撞在一起，要去重。**
+   * 例如壓平三片再合併：三個舊面**全部指向同一個新面**，
+   * 不去重的話「選了幾個」會說 3，而畫面上只有一個 —— 那個數字在說謊（坑第 20 條）。
+   * 邊要連 `twin` 一起比（同一條邊有兩條半邊）。
+   */
+  const seen = new Set();
+  const fresh = e => {
+    const k = e.kind === 'vertex' ? e.vert
+            : e.kind === 'face' ? e.face
+            : (e.he.id < (e.he.twin ? e.he.twin.id : Infinity) ? e.he : e.he.twin);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  };
+
   for (const el of list) {
     if (!el) continue;
 
     if (el.kind === 'vertex') {
       const i = to(oi.get(el.vert));
       if (i !== undefined && newMesh.verts[i]) {
-        out.push({ ...el, vert: newMesh.verts[i], mesh: newMesh });
+        const e = { ...el, vert: newMesh.verts[i], mesh: newMesh };
+        if (fresh(e)) out.push(e);
       }
 
     } else if (el.kind === 'edge') {
       const a = to(oi.get(el.he && el.he.v)), b = to(oi.get(el.he && el.he.to));
       if (a === undefined || b === undefined) continue;
       const he = findEdge(a, b);
-      if (he) out.push({ ...el, he, mesh: newMesh });
+      if (he) { const e = { ...el, he, mesh: newMesh }; if (fresh(e)) out.push(e); }
 
     } else if (el.kind === 'face') {
       if (!el.face) continue;
@@ -690,10 +707,75 @@ export function remapElements(oldMesh, newMesh, els, remap, tolDeg = 0.5) {
       }
       if (lost || !want.size) continue;
       const f = findRegionFace(want);
-      if (f) out.push({ ...el, face: f, mesh: newMesh });
+      if (f) { const e = { ...el, face: f, mesh: newMesh }; if (fresh(e)) out.push(e); }
     }
   }
   return out;
+}
+
+// ═══════════════════════════════════════════════════════
+//  壓平
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **把選取的頂點壓到同一個平面上。**
+ *
+ * ── 它不是一個新功能，是「縮放 × 法向 × Z 打 0」──────────
+ * 這一支**完全走現成的 `elementBasis()` ＋ `applyElementTransform()`**，
+ * 一行新的數學都沒有。存在的理由只是**讓它按得到** ——
+ * 「方向切法向、種類切縮放、Z 打 0」沒有人猜得到。
+ *
+ * 跟擠出的方案 C 同一個形狀：按一顆做一件固定的事，
+ * 而那件事底下是已經驗過的機制。
+ *
+ * ── 為什麼這才是「把幾個面併成一個」的正解 ────────────
+ * kang 選了 3 個 seg，想把它們變成一個面。直覺的做法是
+ * 「不管夾角、直接併成一個 n 邊形」（＝ Blender 的溶解面）——
+ * **實測那個 8 邊形偏離平面 0.9561 cm，是可切容許值（0.1mm）的 96 倍。**
+ * 那不是「精確變近似」，是做不出來。
+ *
+ * 壓平之後那三片**真的共面**了，`mergeCoplanarFaces()` 就會自己把它們
+ * 併成一個面 —— 而且是**真正平的**面，展開仍然精確。
+ * **所以壓平之後，「併成一個面」是免費的。**
+ *
+ * ⚠ **形狀會變，這是它的本質不是缺點。** 呼叫端要講清楚。
+ *
+ * ⚠ **平面的法向是所有選取面的平均**（`elementBasis()` 的規則），
+ * 平面通過中心（`editPivot` 決定是重心還是 active）。
+ * 要「壓到跟某一片完全共面」是另一件事，**現在做不到**。
+ *
+ * @param {Mesh} mesh
+ * @param {object|object[]} el 一個元素或一個陣列
+ * @param {'median'|'active'} pivot
+ * @returns {{ok:boolean, reason?:string, moved:number, before:number}}
+ *          `before` ＝ 壓平前最遠的點離那個平面多遠（cm）——
+ *          本來就在平面上時它是 0，呼叫端據此講「這個面本來就是平的」
+ */
+export function flattenElements(mesh, el, pivot = 'median', tolDeg = 0.5) {
+  const verts = elementVerts(mesh, el, tolDeg);
+  if (verts.length < 3) {
+    return { ok: false, reason: '至少要選到 3 個頂點才壓得平', moved: 0, before: 0 };
+  }
+
+  const basis = elementBasis(mesh, el, tolDeg);
+  if (!basis.ok) {
+    return { ok: false, reason: '算不出這些面的方向（面積是零或孤立的點）', moved: 0, before: 0 };
+  }
+
+  const center = elementCenter(mesh, el, tolDeg, pivot);
+  const nZ = new THREE.Vector3(0, 0, 1).applyQuaternion(basis.quat);
+
+  let before = 0;
+  for (const v of verts) {
+    before = Math.max(before, Math.abs(nZ.dot(new THREE.Vector3().subVectors(v.p, center))));
+  }
+
+  const base = snapshotVerts(verts);
+  const moved = applyElementTransform(verts, base,
+    { pos: center, quat: basis.quat },
+    { pos: center, quat: basis.quat, scale: new THREE.Vector3(1, 1, 0) });
+
+  return { ok: true, moved, before };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -999,11 +1081,17 @@ export function facePlanarity(mesh, face, tolCm = PLANAR_TOL_CM) {
    * 零面積的面其實**是平的**（所有點都在同一條線上），所以 planar 回 true；
    * 真正該講的是「它被壓扁了」，那要另外一個欄位。
    */
+  /**
+   * ⚠ 走 `mesh.faceTriangles()`，**不要自己扇形切**。
+   * 這裡只拿面積判「是不是零面積」，多算一點不致命 ——
+   * 但全專案只留一個三角化入口，留一個例外就等於規則沒立起來
+   * （那個 `for (let i = 2; ...)` 的模式曾經有 8 個出口，每一個都是同一個 bug）。
+   */
   let area = 0;
   const ab = new THREE.Vector3(), ac = new THREE.Vector3();
-  for (let i = 2; i < vs.length; i++) {
-    ab.subVectors(vs[i - 1].p, vs[0].p);
-    ac.subVectors(vs[i].p, vs[0].p);
+  for (const [x, y, z] of mesh.faceTriangles(face)) {
+    ab.subVectors(y.p, x.p);
+    ac.subVectors(z.p, x.p);
     area += ab.cross(ac).length() / 2;
   }
   if (area < 1e-9) return { planar: true, dev: 0, area, degenerate: true };
