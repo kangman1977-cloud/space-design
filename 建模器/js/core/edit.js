@@ -1322,13 +1322,85 @@ export const BEVEL_MAX_SEG = 32;
  * @returns {{n: THREE.Vector3, d: number}} 本地平面 `n·p = d`
  */
 export function worldAxisPlane(matrix, axis, coord) {
-  const e = matrix.elements;                 // three.js 是 column-major
   const row = { x: 0, y: 1, z: 2 }[axis];
   if (row === undefined) throw new Error(`worldAxisPlane：不認得的軸「${axis}」`);
+  const n = new THREE.Vector3(0, 0, 0);
+  n.setComponent(row, 1);
+  return worldPlaneToLocal(matrix, n, coord);
+}
+
+/**
+ * 🔴 **任何一個世界平面 → 這個物件自己座標裡的平面。**
+ *
+ * `worldAxisPlane()` 只是它的特例（法向是單位軸）。抽出來是因為
+ * **刀具**要的平面不是軸對齊的，而**兩條路算同一件事遲早會不一致**
+ * （坑第 31 條：與其讓兩條路對齊，不如換一個只有一條路的定義）。
+ *
+ * 推導：世界點 `P = R·p + t`（`R` 含旋轉與縮放，`t` 是位置）。
+ * 要 `n·P = d`，展開成 `n·(R·p + t) = d`，也就是
+ *
+ * > **`(Rᵀ·n)·p = d − n·t`**
+ *
+ * ⚠ 所以本地法向是 **`R` 的那幾個「列」**（不是行），而偏移要扣掉 `n·t`。
+ * 有縮放時 `Rᵀ·n` 不是單位長度 —— `bisect()` 自己會歸一化。
+ *
+ * @param {THREE.Matrix4} matrix 物件的變換
+ * @param {THREE.Vector3} n 世界平面的法向
+ * @param {number} d 世界平面的偏移（`n·P = d`）
+ * @returns {{n: THREE.Vector3, d: number}} 本地平面 `n·p = d`
+ */
+export function worldPlaneToLocal(matrix, n, d) {
+  const e = matrix.elements;                 // three.js 是 column-major
   return {
-    n: new THREE.Vector3(e[row], e[4 + row], e[8 + row]),
-    d: coord - e[12 + row]
+    n: new THREE.Vector3(
+      e[0] * n.x + e[1] * n.y + e[2] * n.z,
+      e[4] * n.x + e[5] * n.y + e[6] * n.z,
+      e[8] * n.x + e[9] * n.y + e[10] * n.z
+    ),
+    d: d - (e[12] * n.x + e[13] * n.y + e[14] * n.z)
   };
+}
+
+/**
+ * 🔴 **畫面上點的兩個位置 → 一個世界平面**（刀具的地基）。
+ *
+ * ── 一個公式同時對透視與正交，那不是巧合 ────────────────────
+ * 平面過三個點：`A = o1`、`B = o1 + d1`、`C = o2 + d2`，
+ * 所以 `n = (B−A) × (C−A) = d1 × (o2 + d2 − o1)`。
+ *
+ * | 相機 | 退化成 | 對不對 |
+ * |---|---|---|
+ * | **透視** | 兩條射線同一個起點（`o2 = o1`）→ `d1 × d2` | ✅ 過相機的那個平面 |
+ * | **正交** | 兩條射線平行（`d2 = d1`）→ `d1 × (o2 − o1)` | ✅ 順著視線切下去 |
+ *
+ * ⛔ **不要為兩種相機各寫一段** —— 那就是兩條路算同一件事（坑第 31 條）。
+ *
+ * ── ⚠ 兩點太近要擋 ─────────────────────────────────
+ * 兩條射線幾乎重合時 `n` 會趨近 0，算出來的平面方向是浮點雜訊 ——
+ * **切下去的位置會是隨機的**（坑第 24 條）。
+ * 呼叫端拿到 `ok:false` 要講「兩點離太近」，⛔ 不可以沉默不動作。
+ *
+ * @param {THREE.Vector3} o1 第一條射線的起點
+ * @param {THREE.Vector3} d1 第一條射線的方向（單位長）
+ * @param {THREE.Vector3} o2 第二條射線的起點
+ * @param {THREE.Vector3} d2 第二條射線的方向（單位長）
+ * @returns {{ok:boolean, reason?:string, n?:THREE.Vector3, d?:number}} 世界平面
+ */
+export function planeFromTwoRays(o1, d1, o2, d2) {
+  if (!o1 || !d1 || !o2 || !d2) return { ok: false, reason: '沒有給射線' };
+  const c = new THREE.Vector3().subVectors(o2, o1).add(d2);
+  const n = new THREE.Vector3().crossVectors(d1, c);
+  const len = n.length();
+  /**
+   * ⚠ 門檻挑 1e-6：`d1`、`d2` 都是單位長，所以 `|n|` 就是那兩個方向
+   * 張開角度的正弦 —— 1e-6 大約是**萬分之一度**，遠比任何真實的
+   * 點擊誤差小，不會誤擋。
+   */
+  if (!(len > 1e-6)) {
+    return { ok: false, reason: '這兩個位置離太近了，算不出要往哪個方向切' };
+  }
+  n.divideScalar(len);
+  return { ok: true, n, d: n.dot(o1) };
 }
 
 /**

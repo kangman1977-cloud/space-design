@@ -79,6 +79,27 @@ export class Selection {
     this.mateMode = false;
 
     /**
+     * 🔴 **刀具模式。** 開著時點畫面不是選東西，是**定切線的兩個端點**。
+     *
+     * kang 2026-08-25：「刀具我是想要是**自由切**」——
+     * 切一刀要打數值，這一顆是照你在畫面上點的兩個位置切。
+     *
+     * ⚠ **再按一次按鈕就取消**（kang 選的，跟貼合同一個做法）——
+     * 平板沒有 Esc，⛔ 不可以只給鍵盤的出路。
+     */
+    this.knifeMode = false;
+
+    /**
+     * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
+     *
+     * ⚠ **抽成一個 getter 是刻意的**：加刀具的時候發現這個判斷
+     * （`!seamMode && !mateMode`）**散在五個地方**，而第四種模式一來
+     * 就要五處都記得改 —— 那是靠紀律，遲早漏掉一處，
+     * 而漏掉的症狀是「箭頭擋在畫面中間」這種很難聯想到原因的東西。
+     * 〔坑第 31 條：與其讓幾條路對齊，不如換一個只有一條路的定義〕
+     */
+
+    /**
      * 框選模式。開著時空白處拖曳畫矩形，不再旋轉視角。
      *
      * 做成模式而不是「Shift＋拖曳」，是 kang 選的 —— 平板沒有 Shift，
@@ -395,6 +416,15 @@ export class Selection {
     });
 
     cv.addEventListener('pointermove', e => {
+      /**
+       * 🔴 刀具的預覽線要跟著游標／筆尖走 —— 沒有它就是
+       * 「按下去才知道切到哪」（坑第 21 條）。
+       * ⚠ 只在刀具模式下算，⛔ 不可以每次移動都做事（坑第 22 條）。
+       */
+      if (this.knifeMode && this.hooks.onKnifeMove) {
+        const r = this._toCanvasPx(e.clientX, e.clientY);
+        this.hooks.onKnifeMove(r.x, r.y);
+      }
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
@@ -427,6 +457,17 @@ export class Selection {
       if (this.editMode) {
         // 加選重用物件層那一顆「加選」與 Shift —— 同一件事一個入口
         this.pickEdit(e.clientX, e.clientY, e.shiftKey || this.multi);
+        return;
+      }
+      /**
+       * 🔴 **刀具：點的是畫面上的位置，不是東西。**
+       * ⚠ 要放在 `seamMode`／`mateMode` 前面沒關係（互斥），
+       * 但**一定要在 `pick()` 前面** —— 否則會變成選物件。
+       */
+      if (this.knifeMode) {
+        if (this.hooks.onKnifePick) {
+          this.hooks.onKnifePick(this.screenRay(e.clientX, e.clientY));
+        }
         return;
       }
       if (this.seamMode) { this.pickSeam(e.clientX, e.clientY); return; }
@@ -630,6 +671,33 @@ export class Selection {
      */
   }
 
+  /**
+   * 🔴 **螢幕座標 → 一條世界射線**（刀具的入口）。
+   *
+   * ⚠ **刀具點的是畫面上的任意位置，不是元素** ——
+   * 所以不走 `pickElement()`（那一支要打到東西才回話）。
+   * 使用者在物件外面點也算數：那條線照樣定義得出平面。
+   *
+   * ⭐ `Raycaster` 對**透視與正交都認得**，回來的
+   * `origin`／`direction` 直接餵給 `planeFromTwoRays()`：
+   * 透視時兩次的 `origin` 相同、正交時兩次的 `direction` 相同，
+   * 而那一支**一個公式就把兩種都涵蓋了**。
+   *
+   * @returns {{origin: THREE.Vector3, direction: THREE.Vector3, x:number, y:number}}
+   */
+  screenRay(clientX, clientY) {
+    const r = this.view.canvas.getBoundingClientRect();
+    this._ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
+    this._ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
+    this._ray.setFromCamera(this._ndc, this.view.camera);
+    return {
+      origin: this._ray.ray.origin.clone(),
+      direction: this._ray.ray.direction.clone().normalize(),
+      x: clientX - r.left,          // 畫布內的像素座標，預覽線要用
+      y: clientY - r.top
+    };
+  }
+
   /** 螢幕座標 → 打到哪個物件 */
   hitTest(clientX, clientY) {
     const cv = this.view.canvas;
@@ -745,7 +813,7 @@ export class Selection {
 
     // 分片模式下不掛 gizmo。放在這裡是因為 _refresh() 會在選取變動、
     // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
-    if (node && !this.seamMode && !this.mateMode) {
+    if (node && !this.inPickMode) {
       this.tc.attach(node);
       /**
        * ⚠ **一定要把 space 設回世界。**
@@ -881,9 +949,9 @@ export class Selection {
   setEditMode(on) {
     this.editMode = !!on;
     if (!this.editMode) this.clearEditSel();
-    this.tc.enabled = !this.seamMode && !this.mateMode;
+    this.tc.enabled = !this.inPickMode;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.seamMode && !this.mateMode;
+    if (this.helper) this.helper.visible = !this.inPickMode;
     return this.editMode;
   }
 
@@ -1567,24 +1635,43 @@ export class Selection {
    * 貼合模式。跟分片一樣要把 gizmo 收起來 ——
    * 三支箭頭會擋在物件前面，而這裡要點的是物件表面上的點／邊／面。
    */
+  /** 見建構子 `knifeMode` 上方那段：這個判斷原本散在五個地方 */
+  get inPickMode() { return this.seamMode || this.mateMode || this.knifeMode; }
+
   setMateMode(on) {
     this.mateMode = !!on;
-    this.tc.enabled = !this.mateMode && !this.seamMode;
+    this.tc.enabled = !this.inPickMode;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.mateMode && !this.seamMode;
+    if (this.helper) this.helper.visible = !this.inPickMode;
     return this.mateMode;
+  }
+
+  /**
+   * 🔴 **刀具模式。**
+   *
+   * ⚠ **gizmo 一定要關掉** —— 開著的話那三根箭頭會擋在畫面中間，
+   * 而使用者正要在那附近點兩下定切線。跟貼合、分片同一個理由。
+   */
+  setKnifeMode(on) {
+    this.knifeMode = !!on;
+    this.tc.enabled = !this.inPickMode;
+    this._refresh();
+    if (this.helper) {
+      this.helper.visible = !this.inPickMode;
+    }
+    return this.knifeMode;
   }
 
   setSeamMode(on) {
     this.seamMode = !!on;
-    this.tc.enabled = !this.seamMode && !this.mateMode;
+    this.tc.enabled = !this.inPickMode;
     /**
      * 一定要重跑 _refresh()，它才會依照新的模式決定掛不掛 gizmo。
      * 少了這一行，離開分片模式後 gizmo 不會回來 —— 要等下次點選才復原，
      * 而使用者只會覺得「東西不能拖了」。
      */
     this._refresh();
-    if (this.helper) this.helper.visible = !this.seamMode && !this.mateMode;
+    if (this.helper) this.helper.visible = !this.inPickMode;
     return this.seamMode;
   }
 }

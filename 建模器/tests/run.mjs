@@ -7703,6 +7703,113 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  刀具的地基：畫面上兩點 → 一個平面
+// ═══════════════════════════════════════════════════════
+
+section('刀具：螢幕兩點算出來的平面');
+
+/**
+ * 🔴 **這一節驗的是刀具唯一「新」的那一段。**
+ * 切開網格本來就會（`bisect()`），刀具只是換一個方式**決定平面**。
+ *
+ * ── 一個公式同時對兩種相機 ────────────────────────────
+ * 平面過 `A = o1`、`B = o1 + d1`、`C = o2 + d2`：
+ *
+ * | 相機 | 退化成 |
+ * |---|---|
+ * | **透視** | 兩條射線同起點 → `d1 × d2` |
+ * | **正交** | 兩條射線平行 → `d1 × (o2 − o1)` |
+ *
+ * ⛔ 不為兩種相機各寫一段（坑第 31 條）。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  /** 正交：兩條平行射線，起點差一個 X → 平面該是「垂直於 X」的那種嗎？*/
+  {
+    const dir = V(0, 0, -1);                       // 往 −Z 看
+    const r = edit.planeFromTwoRays(V(0, 0, 100), dir, V(0, 5, 100), dir);
+    ok('正交：兩條平行射線算得出平面', r.ok, r.reason);
+    /**
+     * 起點差在 Y、視線在 −Z → 平面含 Y 與 Z 兩個方向 → 法向是 ±X。
+     * ⚠ **正負無所謂**（平面沒有正反），所以比絕對值。
+     */
+    near('★★ 法向是 ±X（|x| = 1）', Math.abs(r.n.x), 1, 1e-9);
+    near('　　y 分量 0', Math.abs(r.n.y), 0, 1e-9);
+    near('　　z 分量 0', Math.abs(r.n.z), 0, 1e-9);
+    near('★ 平面過那兩條射線（d ＝ n·o1）', Math.abs(r.d), 0, 1e-9);
+  }
+
+  /** 透視：同一個起點、兩個不同方向 */
+  {
+    const o = V(0, 0, 100);
+    const r = edit.planeFromTwoRays(o, V(0, 0, -1), o, V(0.1, 0, -1).normalize());
+    ok('透視：同起點兩個方向算得出平面', r.ok, r.reason);
+    near('★★ 兩個方向都在平面上（1）', r.n.dot(V(0, 0, -1)), 0, 1e-9);
+    near('★★ 兩個方向都在平面上（2）', r.n.dot(V(0.1, 0, -1).normalize()), 0, 1e-9);
+    near('★ 相機那一點在平面上', r.n.dot(o) - r.d, 0, 1e-9);
+  }
+
+  /**
+   * 🔴 兩點太近要擋。⚠ 不擋的話法向是浮點雜訊 ——
+   * **切下去的位置會是隨機的**（坑第 24 條），而且形狀看起來還很正常。
+   */
+  {
+    const o = V(0, 0, 100), d = V(0, 0, -1);
+    const bad = edit.planeFromTwoRays(o, d, o, d);
+    ok('★★ 同一條射線（兩點重合）要擋下來', !bad.ok);
+    ok('　　而且要說原因是「離太近」', /太近/.test(bad.reason || ''), bad.reason);
+
+    /** ⚠ 幾乎重合也要擋 —— 邊界要驗，不能只驗完全重合 */
+    const tiny = edit.planeFromTwoRays(o, d, o, V(1e-9, 0, -1).normalize());
+    ok('★★ 幾乎重合也要擋', !tiny.ok);
+
+    /** ⭐ 而正常的點擊角度**不可以**被誤擋（誤報比漏報更糟，坑第 18 條） */
+    const okOne = edit.planeFromTwoRays(o, d, o, V(0.001, 0, -1).normalize());
+    ok('★★ 正常的小角度不可以被誤擋', okOne.ok, okOne.reason);
+  }
+
+  ok('★ 沒給射線要擋', !edit.planeFromTwoRays(null, null, null, null).ok);
+}
+
+{
+  /**
+   * 🔴 **世界平面 → 本地平面**，而且要跟 `worldAxisPlane()` 對得起來。
+   *
+   * ⭐ 那一支現在是**這一支的特例**（法向是單位軸）——
+   * 兩條路合成一條之後，這裡就是「合對了沒有」的機械斷言。
+   */
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3(10, 20, 30),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0.3, -0.7, 0.2)),
+    new THREE.Vector3(1, 1, 1)
+  );
+  for (const [axis, n] of [['x', [1, 0, 0]], ['y', [0, 1, 0]], ['z', [0, 0, 1]]]) {
+    const a = edit.worldAxisPlane(m, axis, 5);
+    const b = edit.worldPlaneToLocal(m, new THREE.Vector3(...n), 5);
+    near(`★★ ${axis} 軸：兩條路的法向逐項相同（x）`, a.n.x, b.n.x, 1e-12);
+    near(`　　　　　　　　　　　　　　　　（y）`, a.n.y, b.n.y, 1e-12);
+    near(`　　　　　　　　　　　　　　　　（z）`, a.n.z, b.n.z, 1e-12);
+    near(`　　偏移也相同`, a.d, b.d, 1e-12);
+  }
+
+  /**
+   * ⭐ **端到端**：拿一個世界平面換到本地，再把本地上的點換回世界 ——
+   * 必須還是落在原本那個平面上。
+   * ⚠ 這一條才是真正在驗「換算對不對」，前面那幾條只驗「兩條路一樣」
+   * （兩條路一起錯的話它們照樣相同）。
+   */
+  const wn = new THREE.Vector3(1, 2, 3).normalize();
+  const wd = 7;
+  const lp = edit.worldPlaneToLocal(m, wn, wd);
+  const local = new THREE.Vector3(1, -2, 4);
+  /** 把 local 挪到本地平面上 */
+  local.addScaledVector(lp.n, (lp.d - lp.n.dot(local)) / lp.n.lengthSq());
+  near('★★★ 本地平面上的點換回世界，仍然落在原本的世界平面上',
+       local.clone().applyMatrix4(m).dot(wn), wd, 1e-9);
+}
+
+// ═══════════════════════════════════════════════════════
 //  分離（＝ Blender 的 Separate）
 // ═══════════════════════════════════════════════════════
 

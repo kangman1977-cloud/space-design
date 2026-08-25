@@ -33,6 +33,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
+         planeFromTwoRays, worldPlaneToLocal,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -56,6 +57,8 @@ const sel = new Selection(view, {
    * 〔重複呼叫沒關係：1000 個點重建一次是微秒級，而這裡是事件驅動不是每幀〕
    */
   onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
+  onKnifePick: ray => knifePick(ray),
+  onKnifeMove: (x, y) => { if (knifePick1) drawKnifeLine(x, y); },
   onTransform: committing => {
     view.sync(doc);
     if (committing) commit('變換物件');
@@ -374,6 +377,7 @@ $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
+$('knife').onclick = () => toggleKnifeMode();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
@@ -572,6 +576,131 @@ function exitOtherModes(keep) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
   }
+  if (keep !== 'knife' && sel.knifeMode) {
+    sel.setKnifeMode(false); $('knife').classList.remove('on');
+    knifePick1 = null; hideKnifeLine();
+  }
+}
+
+/**
+ * 🔴 **刀具：在畫面上點兩下，照那條線把整個物件切開。**
+ *
+ * kang 2026-08-25：「切一刀是要用數值控制...**我不能真的自由切我想要
+ * 的區塊**..但是刀具我是想要是**自由切**」。
+ *
+ * ⭐ **底層還是 `bisect()`** —— 差別只在那個平面**從你點的兩個位置
+ * 算出來**，不是從 X／Y／Z 選一個（`planeFromTwoRays()`）。
+ *
+ * ⚠ **它是這個專案第一個「畫面上連續點兩下」的編輯功能**，
+ * 所以照貼合模式的骨架走（`exitOtherModes` 那一套），
+ * ⛔ 不另開一種模式管理。
+ */
+let knifePick1 = null;
+
+function hideKnifeLine() {
+  const s = $('knifeLine');
+  if (s) s.hidden = true;
+}
+
+/**
+ * 預覽線：從第一點畫到游標／筆尖。
+ *
+ * 🔴 **沒有它就是「按下去才知道切到哪」，那不能用**（坑第 21 條）。
+ * ⚠ 畫在**螢幕座標**上（SVG 疊層），⛔ 不投影到 3D ——
+ * 那條線的意義本來就在螢幕上，硬給它一個深度反而沒有道理。
+ */
+function drawKnifeLine(x2, y2) {
+  const s = $('knifeLine');
+  if (!s || !knifePick1) return;
+  const ln = s.querySelector('line');
+  ln.setAttribute('x1', knifePick1.x);
+  ln.setAttribute('y1', knifePick1.y);
+  ln.setAttribute('x2', x2);
+  ln.setAttribute('y2', y2);
+  s.hidden = false;
+}
+
+function toggleKnifeMode() {
+  if (!sel.knifeMode) exitOtherModes('knife');
+  const on = sel.setKnifeMode(!sel.knifeMode);
+  $('knife').classList.toggle('on', on);
+  knifePick1 = null;
+  hideKnifeLine();
+  panel.refresh();
+  updateBar();
+  toast(on
+    ? '刀具：在畫面上點兩個位置定出切線，整個物件就照那條線切開。再按一次「刀具」取消'
+    : '已離開刀具');
+}
+
+/**
+ * 點下第一點 → 記起來；點下第二點 → 切。
+ *
+ * ⚠ **第一點刻意不檢查有沒有點到物件** —— 使用者常常要從物件外面
+ * 起手（切線本來就該超出輪廓），擋掉的話最自然的用法反而不能用。
+ */
+function knifePick(ray) {
+  const obj = sel.active;
+  if (!obj) { toast('先點一個物件，再按「刀具」', true); return; }
+  if (obj.isParametric) {
+    toast('這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」', true);
+    return;
+  }
+
+  if (!knifePick1) {
+    knifePick1 = ray;
+    drawKnifeLine(ray.x, ray.y);
+    toast('再點第二個位置定出切線　（再按一次「刀具」可以取消）');
+    return;
+  }
+
+  const wp = planeFromTwoRays(knifePick1.origin, knifePick1.direction,
+                              ray.origin, ray.direction);
+  if (!wp.ok) { toast(wp.reason, true); return; }
+
+  /** 世界平面 → 物件自己的座標（跟切一刀走同一支，只是法向不是軸） */
+  const r = bisect(obj.mesh(), worldPlaneToLocal(obj.matrix(), wp.n, wp.d));
+
+  knifePick1 = null;
+  hideKnifeLine();
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('刀具切一刀');
+
+  /** ⚠ 一定要在 commit() 之後才選 —— 跟切一刀、環切同一條理由 */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  /**
+   * 🔴 **切完自動離開刀具模式，並且進編輯模式選起那一圈** ——
+   * 接下來要做的事（拉、分離）都在編輯模式裡，留在刀具模式等於
+   * 逼使用者多按兩次。
+   */
+  sel.setKnifeMode(false);
+  $('knife').classList.remove('on');
+  if (!sel.editMode) { sel.setEditMode(true); $('edit').classList.add('on'); }
+  $('gEditXf').hidden = false;
+  const got = sel.selectEdges(obj, hes);
+  syncModeButtons();
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已切開　切開 ${r.split} 個面`];
+  if (got) bits.push(`新的 ${got} 條線已選起來 —— 要拆成兩個物件就按「分離」`);
+  if (r.skipped) {
+    bits.push(`⚠ 有 ${r.skipped} 個面形狀太複雜（凹進去的）沒切開，`
+            + '那裡的線會斷開 —— 換個角度切多半就過了');
+  }
+  toast(bits.join('　'));
 }
 
 function toggleEditMode() {
@@ -2164,6 +2293,27 @@ function updateBar() {
    * 「現在差什麼」講清楚 —— 灰掉的按鈕不說話，使用者只會覺得壞了
    * （坑第 11、21 條）。
    */
+  /**
+   * 🔴 **刀具：要先選好一個網格物件才進得去。**
+   *
+   * ⚠ **理由是進了刀具模式就選不了物件了** —— 那時候點畫面是定切線。
+   * 所以「先按刀具再選物件」這條路根本不存在，⛔ 不可以讓他按進去
+   * 才發現（坑第 11 條）。
+   *
+   * 🔴 **但模式開著的時候一定要可以按** —— 那是唯一的取消方式
+   * （kang 選的：再按一次取消，平板沒有 Esc）。**鎖起來就出不去了。**
+   */
+  const canKnife = !!sel.active && !sel.active.isParametric;
+  $('knife').disabled = !canKnife && !sel.knifeMode;
+  $('knife').title = sel.knifeMode
+    ? '再按一次可以取消刀具'
+    : canKnife
+      ? '在畫面上點兩個位置定出切線，整個物件就照那條線切開。'
+        + '⚠ 只加線不分家，要拆成兩個物件請接著按「分離」'
+      : !sel.active
+        ? '先點一個物件，再按「刀具」'
+        : '這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」';
+
   /**
    * 分離：**選到邊就給按**。真正分不分得開由 `separateAlongEdges()` 判斷
    * 並講原因 —— ⛔ 介面不要自己再判一次那圈邊有沒有繞成一圈（坑第 31 條）。
