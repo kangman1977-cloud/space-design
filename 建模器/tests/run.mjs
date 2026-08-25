@@ -7495,6 +7495,214 @@ const facePicker = (m, nSides, pred) => m.faces.find(f => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  面上加線（＝ Blender 的 Subdivide 選兩條邊）
+// ═══════════════════════════════════════════════════════
+
+section('面上加線：兩條邊各長一個點，連起來');
+
+/**
+ * 🔴 **kang 2026-08-25 指出「連接兩點」不是他要的**：
+ * > 「我以為是我可以在面或邊上做切一刀..**讓面變成兩等分**」
+ *
+ * 「連接兩點」只能連**既有的角**，切出來是三角形。
+ * 要兩等分得**先在邊的中間長出點** —— 這一支就是去長那個點。
+ * kang 拍板**分成兩顆按鈕**（「畢竟效果呈現不同」）。
+ *
+ * ── 🔴 這一節的主角是「第二條邊要反過來算」───────────────
+ * 兩條邊在面的迴圈上是繞著走的，各自的 `t` 會落在**對角** →
+ * 切出來是**斜線**。所以 A 取 `t`、B 取 `1 − t`。
+ *
+ * **那件事只有兩種驗法，兩種都放進來了：**
+ * 1. `t=0.5` 兩塊面積**完全相等**、`t=0.3` 是 3:7
+ * 2. ⭐ **新線的方向不隨 `t` 改變** —— 這一條更直接：
+ *    沒有反過來算的話，`t` 一離開 0.5 線就會歪掉。
+ */
+const areaOfFace = (m, f) => {
+  let s = 0;
+  for (const [v0, v1, v2] of m.faceTriangles(f)) {
+    const ab = v1.p.clone().sub(v0.p), ac = v2.p.clone().sub(v0.p);
+    s += ab.cross(ac).length() / 2;
+  }
+  return s;
+};
+/** 新線兩側那兩塊的面積（大的在前，⛔ 不要靠面的順序） */
+const splitAreas = (m, newEdge) => {
+  const di = m._vertIndex();
+  const [a, b] = newEdge;
+  const parts = m.faces.filter(f => {
+    const idx = m.faceLoop(f).map(he => di.get(he.v.id));
+    return idx.includes(a) && idx.includes(b);
+  });
+  return parts.map(f => areaOfFace(m, f)).sort((x, y) => y - x);
+};
+const newEdgeDir = (m, newEdge) => {
+  const di = m._vertIndex();
+  const [a, b] = newEdge;
+  const he = [...m.edges()].find(h => {
+    const x = di.get(h.v.id), y = di.get(h.to.id);
+    return (x === a && y === b) || (x === b && y === a);
+  });
+  const d = he.to.p.clone().sub(he.v.p).normalize();
+  /** 方向的正負無所謂（邊沒有規定哪頭是頭），統一成第一個非零分量為正 */
+  for (const k of ['x', 'y', 'z']) {
+    if (Math.abs(d[k]) > 1e-9) { if (d[k] < 0) d.negate(); break; }
+  }
+  return d;
+};
+
+{
+  /** 案例一：方塊頂面兩條對邊，t=0.5 → 兩等分。kang 要的那個 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  ok('前提：找得到頂面那個四邊形', !!top);
+  const hes = box.faceLoop(top);
+
+  const r = edit.splitFaceByEdges(box, hes[0], hes[2], 0.5);
+  ok('兩條對邊加得出線', r.ok, r.reason);
+  const m = r.mesh;
+
+  eq('★ V 8 → 10（兩條邊各長一個點）', m.verts.length, 10);
+  eq('E 12 → 15', edgeCount(m), 15);
+  eq('F 6 → 7', m.faces.length, 7);
+  eq('★★ χ 仍然是 2', chi(m), 2);
+  ok('　　仍然封閉、結構沒問題', m.isClosed() && m.validate().ok);
+
+  /** 🔴 主斷言：只加線 */
+  rel('★★ 體積精確不變', m.volume(), vol0);
+  rel('★★ 面積精確不變', m.area(), area0);
+
+  eq('★ 孤點 0 個', r.orphans, 0);
+  eq('新的線 1 條，而且是 hard', [...m.edges()].filter(he => he.hard).length, 1);
+
+  /**
+   * 🔴 **鄰面一定要跟著加點，否則破洞。**
+   * 方塊頂面的兩條對邊各被兩個面共用 → 兩個側面被波及。
+   * ⚠ 這是使用者**看得見**的副作用（側面多一條短線），呼叫端要講出來。
+   */
+  eq('★★ 兩個側面跟著加了點', r.touched, 2);
+
+  /** 🔴 兩等分 ＝ 兩塊面積完全相等 */
+  const A = splitAreas(m, r.newEdges[0]);
+  eq('前提：新線兩側正好兩塊', A.length, 2);
+  rel('★★ t=0.5 兩塊面積完全相等', A[0], A[1]);
+  /**
+   * ⚠ **頂面是 w×d ＝ 60×45，不是 60×h。**
+   * 〔第一版照沙箱腳本抄了 60×40，而那份的參數是 `h:45, d:40` ——
+   * 　**挑樣本要先去量，不要照參數名推**（任意切線案例五記過同一條）〕
+   */
+  rel('　　兩塊加起來 ＝ 頂面 60×45', A[0] + A[1], 2700);
+}
+
+{
+  /**
+   * 🔴 **案例二：t=0.3。這一組才驗得出「第二條邊有沒有反過來算」。**
+   *
+   * ⚠ `t=0.5` 是**對稱**的，反不反過來結果一樣 ——
+   * 只驗 0.5 等於沒驗到這一條（那正是坑第 17 條「挑樣本」那類的錯）。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume();
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  const half = edit.splitFaceByEdges(box, hes[0], hes[2], 0.5);
+  const r = edit.splitFaceByEdges(box, hes[0], hes[2], 0.3);
+  ok('t=0.3 也加得出線', r.ok, r.reason);
+  rel('★★ 體積照樣精確不變', r.mesh.volume(), vol0);
+
+  const A = splitAreas(r.mesh, r.newEdges[0]);
+  rel('★★ t=0.3 兩塊面積比 ＝ 7:3', A[0] / (A[0] + A[1]), 0.7);
+  rel('　　大的那塊 ＝ 60 × 31.5', A[0], 1890);
+  rel('　　小的那塊 ＝ 60 × 13.5', A[1], 810);
+
+  /**
+   * ⭐ **最直接的一條**：沒有把第二條邊反過來算的話，
+   * `t` 一離開 0.5 新線就會歪掉。方向一樣 ＝ 真的平行。
+   */
+  const d5 = newEdgeDir(half.mesh, half.newEdges[0]);
+  const d3 = newEdgeDir(r.mesh, r.newEdges[0]);
+  near('★★ t=0.3 的新線跟 t=0.5 平行（x）', d3.x, d5.x, 1e-9);
+  near('　　　　　　　　　　　　　　　（y）', d3.y, d5.y, 1e-9);
+  near('　　　　　　　　　　　　　　　（z）', d3.z, d5.z, 1e-9);
+}
+
+{
+  /** 案例三：相鄰的兩條邊 → 切出一個三角形。也要走得通 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  const r = edit.splitFaceByEdges(box, hes[0], hes[1], 0.5);
+  ok('★ 相鄰的兩條邊也加得出線（切出一個角）', r.ok, r.reason);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+}
+
+{
+  /** 案例四：圓柱端面（32 邊形）—— **跟方塊是不同的網格結構**（坑第 17 條）*/
+  const cyl = baked('cylinder', { r: 25, h: 70, seg: 32 });
+  const vol0 = cyl.volume(), area0 = cyl.area();
+  const v0 = cyl.verts.length;
+  const cap = cyl.faces.find(f => cyl.faceLoop(f).length === 32);
+  ok('前提：找得到 32 邊形的端面', !!cap);
+  const hes = cyl.faceLoop(cap);
+
+  const r = edit.splitFaceByEdges(cyl, hes[0], hes[16], 0.5);
+  ok('32 邊形端面加得出線', r.ok, r.reason);
+  eq('★ V ＋2', r.mesh.verts.length, v0 + 2);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+  eq('★ 兩片側面跟著加了點', r.touched, 2);
+}
+
+{
+  /** 案例五：擋下來的情形，每一種都要說原因（坑第 11 條） */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  ok('★ 同一條邊擋下來', !edit.splitFaceByEdges(box, hes[0], hes[0], 0.5).ok);
+  ok('★ t=0 擋下來並說範圍',
+     !edit.splitFaceByEdges(box, hes[0], hes[2], 0).ok);
+  ok('★ t=1 擋下來', !edit.splitFaceByEdges(box, hes[0], hes[2], 1).ok);
+
+  /**
+   * 🔴 **太靠近端點要擋，判準是實際距離不是比例** ——
+   * 插的點離既有頂點比 0.1mm 還近會長出零長度的邊，
+   * 而**體積、面積、χ 全部照樣正確**（坑第 17、25／26 條）。
+   */
+  const tiny = edit.splitFaceByEdges(box, hes[0], hes[2], 0.0001);
+  ok('★★ 太靠近端點擋下來，而且講出那條邊多長',
+     !tiny.ok && /太靠近|端點/.test(tiny.reason || '') && /cm/.test(tiny.reason || ''),
+     tiny.reason);
+
+  /** 不同面的兩條邊 */
+  const side = box.faces.find(f => f !== top);
+  const sh = box.faceLoop(side).find(h => !hes.includes(h) && !hes.includes(h.twin));
+  const cross = edit.splitFaceByEdges(box, hes[0], sh, 0.5);
+  ok('★ 不在同一個面上，擋下來並說原因',
+     !cross.ok && /不在同一個面/.test(cross.reason || ''), cross.reason);
+}
+
+// ═══════════════════════════════════════════════════════
 //  量測（kang 2026-08-25 提出：bake 之後就不知道真實尺寸了）
 // ═══════════════════════════════════════════════════════
 

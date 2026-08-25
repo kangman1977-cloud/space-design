@@ -32,7 +32,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVerts,
-         BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
+         splitFaceByEdges, BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -368,6 +368,7 @@ $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
+$('splitFace').onclick = () => splitFaceSelected();
 /** 換軸要立刻換範圍提示 —— 不換的話那行字會變成謊話（鐵律三） */
 $('bisectAxis').onchange = () => updateBisectRange();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
@@ -1223,6 +1224,70 @@ function connectVertsSelected() {
 }
 
 /**
+ * 🔴 **面上加線：選兩條邊，各長一個點再連起來。**
+ *
+ * ⚠ **它跟「連接兩點」是兩顆按鈕**（kang 2026-08-25 拍板：
+ * 「畢竟效果呈現不同」）——
+ * 連接兩點連的是**既有的角**（切出三角形），
+ * 這一顆是在邊上**長出新的點**（切出矩形，也就是他要的「兩等分」）。
+ */
+function splitFaceSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先按「拉點線面」進入編輯模式，把過濾器切到「邊」，選兩條邊再按', true);
+    return;
+  }
+  if (els.some(e => e.kind !== 'edge')) {
+    toast('「面上加線」只吃邊 —— 把上面的過濾器切到「邊」，再選兩條邊', true);
+    return;
+  }
+  if (els.length !== 2) {
+    toast(`「面上加線」要正好選兩條邊，現在選了 ${els.length} 個。`
+        + '開上面那顆「加選」或按 Shift 點第二條；再點一次可以取消', true);
+    return;
+  }
+
+  const t = +$('splitFaceT').value;
+  if (!Number.isFinite(t)) { toast('位置要打一個數字（0.5 ＝ 正中間）', true); return; }
+
+  const obj = els[0].obj;
+  const oldMesh = obj.mesh();
+  const r = splitFaceByEdges(oldMesh, els[0].he, els[1].he, t);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 被插點的邊如果標過 CUT，線段變兩截了
+  commit(t === 0.5 ? '面上加線（兩等分）' : `面上加線（${t}）`);
+
+  /** ⚠ 一定要在 commit() 之後才選 —— 跟環切、切一刀、連接兩點同一條理由 */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  const got = sel.selectEdges(obj, hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 🔴 **一定要講「旁邊的面也跟著多了一個點」** ——
+   * 那是使用者**看得見**的副作用（側面多一條短線），
+   * 不講的話他會以為程式亂加東西（坑第 11、21 條）。
+   */
+  const bits = [t === 0.5 ? '已在面上加線　切在正中間' : `已在面上加線　切在 ${t}`];
+  if (got) bits.push('新的線已選起來，用箭頭直接拉');
+  if (r.touched) {
+    bits.push(`⚠ 旁邊 ${r.touched} 個面也跟著多了一個點 —— 那是必須的，不然網格會破洞`);
+  }
+  toast(bits.join('　'));
+}
+
+/**
  * 座標框旁邊那行範圍字。
  *
  * 🔴 **這不是裝飾。** 沒有它，使用者根本不知道該打什麼數字 ——
@@ -1946,6 +2011,26 @@ function updateBar() {
         : sel.editSels.some(e => e.kind !== 'vertex')
           ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選兩個角'
           : `要正好兩個點，現在選了 ${sel.editCount} 個`;
+
+  /**
+   * 面上加線：**正好選到兩條邊才給按。**
+   * ⚠ 跟「連接兩點」的差別在**吃什麼**（那顆吃點、這顆吃邊），
+   * 所以 title 要把「現在差什麼」講清楚 —— 兩顆長得很像，
+   * 灰掉的原因不講，使用者會以為按錯顆（坑第 11、21 條）。
+   */
+  const twoEdges = sel.editMode && sel.editCount === 2
+    && sel.editSels.every(e => e.kind === 'edge');
+  $('splitFace').disabled = !twoEdges;
+  $('splitFaceT').disabled = !twoEdges;
+  $('splitFace').title = twoEdges
+    ? '在這兩條邊上各長一個點再連起來，把面切成兩塊。0.5 ＝ 正中間（兩等分）'
+    : !sel.editMode
+      ? '先按「拉點線面」進入編輯模式'
+      : sel.editCount === 0
+        ? '把上面的過濾器切到「邊」，然後選兩條邊（開「加選」或按 Shift 選第二條）'
+        : sel.editSels.some(e => e.kind !== 'edge')
+          ? '這一顆只吃邊 —— 把上面的過濾器切到「邊」，再選兩條邊'
+          : `要正好兩條邊，現在選了 ${sel.editCount} 個`;
 
   /**
    * 法向那一組：**不需要進編輯模式**，選到物件就能按 ——

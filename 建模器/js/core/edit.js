@@ -1699,6 +1699,195 @@ export function connectVerts(mesh, vA, vB) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  面上加線（＝ Blender 的 Subdivide 選兩條邊）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **面上加線：選一個面上的兩條邊，在邊上各長出一個點，連起來把面切成兩塊。**
+ *
+ * ── 為什麼它跟「連接兩點」是兩顆按鈕（kang 2026-08-25 拍板）──────
+ * > 「我是認為分成兩顆按鈕..畢竟**效果呈現不同**」
+ *
+ * | | 連的是 | 切出來 |
+ * |---|---|---|
+ * | **連接兩點** | 兩個**既有的角** | 方塊頂面 → 兩個三角形 |
+ * | **面上加線**（這一支）| 兩條邊上**新長出來的點** | 方塊頂面 → 兩個矩形 |
+ *
+ * ⭐ **kang 原本以為「連接兩點」就是這個** —— 他要的是「讓面變成兩等分」。
+ * 那一顆做不到，因為**邊的中間本來沒有點**。這一支就是去長那個點。
+ *
+ * ── 🔴 `t` 的方向：第二條邊一定要反過來算 ────────────────
+ * 兩條邊在面的迴圈上是**繞著走**的，所以「各自的 0.3」會落在**對角** ——
+ * 切出來是一條**斜線**，不是使用者要的平行線。
+ *
+ * > **A 上取 `t`、B 上取 `1 − t`。**
+ *
+ * `t = 0.5` 時兩端對稱，怎麼算都一樣（那就是「兩等分」）；
+ * 其餘的值才看得出差別。
+ * 🔴 **機械斷言**：`t=0.5` 兩塊面積**必須完全相等**，`t=0.3` 必須是 3:7 ——
+ * 那是「真的平行」唯一驗得出來的方式（斜線的比例會不對）。
+ * 〔鐵律三：讓兩個數字互相對得起來，錯誤才會自己現形〕
+ *
+ * ── 🔴 插點會波及相鄰的面，而且**必須**波及 ────────────────
+ * 一條邊被插了點，**共用那條邊的另一個面也要跟著加**，否則兩邊的迴圈
+ * 對不起來 —— 那不是「順便」，是不做就會破洞。
+ * ⚠ 所以方塊頂面加一條線，**側面會從四邊形變成五邊形**，
+ * 畫面上看得到多一條短線。那是對的，呼叫端要講出來（坑第 21 條）。
+ *
+ * ── ⚠ `t` 太靠近端點要擋 ─────────────────────────────
+ * 插的點離既有頂點比 `PLANAR_TOL_CM`（0.1mm）還近的話，
+ * 會長出一條**零長度的邊**，而**體積、面積、χ 全部照樣正確**，
+ * 只有 `validate()` 或日後的布林會露餡（坑第 17 條、25／26 條）。
+ * 判準用**實際距離**，⛔ 不要用比例的絕對值 —— 邊有長有短。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge} heA 第一條邊
+ * @param {HalfEdge} heB 第二條邊
+ * @param {number} t 位置比例，0.5 ＝ 中點（預設）
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            newEdges?:Array, touched?:number, orphans?:number}}
+ *          `touched` ＝ 被順帶加點的**相鄰**面數，呼叫端要講出來
+ */
+export function splitFaceByEdges(mesh, heA, heB, t = 0.5) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!heA || !heB) return { ok: false, reason: '要選兩條邊' };
+  if (!(t > 0 && t < 1)) {
+    return { ok: false, reason: '位置要在 0 跟 1 中間（0.5 ＝ 正中間）' };
+  }
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const kA = kOf(vi.get(heA.v.id), vi.get(heA.to.id));
+  const kB = kOf(vi.get(heB.v.id), vi.get(heB.to.id));
+  if (kA === kB) return { ok: false, reason: '選到的是同一條邊' };
+
+  /**
+   * 找「迴圈上同時有這兩條邊」的面。
+   * ⚠ 全部走完，找到兩個以上要擋 —— 只切第一個會讓結果取決於儲存順序
+   * （坑第 24 條）。〔跟 `connectVerts()` 同一條〕
+   */
+  const cands = [];
+  for (const f of mesh.faces) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    let pa = -1, pb = -1;
+    for (let i = 0; i < idx.length; i++) {
+      const k = kOf(idx[i], idx[(i + 1) % idx.length]);
+      if (k === kA) pa = i;
+      if (k === kB) pb = i;
+    }
+    if (pa < 0 || pb < 0) continue;
+    cands.push({ f, idx, pa, pb });
+  }
+
+  if (!cands.length) {
+    return { ok: false, reason: '這兩條邊不在同一個面上 —— 這一顆只能在一個面裡面加線' };
+  }
+  if (cands.length > 1) {
+    return { ok: false, reason: `這兩條邊同時在 ${cands.length} 個面上，加下去會長出兩條重疊的線` };
+  }
+
+  const { f: target, idx: loop, pa, pb } = cands[0];
+  const points = mesh.verts.map(v => v.p.clone());
+
+  /**
+   * 兩個新點的位置。**方向以目標面的迴圈為準**（`idx[i] → idx[i+1]`），
+   * 第二條取 `1 − t` —— 見檔頭那一段。
+   */
+  const mk = (i, s) => {
+    const a = loop[i], b = loop[(i + 1) % loop.length];
+    const pa2 = points[a], pb2 = points[b];
+    const len = pa2.distanceTo(pb2);
+    if (!(len > 0)) return { err: '這條邊的長度是 0' };
+    if (len * s < PLANAR_TOL_CM || len * (1 - s) < PLANAR_TOL_CM) {
+      return { err: `位置太靠近邊的端點了（這條邊只有 ${len.toFixed(2)} cm，`
+                  + `${PLANAR_TOL_CM * 10} mm 以內會長出一條長度 0 的線）` };
+    }
+    return { p: pa2.clone().lerp(pb2, s) };
+  };
+
+  const ra = mk(pa, t), rb = mk(pb, 1 - t);
+  if (ra.err) return { ok: false, reason: ra.err };
+  if (rb.err) return { ok: false, reason: rb.err };
+
+  const newIdx = new Map();               // 邊 key → 新點的索引
+  newIdx.set(kA, points.length); points.push(ra.p);
+  newIdx.set(kB, points.length); points.push(rb.p);
+  const iA = newIdx.get(kA), iB = newIdx.get(kB);
+
+  /**
+   * 標記帳本。🔴 **一條邊被插點就變成兩段，兩段都要繼承** ——
+   * 不做的話索引配對落空，**標記會安靜消失**（環切那一輪燒過）。
+   */
+  const marks = new Map();
+  const mark = (a, b, m) => {
+    const k = kOf(a, b);
+    marks.set(k, Object.assign({}, marks.get(k), m));
+  };
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    const m = mesh.marksOf(he);
+    const mid = newIdx.get(kOf(a, b));
+    if (mid === undefined) { mark(a, b, m); continue; }
+    mark(a, mid, m);
+    mark(mid, b, m);
+  }
+  mark(iA, iB, { hard: true });           // 新長出來的那條線
+
+  /**
+   * 重建。**每個面都要走一次插點**（不只目標面）——
+   * 共用那條邊的鄰面不跟著加點的話，兩邊的迴圈就對不起來了。
+   */
+  const faces = [];
+  let touched = 0;
+  for (const f of mesh.faces) {
+    const idx = f === target ? loop : mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    const seq = [];
+    let onIdx = [];
+    for (let i = 0; i < idx.length; i++) {
+      const a = idx[i], b = idx[(i + 1) % idx.length];
+      seq.push(a);
+      const mid = newIdx.get(kOf(a, b));
+      if (mid !== undefined) { onIdx.push(seq.length); seq.push(mid); }
+    }
+    if (f !== target) {
+      faces.push(seq);
+      if (onIdx.length) touched++;        // 順帶加了點的鄰面
+      continue;
+    }
+    const [p, q] = onIdx.sort((x, y) => x - y);
+    faces.push(seq.slice(p, q + 1));
+    faces.push([...seq.slice(q), ...seq.slice(0, p + 1)]);
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `加下去做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const want = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x === undefined || y === undefined) continue;
+    want.set(kOf(x, y), m);
+  }
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  }
+
+  const na = to(iA), nb = to(iB);
+  return {
+    ok: true, mesh: out, remap: clean.remap, touched,
+    newEdges: (na !== undefined && nb !== undefined) ? [[na, nb]] : [],
+    orphans: clean.dropped.orphans
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  內縮（Inset）
 // ═══════════════════════════════════════════════════════
 
