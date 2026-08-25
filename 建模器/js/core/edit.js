@@ -2211,15 +2211,79 @@ export function bevelEdges(mesh, hes, w, opt = {}) {
   };
 
   /**
+   * ═══ outer miter：只導一部分的邊，角落怎麼接 ═══════════════
+   *
+   * 🔴 **方案來源 `外部參考-Blender編輯.md` 第 13 節**（動這一段之前先讀）。
+   * Blender 三種接法（Sharp／Patch／Arc）裡**選 Sharp**：
+   * **兩片圓角面延伸到相交，不加額外頂點**。
+   * Patch／Arc 解的是**算圖的著色問題**，那是 Blender 的其他目的，我們不算圖。
+   *
+   * ── ⭐ 關鍵：兩條弧共用同一個圓心 ──────────────────────
+   * 這一段卡了兩輪，原因是我一直用「每個面在這個頂點的代表點」去算圓心，
+   * 而**共用面 T 的代表點是「兩條邊都內縮」的角點**，不是任一條邊的偏移。
+   *
+   * > **圓心 c ＝ T 的代表點 − w × T 的法向。兩條弧都用它。**
+   *
+   * 弧1 ＝ `c + w × slerp(n_T, n_B, t)`（e1 的圓角面在 V 端縮短後的那一圈）
+   * 弧2 ＝ `c + w × slerp(n_T, n_A, t)`
+   * 兩條弧的 t=0 都落在 `T:V`，而**交線的兩端剛好是 `T:V` 與 `A:V`**。
+   *
+   * ── 交線：不是圓弧，而且不必解聯立 ──────────────────────
+   * 片1 的點 ＝ `c + s×(e1 方向) + w×slerp(n_T, n_B, t)`，
+   * 代進片2 解出來 **`s = w × sin(t × 90°)`** —— 一個封閉式。
+   * ⚠ 交線上的點**到 c 的距離不是 w**（是 √(w²+s²)）——
+   * 它是**橢圓弧**，⛔ 不要拿圓弧公式去套。
+   */
+
+  /** V 周圍「被導的」邊（從 V 出發的半邊） */
+  const bevAtVert = V => mesh.vertOutgoing(V).filter(
+    he => he.face && he.twin && he.twin.face && isCut(he.v, he.to));
+
+  /**
+   * 這個頂點適不適用 miter，適用的話把零件算好。
+   * 只處理**剛好兩條被導的邊、而且它們共用一個面**的情形 ——
+   * 其餘（4 價上兩條不相鄰、三條以上但沒全導）先擋，⛔ 不唯一就不猜。
+   */
+  const miterAt = V => {
+    const bs = bevAtVert(V);
+    if (bs.length !== 2) return null;
+    const [e1, e2] = bs;
+    const f1 = [e1.face, e1.twin.face], f2 = [e2.face, e2.twin.face];
+    const T = f1.find(f => f2.includes(f));
+    if (!T) return null;                       // 兩條被導的邊不相鄰
+    const B = f1.find(f => f !== T);
+    const A = f2.find(f => f !== T);
+    if (!A || !B || A === B) return null;
+    const repT = R.get(`${T.id}:${V.id}`);
+    if (repT === undefined) return null;
+    const c = pts[repT].clone().addScaledVector(T.normal, -w);
+    /** 兩條邊的單位方向（從 V 往外） */
+    const d1 = e1.to.p.clone().sub(V.p).normalize();
+    const d2 = e2.to.p.clone().sub(V.p).normalize();
+    return { e1, e2, T, A, B, c, d1, d2, repT };
+  };
+
+  /**
    * 圓角接不起來時，講**這個頂點**真正的原因，而且要講得出路。
    * 〔坑第 11 條：沉默地退回最糟；坑第 18 條：訊息錯了比沒訊息更糟〕
    */
-  const bevelBlockReason = V => (partialAtVert(V)
-    ? '這個角落只導了一部分的邊，圓角在那裡接不起來。'
-      + '把這個角落的邊**全部一起選**就可以了（例如方塊要整個圓角，12 條邊一起選）。'
-      + '只想導幾條的話，段數改成 1 的斜切邊可以做'
-    : '這個角落不是直角，圓角還做不出來（找不到一個球同時貼合每個面）。'
-      + '段數改成 1 的斜切邊可以做');
+  const bevelBlockReason = V => {
+    /**
+     * ⚠ **outer miter（2026-08-25）之後這裡要重新分類。**
+     * 「只導一部分」本身**已經做得到了**（剛好兩條、而且是直角的角落），
+     * 所以還會走到這裡的只剩兩種，⛔ 不可以再一律說「只導了一部分」——
+     * 那會叫圓錐的使用者去「全部一起選」，而那條路對他是死路
+     * （坑第 34 條：不要寫一個不存在的退路）。
+     */
+    const bs = bevAtVert(V).length;
+    if (partialAtVert(V) && bs !== 2) {
+      return '這個角落只導了一部分的邊，圓角在那裡接不起來。'
+           + '把這個角落的邊**全部一起選**就可以了（例如方塊要整個圓角，12 條邊一起選）。'
+           + '只想導幾條的話，段數改成 1 的斜切邊可以做';
+    }
+    return '這個角落不是直角，圓角還做不出來 —— 兩邊的圓弧接不到一起。'
+         + '段數改成 1 的斜切邊可以做';
+  };
 
   /** 這兩個面之間，有沒有一條**被導的**邊通過 V —— 有才存在一條弧 */
   const sharedBevelEdge = (V, g1, g2) => {
@@ -2256,13 +2320,125 @@ export function bevelEdges(mesh, hes, w, opt = {}) {
     return idx;
   };
 
+  /**
+   * ── miter 的兩片：先把點全部生好，②③④ 再各自取用 ──────────
+   * ⚠ 一定要**共用**：交線 `seam[i]` 同時屬於兩片，
+   * 兩邊各生一次的話接縫上會出現重合但不共用的點，網格就裂開了
+   * （跟 `arcPt()` 要快取是同一個理由）。
+   */
+  const miters = new Map();
+  if (segs > 1) {
+    for (const V of mesh.verts) {
+      const mi = miterAt(V);
+      if (!mi) continue;
+      const { T, A, B, c, d1, d2 } = mi;
+      /**
+       * ⚠ **只做直角。** 非直角時三片的偏移距離不一樣，
+       * `s = w·sin(t·夾角)` 那條封閉式是從正交推出來的，不成立 ——
+       * 而**那正是 Blender 開 Miter 三個選項的地方**（第 13 節）。
+       * ⛔ 不唯一就不猜，擋下來。
+       */
+      if (Math.abs(T.normal.dot(A.normal)) > 1e-6) continue;
+      if (Math.abs(T.normal.dot(B.normal)) > 1e-6) continue;
+      /** 交線的兩端必須是既有的點：T:V 與 A:V（＝ B:V，①b 已經併過） */
+      const iT = R.get(`${T.id}:${V.id}`);
+      const iA = R.get(`${A.id}:${V.id}`), iB = R.get(`${B.id}:${V.id}`);
+      if (iT === undefined || iA === undefined || iA !== iB) continue;
+
+      const ang1 = Math.acos(Math.min(1, Math.max(-1, T.normal.dot(B.normal))));
+      const ang2 = Math.acos(Math.min(1, Math.max(-1, T.normal.dot(A.normal))));
+      const g1 = d1.clone().negate(), g2 = d2.clone().negate();
+      const P = v => { pts.push(v); return pts.length - 1; };
+
+      /** 交線：從 T:V 走到 A:V。⚠ 它是**橢圓弧**，到 c 的距離不是 w */
+      const seam = [iT];
+      for (let i = 1; i < segs; i++) {
+        const t = i / segs;
+        seam.push(P(c.clone()
+          .addScaledVector(slerpDir(T.normal, B.normal, t), w)
+          .addScaledVector(g1, w * Math.sin(t * ang1))));
+      }
+      seam.push(iA);
+
+      /** 一片：第 i 列 i+1 個點，j=0 在弧上、j=i 在交線上 */
+      const mkRows = (nOther, ang, dir) => {
+        const rows = [[seam[0]]];
+        for (let i = 1; i <= segs; i++) {
+          const t = i / segs;
+          const u = slerpDir(T.normal, nOther, t);
+          const s = w * Math.sin(t * ang);
+          const row = [];
+          for (let j = 0; j <= i; j++) {
+            if (j === i) { row.push(seam[i]); continue; }
+            row.push(P(c.clone().addScaledVector(u, w)
+                                .addScaledVector(dir, s * j / i)));
+          }
+          rows.push(row);
+        }
+        return rows;
+      };
+      const rows1 = mkRows(B.normal, ang1, g1);
+      const rows2 = mkRows(A.normal, ang2, g2);
+
+      miters.set(V.id, {
+        T, A, B, rows1, rows2,
+        arc1: rows1.map(r => r[0]), arc2: rows2.map(r => r[0]),
+        endB: rows1[segs][0], endA: rows2[segs][0],
+        k1: kOf(vi.get(mi.e1.v.id), vi.get(mi.e1.to.id)),
+        k2: kOf(vi.get(mi.e2.v.id), vi.get(mi.e2.to.id))
+      });
+    }
+  }
+
+  /**
+   * 這條邊在 V 端、F 側的第 k 個弧點。
+   * miter 頂點用**縮短後**的弧（角落那兩片接管了剩下的部分），
+   * 其餘走一般的 `arcPt()`。
+   */
+  const arcAt = (V, F, G, k, ekey) => {
+    const m = miters.get(V.id);
+    if (m) {
+      if (ekey === m.k1) return F === m.T ? m.arc1[k] : m.arc1[segs - k];
+      if (ekey === m.k2) return F === m.T ? m.arc2[k] : m.arc2[segs - k];
+    }
+    return arcPt(V, F, G, k);
+  };
+
   const faces = [];
   // ── ② 原面：有代表點就換掉；沒有的要吸收鄰居的（見檔頭 ②）──
   for (const f of mesh.faces) {
     const out = [];
     for (const V of mesh.faceVerts(f)) {
       const own = R.get(`${f.id}:${V.id}`);
-      if (own !== undefined) { out.push(own); continue; }
+      if (own !== undefined) {
+        /**
+         * 🔴 **miter 的兩片會吃掉旁邊那兩個面的一角**，
+         * 所以那兩個面在這一角要多吸收一個點（弧的末端）。
+         * ⚠ **這跟「只導一條邊網格會裂開」是同一個機制** ——
+         * 少吸收一個點，半邊就配不到 twin。
+         *
+         * 順序照繞行方向：`prv` 先、`cur` 後。
+         * 靠「被導的那條邊」那一側放弧的末端，另一側放原本的代表點。
+         */
+        const m = segs > 1 ? miters.get(V.id) : null;
+        if (m && (f === m.A || f === m.B)) {
+          /**
+           * ⚠ **要吸收的是一整列，不是兩端。**
+           * 角落那片的第三條邊界（`rows[segs]`）整條躺在這個面上，
+           * 只放兩端的話中間 segs−1 個點在這裡配不到邊 → 破洞
+           * （實測 χ 2 → −6，而**體積照樣正確收斂** —— 坑第 17 條）。
+           * 該列的最後一個就是 `own`（＝ A:V ＝ 交線終點），所以不另外放。
+           */
+          const row = (f === m.A) ? m.rows2[segs] : m.rows1[segs];
+          const cc = at(f, V);
+          const prvBev = cc && isCut(cc.prv.v, cc.prv.to);
+          if (prvBev) out.push(...row);
+          else        out.push(...[...row].reverse());
+          continue;
+        }
+        out.push(own);
+        continue;
+      }
       const c = at(f, V);
       const a1 = repForEdge(f, c.prv, V), a2 = repForEdge(f, c.cur, V);
       out.push(a1);
@@ -2316,9 +2492,10 @@ export function bevelEdges(mesh, hes, w, opt = {}) {
      * ⚠ 兩端的弧**方向要一致**（都從 F 走到 G），否則四邊形會扭成沙漏
      * —— 那是坑第 29 條，畫面上完全看不出來。
      */
+    const ekey = kOf(vi.get(he.v.id), vi.get(he.to.id));
     for (let k = 0; k < segs; k++) {
-      const a0 = arcPt(he.v,  F, G, k),     a1 = arcPt(he.to, F, G, k);
-      const b1 = arcPt(he.to, F, G, k + 1), b0 = arcPt(he.v,  F, G, k + 1);
+      const a0 = arcAt(he.v,  F, G, k, ekey),     a1 = arcAt(he.to, F, G, k, ekey);
+      const b1 = arcAt(he.to, F, G, k + 1, ekey), b0 = arcAt(he.v,  F, G, k + 1, ekey);
       if ([a0, a1, b1, b0].some(x => x === undefined)) {
         const V = (a0 === undefined || b0 === undefined) ? he.v : he.to;
         return { ok: false, reason: bevelBlockReason(V) };
@@ -2346,6 +2523,27 @@ export function bevelEdges(mesh, hes, w, opt = {}) {
     const around = mesh.vertOutgoing(V).filter(he => he.face);
     if (!around.length) continue;
     if (!around.some(he => hasBev(he.face, V))) continue;   // 這個頂點完全沒被碰到
+
+    /**
+     * ── miter 角落：兩片圓柱面延伸到交線（第 13 節的 Sharp）──────
+     * ⚠ 走這條就不走底下的 ring 邏輯 —— miter 頂點的 ring 只有 2 個點
+     * （`A:V` 與 `T:V`），會被當成「不用補」而 continue，那就破了。
+     * ⭐ 繞向不在這裡判斷，交給後面已經驗過的 `recalcNormalsOutside()`。
+     */
+    const mt = segs > 1 ? miters.get(V.id) : null;
+    if (mt) {
+      for (const rows of [mt.rows1, mt.rows2]) {
+        for (let i = 1; i <= segs; i++) {
+          const up = rows[i - 1], dn = rows[i];
+          for (let j = 0; j < i; j++) {
+            faces.push([up[j], dn[j], dn[j + 1]]);
+            if (j > 0) faces.push([up[j - 1], dn[j], up[j]]);
+          }
+        }
+      }
+      corners++;
+      continue;
+    }
 
     /**
      * 🔴 **繞著 V 走一圈，收集「每個面在這一角現在用的是哪一點」。**

@@ -6658,17 +6658,20 @@ section('導圓角：段數 1 就是現在的斜切邊');
     const r1 = edit.bevelEdges(box, four, 5, { segments: 1 });
     ok('★ 頂面四條邊：段數 1 的斜切邊本來就做得到', r1.ok, r1.reason || '');
 
+    /**
+     * 🔴 **這幾條的斷言在 2026-08-25 翻過來了。**
+     * 原本斷言「頂面四條邊的多段導角**會被擋下來**」，並檢查那則訊息
+     * 說的是「只導了一部分」而不是「不是直角」。
+     * **outer miter 做完之後它做得到了**，所以斷言跟著翻 ——
+     * 完整驗證見「導圓角 outer miter」那一節。
+     * 〔留著這段歷史是因為它記著一個容易重犯的錯：
+     * 　方塊明明是直角，訊息卻說「不是直角」〕
+     */
     const r4 = edit.bevelEdges(box, four, 5, { segments: 4 });
-    ok('★★ 頂面四條邊：多段擋下來，而且說的是「只導了一部分的邊」',
-       !r4.ok && /一部分/.test(r4.reason || ''), r4.reason || '(沒擋)');
-    ok('★★ 　　而且不可以再說「不是直角」（方塊明明是直角）',
-       !r4.ok && !/不是直角/.test(r4.reason || ''));
-    ok('　　訊息要講得出路（全部一起選）',
-       !r4.ok && /全部一起選/.test(r4.reason || ''));
+    ok('★★ 頂面四條邊：段數 4 現在做得出來了（outer miter）', r4.ok, r4.reason || '');
 
-    /** 而「全部一起選」真的做得到 —— 出路不可以是假的（坑第 34 條）*/
     const rAll = edit.bevelEdges(box, [...box.edges()], 5, { segments: 4 });
-    ok('★★ 訊息講的那條出路真的走得通（12 條全選就成功）', rAll.ok, rAll.reason || '');
+    ok('★★ 12 條全選照樣成功（球面角落沒被 miter 搶走）', rAll.ok, rAll.reason || '');
   }
 
   {
@@ -6685,6 +6688,14 @@ section('導圓角：段數 1 就是現在的斜切邊');
     const r8 = edit.bevelEdges(cone, es, 2, { segments: 8 });
     ok('★ 非直角的角落，多段先擋下來並說原因',
        !r8.ok && /直角|角落/.test(r8.reason || ''), r8.reason || '(沒擋)');
+    /**
+     * 🔴 **⛔ 這裡不可以叫他「全部一起選」——那對圓錐是死路。**
+     * outer miter 之後「只導一部分」本身已經做得到了，
+     * 還會被擋的是**非直角**，而全部一起選並不會讓它變成直角。
+     * 〔坑第 34 條：不要寫一個不存在的退路〕
+     */
+    ok('★★ 　　而且不可以叫他「全部一起選」（那對非直角是死路）',
+       !r8.ok && !/全部一起選/.test(r8.reason || ''), r8.reason || '');
   }
 
   {
@@ -6698,6 +6709,142 @@ section('導圓角：段數 1 就是現在的斜切邊');
     const u = unfoldMesh(r.mesh, rule);
     ok('★ 圓角之後展開不會爆掉',
        u.pieces.length > 0, `${u.pieces.length} 片、${u.warnings.length} 則警告`);
+  }
+}
+
+section('導圓角 outer miter：只導一部分的邊');
+
+/**
+ * 🔴 **這一節守的是「只導頂面四條邊」那個情形**（＝圓角桌面、圓角面板）。
+ * kang 2026-08-25 第一輪實測就試到，當時被擋下來。
+ *
+ * **方案來源**：`外部參考-Blender編輯.md` **第 13 節**（Blender 叫 outer miter，
+ * 三種接法裡選 **Sharp**：兩片圓角面延伸到相交，不加額外頂點）。
+ *
+ * ── ⚠ 這一組刻意同時驗體積**與** χ ────────────────────────
+ * 上一輪查方案時的沙箱腳本**只有體積對、χ 是 −2n**（封面拼錯），
+ * 而**體積照樣漂亮地收斂** —— 那正是坑第 17 條：
+ * **中途的量一直都是對的，末端才錯。**
+ * ⛔ 所以這裡每一個段數都要同時斷言 χ、封閉、體積，少一個都不算過。
+ */
+{
+  const box = () => baked('box', { w: 60, d: 45, h: 40 });
+  const top = m => m.faces.find(f => f.normal.y > 0.99);
+  const R = 5;
+  /** 用兩條獨立的路對過答案：蒙地卡羅 106921.47 ／ 手算解析 106921.2755 */
+  const ANALYTIC = 106921.2755;
+
+  /**
+   * 🔴 **最強的幾何斷言：圓角表面上每個點到「軸線框」的距離都是 r。**
+   *
+   * 四條被導的邊各有一條圓角軸，它們在 y＝15 那個平面上圍成一個矩形框
+   * （x ∈ [−25,25]、z ∈ [−17.5,17.5] 的**邊界**）。
+   * 圓角面、角落面、頂面的角、側面的頂緣 —— 全部都該離它剛好 5。
+   *
+   * ⭐ 這一條抓得到「頂點跑到弧外面」，而體積抓不到（積分會平均掉）。
+   */
+  const segDist = (p, ax, ay, az, bx2, by, bz) => {
+    const dx = bx2-ax, dy = by-ay, dz = bz-az;
+    const L2 = dx*dx + dy*dy + dz*dz;
+    let t = L2 ? ((p.x-ax)*dx + (p.y-ay)*dy + (p.z-az)*dz) / L2 : 0;
+    t = Math.min(1, Math.max(0, t));
+    return Math.hypot(p.x-(ax+dx*t), p.y-(ay+dy*t), p.z-(az+dz*t));
+  };
+  /**
+   * ⚠ **「到最近那條軸的距離 ＝ r」這個斷言在 miter 上不成立**，
+   * 兩次都栽在這裡，寫下來免得第三次：
+   *   · 軸線段要用**邊本身的長度**（不是內縮後的），否則交線終點算成 5√2
+   *   · 但即使修好長度**還是不對** —— 像 (30,15,17.5) 這種點
+   *     **正好落在另一條軸線上**（距離 0），它到自己那條軸才是 5。
+   *     一個點可以離某條軸很近，同時仍然是正確的表面點。
+   *
+   * → 換成一個**正確而且更強**的判準（就是蒙地卡羅用的那個 `inside()`）：
+   *   **沒有任何頂點跑到理想圓角實體的外面。**
+   *   它抓得到「頂點跑到弧外面」，而體積抓不到（積分會平均掉）。
+   *   凹進去太多的那一半由「體積收斂 ＋ 單調遞增」守。
+   */
+  const outsideBy = p => {
+    if (p.y <= 15 + 1e-12) return 0;          // 圓角起始高度以下，一定在裡面
+    const dy2 = (p.y - 15) ** 2;
+    let worst = 0;
+    const chk = d => { const e = dy2 + d * d - 25; if (e > worst) worst = e; };
+    if (p.z >  17.5) chk(p.z - 17.5);
+    if (p.z < -17.5) chk(p.z + 17.5);
+    if (p.x >  25)   chk(p.x - 25);
+    if (p.x < -25)   chk(p.x + 25);
+    return worst;
+  };
+
+  {
+    /**
+     * 🔴 **回歸：段數 1 的斜切邊本來就做得到，不可以被 miter 改掉。**
+     * 〔跟圓角那一輪同一招：舊行為不變靠測試保證，不靠人記得〕
+     */
+    const m = box();
+    const r = edit.bevelEdges(m, m.faceLoop(top(m)), R, { segments: 1 });
+    ok('段數 1（斜切邊）照樣成功', r.ok, r.reason || '');
+    eq('★★ 段數 1：V12 F10（跟以前完全一樣）',
+       `${r.mesh.verts.length}/${r.mesh.faces.length}`, '12/10');
+    eq('　　χ 仍然是 2', chi(r.mesh), 2);
+  }
+
+  const vols = [], errs = [];
+  for (const n of [2, 4, 8]) {
+    const m = box();
+    const r = edit.bevelEdges(m, m.faceLoop(top(m)), R, { segments: n });
+    ok(`★★ 只導頂面四條邊 段數 ${n}：做得出來`, r.ok, r.reason || '');
+    if (!r.ok) { vols.push(null); errs.push(null); continue; }
+    const g = r.mesh;
+
+    eq(`★★ 段數 ${n}：χ 仍然是 2`, chi(g), 2);
+    ok(`★★ 段數 ${n}：仍然封閉、結構沒問題`, g.isClosed() && g.validate().ok);
+    ok(`　　段數 ${n}：沒有零長度的邊`,
+       [...g.edges()].every(he => he.to.p.distanceTo(he.v.p) > 1e-6));
+
+    /** ⭐ 幾何斷言：沒有頂點跑到理想圓角的外面 */
+    const worst = Math.max(...g.verts.map(v => outsideBy(v.p)));
+    near(`★★ 段數 ${n}：沒有任何頂點跑到理想圓角的外面`, worst, 0, 1e-9);
+
+    vols.push(g.volume());
+    errs.push(Math.abs(g.volume() - ANALYTIC) / ANALYTIC);
+  }
+
+  {
+    const v = vols.filter(x => x != null);
+    ok('★★ 體積永遠小於解析解 106921.2755（內接，不可能超過）',
+       v.length === 3 && v.every(x => x < ANALYTIC),
+       v.map(x => x.toFixed(2)).join(' < '));
+    ok('★★ 段數越高，體積單調遞增',
+       v.length === 3 && v.every((x, i) => i === 0 || x > v[i-1]));
+    const e = errs.filter(x => x != null);
+    ok('★★ 段數加倍，誤差縮到約四分之一',
+       e.length === 3 && [e[0]/e[1], e[1]/e[2]].every(x => x > 3.3 && x < 4.3),
+       e.length === 3 ? [e[0]/e[1], e[1]/e[2]].map(x => x.toFixed(2)).join('、') : '');
+  }
+
+  {
+    /** 兩條相鄰的邊（最小的 miter 情形）—— 一樣要做得出來 */
+    const m = box();
+    const b = m.bounds();
+    const corner = m.verts.find(v => Math.abs(v.p.x-b.max.x) < 1e-9
+      && Math.abs(v.p.y-b.max.y) < 1e-9 && Math.abs(v.p.z-b.max.z) < 1e-9);
+    const two = [...m.edges()].filter(he => he.v === corner || he.to === corner).slice(0, 2);
+    const r = edit.bevelEdges(m, two, R, { segments: 4 });
+    ok('★★ 兩條相鄰的邊 段數 4：做得出來', r.ok, r.reason || '');
+    if (r.ok) {
+      eq('　　χ 仍然是 2', chi(r.mesh), 2);
+      ok('　　仍然封閉', r.mesh.isClosed());
+    }
+  }
+
+  {
+    /** 🔴 三條全導的球面角落**不可以被 miter 改掉**（回歸） */
+    const m = box();
+    const r = edit.bevelEdges(m, [...m.edges()], R, { segments: 4 });
+    ok('★★ 12 條全導照樣走球面角落（沒被 miter 搶走）', r.ok, r.reason || '');
+    eq('　　仍然是 48 片 ＋ 8 個角落', `${r.walls}/${r.corners}`, '48/8');
+    eq('　　V120 F182（跟圓角那一輪完全一樣）',
+       `${r.mesh.verts.length}/${r.mesh.faces.length}`, '120/182');
   }
 }
 
