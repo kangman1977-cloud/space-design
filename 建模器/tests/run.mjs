@@ -7809,6 +7809,61 @@ section('刀具：螢幕兩點算出來的平面');
        local.clone().applyMatrix4(m).dot(wn), wd, 1e-9);
 }
 
+section('刀具：這一刀會切在哪（預覽用的交線）');
+
+/**
+ * 🔴 **kang 2026-08-25 實測指出的核心問題**：
+ * > 「光是兩點...**測試後也不知道要如何點兩點呈現我想要的切一刀位置**」
+ *
+ * 螢幕上那條虛線只說明「你畫過哪裡」，這一支算的才是「**會切到哪裡**」。
+ *
+ * ⚠ `slice/section.js` 的 `sectionAt()` **重用不了** —— 它綁死在
+ * X／Y／Z 軸上，而刀具的平面是任意方向的。
+ * 〔又一次「讀程式，不要照它的描述推」〕
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+
+  /** 攔腰一刀：方塊的四個側面各被切一段 → 4 段 */
+  const segs = edit.planeCrossSegments(box, { n: new THREE.Vector3(0, 1, 0), d: 0 });
+  eq('★★ 方塊攔腰切，交線是 4 段（每段兩個端點 ＝ 8 個點）', segs.length, 8);
+  ok('★★ 每個端點都落在平面上',
+     segs.every(p => Math.abs(p.y) < 1e-9));
+
+  /**
+   * ⭐ **周長對得起來**：那 4 段接起來就是 60×45 的一圈 ＝ 210。
+   * 🔴 這一條比「幾段」有用得多 —— 段數對但長度錯的話，
+   * 畫出來的線會是歪的，而**畫面上很難看出來**（鐵律三）。
+   */
+  let total = 0;
+  for (let i = 0; i < segs.length; i += 2) total += segs[i].distanceTo(segs[i + 1]);
+  rel('★★★ 四段加起來 ＝ 頂面一圈的周長 210', total, 210);
+
+  /** 斜著切也要算得出來（那正是刀具做得到、切一刀做不到的） */
+  const tilt = edit.planeCrossSegments(box,
+    { n: new THREE.Vector3(1, 1, 0).normalize(), d: 0 });
+  ok('★ 斜的平面也切得出交線', tilt.length >= 2);
+  ok('★★ 斜切的端點也都落在那個斜平面上',
+     tilt.every(p => Math.abs(p.x + p.y) < 1e-6));
+
+  /** 平面在物件外面 → 沒有交線，⛔ 不可以丟例外 */
+  eq('★ 平面在物件外面，回空的（不是壞掉）',
+     edit.planeCrossSegments(box, { n: new THREE.Vector3(0, 1, 0), d: 999 }).length, 0);
+  eq('★ 沒給平面也不會壞', edit.planeCrossSegments(box, null).length, 0);
+  eq('★ 法向是 0 也不會壞',
+     edit.planeCrossSegments(box, { n: new THREE.Vector3(0, 0, 0), d: 0 }).length, 0);
+
+  /**
+   * 🔴 **平面剛好通過既有頂點時，不可以吐出長度 0 的線段。**
+   * ⚠ 那種線段畫出來是一個看不見的點，而「幾段」照樣是對的 ——
+   * 只有量長度才抓得到（坑第 17 條）。
+   */
+  const oct = baked('prism', { r: 30, h: 50, sides: 8 });
+  const onVert = edit.planeCrossSegments(oct, { n: new THREE.Vector3(1, 0, 0), d: 0 });
+  ok('★★ 通過既有頂點時，沒有長度 0 的線段',
+     onVert.every((p, i) => i % 2 === 1 || p.distanceTo(onVert[i + 1]) > 1e-6));
+}
+
 // ═══════════════════════════════════════════════════════
 //  分離（＝ Blender 的 Separate）
 // ═══════════════════════════════════════════════════════

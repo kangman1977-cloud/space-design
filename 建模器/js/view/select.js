@@ -423,7 +423,12 @@ export class Selection {
        */
       if (this.knifeMode && this.hooks.onKnifeMove) {
         const r = this._toCanvasPx(e.clientX, e.clientY);
-        this.hooks.onKnifeMove(r.x, r.y);
+        /**
+         * ⚠ 連射線一起給 —— 呼叫端要用它算「這一刀會切在哪」。
+         * ⛔ 不要讓呼叫端自己再從 x/y 轉一次：那就是兩個地方各算一次
+         * 同一件事（坑第 31 條），而且它們用的相機還可能不同步。
+         */
+        this.hooks.onKnifeMove(r.x, r.y, this.screenRay(e.clientX, e.clientY));
       }
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);

@@ -557,6 +557,49 @@ export class SceneView {
     this._vertDots = pts;
   }
 
+  /**
+   * 🔴 **刀具的「這一刀會切在哪」預覽。**
+   *
+   * kang 2026-08-25：「不知道要如何點兩點呈現我想要的切一刀位置」——
+   * 螢幕上那條虛線只說明「你畫過哪裡」，**這一條才說明「會切到哪裡」**。
+   *
+   * ⚠ 用 **`LineSegments`**（每兩個點一段），⛔ 不是 `Line` ——
+   * 交線是一堆**各自獨立**的線段，串成連續折線會多畫一堆不存在的線。
+   *
+   * ⚠ 整批一個物件，跟「顯示點」同一個理由：
+   * 這一支會被 pointermove 一直呼叫，⛔ 不可以每段建一個 Mesh。
+   *
+   * @param {THREE.Vector3[]} worldPts 兩兩一組的世界座標端點
+   */
+  setKnifePreview(worldPts) {
+    this.clearKnifePreview();
+    if (!worldPts || worldPts.length < 2) return;
+
+    const pos = new Float32Array(worldPts.length * 3);
+    worldPts.forEach((p, i) => {
+      pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+    const ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      color: 0xff8c1a,
+      depthTest: false        // 背面那一段也要看得到，否則只看得到一半
+    }));
+    ln.renderOrder = 7;       // 蓋過選取標記（6）與點（5）
+    ln.raycast = () => {};
+    this.scene.add(ln);
+    this._knifePrev = ln;
+  }
+
+  clearKnifePreview() {
+    if (!this._knifePrev) return;
+    this.scene.remove(this._knifePrev);
+    this._knifePrev.geometry.dispose();
+    this._knifePrev.material.dispose();
+    this._knifePrev = null;
+  }
+
   clearVertexDots() {
     if (!this._vertDots) return;
     this.scene.remove(this._vertDots);

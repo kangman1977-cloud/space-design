@@ -86,9 +86,22 @@ select {
   〔跟框選那個矩形同一個做法〕
 */
 #knifeLine {
-  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  /* 🔴 width/height 一定要明確給。
+     ⚠ **只寫 inset:0 是不夠的** —— SVG 是 replaced element，
+     寬高 auto 時用的是它自己的預設尺寸（300×150），
+     而 SVG 預設 overflow:hidden，畫在那個框外面的線**直接被裁掉**。
+     〔2026-08-25 kang 實測：「點第一下也沒看到橘線」。
+     　這是沙箱驗不了畫面的典型代價 —— 語法沒錯、邏輯沒錯，就是看不見〕 */
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 4; pointer-events: none; overflow: visible;
+  /* 🔴 初始藏起來用 CSS，⛔ 不靠 `hidden` 屬性 ——
+     那是 HTML 元素的屬性，對 SVG 不保證生效（2026-08-25 實測踩到：
+     虛線藏不起來，殘留在畫面上）。JS 那邊一律改 style.display。 */
+  display: none;
 }
 #knifeLine line { stroke: #ff8c1a; stroke-width: 2; stroke-dasharray: 7 5; }
+/* 這一刀會切在模型上的哪條線 —— 比螢幕上那條虛線更重要 */
+#knifeLine polyline { fill: none; stroke: #ff8c1a; stroke-width: 2.5; }
 
 /* ══ 右側面板 ══════════════════════════════════════ */
 #panel {
@@ -650,7 +663,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     <div id="stage">
       <canvas id="cv"></canvas>
       <div id="marqueeBox" hidden></div>
-      <svg id="knifeLine" hidden><line x1="0" y1="0" x2="0" y2="0"/></svg>
+      <!-- ⛔ 刻意沒有 hidden 屬性：那是 HTML 元素的東西，對 SVG 不保證生效。
+           初始隱藏靠 CSS 的 display:none，JS 也一律改 style.display。 -->
+      <svg id="knifeLine"><line x1="0" y1="0" x2="0" y2="0"/></svg>
       <div id="toast"></div>
       <div id="status">
         <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>

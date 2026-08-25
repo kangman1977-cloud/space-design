@@ -1404,6 +1404,70 @@ export function planeFromTwoRays(o1, d1, o2, d2) {
 }
 
 /**
+ * 🔴 **這個平面會切在模型的哪些線上（只算，不改）。**
+ *
+ * ── kang 2026-08-25 實測講的那件事 ──────────────────────
+ * > 「光是兩點...**測試後也不知道要如何點兩點呈現我想要的切一刀位置**」
+ *
+ * 刀具在螢幕上點兩個位置，那條線**往螢幕深處延伸**成一片刀片 ——
+ * 而「往深處延伸」那個方向使用者看不見，所以按下去才知道切到哪。
+ *
+ * ⚠ **那不是「結果不唯一」**（程式沒有亂猜），是**結果唯一但事先看不到**。
+ * 一樣不能用（坑第 21 條的親戚：看不到作用的操作沒有人敢按）。
+ *
+ * → 這一支把「會切在哪」算出來，讓呼叫端**即時畫在模型上**。
+ *
+ * ── ⚠ `slice/section.js` 的 `sectionAt()` 重用不了 ──────────
+ * 那一支**綁死在 X／Y／Z 軸上**（參數是 `axisKey`），而刀具的平面
+ * 是任意方向的。〔又一次「讀程式，不要照它的描述推」——
+ * 　我原本以為那支現成可用〕
+ *
+ * ⭐ 但我們要的比它簡單得多：**只要線段，不必串成封閉輪廓**。
+ * 畫出來就好，不出圖也不算面積。
+ *
+ * ── ⚠ 效能：這一支會被 pointermove 一直呼叫 ─────────────────
+ * 它是 O(面數)。小模型無感，但**大模型會隨面數成長**（坑第 22 條）。
+ * 呼叫端要節流，而且 ⛔ 不可以在裡面配置大量暫存物件。
+ *
+ * @param {Mesh} mesh
+ * @param {{n: THREE.Vector3, d: number}} plane 本地平面
+ * @returns {THREE.Vector3[]} 兩兩一組的線段端點（本地座標）
+ */
+export function planeCrossSegments(mesh, plane) {
+  const out = [];
+  if (!mesh || !plane || !plane.n) return out;
+  const n = plane.n.clone();
+  const len = n.length();
+  if (!(len > 1e-12)) return out;
+  n.divideScalar(len);
+  const d = plane.d / len;
+
+  for (const f of mesh.faces) {
+    const hits = [];
+    for (const he of mesh.faceLoop(f)) {
+      const a = he.v.p, b = he.to.p;
+      const da = a.dot(n) - d, db = b.dot(n) - d;
+      /**
+       * ⚠ 頂點剛好落在平面上時，**它的兩條邊會各記一次** ——
+       * 不擋的話同一個點進來兩次，線段就退化成一個點。
+       * 沿用 `bisect()` 那條三態的判準（`ON_PLANE_CM`），
+       * ⛔ 不要用 1e-9 那種浮點尺度（坑第 25／26 條）。
+       */
+      if (Math.abs(da) < ON_PLANE_CM) {
+        if (!hits.some(p => p.distanceTo(a) < ON_PLANE_CM)) hits.push(a.clone());
+        continue;
+      }
+      if (da * db < 0) hits.push(a.clone().lerp(b, da / (da - db)));
+      if (hits.length >= 2) break;      // 一個面畫一段就夠了（預覽而已）
+    }
+    if (hits.length >= 2 && hits[0].distanceTo(hits[1]) > ON_PLANE_CM) {
+      out.push(hits[0], hits[1]);
+    }
+  }
+  return out;
+}
+
+/**
  * 🔴 **任意切線：用一個平面把網格切開，只加線、不改形狀。**
  *
  * ── 它是「加線 × 平面」，不是新功能 ──────────────────────

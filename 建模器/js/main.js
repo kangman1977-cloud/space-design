@@ -33,7 +33,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
-         planeFromTwoRays, worldPlaneToLocal,
+         planeFromTwoRays, worldPlaneToLocal, planeCrossSegments,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -58,7 +58,15 @@ const sel = new Selection(view, {
    */
   onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
   onKnifePick: ray => knifePick(ray),
-  onKnifeMove: (x, y) => { if (knifePick1) drawKnifeLine(x, y); },
+  /**
+   * ⚠ 兩件事都要做：畫面上那條虛線（你畫過哪裡）
+   * ＋ 模型上那圈線（**會切到哪裡**）。後者才是 kang 缺的那一個。
+   */
+  onKnifeMove: (x, y, ray) => {
+    if (!knifePick1) return;
+    drawKnifeLine(x, y);
+    updateKnifePreview(ray);
+  },
   onTransform: committing => {
     view.sync(doc);
     if (committing) commit('變換物件');
@@ -597,9 +605,56 @@ function exitOtherModes(keep) {
  */
 let knifePick1 = null;
 
+/**
+ * 🔴 **藏／顯示一律用 `style.display`，⛔ 不要用 `hidden`。**
+ *
+ * ⚠ **`hidden` 是 HTML 元素的屬性，而這是一個 SVG 元素** ——
+ * 設下去不保證生效，於是**那條虛線藏不起來，殘留在最後移動到的位置**。
+ * 〔2026-08-25 kang 實測截圖：切完之後畫面上還掛著一小段橘虛線。
+ * 　模型上那條實線是另一套機制（`scene.remove()`），所以它正常消失了 ——
+ * 　「只有虛線留著」正好把病因指出來〕
+ *
+ * ⚠ 同一個檔案裡框選那個 `#marqueeBox` 是 **div**，`hidden` 對它有效 ——
+ * ⛔ 所以不能照抄它的寫法，那是這次踩到的地方。
+ */
 function hideKnifeLine() {
   const s = $('knifeLine');
-  if (s) s.hidden = true;
+  if (s) s.style.display = 'none';
+  view.clearKnifePreview();
+  _knifeRaf = 0;
+}
+
+/**
+ * 🔴 **「這一刀會切在哪」的即時預覽 —— kang 實測指出的核心問題。**
+ *
+ * > 「光是兩點...**測試後也不知道要如何點兩點呈現我想要的切一刀位置**」
+ *
+ * 螢幕上那條橘虛線只說明「你畫過哪裡」，
+ * **這一條才說明「會切到哪裡」** —— 那條線往螢幕深處延伸成一片刀片，
+ * 而使用者看不見深處那個方向。
+ *
+ * ⚠ **用 rAF 節流**：`planeCrossSegments()` 是 O(面數)，而 pointermove
+ * 觸發得很密。⛔ 每一次都算會隨模型大小成長（坑第 22 條）。
+ */
+let _knifeRaf = 0;
+
+function updateKnifePreview(ray) {
+  const obj = sel.active;
+  if (!knifePick1 || !obj) return;
+  if (_knifeRaf) return;                 // 這一幀已經排過了
+  _knifeRaf = requestAnimationFrame(() => {
+    _knifeRaf = 0;
+    if (!knifePick1 || !sel.knifeMode) return;
+    const wp = planeFromTwoRays(knifePick1.origin, knifePick1.direction,
+                                ray.origin, ray.direction);
+    if (!wp.ok) { view.clearKnifePreview(); return; }
+    const local = worldPlaneToLocal(obj.matrix(), wp.n, wp.d);
+    const segs = planeCrossSegments(obj.mesh(), local);
+    const node = view.nodeOf(obj.id);
+    if (!node) { view.clearKnifePreview(); return; }
+    node.updateMatrixWorld(true);
+    view.setKnifePreview(segs.map(p => node.localToWorld(p.clone())));
+  });
 }
 
 /**
@@ -617,7 +672,7 @@ function drawKnifeLine(x2, y2) {
   ln.setAttribute('y1', knifePick1.y);
   ln.setAttribute('x2', x2);
   ln.setAttribute('y2', y2);
-  s.hidden = false;
+  s.style.display = 'block';      // ⛔ 不用 hidden，見 hideKnifeLine()
 }
 
 function toggleKnifeMode() {
