@@ -1253,7 +1253,27 @@ export class Selection {
       base: snapshotVerts(verts),
       start: {
         pos: this._proxy.position.clone(),
-        quat: this._proxy.quaternion.clone()
+        quat: this._proxy.quaternion.clone(),
+        /**
+         * 🔴 **軸要在這裡記下來，⛔ 不可以事後去問 `tc.axis`。**
+         *
+         * ⚠ **kang 2026-08-25 實測抓到的**：拖完箭頭，數值欄看得到數字，
+         * 但去改那個數字「**似乎沒作用**」——「似乎」兩個字是關鍵，
+         * 因為它**有時候會動、有時候不會**。
+         *
+         * 原因：`TransformControls` 的 `axis` 是**滑鼠停在哪根把手上**，
+         * 不是「這次在拖哪根軸」。放手之後只要指標掃過空白處，
+         * 它就被清成 `null`（`TransformControls.js` 有三個地方清它）——
+         * 於是 `editDragValue()` 回 `null`，打的數字被丟掉。
+         * 而如果指標是**直接從把手移出畫布**到工具列，畫布收不到
+         * `pointermove`，`axis` 就還留著 —— **所以會時好時壞。**
+         *
+         * ⭐ 這跟「記初始座標、每幀從初始值重算」是同一條：
+         * **軸也是這次拖曳的初始狀態的一部分**，不是可以事後再問的東西。
+         * 〔日誌：記初始值的價值不是手感，是正確性〕
+         */
+        axis: this.tc.axis,
+        mode: this.tc.getMode()
       },
       cancelled: false
     };
@@ -1334,9 +1354,18 @@ export class Selection {
    */
   editDragValue() {
     const d = this._drag;
-    const axis = this.tc.axis;
+    /**
+     * 🔴 **軸與種類都讀「拖曳開始時記下來的」，⛔ 不要讀 `tc.axis`。**
+     * 理由寫在 `_beginEditDrag()` 那段長註解裡（kang 抓到的「時好時壞」）。
+     *
+     * ⚠ 種類也要比對：拖完之後如果去按了「旋轉」，這份位移快照就對不上了，
+     * 這時**老實回 `null`**，讓呼叫端說「先拉一下箭頭」——
+     * ⛔ 不要拿位移的快照去算旋轉的數字（那會是一個沒有人驗得出來的數）。
+     */
+    const axis = d && d.start ? d.start.axis : null;
     if (!d || !axis || !['X', 'Y', 'Z'].includes(axis)) return null;
-    const mode = this.tc.getMode();
+    if (d.start.mode && d.start.mode !== this.tc.getMode()) return null;
+    const mode = d.start.mode || this.tc.getMode();
 
     if (mode === 'translate') {
       const dir = this._axisDir(axis, d.start.quat);

@@ -7365,6 +7365,135 @@ const bisectPlane = (nx, ny, nz, d) => ({ n: new THREE.Vector3(nx, ny, nz), d })
      [...round.edges()].filter(he => he.hard).length, 4);
 }
 
+// ═══════════════════════════════════════════════════════
+//  量測（kang 2026-08-25 提出：bake 之後就不知道真實尺寸了）
+// ═══════════════════════════════════════════════════════
+
+section('量測：選到的東西有多大');
+{
+  const measure = await import('../js/core/measure.js');
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const I = new THREE.Matrix4();
+  const edgeEl = he => ({ kind: 'edge', he });
+  const faceEl = f => ({ kind: 'face', face: f });
+
+  /** 找一條長度接近 L 的邊 */
+  const edgeOf = L => [...box.edges()].find(
+    he => Math.abs(measure.edgeLength(he, I) - L) < 1e-9);
+
+  // ── 邊長：三種長度都要對得上建模參數 ──
+  for (const L of [60, 45, 40]) {
+    const he = edgeOf(L);
+    ok(`方塊 找得到長度 ${L} 的邊`, !!he);
+    if (he) rel(`方塊 邊長 ${L}`,
+      measure.measureSelection(box, [edgeEl(he)], I).length, L);
+  }
+
+  // ── 面積與周長：一個面就是一個共面區域，不是三角形 ──
+  {
+    const got = box.faces.map(f =>
+      Math.round(measure.measureSelection(box, [faceEl(f)], I).area));
+    got.sort((a, b) => a - b);
+    eq('方塊 六個面的面積', got.join(','), '1800,1800,2400,2400,2700,2700');
+
+    const top = box.faces.find(f =>
+      Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+    const m = measure.measureSelection(box, [faceEl(top)], I);
+    rel('方塊 60×45 面的周長（＝2×(60+45)）', m.perimeter, 210);
+    eq('方塊 這個面沒有洞', m.holes, 0);
+    eq('　　選到的是共面區域，4 個頂點', m.vertCount, 4);
+  }
+
+  // ── 🔴 兩個數字互相對得起來：六個面加起來 ＝ mesh.area() ──
+  {
+    let sum = 0;
+    for (const f of box.faces) sum += measure.measureSelection(box, [faceEl(f)], I).area;
+    rel('★★ 六個面的面積總和 ＝ mesh.area()', sum, box.area());
+    rel('　　而且就是 13800', sum, 13800);
+  }
+
+  // ── 🔴 一律換世界座標：縮放過的物件要報縮放後的尺寸 ──
+  {
+    const S2 = new THREE.Matrix4().makeScale(2, 2, 2);
+    const he = edgeOf(60);
+    rel('★★ 整體放大 2 倍 邊長也 2 倍', measure.measureSelection(box, [edgeEl(he)], S2).length, 120);
+    const top = box.faces.find(f =>
+      Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+    rel('★★ 整體放大 2 倍 面積 4 倍', measure.measureSelection(box, [faceEl(top)], S2).area, 10800);
+
+    // 非均勻縮放：只有沿著那個方向的邊會變
+    const SX = new THREE.Matrix4().makeScale(3, 1, 1);
+    const along = [...box.edges()].find(he2 => {
+      const d = he2.to.p.clone().sub(he2.v.p);
+      return Math.abs(Math.abs(d.x) - 60) < 1e-9 && Math.abs(d.y) < 1e-9 && Math.abs(d.z) < 1e-9;
+    });
+    if (along) rel('★ 只放大 X 3 倍，X 向的 60 變 180',
+      measure.measureSelection(box, [edgeEl(along)], SX).length, 180);
+  }
+
+  // ── 🔴 剛體運動不改變尺寸：旋轉、位移都不可以動到長度與面積 ──
+  {
+    const R = new THREE.Matrix4().makeRotationFromEuler(
+      new THREE.Euler(0.3, -1.1, 0.7));
+    const T = new THREE.Matrix4().makeTranslation(123, -45, 6.7);
+    const RT = new THREE.Matrix4().multiplyMatrices(T, R);
+    const he = edgeOf(60);
+    rel('★★ 旋轉＋位移後 邊長不變', measure.measureSelection(box, [edgeEl(he)], RT).length, 60);
+
+    let sum = 0;
+    for (const f of box.faces) sum += measure.measureSelection(box, [faceEl(f)], RT).area;
+    rel('★★ 旋轉＋位移後 總面積不變', sum, 13800);
+
+    // 重心要跟著搬到世界座標去 —— 這就是「跟切一刀、對齊同一套數字」
+    const c = measure.measureSelection(box, [faceEl(box.faces[0])], T).center;
+    const c0 = measure.measureSelection(box, [faceEl(box.faces[0])], I).center;
+    rel('★★ 位移後 重心跟著移動（X）', c.x - c0.x, 123);
+    rel('　　（Y）', c.y - c0.y, -45);
+  }
+
+  // ── 多選：總長、總面積有意義；周長沒有意義就回 null ──
+  {
+    const top = box.faces.find(f =>
+      Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+    const other = box.faces.find(f => f !== top);
+    const m = measure.measureSelection(box, [faceEl(top), faceEl(other)], I);
+    eq('多選面 count', m.count, 2);
+    ok('多選面 總面積 ＝ 兩片相加', Math.abs(m.area - (2700 + measure.measureSelection(box, [faceEl(other)], I).area)) < 1e-6);
+    eq('★ 多選面 周長回 null（共用的邊會被算兩次，不硬湊）', m.perimeter, null);
+
+    // 一整圈邊的總長 ＝ 那一圈的周長
+    const ring = [...box.edges()].filter(he => {
+      const L = measure.edgeLength(he, I);
+      return (Math.abs(L - 60) < 1e-9 || Math.abs(L - 45) < 1e-9)
+        && Math.abs(he.v.p.y - he.to.p.y) < 1e-9
+        && Math.abs(he.v.p.y - box.verts.reduce((mx, v) => Math.max(mx, v.p.y), -1e9)) < 1e-9;
+    }).map(edgeEl);
+    eq('頂面那一圈是 4 條邊', ring.length, 4);
+    rel('★ 一整圈邊的總長 ＝ 周長 210', measure.measureSelection(box, ring, I).length, 210);
+  }
+
+  // ── 選取外框：任何選取都有意義 ──
+  {
+    const s = measure.measureSelection(box, box.faces.map(faceEl), I).size;
+    rel('全選面 外框 X', s.x, 60);
+    rel('全選面 外框 Y', s.y, 40);
+    rel('全選面 外框 Z', s.z, 45);
+  }
+
+  // ── 顯示格式：兩位小數，一個入口 ──
+  {
+    eq('fmtCm 兩位小數', measure.fmtCm(45.6789), '45.68');
+    eq('fmtCm 補零', measure.fmtCm(45), '45.00');
+    eq('fmtCm 不留浮點雜訊', measure.fmtCm(0.1 + 0.2), '0.30');
+  }
+
+  // ── 沒有選取就回 null，⛔ 不要回一個假的 0 ──
+  {
+    eq('沒有選取回 null', measure.measureSelection(box, [], I), null);
+    eq('選取是 null 也回 null', measure.measureSelection(box, null, I), null);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -17,9 +17,10 @@ import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
 import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
+import { measureSelection, fmtCm } from '../core/measure.js';
 import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
-         AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
+         worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -379,8 +380,22 @@ export class Panel {
     // 頂點數一律算**整份選取**的聯集 —— 相鄰的面共用頂點，
     // 「3 個面」不等於「3×4 個頂點」，而使用者最容易在這裡誤會
     const n = elementVerts(mesh, sel.editSels).length;
-    const c = elementCenter(mesh, sel.editSels, 0.5, sel.editPivot);
-    const f = v => (Math.round(v * 100) / 100).toFixed(2);
+
+    /**
+     * 🔴 **量測一律走 `measureSelection()`，而且它算的是世界座標。**
+     *
+     * ⚠ **這裡原本印的是網格自己的座標**（`elementCenter()` 沒乘矩陣）——
+     * 物件一被搬動或旋轉，這個數字就跟「切一刀」「對齊」「貼合」
+     * 「剖面分切」**對不起來**，而畫面上完全看不出來（坑第 20 條）。
+     * kang 2026-08-25 為切一刀拍板的那條在這裡一樣適用：
+     * **座標是空間裡的實際位置。**
+     *
+     * ⛔ 不要在這裡自己算長度或面積 —— 那支是純函式而且測得到（1606 項裡
+     * 有一整節），這裡只負責畫。
+     */
+    const ms = measureSelection(mesh, sel.editSels, el.obj.matrix(), sel.editPivot);
+    const c = ms ? ms.center : elementCenter(mesh, sel.editSels, 0.5, sel.editPivot);
+    const f = v => fmtCm(v);
 
     const one = el.kind === 'vertex' ? '一個點'
       : el.kind === 'edge' ? '一條邊（2 個頂點）'
@@ -397,7 +412,31 @@ export class Panel {
      * 差別很具體（它決定縮放時東西往哪邊收），而畫面上只看得到
      * 一組箭頭，看不出程式用的是哪一個。
      */
+    /**
+     * 尺寸那一行 —— **kang 2026-08-25 要的東西就是這一行**：
+     * 「轉換成編輯網格後，就無法正確知道真實尺寸，只有座標」。
+     *
+     * ⚠ **哪些量有意義是 `measureSelection()` 決定的**，這裡只管畫。
+     * 例如多選面時 `perimeter` 是 `null`（共用的邊會被算兩次，
+     * 那個數字沒有人驗得出來），⛔ 不要在這裡補一個湊數的。
+     */
+    const dim = [];
+    if (ms) {
+      if (ms.length !== null) {
+        dim.push(`${many ? '總長' : '長度'} <b>${f(ms.length)}</b> cm`);
+      }
+      if (ms.area !== null) {
+        dim.push(`${many ? '總面積' : '面積'} <b>${f(ms.area)}</b> cm²`);
+      }
+      if (ms.perimeter !== null) dim.push(`周長 <b>${f(ms.perimeter)}</b> cm`);
+      if (ms.holes) dim.push(`<span class="dim2">（這個面上有 ${ms.holes} 個洞，周長只算外緣）</span>`);
+      if (many) {
+        dim.push(`外框 <b>${f(ms.size.x)}</b> × <b>${f(ms.size.y)}</b> × <b>${f(ms.size.z)}</b> cm`);
+      }
+    }
+
     box.innerHTML = `選到 <b>${what}</b>，在「${el.obj.name}」上<br>`
+      + (dim.length ? dim.join('　') + '<br>' : '')
       + `${many ? (sel.editPivot === 'active' ? '中心（最後選的）' : '中心（重心）') : '重心'} `
       + `X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`
       + (many ? '<br><span class="dim2">橘色的那個是最後選的（active）——'
@@ -1031,10 +1070,36 @@ export class Panel {
       const s = summarize(mesh);
       const ms = Math.round(performance.now() - t0);
 
+      /**
+       * 🔴 **外框是 bake 之後唯一還講得出「這東西多大」的東西。**
+       * 參數物件的 `w/h/d` 在 `bake()` 之後就沒了（kang 2026-08-25 提的問題），
+       * 而外框是從世界座標的頂點現算的，編輯過照樣算得出來。
+       * ⭐ 借 `align.js` 的 `worldBounds()` —— 對齊、貼合、切一刀的範圍提示
+       * 用的都是它，**四個地方看到的是同一套數字**。
+       *
+       * ⚠ **表面積與體積是網格自己的座標算的，沒有含物件的縮放。**
+       * 縮放不是 1 的時候那兩個數字會偏，所以下面會多印一行講出來 ——
+       * ⛔ 不可以讓它安靜地錯（坑第 18 條：誤報比漏報更糟，
+       * 但**沉默的錯報是最糟的**）。真的要修是另一件事，已開待辦。
+       */
+      const sc = obj.scale;
+      const b = worldBounds(obj);
+      /**
+       * ⚠ 這裡刻意**不用 `b.getSize(new THREE.Vector3())`** ——
+       * `toolbar.js` 從頭到尾沒有 import three，而它是**測試載得進 Node 的**
+       * 那幾支之一（`topologyCheck` 就是為此抽出來的）。
+       * 為了印三個數字去背一個 three 依賴不划算，減一下就好。
+       * 〔寫的時候真的寫成 `THREE.Vector3` 了，`node --check` **過**，
+       * 　瀏覽器一開才會爆 —— 語法檢查不等於跑得動〕
+       */
       const data = {
         name: obj.name, v, s, ms,
         area: mesh.area(),
-        volume: v.closed ? mesh.volume() : null
+        volume: v.closed ? mesh.volume() : null,
+        size: b.isEmpty() ? null
+          : { x: b.max.x - b.min.x, y: b.max.y - b.min.y, z: b.max.z - b.min.z },
+        scaled: Math.abs(sc.x - 1) > 1e-9 || Math.abs(sc.y - 1) > 1e-9
+             || Math.abs(sc.z - 1) > 1e-9
       };
       this.analysisCache.set(obj.id, data);
       this._renderAnalysis(data);
@@ -1080,9 +1145,15 @@ export class Panel {
         <tr><td>折線 / 切割線</td><td>${s.folds} / ${s.cuts}</td></tr>
 
         <tr><th colspan="2" class="grp">尺寸</th></tr>
+        ${d.size
+          ? `<tr><td title="這個物件在空間裡佔的長寬高。跟對齊、貼合、切一刀的範圍提示是同一套數字">外框 X × Y × Z</td>
+                 <td>${fmtCm(d.size.x)} × ${fmtCm(d.size.y)} × ${fmtCm(d.size.z)} cm</td></tr>` : ''}
         <tr><td>表面積</td><td>${fmt(d.area)} cm²</td></tr>
         ${d.volume !== null
           ? `<tr><td>體積</td><td>${fmt(d.volume)} cm³</td></tr>` : ''}
+        ${d.scaled
+          ? `<tr><td colspan="2" class="dim2">⚠ 這個物件被縮放過，上面的表面積與體積
+                 <b>沒有含縮放</b>（外框有）。要正確的數字請先把縮放併進網格</td></tr>` : ''}
       </table>
       <div class="anaFoot">計算耗時 ${d.ms} ms</div>`;
   }

@@ -388,7 +388,22 @@ for (const b of document.querySelectorAll('.pvBtn')) {
  * 就是這個專案從第 0 期就在用的那條。
  */
 $('editNum').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); commitEditNumber(); }
+  /**
+   * 🔴 **Enter 只負責「離開欄位」，⛔ 不要在這裡直接套用。**
+   *
+   * ⚠ **kang 2026-08-25 實測抓到的**：打完數字按 Enter，數字有生效，
+   * 但**接著會跳一句紅字**「先拉一下箭頭，程式才知道你要改哪一根軸」。
+   *
+   * 原因是這一支原本兩條路都直接套用，而按 Enter 會**兩條都走** ——
+   * `keydown` 一次，瀏覽器接著又發 `change` 再一次。
+   * 第一次成功、第二次就跳紅字，看起來像「做了又被打槍」。
+   *
+   * ⭐ 改成 `blur()` 之後**兩邊自然收斂成同一條路**：
+   * 桌機按 Enter → 離開欄位 → `change`；手機點別的地方 → `change`。
+   * 〔原本的註解說「兩個都接才會兩邊行為一樣」，方向對，
+   * 　但**接成兩條會套用兩次** —— 正解是入口分開、**動作只走一條**〕
+   */
+  if (e.key === 'Enter') { e.preventDefault(); $('editNum').blur(); }
 });
 $('editNum').addEventListener('change', () => commitEditNumber());
 $('unfold').onclick = () => unfoldWin.open();
@@ -617,18 +632,31 @@ function commitEditNumber() {
  * 顯示一個看起來像數字、實際上沒有意義的東西，比沒有數字更糟（坑第 20 條）。
  */
 function updateEditNum() {
-  const box = $('editNum'), unit = $('editNumUnit');
+  const box = $('editNum'), unit = $('editNumUnit'), lbl = $('editNumLbl');
+
+  /**
+   * 🔴 **標籤要跟著動作換**，⛔ 不要寫死「數值」。
+   *
+   * ⚠ kang 2026-08-25 的回報是「**看座標無法真正知道我移動多少**」——
+   * 而位移量**一直都印在這個欄位裡**。功能沒有缺，缺的是
+   * 「這個數字是什麼」講不出來（坑第 20 條：把內部的數字放上介面之前，
+   * 先問這個數字的單位是什麼 —— 這裡連名字都沒講對）。
+   */
+  const NAME = { translate: '移動', rotate: '旋轉', scale: '縮放' };
+
   const info = sel.editMode ? sel.editDragValue() : null;
   if (!info) {
     box.disabled = true;
     box.value = '';
     unit.textContent = '—';
+    if (lbl) lbl.textContent = '數值';
     return;
   }
   box.disabled = false;
   // 拖曳中不要覆蓋使用者正在打的字；只有沒聚焦時才跟著拖曳跑
   if (document.activeElement !== box) box.value = (+info.value.toFixed(4)).toString();
   unit.textContent = `${info.axis}　${info.unit}`;
+  if (lbl) lbl.textContent = NAME[info.mode] || '數值';
 }
 
 function setEditFilter(kind) {

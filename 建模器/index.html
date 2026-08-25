@@ -502,7 +502,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">中心</span>
       <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
       <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
-      <span class="lbl">數值</span>
+      <!--
+        🔴 這個字會跟著動作換成「移動／旋轉／縮放」（見 main.js updateEditNum）。
+        原本固定寫「數值」，而 kang 2026-08-25 的回報是
+        「看座標無法真正知道我移動多少」—— 位移量其實一直都印在這裡，
+        只是欄位名稱看不出那是什麼。⛔ 不要改回固定字串。
+      -->
+      <span class="lbl" id="editNumLbl"
+            title="拖曳中會即時顯示這一次移動／旋轉／縮放了多少，放開之後可以直接打精確數字按 Enter">數值</span>
       <input id="editNum" type="number" step="0.1" disabled
              title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
       <span id="editNumUnit" class="unit">—</span>
