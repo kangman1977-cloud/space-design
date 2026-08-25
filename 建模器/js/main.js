@@ -32,7 +32,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, subdivideEdges,
+         splitFaceByEdges, subdivideEdges, separateAlongEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -374,6 +374,7 @@ $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
+$('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
@@ -1164,6 +1165,68 @@ function bisectSelected() {
             + '那裡的線會斷開 —— 換個位置切多半就過了');
   }
   toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **分離：沿著選到的那一圈邊，把物件拆成兩個。**
+ *
+ * kang 2026-08-25：「刀具在我的想法中是將模型切開...如果是一個球..
+ * 我可以把球**切成兩半...變成兩個半圓模型**」。
+ *
+ * 🔴 **「切開」跟「拆成兩個物件」是兩件事** —— 切一刀／環切都只加線，
+ * 網格從頭到尾是一整塊。這一顆補的是後面那一半。
+ *
+ * ⚠ **它跟同組其他按鈕最大的不同：會產生新物件。**
+ * 所以走的是「打散」那條路（`doc.remove` ＋ `doc.add`），
+ * ⛔ 不是 `obj.setMesh()`。
+ */
+function separateSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先用「切一刀」或「環切」切一圈，切完那圈會自動選中，再按「分離」', true);
+    return;
+  }
+  if (els.some(e => e.kind !== 'edge')) {
+    toast('「分離」要沿著一圈邊切開 —— 把過濾器切到「邊」，選那一圈線', true);
+    return;
+  }
+
+  const obj = els[0].obj;
+  const r = separateAlongEdges(obj.mesh(), els.map(e => e.he));
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  /**
+   * ⚠ **位置刻意不動**：每一塊都沿用原物件的變換，網格座標一格都不改 ——
+   * 分離之後畫面上什麼都不會跳，只是變成兩個物件。
+   * 〔對照 `explodeShapes()`：那一支會置中，因為它拆的是本來就各自獨立
+   * 　的形狀；這裡拆的是同一個東西的兩半，跳開反而難對回去〕
+   */
+  const made = r.meshes.map((m, i) => new ModelObject({
+    name: `${obj.name}－${i + 1}`,
+    kind: obj.kind,
+    src: { type: 'mesh' },
+    mesh: m,
+    pos: obj.pos, rot: obj.rot, scale: obj.scale,
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+  }));
+
+  sel.clearEditSel();
+  doc.remove(obj);
+  for (const o of made) doc.add(o);
+  view.sync(doc);
+  sel.set(made.map(o => o.id));
+  panel.analysisCache.clear();
+  commit(`分離成 ${made.length} 個物件`);
+  panel.refresh();
+  updateBar();
+
+  /**
+   * 🔴 **一定要講「斷面是空的」。** 球切兩半是兩個**碗**不是兩個實心半球，
+   * 而使用者八成期待後者 —— 不講的話他會以為程式做錯了（坑第 11、21 條）。
+   * ⭐ 而且要指出那條**真的走得通**的出路（坑第 34 條）：「補洞」已經有了。
+   */
+  toast(`已分離成 ${made.length} 個物件　⚠ 切開的斷面是空的 —— `
+      + '選一個物件按「補洞」就補起來');
 }
 
 /**
@@ -2101,6 +2164,22 @@ function updateBar() {
    * 「現在差什麼」講清楚 —— 灰掉的按鈕不說話，使用者只會覺得壞了
    * （坑第 11、21 條）。
    */
+  /**
+   * 分離：**選到邊就給按**。真正分不分得開由 `separateAlongEdges()` 判斷
+   * 並講原因 —— ⛔ 介面不要自己再判一次那圈邊有沒有繞成一圈（坑第 31 條）。
+   */
+  const edgeAnySel = sel.editMode && sel.editCount > 0
+    && sel.editSels.every(e => e.kind === 'edge');
+  $('separate').disabled = !edgeAnySel;
+  $('separate').title = edgeAnySel
+    ? `沿著這 ${sel.editCount} 條邊把物件拆成兩個獨立的物件。`
+      + '⚠ 斷面是空的，要補請按「補洞」'
+    : !sel.editMode
+      ? '先按「拉點線面」進入編輯模式'
+      : sel.editCount === 0
+        ? '先用「切一刀」或「環切」切一圈（切完會自動選中），再按這裡'
+        : '「分離」要沿著一圈邊切開 —— 把過濾器切到「邊」';
+
   /**
    * 邊上加點：**選到邊就給按**（一條或好幾條都行）。
    * ⚠ 它跟「面上加線」都吃邊，差別是**這顆只加點、那顆會連起來**，

@@ -1519,6 +1519,138 @@ export function bisect(mesh, plane) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  分離（＝ Blender 的 Separate）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **分離：沿著選到的那一圈邊，把網格拆成兩塊。**
+ *
+ * ── kang 2026-08-25 講的那件事 ────────────────────────
+ * > 「刀具在我的想法中是將模型切開...如果是一個球..
+ * > 　我可以把球**切成兩半...變成兩個半圓模型**」
+ *
+ * 🔴 **「切開」跟「拆成兩個物件」是兩件事，而我們只有前者。**
+ * `bisect()`／`loopCut()` 都只加線，網格從頭到尾是**一整塊**。
+ * 這一支補的是後面那一半。
+ *
+ * ⭐ **銜接得剛剛好**：切一刀、環切做完之後**那圈邊本來就自動選中了** ——
+ * 使用者切完直接按「分離」，中間不必再選任何東西。
+ * 〔kang 的原話：「都可以套用在切一刀或是環切」〕
+ *
+ * ── 做法：那圈邊當「牆」，剩下的用走訪分組 ──────────────────
+ * 從一個面出發，**經由不是牆的邊**走到相鄰面，走得到的就是同一塊。
+ * ⚠ **判準是「走不走得過去」，不是幾何位置** ——
+ * 拿平面去分左右會被凹形狀騙（坑第 8 條：判斷依據用幾何事實，
+ * 而「連不連得通」才是這裡的幾何事實）。
+ *
+ * ── ⚠ 分出來的兩塊是「開放的」，那是正確的 ────────────────
+ * 球切兩半 ＝ 兩個**碗**，不是兩個實心半球 —— 斷面本來就是空的。
+ * 要補起來按現成的「補洞」。⛔ 不要在這裡偷偷補：
+ * 使用者要的可能就是碗（薄殼件），而且補洞已經是一顆獨立的按鈕了。
+ *
+ * ── ⚠ 位置刻意不動 ─────────────────────────────────
+ * 兩塊都沿用**原物件的變換**，網格座標一格都不改 ——
+ * 分離之後畫面上**什麼都不會跳**，只是變成兩個物件。
+ * 〔對照 `explodeShapes()`：那一支會把每個新物件置中，因為它拆的是
+ * 　本來就各自獨立的形狀；這裡拆的是同一個東西的兩半，跳開反而難對回去〕
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} hes 當成「牆」的那一圈邊
+ * @returns {{ok:boolean, reason?:string, meshes?:Mesh[], parts?:number}}
+ */
+export function separateAlongEdges(mesh, hes) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(hes) || !hes.length) return { ok: false, reason: '先選一圈邊' };
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+  const wall = new Set();
+  for (const he of hes) {
+    if (!he || !he.v || !he.to) continue;
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if (a === undefined || b === undefined) {
+      return { ok: false, reason: '選到的邊不在這個物件上' };
+    }
+    wall.add(kOf(a, b));
+  }
+  if (!wall.size) return { ok: false, reason: '沒有選到有效的邊' };
+
+  /** 走訪分組：不跨過牆 */
+  const gid = new Map();
+  let groups = 0;
+  for (const f0 of mesh.faces) {
+    if (gid.has(f0)) continue;
+    const stack = [f0];
+    gid.set(f0, groups);
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const he of mesh.faceLoop(cur)) {
+        if (wall.has(kOf(vi.get(he.v.id), vi.get(he.to.id)))) continue;
+        const nb = he.twin && he.twin.face;
+        if (!nb || gid.has(nb)) continue;
+        gid.set(nb, groups);
+        stack.push(nb);
+      }
+    }
+    groups++;
+  }
+
+  if (groups < 2) {
+    return {
+      ok: false,
+      reason: '這幾條邊沒有把物件分成兩塊 —— 要繞成完整的一圈才切得開。'
+            + '用「切一刀」或「環切」切一圈，切完那圈會自動選中，直接按這裡'
+    };
+  }
+
+  /**
+   * 每一塊各自建一個網格。
+   * ⭐ **不必手動複製共用的頂點** —— 各建各的面表，
+   * `cleanRebuild()` 會把沒被用到的點清掉，兩邊自然各留一份。
+   */
+  const buckets = Array.from({ length: groups }, () => []);
+  for (const [f, g] of gid) buckets[g].push(f);
+
+  /** 原網格的標記，記在重建前的索引空間 */
+  const marks = new Map();
+  for (const he of mesh.edges()) {
+    marks.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  }
+
+  const meshes = [];
+  for (const fs of buckets) {
+    const points = mesh.verts.map(v => v.p.clone());
+    const faces = fs.map(f => mesh.faceLoop(f).map(he => vi.get(he.v.id)));
+
+    const pre = preflightRebuild(points, faces);
+    if (!pre.ok) return { ok: false, reason: `拆出來的一塊壞掉了：${pre.fatal[0]}` };
+
+    const clean = cleanRebuild(points, faces);
+    const out = Mesh.fromFaceList(clean.points, clean.faces);
+    out.computeNormals();
+
+    const to = i => clean.remap.get(i);
+    const di = out._vertIndex();
+    const want = new Map();
+    for (const [k, m] of marks) {
+      const [a, b] = k.split('-').map(Number);
+      const x = to(a), y = to(b);
+      if (x === undefined || y === undefined) continue;
+      want.set(kOf(x, y), m);
+    }
+    for (const he of out.edges()) {
+      out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+    }
+    meshes.push(out);
+  }
+
+  /** 大的排前面 —— 呼叫端拿第一塊當「原本那個物件」，名字才不會跳 */
+  meshes.sort((a, b) => b.faces.length - a.faces.length);
+  return { ok: true, meshes, parts: groups };
+}
+
+// ═══════════════════════════════════════════════════════
 //  邊上加點（＝ Blender 的 Subdivide 選一條邊）
 // ═══════════════════════════════════════════════════════
 

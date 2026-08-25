@@ -7703,6 +7703,133 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  分離（＝ Blender 的 Separate）
+// ═══════════════════════════════════════════════════════
+
+section('分離：沿著一圈邊把物件拆成兩塊');
+
+/**
+ * 🔴 **kang 2026-08-25 講的那件事**：
+ * > 「刀具在我的想法中是將模型切開...如果是一個球..
+ * > 　我可以把球**切成兩半...變成兩個半圓模型**」
+ *
+ * 「切開」跟「拆成兩個物件」是兩件事 —— `bisect()`／`loopCut()`
+ * 都只加線，網格從頭到尾是**一整塊**。這一支補的是後面那一半。
+ *
+ * ── 🔴 主斷言：兩塊的面積加起來 ＝ 原本的表面積 ──────────────
+ * 分離**不是**布林，它只是把面分成兩組 —— **一片面都不該多、不該少**。
+ * ⚠ 體積不能拿來當主斷言：兩塊都是**開放的**（斷面是洞），
+ * 開放網格的體積沒有意義。
+ *
+ * ── ⚠ 拆出來的兩塊是開放的，那是正確的 ────────────────────
+ * 球切兩半 ＝ 兩個**碗**，不是兩個實心半球。要補起來按現成的「補洞」。
+ */
+const edgesFromNew = (m, newEdges) => {
+  const di = m._vertIndex();
+  const k = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const want = new Set(newEdges.map(([a, b]) => k(a, b)));
+  return [...m.edges()].filter(he => want.has(k(di.get(he.v.id), di.get(he.to.id))));
+};
+
+{
+  /** kang 的例子：球切兩半 */
+  const ball = baked('sphere', { r: 30, segW: 16, segH: 12 });
+  const area0 = ball.area();
+  ok('前提：原球是封閉的', ball.isClosed());
+
+  const cut = edit.bisect(ball, { n: new THREE.Vector3(0, 1, 0), d: 7.3 });
+  ok('前提：切一刀切得下去', cut.ok, cut.reason);
+  const hes = edgesFromNew(cut.mesh, cut.newEdges);
+  eq('前提：切出來那一圈 16 條', hes.length, 16);
+
+  const r = edit.separateAlongEdges(cut.mesh, hes);
+  ok('★★ 球沿著那一圈拆得開', r.ok, r.reason);
+  eq('★★ 拆成 2 塊', r.parts, 2);
+
+  /** 🔴 主斷言 */
+  rel('★★★ 兩塊的表面積加起來 ＝ 原球的表面積',
+      r.meshes.reduce((s, m) => s + m.area(), 0), area0);
+
+  ok('★★ 兩塊都是開放的（斷面是洞，那是對的）',
+     r.meshes.every(m => !m.isClosed()));
+  ok('　　兩塊的結構都沒問題', r.meshes.every(m => m.validate().ok));
+  ok('★ 大的排前面', r.meshes[0].faces.length >= r.meshes[1].faces.length);
+
+  /**
+   * ⭐ **這一條驗的是「兩顆按鈕接得起來」** ——
+   * kang 要的是「兩個半圓**模型**」，而碗補起來才是半球。
+   * ⛔ 少了這條，分離自己通過也不代表他要的東西做得出來。
+   */
+  const fill = edit.fillHoles(r.meshes[0]);
+  ok('★★★ 拆出來的那一塊可以直接「補洞」變回封閉的', fill.ok, fill.reason);
+  ok('　　　補完是封閉的', fill.mesh.isClosed());
+  eq('　　　χ 回到 2', chi(fill.mesh), 2);
+  ok('　　　而且體積是正的（法向沒有翻掉）', fill.mesh.volume() > 0);
+}
+
+{
+  /** 環切之後分離：圓柱斷成兩截 */
+  const cyl = baked('cylinder', { r: 25, h: 70, seg: 16 });
+  const area0 = cyl.area();
+  const side = [...cyl.edges()].find(he => Math.abs(he.v.p.y - he.to.p.y) > 1);
+  ok('前提：找得到一條直立的側邊', !!side);
+
+  const lc = edit.loopCut(cyl, side, { cuts: 1 });
+  ok('前提：環切繞得起來', lc.ok, lc.reason);
+  const r = edit.separateAlongEdges(lc.mesh, edgesFromNew(lc.mesh, lc.newEdges));
+  ok('★★ 環切之後也拆得開（kang：「都可以套用在切一刀或是環切」）', r.ok, r.reason);
+  eq('★★ 拆成 2 塊', r.parts, 2);
+  rel('★★★ 兩塊面積加起來 ＝ 原本的表面積',
+      r.meshes.reduce((s, m) => s + m.area(), 0), area0);
+  ok('　　兩塊結構都沒問題', r.meshes.every(m => m.validate().ok));
+}
+
+{
+  /**
+   * 🔴 分不開要擋並說原因（坑第 11 條）。
+   * ⚠ 而且訊息要指出**真的走得通**的出路（坑第 34 條）——
+   * 「用切一刀或環切切一圈」那條路是存在的。
+   */
+  const ball = baked('sphere', { r: 30, segW: 16, segH: 12 });
+  const cut = edit.bisect(ball, { n: new THREE.Vector3(0, 1, 0), d: 7.3 });
+  const hes = edgesFromNew(cut.mesh, cut.newEdges);
+
+  const one = edit.separateAlongEdges(cut.mesh, [hes[0]]);
+  ok('★★ 只選一條邊分不開，要擋下來', !one.ok);
+  ok('★★ 而且要指出「切一刀或環切」那條走得通的路',
+     /切一刀|環切/.test(one.reason || ''), one.reason);
+
+  ok('★ 沒選邊要擋', !edit.separateAlongEdges(cut.mesh, []).ok);
+
+  /**
+   * ⭐ **一個沒預期到的能力，是測試自己撞出來的**（2026-08-25）。
+   *
+   * 原本這裡寫「沒切過的球，隨便抓三條邊應該分不開」——
+   * **結果分開了，而且程式是對的**：我隨便抓的那三條剛好**圍住球極點
+   * 的一個三角形**，圍成封閉邊界就真的能把那一片分出去。
+   *
+   * 🔴 **判準從來就不是「有沒有切成兩半」，是「那組邊圍不圍得成封閉邊界」**
+   * —— 所以它也能把**任意一塊面**分出去（那正是對照表說的
+   * 「這對分片是另一條路：與其標接縫，直接切成好幾個物件」）。
+   *
+   * ⚠ 順帶記一條教訓：**挑樣本要先去量，不要隨便抓**
+   * 〔任意切線案例五、面上加線的 60×45 都栽在同一件事〕。
+   */
+  const oneFace = ball.faces[0];
+  const ring = ball.faceLoop(oneFace);
+  const cutOut = edit.separateAlongEdges(ball, ring);
+  ok('★★ 圍住一個面的那幾條邊，可以把那一片單獨分出去', cutOut.ok, cutOut.reason);
+  eq('　　拆成 2 塊', cutOut.parts, 2);
+  eq('　　小的那塊就是那一片', cutOut.meshes[1].faces.length, 1);
+  rel('★★ 面積照樣加得回來',
+      cutOut.meshes.reduce((s, m) => s + m.area(), 0), ball.area());
+
+  /** ⚠ 真正分不開的：同一個面上的兩條邊，圍不成邊界 */
+  const notLoop = edit.separateAlongEdges(ball, [ring[0], ring[1]]);
+  ok('★ 圍不成封閉邊界就分不開，要擋下來', !notLoop.ok, '竟然分開了');
+}
+
+// ═══════════════════════════════════════════════════════
 //  邊上加點（＝ Blender 的 Subdivide 選一條邊）
 // ═══════════════════════════════════════════════════════
 
