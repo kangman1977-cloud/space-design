@@ -7703,6 +7703,111 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  多點連接（＝ 依序跑好幾次「連接兩點」）
+// ═══════════════════════════════════════════════════════
+
+section('多點連接：照選的順序一段一段連');
+
+/**
+ * kang 2026-08-25 定名「多點連接」。原本刻意只收兩個點，理由是
+ * 「四個角會有兩條對角線交叉」—— ⚠ **那個顧慮只對 Blender 的
+ * `Connect Vertices`（不看順序、全部配對）成立**，依序連沒有那個問題。
+ *
+ * ── 🔴 為什麼一定要「依序、一段一段」，不能一次算完 ──────────
+ * **切完第一段，面就變了。** 第二段的兩個點可能分屬切開後的不同塊，
+ * 拿原本那個面去算一定錯。所以每一段都在**上一段的結果**上重新找面。
+ * ⚠ 連帶：每切一次頂點物件就換一批，還沒用到的點要靠 `remap` 搬過去。
+ */
+{
+  /**
+   * 🔴 **回歸最重要**：兩個點的時候，走 `connectVertsPath()` 的結果
+   * 必須跟直接走 `connectVerts()` **逐項相同**。
+   * ⭐ 那是結構保證（迴圈只跑一次），不是靠測試盯著 —— 但還是要釘住，
+   * 因為「包一層」很容易在包的過程中偷偷改掉行為。
+   */
+  const b1 = baked('box', { w: 60, d: 45, h: 40 });
+  const b2 = baked('box', { w: 60, d: 45, h: 40 });
+  const pick = m => {
+    const f = m.faces.find(x => {
+      const vs = m.faceLoop(x).map(he => he.v);
+      return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+    });
+    return m.faceLoop(f).map(he => he.v);
+  };
+  const one = edit.connectVerts(b1, pick(b1)[0], pick(b1)[2]);
+  const path = edit.connectVertsPath(b2, [pick(b2)[0], pick(b2)[2]]);
+  ok('兩個點：兩條路都走得通', one.ok && path.ok, path.reason);
+  eq('★★ 頂點數相同', path.mesh.verts.length, one.mesh.verts.length);
+  eq('★★ 面數相同', path.mesh.faces.length, one.mesh.faces.length);
+  eq('★★ 邊數相同', edgeCount(path.mesh), edgeCount(one.mesh));
+  rel('★★ 體積相同', path.mesh.volume(), one.mesh.volume());
+  rel('★★ 面積相同', path.mesh.area(), one.mesh.area());
+  eq('★ 段數 1', path.segments, 1);
+}
+
+{
+  /**
+   * L 形頂面連兩段：角(0,30) → 角(10,10) → 角(0,0)。
+   * ⭐ **兩段都在面內**，而且第二段是在**第一段切完的新面**上找的。
+   */
+  const prof = [[0, 0], [30, 0], [30, 10], [10, 10], [10, 30], [0, 30]];
+  const H = 10, N = prof.length;
+  const pts = [];
+  for (const [x, z] of prof) pts.push(new THREE.Vector3(x, 0, z));
+  for (const [x, z] of prof) pts.push(new THREE.Vector3(x, H, z));
+  const fl = [[...Array(N).keys()].reverse(), [...Array(N).keys()].map(i => i + N)];
+  for (let i = 0; i < N; i++) fl.push([i, (i + 1) % N, (i + 1) % N + N, i + N]);
+  const raw = Mesh.fromFaceList(pts, fl);
+  raw.computeNormals();
+  const fix = edit.recalcNormalsOutside(raw);
+  const L = (fix && fix.mesh) ? fix.mesh : raw;
+  L.computeNormals();
+  const area0 = L.area(), vol0 = L.volume(), v0 = L.verts.length;
+
+  const top = L.faces.find(f =>
+    L.faceLoop(f).length === 6 && L.faceLoop(f).every(he => Math.abs(he.v.p.y - H) < 1e-9));
+  const V6 = L.faceLoop(top).map(he => he.v);
+
+  const r = edit.connectVertsPath(L, [V6[0], V6[2], V6[5]]);
+  ok('L 形頂面連兩段', r.ok, r.reason);
+  eq('★ 段數 2', r.segments, 2);
+  eq('★ 新的線 2 條', r.newEdges.length, 2);
+  eq('★★ 頂點數不變（都是既有的角）', r.mesh.verts.length, v0);
+  eq('★ 邊 ＋2', edgeCount(r.mesh), edgeCount(L) + 2);
+  eq('★ 面 ＋2', r.mesh.faces.length, L.faces.length + 2);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+  eq('★ 兩條新線都標成 hard', [...r.mesh.edges()].filter(he => he.hard).length, 2);
+
+  /**
+   * ⚠ `remap` 說的是「原網格每個索引 → 最後那個網格」，
+   * ⛔ 給半套（只放選取的那幾個）就是寫一個不存在的退路（坑第 34 條）。
+   */
+  eq('★★ remap 是完整的，不是只有選到的那幾個', r.remap.size, v0);
+
+  /**
+   * 🔴 **卡住的時候要講「第幾段」。** 選了五個點只說「相鄰」，
+   * 使用者不知道是哪一段的問題（坑第 20 條的近親：畫面上數不出來）。
+   */
+  const bad = edit.connectVertsPath(L, [V6[0], V6[2], V6[3]]);
+  ok('★★ 第二段卡住，訊息要說「第 2 段」',
+     !bad.ok && /第 2 段/.test(bad.reason || ''), bad.reason);
+  ok('　　而且要保留原本的原因（相鄰）',
+     /本來就已經有一條線/.test(bad.reason || ''), bad.reason);
+
+  /** ⚠ 只有兩個點時 ⛔ 不要加「第 N 段」—— 那是多餘的雜訊 */
+  const bad2 = edit.connectVertsPath(L, [V6[0], V6[3]]);
+  ok('★ 只有兩個點時不加「第幾段」',
+     !bad2.ok && !/第 \d 段/.test(bad2.reason || ''), bad2.reason);
+
+  ok('★ 連續選到同一個點要擋', !edit.connectVertsPath(L, [V6[0], V6[0]]).ok);
+  ok('★ 只給一個點要擋', !edit.connectVertsPath(L, [V6[0]]).ok);
+  ok('★ 沒給點要擋', !edit.connectVertsPath(L, []).ok);
+}
+
+// ═══════════════════════════════════════════════════════
 //  🔴 凹的面：新拉的線不可以跑到面外面（kang 2026-08-25 實測抓到）
 // ═══════════════════════════════════════════════════════
 

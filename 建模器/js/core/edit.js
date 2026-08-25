@@ -1799,6 +1799,93 @@ export function connectVerts(mesh, vA, vB) {
   };
 }
 
+/**
+ * 🔴 **多點連接：選好幾個點，依照選的順序一段一段連起來。**
+ *
+ * ── 它就是 `connectVerts()` 跑好幾次 ─────────────────────
+ * ⭐ **兩個點的時候行為跟以前完全一樣**（迴圈只跑一次），
+ * 所以舊行為是**結構保證**，不是靠測試盯著。
+ *
+ * ── 🔴 為什麼一定要「依序、一段一段」，不能一次算完 ──────────
+ * **切完第一段，面就變了。** L 形頂面選四個點連三段：
+ * 第一段切下去之後頂面裂成兩塊，第二段的兩個點可能**分屬不同塊** ——
+ * 拿原本那個面去算第二段一定錯。
+ * → 每一段都在**上一段的結果**上重新找面。
+ *
+ * ── ⚠ 每切一次，頂點物件就換了一批 ──────────────────────
+ * `connectVerts()` 走的是「拆掉重建」，回來的是**新的網格**，
+ * 舊的 `Vertex` 物件全部作廢。所以還沒用到的點要靠 `remap`
+ * （舊索引 → 新索引）搬過去，⛔ 不可以抓著舊的物件不放。
+ * 〔這正是 `remapElements()` 存在的理由，只是這裡搬的是索引不是選取〕
+ *
+ * ── ⚠ Blender 的 Connect Vertex Path 還有一半我們不做 ────────
+ * 官方原文：只選兩個點時「會**切過沒被選到的面**…限制在相連的面上做直線切」。
+ * 🔴 **那一半沒做，而且是刻意的**：方塊選頂面一個角、底面另一頭的角，
+ * 那條線要從側面的哪裡通過 —— 繞左、繞右、斜著過去**都說得通**，
+ * **結果不唯一就不要猜**（坑第 24 條）。
+ * ⭐ 真要跨面切，「刀具」（畫面上手畫）才是誠實的答案 —— 畫到哪切到哪。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[]} verts 依選取順序的點，至少兩個
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            newEdges?:Array, segments?:number, orphans?:number}}
+ */
+export function connectVertsPath(mesh, verts) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(verts) || verts.length < 2) {
+    return { ok: false, reason: '至少要選兩個點' };
+  }
+
+  const vi0 = mesh._vertIndex();
+  const idx = verts.map(v => (v ? vi0.get(v.id) : undefined));
+  if (idx.some(i => i === undefined)) {
+    return { ok: false, reason: '選到的點不在這個物件上' };
+  }
+  for (let i = 1; i < idx.length; i++) {
+    if (idx[i] === idx[i - 1]) return { ok: false, reason: '連續選到了同一個點' };
+  }
+
+  let cur = mesh;
+  let at = idx.slice();                 // 這些點在「目前這個網格」裡的索引
+  let done = [];                        // 已經連好的線，同樣要跟著搬
+  let orphans = 0;
+  /**
+   * ⚠ **完整的對照要一路串下去**（原網格的每個索引 → 目前網格）。
+   * ⛔ 不可以只回最後一段的 remap，也不可以只放選取的那幾個點 ——
+   * 這個欄位的名字承諾的是完整對照，給半套就是「寫一個不存在的退路」
+   * （坑第 34 條）。
+   */
+  let chain = new Map(cur.verts.map((_, i) => [i, i]));
+
+  for (let s = 0; s + 1 < at.length; s++) {
+    const r = connectVerts(cur, cur.verts[at[s]], cur.verts[at[s + 1]]);
+    if (!r.ok) {
+      /**
+       * ⚠ **要講出是第幾段卡住的。** 選了五個點只講「不在同一個面上」，
+       * 使用者不知道是哪一段的問題（坑第 20 條的近親：畫面上數不出來）。
+       */
+      return {
+        ok: false,
+        reason: at.length > 2 ? `第 ${s + 1} 段連不起來：${r.reason}` : r.reason
+      };
+    }
+    const mv = i => r.remap.get(i);
+    at = at.map(mv);
+    done = done.map(([a, b]) => [mv(a), mv(b)]).concat(r.newEdges);
+    chain = new Map([...chain]
+      .map(([o, c]) => [o, mv(c)])
+      .filter(([, c]) => c !== undefined));
+    orphans += r.orphans || 0;
+    cur = r.mesh;
+  }
+
+  return {
+    ok: true, mesh: cur, remap: chain,
+    newEdges: done.filter(([a, b]) => a !== undefined && b !== undefined),
+    segments: at.length - 1, orphans
+  };
+}
+
 // ═══════════════════════════════════════════════════════
 //  面上加線（＝ Blender 的 Subdivide 選兩條邊）
 // ═══════════════════════════════════════════════════════

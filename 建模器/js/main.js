@@ -31,7 +31,7 @@ import { faceFrame, edgeFrame, vertexPoint,
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
-         deleteFaces, fillHoles, bisect, worldAxisPlane, connectVerts,
+         deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -1150,51 +1150,48 @@ function bisectSelected() {
 }
 
 /**
- * 🔴 **連接兩點：在一個面上選兩個角，中間長出一條線。**
+ * 🔴 **多點連接：選好幾個角，照選的順序一段一段連起來。**
  *
  * 四動作框架（加線／加面／移除／移動）的第四個案例 ——
  * 加線 × 一圈邊（環切）／面的內縮輪廓（內縮）／平面（切一刀）／
- * **兩個既有頂點**（這一顆）。
+ * **既有頂點**（這一顆）。
  *
  * ⚠ **它跟同組其他按鈕的選取條件不同**：環切要**一條邊**、內縮與導角
- * 要**面或邊**、切一刀**什麼都不用選**，而這一顆要**正好兩個點**。
+ * 要**面或邊**、切一刀**什麼都不用選**，而這一顆要**兩個以上的點**。
  *
- * 🔴 **第一版刻意只收「正好兩個」**（kang 2026-08-25 批准的範圍）。
- * Blender 的 Pairs 可以一次連好幾對，但方塊頂面選四個角會有**兩條
- * 對角線交叉在中間而沒有交點** —— 那裡會長出什麼**我沒有驗證過**。
- * ⛔ 結果不唯一就不要猜（坑第 24 條）。
+ * ⭐ **選取順序本來就有** —— `editSels` 是有順序的陣列
+ * （「順序即 active」那一輪做的），橘色那個就是最後選的。
+ *
+ * ⚠ **原本刻意只收兩個**，理由是「四個角會有兩條對角線交叉在中間」——
+ * 那個顧慮只對 Blender 的 **Pairs**（不看順序、全部配對）成立。
+ * **依序連沒有那個問題**（kang 2026-08-25 定名「多點連接」後放寬）。
  */
 function connectVertsSelected() {
   const els = sel.editSels;
   if (!sel.editMode || !els.length) {
-    toast('先按「拉點線面」進入編輯模式，把過濾器切到「點」，選兩個點再按', true);
+    toast('先按「拉點線面」進入編輯模式，把過濾器切到「點」，選兩個以上的點再按', true);
     return;
   }
   if (els.some(e => e.kind !== 'vertex')) {
-    toast('「連接兩點」只吃點 —— 把上面的過濾器切到「點」，再選兩個角', true);
+    toast('「多點連接」只吃點 —— 把上面的過濾器切到「點」，再選角', true);
     return;
   }
-  /**
-   * ⚠ 數量不對時要**講出現在選了幾個**，⛔ 不可以只說「請選兩個點」——
-   * 使用者常常是「以為選了兩個、其實點到第三個」（坑第 20 條的近親：
-   * 畫面上數不出來就要由程式講）。
-   */
-  if (els.length !== 2) {
-    toast(`「連接兩點」要正好選兩個點，現在選了 ${els.length} 個。`
-        + '開上面那顆「加選」或按 Shift 點第二個；再點一次可以取消', true);
+  if (els.length < 2) {
+    toast('「多點連接」至少要選兩個點。開上面那顆「加選」或按 Shift 點第二個；'
+        + '再點一次可以取消', true);
     return;
   }
 
   const obj = els[0].obj;
   const oldMesh = obj.mesh();
-  const r = connectVerts(oldMesh, els[0].vert, els[1].vert);
+  const r = connectVertsPath(oldMesh, els.map(e => e.vert));
   if (!r.ok) { toast(r.reason, true); return; }
 
   obj.setMesh(r.mesh);
   refreshAfterEdit(r.mesh);
   view.markGeomDirty();
   view.markSeamsDirty();
-  commit('連接兩點');
+  commit(r.segments > 1 ? `多點連接（${r.segments} 段）` : '多點連接');
 
   /**
    * ⚠ 一定要在 commit() 之後才選 —— 跟環切、切一刀、擠出同一條理由：
@@ -1218,8 +1215,10 @@ function connectVertsSelected() {
    * 而使用者按下去只會看到多一條線 —— 不講的話很容易以為它沒作用
    * 或是偷偷改了什麼（坑第 21 條）。
    */
-  const bits = ['已連接兩點　多了一條線，形狀沒有變'];
-  if (got) bits.push('新的線已選起來，用箭頭直接拉');
+  const bits = [r.segments > 1
+    ? `已連好 ${r.segments} 段　形狀沒有變`
+    : '已連接　多了一條線，形狀沒有變'];
+  if (got) bits.push(`新的 ${got} 條線已選起來，用箭頭直接拉`);
   toast(bits.join('　'));
 }
 
@@ -1999,18 +1998,21 @@ function updateBar() {
    * 「現在差什麼」講清楚 —— 灰掉的按鈕不說話，使用者只會覺得壞了
    * （坑第 11、21 條）。
    */
-  const twoVerts = sel.editMode && sel.editCount === 2
+  const manyVerts = sel.editMode && sel.editCount >= 2
     && sel.editSels.every(e => e.kind === 'vertex');
-  $('connectVerts').disabled = !twoVerts;
-  $('connectVerts').title = twoVerts
-    ? '在這兩個點之間連一條線，把那個面切成兩塊。形狀不會變，新的線會自動選中'
+  $('connectVerts').disabled = !manyVerts;
+  $('connectVerts').title = manyVerts
+    ? (sel.editCount > 2
+        ? `照你選的順序把這 ${sel.editCount} 個點連成 ${sel.editCount - 1} 段，`
+          + '面會被切開。形狀不會變'
+        : '在這兩個點之間連一條線，把那個面切成兩塊。形狀不會變，新的線會自動選中')
     : !sel.editMode
       ? '先按「拉點線面」進入編輯模式'
       : sel.editCount === 0
-        ? '把上面的過濾器切到「點」，然後選兩個點（開「加選」或按 Shift 選第二個）'
+        ? '把上面的過濾器切到「點」，然後選兩個以上的點（開「加選」或按 Shift 加選）'
         : sel.editSels.some(e => e.kind !== 'vertex')
-          ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選兩個角'
-          : `要正好兩個點，現在選了 ${sel.editCount} 個`;
+          ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選角'
+          : '至少要選兩個點';
 
   /**
    * 面上加線：**正好選到兩條邊才給按。**
