@@ -33,8 +33,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
-         planeFromTwoRays, worldPlaneToLocal, planeCrossSegments,
-         BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
+         knifePath, BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -57,16 +56,8 @@ const sel = new Selection(view, {
    * 〔重複呼叫沒關係：1000 個點重建一次是微秒級，而這裡是事件驅動不是每幀〕
    */
   onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
-  onKnifePick: ray => knifePick(ray),
-  /**
-   * ⚠ 兩件事都要做：畫面上那條虛線（你畫過哪裡）
-   * ＋ 模型上那圈線（**會切到哪裡**）。後者才是 kang 缺的那一個。
-   */
-  onKnifeMove: (x, y, ray) => {
-    if (!knifePick1) return;
-    drawKnifeLine(x, y);
-    updateKnifePreview(ray);
-  },
+  /** 刀具：點下去吸到最近的邊，`hit` 帶著那條邊與邊上的落點 */
+  onKnifePick: hit => knifePick(hit),
   onTransform: committing => {
     view.sync(doc);
     if (committing) commit('變換物件');
@@ -386,6 +377,7 @@ $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
+$('knifeCancel').onclick = () => cancelKnifeMode();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
@@ -586,7 +578,7 @@ function exitOtherModes(keep) {
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
-    knifePick1 = null; hideKnifeLine();
+    knifePicks = []; hideKnifeLine();
   }
 }
 
@@ -603,128 +595,119 @@ function exitOtherModes(keep) {
  * 所以照貼合模式的骨架走（`exitOtherModes` 那一套），
  * ⛔ 不另開一種模式管理。
  */
-let knifePick1 = null;
+let knifePicks = [];
 
-/**
- * 🔴 **藏／顯示一律用 `style.display`，⛔ 不要用 `hidden`。**
- *
- * ⚠ **`hidden` 是 HTML 元素的屬性，而這是一個 SVG 元素** ——
- * 設下去不保證生效，於是**那條虛線藏不起來，殘留在最後移動到的位置**。
- * 〔2026-08-25 kang 實測截圖：切完之後畫面上還掛著一小段橘虛線。
- * 　模型上那條實線是另一套機制（`scene.remove()`），所以它正常消失了 ——
- * 　「只有虛線留著」正好把病因指出來〕
- *
- * ⚠ 同一個檔案裡框選那個 `#marqueeBox` 是 **div**，`hidden` 對它有效 ——
- * ⛔ 所以不能照抄它的寫法，那是這次踩到的地方。
- */
 function hideKnifeLine() {
-  const s = $('knifeLine');
-  if (s) s.style.display = 'none';
   view.clearKnifePreview();
-  _knifeRaf = 0;
 }
 
 /**
- * 🔴 **「這一刀會切在哪」的即時預覽 —— kang 實測指出的核心問題。**
+ * 🔴 **把目前點過的位置與段落畫出來。**
  *
- * > 「光是兩點...**測試後也不知道要如何點兩點呈現我想要的切一刀位置**」
+ * ⚠ **兩件事一起畫**：每個位置一顆小球、每一段一條線 ——
+ * 只畫點看不出「連起來會長什麼樣」，只畫線看不出「點在哪」。
  *
- * 螢幕上那條橘虛線只說明「你畫過哪裡」，
- * **這一條才說明「會切到哪裡」** —— 那條線往螢幕深處延伸成一片刀片，
- * 而使用者看不見深處那個方向。
- *
- * ⚠ **用 rAF 節流**：`planeCrossSegments()` 是 O(面數)，而 pointermove
- * 觸發得很密。⛔ 每一次都算會隨模型大小成長（坑第 22 條）。
+ * ⛔ **不再用螢幕上的 SVG 疊層**（第一版那條虛線）：
+ * 那是「畫面上的線」，而現在的點是**模型上的實際位置** ——
+ * 畫在 3D 裡才會跟著模型走，而**那正是第一版「一直亂跳」的病根**。
  */
-let _knifeRaf = 0;
-
-function updateKnifePreview(ray) {
-  const obj = sel.active;
-  if (!knifePick1 || !obj) return;
-  if (_knifeRaf) return;                 // 這一幀已經排過了
-  _knifeRaf = requestAnimationFrame(() => {
-    _knifeRaf = 0;
-    if (!knifePick1 || !sel.knifeMode) return;
-    const wp = planeFromTwoRays(knifePick1.origin, knifePick1.direction,
-                                ray.origin, ray.direction);
-    if (!wp.ok) { view.clearKnifePreview(); return; }
-    const local = worldPlaneToLocal(obj.matrix(), wp.n, wp.d);
-    const segs = planeCrossSegments(obj.mesh(), local);
-    const node = view.nodeOf(obj.id);
-    if (!node) { view.clearKnifePreview(); return; }
-    node.updateMatrixWorld(true);
-    view.setKnifePreview(segs.map(p => node.localToWorld(p.clone())));
-  });
-}
-
-/**
- * 預覽線：從第一點畫到游標／筆尖。
- *
- * 🔴 **沒有它就是「按下去才知道切到哪」，那不能用**（坑第 21 條）。
- * ⚠ 畫在**螢幕座標**上（SVG 疊層），⛔ 不投影到 3D ——
- * 那條線的意義本來就在螢幕上，硬給它一個深度反而沒有道理。
- */
-function drawKnifeLine(x2, y2) {
-  const s = $('knifeLine');
-  if (!s || !knifePick1) return;
-  const ln = s.querySelector('line');
-  ln.setAttribute('x1', knifePick1.x);
-  ln.setAttribute('y1', knifePick1.y);
-  ln.setAttribute('x2', x2);
-  ln.setAttribute('y2', y2);
-  s.style.display = 'block';      // ⛔ 不用 hidden，見 hideKnifeLine()
+function drawKnifePicks() {
+  if (!knifePicks.length) { view.clearKnifePreview(); return; }
+  const segs = [];
+  for (let i = 0; i + 1 < knifePicks.length; i++) {
+    segs.push(knifePicks[i].world.clone(), knifePicks[i + 1].world.clone());
+  }
+  view.setKnifePreview(segs, knifePicks.map(k => k.world.clone()));
 }
 
 function toggleKnifeMode() {
-  if (!sel.knifeMode) exitOtherModes('knife');
-  const on = sel.setKnifeMode(!sel.knifeMode);
-  $('knife').classList.toggle('on', on);
-  knifePick1 = null;
+  /** 已經在模式裡而且點滿兩個 → 這一按就是「切下去」 */
+  if (sel.knifeMode && knifePicks.length >= 2) { knifeApply(); return; }
+  if (sel.knifeMode) {
+    toast('至少要點兩個位置才切得下去 —— 或按「取消」離開', true);
+    return;
+  }
+  exitOtherModes('knife');
+  sel.setKnifeMode(true);
+  $('knife').classList.add('on');
+  knifePicks = [];
+  drawKnifePicks();
+  panel.refresh();
+  updateBar();
+  toast('刀具：在模型上點你要切過的位置（會吸到最近的邊）。'
+      + '點完再按一次「刀具」就切下去；按「取消」離開');
+}
+
+function cancelKnifeMode() {
+  sel.setKnifeMode(false);
+  $('knife').classList.remove('on');
+  knifePicks = [];
   hideKnifeLine();
   panel.refresh();
   updateBar();
-  toast(on
-    ? '刀具：在畫面上點兩個位置定出切線，整個物件就照那條線切開。再按一次「刀具」取消'
-    : '已離開刀具');
+  toast('已離開刀具');
 }
 
 /**
- * 點下第一點 → 記起來；點下第二點 → 切。
+ * 點一下 → 加一個位置。
  *
- * ⚠ **第一點刻意不檢查有沒有點到物件** —— 使用者常常要從物件外面
- * 起手（切線本來就該超出輪廓），擋掉的話最自然的用法反而不能用。
+ * ⚠ **再點同一個地方一次 ＝ 取消最後那一點**（kang 同意的），
+ * 跟編輯模式「再點一次取消選取」同一條規則 —— ⛔ 不要另發明一種。
  */
-function knifePick(ray) {
-  const obj = sel.active;
-  if (!obj) { toast('先點一個物件，再按「刀具」', true); return; }
-  if (obj.isParametric) {
+function knifePick(hit) {
+  if (!hit) { toast('點在物件上 —— 那個位置會吸到最近的一條邊', true); return; }
+  if (hit.obj.isParametric) {
     toast('這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」', true);
     return;
   }
-
-  if (!knifePick1) {
-    knifePick1 = ray;
-    drawKnifeLine(ray.x, ray.y);
-    toast('再點第二個位置定出切線　（再按一次「刀具」可以取消）');
+  /**
+   * ⚠ **一次只切一個物件。** 混著點的話後面那些點的索引屬於別的網格，
+   * 切下去會**改到使用者沒在看的物件** —— 那正是「選取有兩份資料」
+   * 那一輪燒過的病（形狀改對了，只是改錯了對象）。
+   */
+  const first = knifePicks[0];
+  if (first && hit.obj !== first.obj) {
+    toast(`刀具一次只能切一個物件 —— 現在切的是「${first.obj.name}」`, true);
     return;
   }
 
-  const wp = planeFromTwoRays(knifePick1.origin, knifePick1.direction,
-                              ray.origin, ray.direction);
-  if (!wp.ok) { toast(wp.reason, true); return; }
+  const last = knifePicks[knifePicks.length - 1];
+  if (last && last.world.distanceTo(hit.world) < 0.5) {
+    knifePicks.pop();
+    drawKnifePicks();
+    updateBar();
+    toast(knifePicks.length ? `取消最後一點，還有 ${knifePicks.length} 個`
+                            : '取消最後一點');
+    return;
+  }
 
-  /** 世界平面 → 物件自己的座標（跟切一刀走同一支，只是法向不是軸） */
-  const r = bisect(obj.mesh(), worldPlaneToLocal(obj.matrix(), wp.n, wp.d));
+  knifePicks.push(hit);
+  drawKnifePicks();
+  updateBar();
+  toast(knifePicks.length < 2
+    ? '再點下一個位置（點在同一個面的另一條邊上，就會切開那個面）'
+    : `已點 ${knifePicks.length} 個位置　再按一次「刀具」就切下去`);
+}
 
-  knifePick1 = null;
-  hideKnifeLine();
+/** 真的切下去 */
+function knifeApply() {
+  const obj = knifePicks.length ? knifePicks[0].obj : null;
+  if (!obj) { toast('先在模型上點兩個以上的位置', true); return; }
+
+  const r = knifePath(obj.mesh(), knifePicks.map(k => ({ a: k.a, b: k.b, p: k.p })));
   if (!r.ok) { toast(r.reason, true); return; }
+
+  const segs = r.segments;
+  knifePicks = [];
+  hideKnifeLine();
+  sel.setKnifeMode(false);
+  $('knife').classList.remove('on');
 
   obj.setMesh(r.mesh);
   refreshAfterEdit(r.mesh);
   view.markGeomDirty();
   view.markSeamsDirty();
-  commit('刀具切一刀');
+  commit(segs > 1 ? `刀具切 ${segs} 段` : '刀具切一刀');
 
   /** ⚠ 一定要在 commit() 之後才選 —— 跟切一刀、環切同一條理由 */
   const di = r.mesh._vertIndex();
@@ -735,12 +718,9 @@ function knifePick(ray) {
     if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
   }
   /**
-   * 🔴 **切完自動離開刀具模式，並且進編輯模式選起那一圈** ——
-   * 接下來要做的事（拉、分離）都在編輯模式裡，留在刀具模式等於
-   * 逼使用者多按兩次。
+   * 🔴 **切完自動進編輯模式並選起新的線** —— 接下來要做的事
+   * （拉、分離）都在編輯模式裡，留在刀具模式等於逼使用者多按兩次。
    */
-  sel.setKnifeMode(false);
-  $('knife').classList.remove('on');
   if (!sel.editMode) { sel.setEditMode(true); $('edit').classList.add('on'); }
   $('gEditXf').hidden = false;
   const got = sel.selectEdges(obj, hes);
@@ -749,12 +729,8 @@ function knifePick(ray) {
   updateBar();
   updateEditNum();
 
-  const bits = [`已切開　切開 ${r.split} 個面`];
+  const bits = [segs > 1 ? `已切開 ${segs} 段` : '已切開'];
   if (got) bits.push(`新的 ${got} 條線已選起來 —— 要拆成兩個物件就按「分離」`);
-  if (r.skipped) {
-    bits.push(`⚠ 有 ${r.skipped} 個面形狀太複雜（凹進去的）沒切開，`
-            + '那裡的線會斷開 —— 換個角度切多半就過了');
-  }
   toast(bits.join('　'));
 }
 
@@ -2360,11 +2336,22 @@ function updateBar() {
    */
   const canKnife = !!sel.active && !sel.active.isParametric;
   $('knife').disabled = !canKnife && !sel.knifeMode;
+  /**
+   * 🔴 **按鈕文字要講出「現在按下去會發生什麼」。**
+   * 同一顆按鈕在模式裡是「切下去」、在模式外是「進入刀具」——
+   * ⛔ 一直寫「刀具」的話，使用者不知道點滿兩個之後該按誰（坑第 21 條）。
+   */
+  $('knife').textContent = sel.knifeMode
+    ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : '刀具（點兩個以上）')
+    : '刀具';
+  $('knifeCancel').hidden = !sel.knifeMode;
   $('knife').title = sel.knifeMode
-    ? '再按一次可以取消刀具'
+    ? (knifePicks.length >= 2
+        ? '照剛才點的位置切下去'
+        : '在模型上點你要切過的位置，至少兩個')
     : canKnife
-      ? '在畫面上點兩個位置定出切線，整個物件就照那條線切開。'
-        + '⚠ 只加線不分家，要拆成兩個物件請接著按「分離」'
+      ? '在模型上點你要切過的位置（會吸到最近的邊），點完再按一次就切下去。'
+        + '同一個面點兩個位置就切開那個面；繞著模型一路點就能環繞切開'
       : !sel.active
         ? '先點一個物件，再按「刀具」'
         : '這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」';

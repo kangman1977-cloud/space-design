@@ -538,7 +538,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⭐ 底層還是「切一刀」那個平面 —— 差別只在平面從你點的兩個
         位置算出來，不是從 X／Y／Z 選一個。
       -->
-      <button id="knife" disabled title="刀具（自由切）：按一下進入，在畫面上點兩個位置定出一條切線，整個物件就照那條線切開。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」。再按一次這顆按鈕可以取消">刀具</button>
+      <button id="knife" disabled title="刀具（自由切）：按一下進入，在模型上點你要切過的位置（會吸到最近的邊），點完再按一次就切下去。同一個面點兩個位置就切開那個面；繞著模型一路點下去就能環繞切開。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」">刀具</button>
+      <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>
       <!--
         連接兩點：在一個面上選兩個角，中間長出一條線，那個面被切成兩塊。
 

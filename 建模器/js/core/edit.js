@@ -1871,6 +1871,29 @@ export function subdivideEdges(mesh, hes, cuts = 1) {
   }
   if (!ins.size) return { ok: false, reason: '沒有選到有效的邊' };
 
+  return rebuildWithInserts(mesh, points, ins, { edges: ins.size });
+}
+
+/**
+ * 🔴 **把一批「插在邊上的新點」重建成新網格。**
+ *
+ * ── 為什麼抽出來 ────────────────────────────────────
+ * 「邊上加點」（均分）與**刀具**（使用者指定位置）**輸入不同，
+ * 但後半段一模一樣**：插點進迴圈、標記逐段繼承、preflight、
+ * cleanRebuild、applyMarks。
+ * ⛔ 各寫一份就是兩條路算同一件事（坑第 31 條）——
+ * 而漏掉的那一半會是「標記安靜消失」，畫面上完全看不出來。
+ *
+ * @param {Mesh} mesh
+ * @param {THREE.Vector3[]} points 已經含新點的完整座標表
+ * @param {Map<string,{a:number,b:number,ids:number[]}>} ins
+ *        邊 key → 那條邊上的新點（`ids` 照 `a → b` 的順序）
+ * @param {object} extra 併進回傳值的欄位
+ */
+function rebuildWithInserts(mesh, points, ins, extra = {}) {
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
   /** 這條邊上的新點，照「從 `a` 走到 `b`」的順序排好 */
   const along = (a, b) => {
     const rec = ins.get(kOf(a, b));
@@ -1942,8 +1965,113 @@ export function subdivideEdges(mesh, hes, cuts = 1) {
 
   return {
     ok: true, mesh: out, remap: clean.remap, newVerts,
-    edges: ins.size, touched, orphans: clean.dropped.orphans
+    touched, orphans: clean.dropped.orphans, ...extra
   };
+}
+
+/**
+ * 🔴 **刀具：在使用者點的一串位置上插點，然後依序連起來。**
+ *
+ * ── kang 2026-08-25 想出來的操作方式 ────────────────────
+ * > 「把這功能改成可以任意點選**不只兩個點**...同一面兩點指定完...
+ * > 　我再按刀具就切這一個面...如果正面兩點然後我反側面再選一點..
+ * > 　再按刀具...就會切兩個面.....以此類推...**環繞一圈**」
+ *
+ * ⭐ **它剛好解掉第一版「預覽一直亂跳」的病**：使用者點的是
+ * **模型上的實際位置**，不是「從眼睛射出去的一條線」——
+ * 位置記在模型上，**轉視角完全不影響**。
+ *
+ * ── ⭐ 一段新的幾何都不用寫 ────────────────────────────
+ * | 步驟 | 用什麼 |
+ * |---|---|
+ * | 1. 在每個點的位置插一個頂點 | `rebuildWithInserts()`（＝邊上加點的後半段）|
+ * | 2. 那些點就變成**既有頂點** | — |
+ * | 3. 依序連起來 | **`connectVertsPath()`** 原封不動 |
+ *
+ * ⚠ **第 2 步是關鍵**：插完之後問題就退化成「連既有的點」，
+ * 而那一支已經寫好、測過、會處理「切完面就變了」那件事。
+ *
+ * ── 🔴 「跨面」不用另外做 ──────────────────────────────
+ * 正面與側面的**共用邊同時屬於兩個面**。使用者在共用邊上點一下，
+ * 前一段（正面）與後一段（側面）就自然接起來 ——
+ * **每一段的兩個端點都同屬一個面**，那正是 `connectVertsPath()` 的規則。
+ *
+ * ⚠ 兩點不同屬一個面時，`connectVertsPath()` 會擋下來，
+ * 而它的訊息要指出**真的走得通**的路：**中間再點一個**（坑第 34 條）。
+ *
+ * @param {Mesh} mesh
+ * @param {Array<{a:number,b:number,p:THREE.Vector3}>} picks
+ *        依序的點：`a`／`b` 是那條邊的兩個頂點索引，`p` 是邊上的位置
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh,
+ *            newEdges?:Array, segments?:number, added?:number}}
+ */
+export function knifePath(mesh, picks) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(picks) || picks.length < 2) {
+    return { ok: false, reason: '至少要點兩個位置' };
+  }
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const points = mesh.verts.map(v => v.p.clone());
+
+  /**
+   * ⚠ **同一條邊上可能被點好幾次**（繞一圈時很常見）——
+   * 所以一條邊記一串位置，而且**要照「從 a 走到 b」排好**，
+   * 不然插進迴圈的順序會亂掉，面就破了。
+   */
+  const ins = new Map();
+  const order = [];                     // 跟 picks 同順序的「新點暫時索引」
+  for (const k of picks) {
+    if (!k || k.a === undefined || k.b === undefined || !k.p) {
+      return { ok: false, reason: '有一個點的資料不完整' };
+    }
+    const key = kOf(k.a, k.b);
+    const pa = points[k.a], pb = points[k.b];
+    if (!pa || !pb) return { ok: false, reason: '點到的邊不在這個物件上' };
+    const ab = pb.clone().sub(pa);
+    const len = ab.length();
+    if (!(len > 0)) return { ok: false, reason: '那條邊的長度是 0' };
+    /** ⚠ 投影回邊上 —— 使用者點的位置只是「靠近」，不見得精確在上面 */
+    let s = k.p.clone().sub(pa).dot(ab) / (len * len);
+    s = Math.max(0, Math.min(1, s));
+    if (len * s < PLANAR_TOL_CM || len * (1 - s) < PLANAR_TOL_CM) {
+      return {
+        ok: false,
+        reason: `有一個點太靠近邊的端點了 —— 那裡會長出長度 0 的線。`
+              + `想從角落切就直接點那個角（用「多點連接」）`
+      };
+    }
+    if (!ins.has(key)) ins.set(key, { a: k.a, b: k.b, ids: [], ss: [] });
+    const rec = ins.get(key);
+    /** 記在 `a → b` 的方向上（`rec.a` 就是 `k.a` 的那一頭時 s 不用翻） */
+    const sAB = rec.a === k.a ? s : 1 - s;
+    const id = points.length;
+    points.push(pa.clone().lerp(pb, s));
+    rec.ids.push(id);
+    rec.ss.push(sAB);
+    order.push(id);
+  }
+  /** 🔴 一條邊上的多個點要照順序排，否則插進迴圈之後面會自交 */
+  for (const rec of ins.values()) {
+    const idx = rec.ids.map((id, i) => i).sort((x, y) => rec.ss[x] - rec.ss[y]);
+    rec.ids = idx.map(i => rec.ids[i]);
+  }
+
+  const step1 = rebuildWithInserts(mesh, points, ins);
+  if (!step1.ok) return step1;
+
+  /** 暫時索引 → 新網格的索引，再換成頂點物件，順序跟 `picks` 一樣 */
+  const verts = order.map(id => {
+    const x = step1.remap.get(id);
+    return x === undefined ? null : step1.mesh.verts[x];
+  });
+  if (verts.some(v => !v)) return { ok: false, reason: '插點之後有位置對不回來' };
+
+  const step2 = connectVertsPath(step1.mesh, verts);
+  if (!step2.ok) return step2;
+
+  return { ...step2, added: order.length };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2364,10 +2492,24 @@ export function connectVertsPath(mesh, verts) {
  *            newEdges?:Array, touched?:number, orphans?:number}}
  *          `touched` ＝ 被順帶加點的**相鄰**面數，呼叫端要講出來
  */
-export function splitFaceByEdges(mesh, heA, heB, t = 0.5) {
+export function splitFaceByEdges(mesh, heA, heB, t = 0.5, opt = {}) {
   if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
   if (!heA || !heB) return { ok: false, reason: '要選兩條邊' };
-  if (!(t > 0 && t < 1)) {
+  /**
+   * 🔴 **兩種指定位置的方式，一條實作。**
+   *
+   * | 誰在用 | 怎麼給 |
+   * |---|---|
+   * | `面上加線` | 一個比例 `t`，另一條自動用 `1 − t`（才會平行）|
+   * | **`刀具`** | **`opt.pA` / `opt.pB`：邊上的 3D 點**（使用者點的位置）|
+   *
+   * ⚠ **刀具不能用比例** —— 比例的方向是「沿著面的迴圈走」，
+   * 而使用者點的位置跟迴圈方向無關。給 3D 點最直接，
+   * 而且呼叫端本來就是從吸附算出那個點的。
+   * ⛔ 不要為刀具另寫一支（坑第 31 條）。
+   */
+  const byPoint = !!(opt.pA && opt.pB);
+  if (!byPoint && !(t > 0 && t < 1)) {
     return { ok: false, reason: '位置要在 0 跟 1 中間（0.5 ＝ 正中間）' };
   }
 
@@ -2409,11 +2551,21 @@ export function splitFaceByEdges(mesh, heA, heB, t = 0.5) {
    * 兩個新點的位置。**方向以目標面的迴圈為準**（`idx[i] → idx[i+1]`），
    * 第二條取 `1 − t` —— 見檔頭那一段。
    */
-  const mk = (i, s) => {
+  const mk = (i, s, given) => {
     const a = loop[i], b = loop[(i + 1) % loop.length];
     const pa2 = points[a], pb2 = points[b];
     const len = pa2.distanceTo(pb2);
     if (!(len > 0)) return { err: '這條邊的長度是 0' };
+    /**
+     * ⚠ 給了 3D 點就**投影回這條邊上算出比例** —— ⛔ 不直接用那個點，
+     * 因為使用者點的位置只是「靠近」那條邊，不見得精確在上面。
+     * 投影之後才保證新點真的落在邊上（不然網格會裂開）。
+     */
+    if (given) {
+      const ab = pb2.clone().sub(pa2);
+      s = given.clone().sub(pa2).dot(ab) / ab.lengthSq();
+      s = Math.max(0, Math.min(1, s));
+    }
     if (len * s < PLANAR_TOL_CM || len * (1 - s) < PLANAR_TOL_CM) {
       return { err: `位置太靠近邊的端點了（這條邊只有 ${len.toFixed(2)} cm，`
                   + `${PLANAR_TOL_CM * 10} mm 以內會長出一條長度 0 的線）` };
@@ -2421,7 +2573,8 @@ export function splitFaceByEdges(mesh, heA, heB, t = 0.5) {
     return { p: pa2.clone().lerp(pb2, s) };
   };
 
-  const ra = mk(pa, t), rb = mk(pb, 1 - t);
+  const ra = mk(pa, t, byPoint ? opt.pA : null);
+  const rb = mk(pb, 1 - t, byPoint ? opt.pB : null);
   if (ra.err) return { ok: false, reason: ra.err };
   if (rb.err) return { ok: false, reason: rb.err };
 

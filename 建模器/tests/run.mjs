@@ -7809,6 +7809,111 @@ section('刀具：螢幕兩點算出來的平面');
        local.clone().applyMatrix4(m).dot(wn), wd, 1e-9);
 }
 
+section('刀具：點一串位置，依序切過去');
+
+/**
+ * 🔴 **kang 2026-08-25 想出來的操作方式**（第一版「兩點定平面」被他
+ * 實測否決之後）：
+ * > 「改成可以任意點選**不只兩個點**...同一面兩點指定完...我再按刀具
+ * > 　就切這一個面...正面兩點然後我反側面再選一點..就會切兩個面...
+ * > 　以此類推...**環繞一圈**」
+ *
+ * ⭐ **它剛好解掉第一版「預覽一直亂跳」的病**：使用者點的是
+ * **模型上的實際位置**，不是「從眼睛射出去的一條線」——
+ * 轉視角完全不影響。
+ *
+ * ── ⭐ 一段新的幾何都沒寫 ────────────────────────────
+ * 1. 在每個點的位置**插一個頂點**（＝「邊上加點」的後半段）
+ * 2. 那些點就變成**既有頂點**
+ * 3. 直接餵給 **`connectVertsPath()`**（＝「多點連接」）
+ *
+ * 🔴 **「跨面」也不用另外做**：正面與側面的**共用邊同時屬於兩個面**，
+ * 在共用邊上點一下，前後兩段就自然接起來。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const vi = box._vertIndex();
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+  const pick = (he, t) => ({
+    a: vi.get(he.v.id), b: vi.get(he.to.id),
+    p: he.v.p.clone().lerp(he.to.p, t)
+  });
+
+  /** 例子一：同一面兩點 → 切這一面 */
+  const r1 = edit.knifePath(box, [pick(hes[0], 0.3), pick(hes[2], 0.7)]);
+  ok('同一面點兩個位置，切得下去', r1.ok, r1.reason);
+  eq('★ 加了 2 個點', r1.added, 2);
+  eq('★ 連成 1 段', r1.segments, 1);
+  eq('★ V 8 → 10', r1.mesh.verts.length, 10);
+  eq('★★ χ 仍然是 2', chi(r1.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r1.mesh.isClosed() && r1.mesh.validate().ok);
+  rel('★★ 體積精確不變', r1.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r1.mesh.area(), area0);
+
+  /**
+   * 🔴 **例子二：正面兩點 ＋ 側面一點 → 切兩個面。**
+   * ⭐ 這一條才是 kang 要的那個 —— 中間那一點落在**共用邊**上，
+   * 它同時屬於兩個面，所以前後兩段各自成立。
+   */
+  const side = box.faces.find(f => f !== top && box.faceLoop(f).some(h =>
+    (h.v === hes[1].v && h.to === hes[1].to) || (h.v === hes[1].to && h.to === hes[1].v)));
+  ok('前提：找得到跟頂面共用一條邊的側面', !!side);
+  const other = box.faceLoop(side).find(h =>
+    !hes.includes(h) && !hes.some(x => x.v === h.to && x.to === h.v)
+    && Math.abs(h.v.p.y - h.to.p.y) < 1e-9);
+  ok('前提：那個側面上找得到另一條水平邊', !!other);
+
+  const r2 = edit.knifePath(box, [pick(hes[0], 0.4), pick(hes[1], 0.5), pick(other, 0.6)]);
+  ok('★★★ 正面兩點 ＋ 側面一點，切得下去（kang 要的那個）', r2.ok, r2.reason);
+  eq('★★ 連成 2 段', r2.segments, 2);
+  eq('★★ 新的線 2 條', r2.newEdges.length, 2);
+  eq('★ 加了 3 個點', r2.added, 3);
+  eq('★★ χ 仍然是 2', chi(r2.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r2.mesh.isClosed() && r2.mesh.validate().ok);
+  rel('★★ 體積精確不變', r2.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r2.mesh.area(), area0);
+
+  /**
+   * ⚠ **同一條邊上點兩次**（繞一圈時很常見）。
+   * 🔴 那條邊上的點要**照順序插**，不然面會自交 —— 而自交的症狀是
+   * 面積算多，χ 跟體積照樣正確（坑第 17 條）。
+   */
+  const r3 = edit.knifePath(box, [pick(hes[0], 0.2), pick(hes[2], 0.5), pick(hes[0], 0.8)]);
+  ok('★★ 同一條邊上點兩次也走得通', r3.ok, r3.reason);
+  rel('★★★ 面積精確不變（自交的話這裡會變多）', r3.mesh.area(), area0);
+  rel('　　體積精確不變', r3.mesh.volume(), vol0);
+  ok('　　結構沒問題', r3.mesh.validate().ok);
+
+  /** 擋下來 */
+  ok('★ 只點一個位置要擋', !edit.knifePath(box, [pick(hes[0], 0.5)]).ok);
+  const tiny = edit.knifePath(box, [pick(hes[0], 0.00001), pick(hes[2], 0.5)]);
+  ok('★★ 太靠近角落要擋，而且要指出「用多點連接」那條走得通的路',
+     !tiny.ok && /多點連接/.test(tiny.reason || ''), tiny.reason);
+
+  /**
+   * 🔴 兩個點不同屬一個面 → 擋，而且要說「中間再點一個」。
+   * ⚠ **樣本要先去量**：頂面的邊跟底面的邊**可能同屬一個側面**
+   * （那樣是連得起來的，不是 bug）。要挑真的跨不過去的那一組。
+   * 〔第一版沙箱腳本就挑錯過，還以為是 bug〕
+   */
+  const bot = box.faces.find(f => box.faceLoop(f).every(h => Math.abs(h.v.p.y + 20) < 1e-9));
+  const far = box.faceLoop(bot).find(h => {
+    const s = new Set([h.v, h.to]);
+    return !box.faceLoop(side).some(x => s.has(x.v));
+  });
+  ok('前提：找得到一條跟那個側面完全不相干的底面邊', !!far);
+  if (far) {
+    const cross = edit.knifePath(box, [pick(hes[0], 0.5), pick(far, 0.5)]);
+    ok('★★ 跨太遠要擋下來', !cross.ok, '竟然連起來了');
+    ok('★★ 而且要說「不在同一個面上」', /不在同一個面/.test(cross.reason || ''), cross.reason);
+  }
+}
+
 section('刀具：這一刀會切在哪（預覽用的交線）');
 
 /**

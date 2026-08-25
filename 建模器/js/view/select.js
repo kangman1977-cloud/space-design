@@ -421,15 +421,6 @@ export class Selection {
        * 「按下去才知道切到哪」（坑第 21 條）。
        * ⚠ 只在刀具模式下算，⛔ 不可以每次移動都做事（坑第 22 條）。
        */
-      if (this.knifeMode && this.hooks.onKnifeMove) {
-        const r = this._toCanvasPx(e.clientX, e.clientY);
-        /**
-         * ⚠ 連射線一起給 —— 呼叫端要用它算「這一刀會切在哪」。
-         * ⛔ 不要讓呼叫端自己再從 x/y 轉一次：那就是兩個地方各算一次
-         * 同一件事（坑第 31 條），而且它們用的相機還可能不同步。
-         */
-        this.hooks.onKnifeMove(r.x, r.y, this.screenRay(e.clientX, e.clientY));
-      }
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
@@ -471,7 +462,7 @@ export class Selection {
        */
       if (this.knifeMode) {
         if (this.hooks.onKnifePick) {
-          this.hooks.onKnifePick(this.screenRay(e.clientX, e.clientY));
+          this.hooks.onKnifePick(this.pickEdgePoint(e.clientX, e.clientY));
         }
         return;
       }
@@ -700,6 +691,65 @@ export class Selection {
       direction: this._ray.ray.direction.clone().normalize(),
       x: clientX - r.left,          // 畫布內的像素座標，預覽線要用
       y: clientY - r.top
+    };
+  }
+
+  /**
+   * 🔴 **刀具：點畫面 → 吸到最近的那條邊，並算出「邊上的哪個位置」。**
+   *
+   * ── 為什麼一定要吸到邊上 ────────────────────────────
+   * 一條線要把面切開，**它的兩端一定得落在那個面的邊上** ——
+   * 端點停在面中間是接不起來的（那一頭會懸空，網格拓撲不允許）。
+   *
+   * ⚠ 這其實跟使用者要的一致：要切開一個面，那條線本來就得
+   * 從一邊走到另一邊。
+   *
+   * ── ⚠ `nearestMarkableEdge()` 只回「哪條邊」，不回「邊上哪裡」──────
+   * 後者要自己投影算（很短）。⛔ 不要另外寫一套「找最近的邊」——
+   * 判準一律用 `isMarkable()`，那是「畫面上看得見的邊」的唯一定義
+   * （全選邊那一輪定的，坑第 20 條）。
+   *
+   * @returns {null|{obj, a:number, b:number, p:THREE.Vector3, world:THREE.Vector3}}
+   *          `a`／`b` ＝ 那條邊兩端的頂點索引；`p` ＝ 本地座標的落點
+   */
+  pickEdgePoint(clientX, clientY) {
+    const r = this._toCanvasPx(clientX, clientY);
+    this._ndc.x = (r.x / r.w) * 2 - 1;
+    this._ndc.y = -(r.y / r.h) * 2 + 1;
+    this._ray.setFromCamera(this._ndc, this.view.camera);
+
+    const hits = this._ray.intersectObjects(this.view.pickables, true);
+    let hit = null, id = null;
+    for (const h of hits) {
+      const mid = this.view.modelIdOf(h.object);
+      if (mid !== null) { hit = h; id = mid; break; }
+    }
+    if (!hit) return null;
+
+    const obj = this._doc && this._doc.byId(id);
+    const node = this.view.nodeOf(id);
+    if (!obj || !node) return null;
+
+    const mesh = obj.mesh();
+    const pLocal = node.worldToLocal(hit.point.clone());
+    const near = nearestMarkableEdge(mesh, pLocal);
+    if (!near || !near.he) return null;
+
+    /** 投影到那條邊上 → 邊上的落點 */
+    const a = near.he.v.p, b = near.he.to.p;
+    const ab = b.clone().sub(a);
+    const L2 = ab.lengthSq();
+    let s = L2 > 0 ? pLocal.clone().sub(a).dot(ab) / L2 : 0;
+    s = Math.max(0, Math.min(1, s));
+    const p = a.clone().lerp(b, s);
+
+    const vi = mesh._vertIndex();
+    return {
+      obj,
+      a: vi.get(near.he.v.id),
+      b: vi.get(near.he.to.id),
+      p,
+      world: node.localToWorld(p.clone())
     };
   }
 

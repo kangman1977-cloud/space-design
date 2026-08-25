@@ -571,32 +571,59 @@ export class SceneView {
    *
    * @param {THREE.Vector3[]} worldPts 兩兩一組的世界座標端點
    */
-  setKnifePreview(worldPts) {
+  setKnifePreview(worldPts, dots) {
     this.clearKnifePreview();
-    if (!worldPts || worldPts.length < 2) return;
+    const g = new THREE.Group();
+    g.name = 'knifePreview';
 
-    const pos = new Float32Array(worldPts.length * 3);
-    worldPts.forEach((p, i) => {
-      pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
-    });
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    /** 段落：⚠ `LineSegments`（每兩點一段），⛔ 不是 `Line` */
+    if (worldPts && worldPts.length >= 2) {
+      const pos = new Float32Array(worldPts.length * 3);
+      worldPts.forEach((p, i) => {
+        pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        color: 0xff8c1a,
+        depthTest: false      // 背面那一段也要看得到，否則只看得到一半
+      }));
+      ln.renderOrder = 7;
+      g.add(ln);
+    }
 
-    const ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      color: 0xff8c1a,
-      depthTest: false        // 背面那一段也要看得到，否則只看得到一半
-    }));
-    ln.renderOrder = 7;       // 蓋過選取標記（6）與點（5）
-    ln.raycast = () => {};
-    this.scene.add(ln);
-    this._knifePrev = ln;
+    /**
+     * 🔴 **點過的位置也要標出來。**
+     * ⚠ 只畫線的話，**點了第一下之後畫面上什麼都沒有** ——
+     * 那就是一顆按了沒反應的操作（坑第 21 條）。
+     */
+    if (dots && dots.length) {
+      const dp = new Float32Array(dots.length * 3);
+      dots.forEach((p, i) => {
+        dp[i * 3] = p.x; dp[i * 3 + 1] = p.y; dp[i * 3 + 2] = p.z;
+      });
+      const dg = new THREE.BufferGeometry();
+      dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+      const pts = new THREE.Points(dg, new THREE.PointsMaterial({
+        color: 0xff8c1a, size: 11, sizeAttenuation: false, depthTest: false
+      }));
+      pts.renderOrder = 8;
+      g.add(pts);
+    }
+
+    if (!g.children.length) return;
+    g.traverse(o => { o.raycast = () => {}; });
+    this.scene.add(g);
+    this._knifePrev = g;
   }
 
   clearKnifePreview() {
     if (!this._knifePrev) return;
     this.scene.remove(this._knifePrev);
-    this._knifePrev.geometry.dispose();
-    this._knifePrev.material.dispose();
+    this._knifePrev.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
     this._knifePrev = null;
   }
 
