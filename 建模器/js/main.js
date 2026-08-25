@@ -32,7 +32,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane,
-         BEVEL_MAX_SEG } from './core/edit.js';
+         BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -1135,7 +1135,37 @@ function updateBisectRange() {
   if (b.isEmpty()) { span.textContent = ''; return; }
   const ax = $('bisectAxis').value;
   const f = x => (Math.round(x * 100) / 100);
-  span.textContent = `${ax.toUpperCase()}：${f(b.min[ax])} ～ ${f(b.max[ax])}`;
+  const lo = b.min[ax], hi = b.max[ax];
+  span.textContent = `${ax.toUpperCase()}：${f(lo)} ～ ${f(hi)}`;
+
+  /**
+   * 🔴 **框裡的數字切不到，就換成範圍的中點。**（kang 2026-08-25 選的）
+   *
+   * ⚠ **這是 kang 實測第一次按就踩到的**：`index.html` 把預設值寫死
+   * `value="0"`，而範圍是**照物件算出來的** —— 兩個數字沒有任何關聯，
+   * 所以物件只要不跨過 0，**第一次按必定跳「沒有切到東西」**。
+   * 那正是鐵律三反過來的樣子：範圍是算的、預設值是寫死的，對不起來。
+   *
+   * 🔴 **只在「現在這個數字切不到」時才改**，切得到就不動 ——
+   * ⛔ 不可以每次都覆蓋，那會把使用者剛打好的數字吃掉。
+   *
+   * ⚠ **正在打字時完全不碰**（`activeElement`）：`updateBar()` 什麼時候會被
+   * 呼叫不是這裡管得到的，打到一半被換掉是最惱人的那種 bug。
+   *
+   * 邊界要留 `PLANAR_TOL_CM` —— 剛好打在範圍的頭或尾等於「平面貼在表面上」，
+   * `bisect()` 那邊會判成整個物件都在同一側，照樣切不到（三態的容許值）。
+   * ⛔ 不要另外定一個容許值，它問的是同一件事。
+   *
+   * 〔厚度小於 2×容許值的板件：中點也切不到，這裡照樣填中點，
+   * 　由 `bisect()` 去講原因 —— **那本來就是切不開的**，不是這裡要解的事〕
+   */
+  const el = $('bisectAt');
+  if (document.activeElement === el) return;
+  const at = +el.value;
+  const t = PLANAR_TOL_CM;
+  if (!Number.isFinite(at) || !(at > lo + t && at < hi - t)) {
+    el.value = f((lo + hi) / 2);
+  }
 }
 
 /**
