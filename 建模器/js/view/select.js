@@ -1078,6 +1078,35 @@ export class Selection {
   }
 
   /**
+   * 直接指定要選哪幾個點（不經過點選）。
+   *
+   * 「邊上加點」之後用它把**新加的那幾個點**選起來 ——
+   * 點很小，不標出來使用者根本看不到加在哪（坑第 21 條）。
+   *
+   * ⚠ **選取順序就是傳進來的順序**，而「多點連接」是**照順序連的** ——
+   * 所以呼叫端如果一次加了好幾個點，要在提示裡講清楚
+   * 「要照自己的順序連就重新點一次」，⛔ 不要讓使用者以為程式排的順序
+   * 就是他想要的（坑第 24 條：結果不唯一就要講）。
+   *
+   * ⚠ 跟 `selectEdges()` 一樣，一定要在 `commit()` **之後**呼叫。
+   *
+   * @param {object} obj
+   * @param {Vertex[]} verts
+   * @returns {number} 實際選起來的個數
+   */
+  selectVerts(obj, verts) {
+    const list = (verts || []).filter(Boolean);
+    if (!obj || !list.length) { this.clearEditSel(); return 0; }
+    const mesh = obj.mesh();
+    this.editSels = list.map(vert => ({ obj, kind: 'vertex', vert, mesh }));
+    this._drag = null;
+    this._attachEditProxy();
+    this._drawEditMark();
+    if (this.hooks.onChange) this.hooks.onChange(this);
+    return this.editSels.length;
+  }
+
+  /**
    * 把替身擺到元素重心上、轉成目前選的方向，並把 gizmo 掛過去。
    *
    * ── 方向是怎麼做到的（而且沒有動 TransformControls）────────

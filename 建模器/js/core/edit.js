@@ -1519,6 +1519,166 @@ export function bisect(mesh, plane) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  邊上加點（＝ Blender 的 Subdivide 選一條邊）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **邊上加點：在選到的邊上放點，什麼都不連。**
+ *
+ * ── 它補的是一個很具體的洞（kang 2026-08-25 問出來的）──────────
+ * > 「是不是還有功能是**可以增加點**..然後再使用多點連接功能?」
+ *
+ * 現在能加點的四顆按鈕（切一刀／環切／面上加線／內縮導角）
+ * **加完都順手把線連掉了**，沒有一顆是「只放一個點，其他什麼都別做」。
+ *
+ * 🔴 **有了它，「多點連接」才真的自由** —— 在這之前只連得到**既有的角**，
+ * 現在可以先把點放到想要的地方，再連。
+ *
+ * ── ⛔ 刻意不做位置參數 ────────────────────────────────
+ * 只給「幾個點」（均分）。要放在特定位置，**加完用「拉點」移過去**。
+ * ⭐ 那跟「加線只加線、形狀交給拉點」是同一條分工，
+ * 而且 kang 自己示範過（「本來會產生歪的切線..人工拉點後做調整」）。
+ *
+ * ── ⚠ 這一支會留下「共線的點」，那是刻意的 ──────────────────
+ * 方塊頂面加一個點之後是**五邊形**，其中一個角是 180 度。
+ * 那在幾何上完全合法（`faceTriangles()` 走耳切，共線點不影響），
+ * 但**跟這個專案其他地方的直覺相反** —— 別處都在消滅多餘的點
+ * （還原多邊形、`cleanRebuild()` 清孤點）。
+ * 🔴 **這裡不可以清掉，那正是使用者要的東西。**
+ *
+ * ── ⚠ 插點一定會波及鄰面 ─────────────────────────────
+ * 跟 `splitFaceByEdges()` 同一條：共用那條邊的面都要跟著加，
+ * 否則兩邊的迴圈對不起來。呼叫端要把 `touched` 講出來。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} hes 選到的邊（同一條只算一次）
+ * @param {number} cuts 每條邊上加幾個點，均分。1 ＝ 中點
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            newVerts?:number[], edges?:number, touched?:number, orphans?:number}}
+ *          `newVerts` ＝ 新加的點在新網格裡的索引，呼叫端拿去選中
+ */
+export function subdivideEdges(mesh, hes, cuts = 1) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(hes) || !hes.length) return { ok: false, reason: '先選一條邊' };
+  cuts = Math.round(cuts);
+  if (!(cuts >= 1)) return { ok: false, reason: '至少要加一個點' };
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const points = mesh.verts.map(v => v.p.clone());
+
+  /**
+   * 每條要加點的邊記一筆。`a`／`b` 記的是**當初的方向**，
+   * ⚠ 因為 `ids` 是照 `a → b` 排的，而面的迴圈可能反向走過這條邊。
+   */
+  const ins = new Map();
+  for (const he of hes) {
+    if (!he || !he.v || !he.to) continue;
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if (a === undefined || b === undefined) {
+      return { ok: false, reason: '選到的邊不在這個物件上' };
+    }
+    const k = kOf(a, b);
+    if (ins.has(k)) continue;                 // 同一條邊只加一次
+    const len = points[a].distanceTo(points[b]);
+    /**
+     * ⚠ 判準是**實際距離**，⛔ 不是比例 —— 邊有長有短。
+     * 分出來的每一段都要比 `PLANAR_TOL_CM`（0.1mm）長，
+     * 否則會長出幾乎零長度的邊，而**體積、面積、χ 全部照樣正確**
+     * （坑第 17、25／26 條）。
+     */
+    if (len / (cuts + 1) < PLANAR_TOL_CM) {
+      return {
+        ok: false,
+        reason: `有一條邊只有 ${len.toFixed(2)} cm，切成 ${cuts + 1} 段之後`
+              + `每段不到 ${PLANAR_TOL_CM * 10} mm —— 會長出長度 0 的線`
+      };
+    }
+    const ids = [];
+    for (let i = 1; i <= cuts; i++) {
+      ids.push(points.length);
+      points.push(points[a].clone().lerp(points[b], i / (cuts + 1)));
+    }
+    ins.set(k, { a, b, ids });
+  }
+  if (!ins.size) return { ok: false, reason: '沒有選到有效的邊' };
+
+  /** 這條邊上的新點，照「從 `a` 走到 `b`」的順序排好 */
+  const along = (a, b) => {
+    const rec = ins.get(kOf(a, b));
+    if (!rec) return null;
+    return rec.a === a ? rec.ids : rec.ids.slice().reverse();
+  };
+
+  /**
+   * 標記帳本。🔴 **一條邊被切成 `cuts+1` 段，每一段都要繼承** ——
+   * 不做的話索引配對落空，**標記會安靜消失**（環切那一輪燒過）。
+   */
+  const marks = new Map();
+  const mark = (a, b, m) => {
+    const k = kOf(a, b);
+    marks.set(k, Object.assign({}, marks.get(k), m));
+  };
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    const m = mesh.marksOf(he);
+    const mid = along(a, b);
+    if (!mid) { mark(a, b, m); continue; }
+    const chain = [a, ...mid, b];
+    for (let i = 0; i + 1 < chain.length; i++) mark(chain[i], chain[i + 1], m);
+  }
+
+  const faces = [];
+  let touched = 0;
+  for (const f of mesh.faces) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    const seq = [];
+    let hit = false;
+    for (let i = 0; i < idx.length; i++) {
+      const a = idx[i], b = idx[(i + 1) % idx.length];
+      seq.push(a);
+      const mid = along(a, b);
+      if (mid) { seq.push(...mid); hit = true; }
+    }
+    faces.push(seq);
+    if (hit) touched++;
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `加下去做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const want = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x === undefined || y === undefined) continue;
+    want.set(kOf(x, y), m);
+  }
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  }
+
+  const newVerts = [];
+  for (const rec of ins.values()) {
+    for (const id of rec.ids) {
+      const x = to(id);
+      if (x !== undefined) newVerts.push(x);
+    }
+  }
+
+  return {
+    ok: true, mesh: out, remap: clean.remap, newVerts,
+    edges: ins.size, touched, orphans: clean.dropped.orphans
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  在一個面上拉一條線：那條線必須留在面裡面
 // ═══════════════════════════════════════════════════════
 

@@ -7703,6 +7703,131 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  邊上加點（＝ Blender 的 Subdivide 選一條邊）
+// ═══════════════════════════════════════════════════════
+
+section('邊上加點：只放點，什麼都不連');
+
+/**
+ * kang 2026-08-25 問出來的：
+ * > 「是不是還有功能是**可以增加點**..然後再使用多點連接功能?」
+ *
+ * 現在能加點的四顆按鈕（切一刀／環切／面上加線／內縮導角）
+ * **加完都順手把線連掉了**，沒有一顆是「只放一個點」。
+ * 🔴 **有了它，「多點連接」才真的自由** —— 在這之前只連得到既有的角。
+ *
+ * ── 🔴 這一節最重要的一條斷言 ─────────────────────────
+ * **共線的點不可以被吃掉。** 方塊頂面加一個點之後是**五邊形**，
+ * 其中一個角是 180 度 —— 而這個專案別處都在消滅多餘的點
+ * （還原多邊形、`cleanRebuild()` 清孤點）。
+ * ⚠ **被吃掉的話這顆按鈕就是按了沒反應**（坑第 21 條），
+ * 而體積、面積、χ **全部照樣正確**（坑第 17 條）。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const v0 = box.verts.length, e0 = edgeCount(box), f0 = box.faces.length;
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  const r = edit.subdivideEdges(box, [hes[0]], 1);
+  ok('一條邊加一個點', r.ok, r.reason);
+  const m = r.mesh;
+
+  eq('★ V 8 → 9', m.verts.length, v0 + 1);
+  eq('★ E 12 → 13（那條邊變成兩段）', edgeCount(m), e0 + 1);
+  eq('★★ 面數不變（只加點，不連線）', m.faces.length, f0);
+  eq('★★ χ 仍然是 2', chi(m), 2);
+  ok('　　仍然封閉、結構沒問題', m.isClosed() && m.validate().ok);
+  rel('★★ 體積精確不變', m.volume(), vol0);
+  rel('★★ 面積精確不變', m.area(), area0);
+  eq('★ 孤點 0 個', r.orphans, 0);
+  eq('★ 回報新加了 1 個點', r.newVerts.length, 1);
+  eq('★ 兩個面被波及（共用那條邊的）', r.touched, 2);
+
+  /** 🔴 那個點真的在新網格裡，而且在中點上 */
+  const nv = m.verts[r.newVerts[0]];
+  ok('★★ 新的點真的在（不是只回報了索引）', !!nv);
+  near('　　而且落在那條邊的中點上', nv.p.distanceTo(
+    hes[0].v.p.clone().add(hes[0].to.p).multiplyScalar(0.5)), 0, 1e-9);
+
+  const t2 = m.faces.find(f => m.faceLoop(f).every(he => Math.abs(he.v.p.y - 20) < 1e-9));
+  eq('★★ 頂面從四邊形變成五邊形', m.faceLoop(t2).length, 5);
+
+  /**
+   * 🔴🔴 **最重要的一條：共線的點不可以被還原多邊形吃掉。**
+   * 這個專案的 `bake()` 會自動跑 `mergeCoplanarFaces()`，
+   * 那一支的工作正是「消滅多餘的東西」—— 它必須放過使用者放的點。
+   */
+  ok('★★★ 再跑一次還原多邊形，不可以把共線的點吃掉',
+     !edit.mergeCoplanarFaces(m).ok || edit.mergeCoplanarFaces(m).mesh.verts.length === m.verts.length);
+}
+
+{
+  /** 一條邊加 3 個點；四條邊各加 1 個 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const v0 = box.verts.length;
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  const r3 = edit.subdivideEdges(box, [hes[0]], 3);
+  ok('一條邊加 3 個點', r3.ok, r3.reason);
+  eq('★ V ＋3', r3.mesh.verts.length, v0 + 3);
+  eq('★★ χ 仍然是 2', chi(r3.mesh), 2);
+  rel('★★ 體積精確不變', r3.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r3.mesh.area(), area0);
+
+  const r4 = edit.subdivideEdges(box, hes, 1);
+  ok('四條邊各加一個點', r4.ok, r4.reason);
+  eq('★ V ＋4', r4.mesh.verts.length, v0 + 4);
+  eq('★ 頂面變成八邊形', r4.mesh.faceLoop(
+    r4.mesh.faces.find(f => r4.mesh.faceLoop(f).every(he => Math.abs(he.v.p.y - 20) < 1e-9))
+  ).length, 8);
+  eq('★★ χ 仍然是 2', chi(r4.mesh), 2);
+  rel('★★ 體積精確不變', r4.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r4.mesh.area(), area0);
+
+  /**
+   * ⭐ **這一條驗的是「兩顆按鈕接得起來」** —— 那正是 kang 問的那件事：
+   * 加點 → 再用多點連接。⛔ 少了這條，兩顆各自通過也不代表流程走得通。
+   */
+  const vs = r4.newVerts.map(i => r4.mesh.verts[i]);
+  const rc = edit.connectVertsPath(r4.mesh, [vs[0], vs[2]]);
+  ok('★★★ 加完的點可以直接拿去「多點連接」', rc.ok, rc.reason);
+  rel('　　　而且面積照樣精確不變', rc.mesh.area(), area0);
+  eq('　　　χ 仍然是 2', chi(rc.mesh), 2);
+}
+
+{
+  /** 擋下來的情形 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const top = box.faces.find(f => {
+    const vs = box.faceLoop(f).map(he => he.v);
+    return vs.length === 4 && vs.every(v => Math.abs(v.p.y - 20) < 1e-9);
+  });
+  const hes = box.faceLoop(top);
+
+  ok('★ 沒選邊要擋', !edit.subdivideEdges(box, [], 1).ok);
+  ok('★ 個數 0 要擋', !edit.subdivideEdges(box, [hes[0]], 0).ok);
+
+  /**
+   * 🔴 切太細要擋，判準是**實際距離**不是個數 —— 邊有長有短。
+   * 每段不到 0.1mm 會長出零長度的邊，而體積面積 χ 全部照樣正確
+   * （坑第 17、25／26 條）。
+   */
+  const tiny = edit.subdivideEdges(box, [hes[0]], 100000);
+  ok('★★ 切太細擋下來，而且講出那條邊多長',
+     !tiny.ok && /cm/.test(tiny.reason || '') && /mm/.test(tiny.reason || ''), tiny.reason);
+}
+
+// ═══════════════════════════════════════════════════════
 //  多點連接（＝ 依序跑好幾次「連接兩點」）
 // ═══════════════════════════════════════════════════════
 

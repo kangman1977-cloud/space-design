@@ -489,6 +489,18 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 它是 Blender 的 Connect Vertex **Pairs**（單面），
         不是 Path（跨面）—— 後者還沒做。
       -->
+      <!--
+        邊上加點 → 多點連接：這兩顆是一組，順序就是工作流程。
+        kang 2026-08-25 問出來的：「是不是還有功能是可以增加點..
+        然後再使用多點連接功能?」——在這之前，多點連接只連得到既有的角。
+
+        ⛔ 刻意不做位置參數：只給「幾個點」（均分），
+        要放在特定位置就加完用「拉點」移過去。
+        跟「加線只加線、形狀交給拉點」同一條分工。
+      -->
+      <button id="subdivEdge" disabled title="邊上加點：在選到的邊上放點，什麼都不連。放好之後用「多點連接」把它們連成你要的形狀。要放在特定位置，加完用「拉點」移過去">邊上加點</button>
+      <input id="subdivN" type="number" min="1" max="32" step="1" value="1"
+             title="每條邊上加幾個點，平均分佈。1 就是中點">
       <button id="connectVerts" disabled title="多點連接：選好幾個角，照你選的順序一段一段連起來，面會被切開。兩個點就是連一條線。形狀完全不變，新的線會自動選中，接著用箭頭拉就能做屋頂、折線。⚠ 每一段的兩個點要在同一個面上，而且不能相鄰（相鄰本來就有線了）">多點連接</button>
       <!--
         面上加線：跟「連接兩點」分成兩顆，kang 2026-08-25 拍板

@@ -32,7 +32,8 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
+         splitFaceByEdges, subdivideEdges,
+         BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -367,6 +368,7 @@ $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
+$('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
 /** 換軸要立刻換範圍提示 —— 不換的話那行字會變成謊話（鐵律三） */
@@ -1145,6 +1147,62 @@ function bisectSelected() {
   if (r.skipped) {
     bits.push(`⚠ 有 ${r.skipped} 個面形狀太複雜（凹進去的）沒切開，`
             + '那裡的線會斷開 —— 換個位置切多半就過了');
+  }
+  toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **邊上加點：在選到的邊上放點，什麼都不連。**
+ *
+ * ⭐ 它跟「多點連接」是**一組**，順序就是工作流程 ——
+ * kang 2026-08-25 問出來的：「是不是還有功能是**可以增加點**..
+ * 然後再使用多點連接功能?」在這之前，多點連接只連得到**既有的角**。
+ */
+function subdivideEdgesSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先按「拉點線面」進入編輯模式，把過濾器切到「邊」，選邊再按', true);
+    return;
+  }
+  if (els.some(e => e.kind !== 'edge')) {
+    toast('「邊上加點」只吃邊 —— 把上面的過濾器切到「邊」，再選邊', true);
+    return;
+  }
+  const n = Math.max(1, Math.min(32, Math.round(+$('subdivN').value || 1)));
+
+  const obj = els[0].obj;
+  const oldMesh = obj.mesh();
+  const r = subdivideEdges(oldMesh, els.map(e => e.he), n);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 一條邊被切成好幾段，標過 CUT 的線段也跟著分段
+  commit(n > 1 ? `邊上加點（每條 ${n} 個）` : '邊上加點');
+
+  /**
+   * 🔴 **一定要把新加的點選起來** —— 點很小，不標出來使用者
+   * 根本看不到加在哪，那就是一顆「按了好像沒反應」的按鈕（坑第 21 條）。
+   */
+  const verts = r.newVerts.map(i => r.mesh.verts[i]).filter(Boolean);
+  const got = sel.selectVerts(obj, verts);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已加 ${r.newVerts.length} 個點　形狀沒有變`];
+  if (got) bits.push('新的點已選起來');
+  /**
+   * ⚠ **順序要講清楚。** 「多點連接」是照選取順序連的，而這裡的順序是
+   * **程式排的**（照選到的邊）—— 使用者八成想要別的順序。
+   * ⛔ 不講的話他會直接按下去，然後得到一個莫名其妙的形狀（坑第 24 條）。
+   */
+  if (got > 2) {
+    bits.push('⚠ 要用「多點連接」的話，順序是程式排的 —— 自己重新照順序點一次比較準');
+  }
+  if (r.touched > r.edges) {
+    bits.push(`⚠ 旁邊的面也跟著多了點 —— 那是必須的，不然網格會破洞`);
   }
   toast(bits.join('　'));
 }
@@ -1998,6 +2056,24 @@ function updateBar() {
    * 「現在差什麼」講清楚 —— 灰掉的按鈕不說話，使用者只會覺得壞了
    * （坑第 11、21 條）。
    */
+  /**
+   * 邊上加點：**選到邊就給按**（一條或好幾條都行）。
+   * ⚠ 它跟「面上加線」都吃邊，差別是**這顆只加點、那顆會連起來**，
+   * 所以兩顆的 title 要講得出差別，不然使用者不知道該按哪一顆。
+   */
+  const edgeSome = sel.editMode && sel.editCount > 0
+    && sel.editSels.every(e => e.kind === 'edge');
+  $('subdivEdge').disabled = !edgeSome;
+  $('subdivN').disabled = !edgeSome;
+  $('subdivEdge').title = edgeSome
+    ? `在選到的 ${sel.editCount} 條邊上各放點，什麼都不連 —— `
+      + '接著用「多點連接」把它們連成你要的形狀'
+    : !sel.editMode
+      ? '先按「拉點線面」進入編輯模式'
+      : sel.editCount === 0
+        ? '把上面的過濾器切到「邊」，然後選邊'
+        : '這一顆只吃邊 —— 把上面的過濾器切到「邊」';
+
   const manyVerts = sel.editMode && sel.editCount >= 2
     && sel.editSels.every(e => e.kind === 'vertex');
   $('connectVerts').disabled = !manyVerts;
