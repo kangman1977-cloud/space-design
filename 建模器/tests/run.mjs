@@ -7703,6 +7703,94 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
+//  🔴 凹的面：新拉的線不可以跑到面外面（kang 2026-08-25 實測抓到）
+// ═══════════════════════════════════════════════════════
+
+section('凹的面：連接兩點／面上加線都不可以穿出邊界');
+
+/**
+ * 🔴 **這一節是 kang 實測抓出來的，而且症狀很典型。**
+ *
+ * 他的原話：「面切一刀...如果**遇到兩個邊不一樣大時**...會很奇怪」，
+ * 附了 L 形跟方塊的對照截圖。查下去發現不只是難看：
+ *
+ * > **面積 2200 → 2600，而 `validate()`、χ、體積全部照樣正確。**
+ *
+ * 線穿出邊界之後，切出來的兩塊是**自交的多邊形**，三角化會把外面那塊
+ * 也算進去。⚠ **體積是有號量所以照樣精確** —— 坑第 17 條：
+ * **中途的量一直都是對的，末端才錯。**
+ *
+ * ── ⚠ 原本的測試為什麼沒抓到 ────────────────────────
+ * 樣本是方塊的四邊形與圓柱的 32 邊形 —— **兩個都是凸的**，
+ * 而凸多邊形的任兩點連線一定在裡面，那條路根本沒被走到。
+ * 🔴 坑第 17 條：挑樣本要涵蓋不同的**網格結構**，
+ * 而「凸／非凸」正是這個專案反覆踩到的那一組
+ * 〔扇形三角化那次有 8 個出口，這是同一個病的第 9 個〕。
+ * ⛔ **日後任何「在面上拉線」的功能，這一組一定要一起跑。**
+ */
+{
+  /** L 形柱：頂面是**凹的** 6 邊形，面積 30×30 − 20×20 ＝ 500 */
+  const prof = [[0, 0], [30, 0], [30, 10], [10, 10], [10, 30], [0, 30]];
+  const H = 10, N = prof.length;
+  const pts = [];
+  for (const [x, z] of prof) pts.push(new THREE.Vector3(x, 0, z));
+  for (const [x, z] of prof) pts.push(new THREE.Vector3(x, H, z));
+  const fl = [[...Array(N).keys()].reverse(), [...Array(N).keys()].map(i => i + N)];
+  for (let i = 0; i < N; i++) fl.push([i, (i + 1) % N, (i + 1) % N + N, i + N]);
+  const raw = Mesh.fromFaceList(pts, fl);
+  raw.computeNormals();
+  const fix = edit.recalcNormalsOutside(raw);
+  const L = (fix && fix.mesh) ? fix.mesh : raw;
+  L.computeNormals();
+
+  const area0 = L.area(), vol0 = L.volume();
+  eq('前提：L 形柱體積 30×30×10 − 20×20×10', vol0, 5000);
+  rel('前提：表面積 2200', area0, 2200);
+
+  const top = L.faces.find(f =>
+    L.faceLoop(f).length === 6 && L.faceLoop(f).every(he => Math.abs(he.v.p.y - H) < 1e-9));
+  ok('前提：頂面是凹的 6 邊形', !!top);
+  const V6 = L.faceLoop(top).map(he => he.v);
+  const E6 = L.faceLoop(top);
+
+  /**
+   * 🔴 **穿出去的要擋。**
+   * 角 (0,30) → (30,10) 這條對角線從 L 的凹口外面走。
+   */
+  const bad1 = edit.connectVerts(L, V6[0], V6[3]);
+  ok('★★ 連接兩點：穿出邊界的要擋下來', !bad1.ok, '竟然過了');
+  ok('★★ 而且要說出原因是「面是凹的」',
+     /凹|外面/.test(bad1.reason || ''), bad1.reason);
+
+  const bad2 = edit.splitFaceByEdges(L, E6[0], E6[3], 0.5);
+  ok('★★ 面上加線：穿出邊界的要擋下來', !bad2.ok, '竟然過了');
+
+  /**
+   * ⭐ **而留在裡面的必須照樣做得到** —— ⛔ 不可以因為「這個面是凹的」
+   * 就整個擋掉。那會是誤報，而誤報會讓人不敢用整個功能（坑第 18 條）。
+   */
+  const good = edit.connectVerts(L, V6[0], V6[2]);
+  ok('★★ 沒穿出去的照樣連得起來', good.ok, good.reason);
+  rel('★★ 　　而且面積精確不變（這就是原本壞掉的那個量）', good.mesh.area(), area0);
+  rel('　　體積也精確不變', good.mesh.volume(), vol0);
+  eq('　　χ 仍然是 2', chi(good.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', good.mesh.isClosed() && good.mesh.validate().ok);
+
+  const good2 = edit.connectVerts(L, V6[2], V6[5]);
+  ok('★ 另一條沒穿出去的也連得起來', good2.ok, good2.reason);
+  rel('　　面積精確不變', good2.mesh.area(), area0);
+
+  /**
+   * 🔴 **這一條是「原本錯在哪」的機械斷言**：
+   * 穿出去的話面積會**變大**（外面那塊被算進去）。
+   * ⚠ 只驗「有沒有被擋」不夠 —— 擋的條件寫錯（例如全擋）也會通過。
+   * 這裡同時釘住「該擋的擋了」與「不該擋的沒擋，而且數字是對的」。
+   */
+  ok('★★ 沒有任何一個成功的結果讓面積跑掉',
+     [good, good2].every(r => Math.abs(r.mesh.area() - area0) < 1e-6));
+}
+
+// ═══════════════════════════════════════════════════════
 //  量測（kang 2026-08-25 提出：bake 之後就不知道真實尺寸了）
 // ═══════════════════════════════════════════════════════
 

@@ -1519,6 +1519,98 @@ export function bisect(mesh, plane) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  在一個面上拉一條線：那條線必須留在面裡面
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **新拉的那條線有沒有跑到面外面去。**
+ *
+ * ── ⚠ 這一支是 kang 實測抓出來的，而且症狀很典型 ──────────
+ * 2026-08-25：L 形（**凹的**）頂面用「面上加線」，
+ * 「線很奇怪」—— 查下去發現不只是難看：
+ *
+ * > **面積 2200 → 2600，而 `validate()`、χ、體積全部照樣正確。**
+ *
+ * 線穿出邊界之後，切出來的兩塊是**自交的多邊形**，三角化會把外面那塊
+ * 也算進去。⚠ **體積是有號量所以照樣精確**（跟導角那次「只有 `volume()`
+ * 是對的」一模一樣）—— 坑第 17 條：**中途的量一直都是對的，末端才錯。**
+ *
+ * ── ⚠ 我的測試沒抓到，因為樣本全是凸的 ───────────────────
+ * 方塊的四邊形、圓柱的 32 邊形 —— **兩個都是凸多邊形**，
+ * 而凸多邊形的任兩點連線一定在裡面，那條路根本沒被走到。
+ * 🔴 **坑第 17 條又一次**：挑樣本要涵蓋不同的**網格結構**，
+ * 而「凸／非凸」是這個專案反覆踩到的那一組
+ * 〔扇形三角化那次有 8 個出口，這是同一個病的第 9 個〕。
+ * ⛔ 日後任何「在面上拉線」的功能，**L 形那組一定要一起跑**。
+ *
+ * ── 🔴 為什麼兩支共用一份，不各寫各的 ────────────────────
+ * `connectVerts()` 與 `splitFaceByEdges()` 都要問同一個問題。
+ * 各寫一份就是「兩個地方各判一次，遲早不一致」（坑第 31 條）——
+ * 與其讓兩條路對齊，不如換一個**只有一條路**的定義。
+ *
+ * ── 判準是兩件事，缺一不可 ───────────────────────────
+ * | 檢查 | 擋掉什麼 |
+ * |---|---|
+ * | 跟其他邊**不可以相交** | 線穿出去又穿回來（中點可能還在裡面）|
+ * | **中點必須在多邊形內** | 線整條落在凹口外面（可能完全不相交）|
+ *
+ * @param {THREE.Vector3[]} loop 這個面的迴圈（**已經插好新點**的版本）
+ * @param {number} ia 線的一端在迴圈上的索引
+ * @param {number} ib 另一端
+ * @returns {boolean} 線是不是整條留在面裡面
+ */
+function chordInsideFace(loop, ia, ib) {
+  const n = loop.length;
+  if (n < 4) return true;                    // 三角形沒有對角線可拉
+
+  /** 投影到面自己的平面上：法向用 Newell（對非凸也成立） */
+  const nrm = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    nrm.x += (a.y - b.y) * (a.z + b.z);
+    nrm.y += (a.z - b.z) * (a.x + b.x);
+    nrm.z += (a.x - b.x) * (a.y + b.y);
+  }
+  if (!(nrm.length() > 1e-12)) return true;  // 退化的面，交給 preflight 去擋
+  nrm.normalize();
+  const ux = Math.abs(nrm.x) < 0.9 ? new THREE.Vector3(1, 0, 0)
+                                   : new THREE.Vector3(0, 1, 0);
+  const u = new THREE.Vector3().crossVectors(nrm, ux).normalize();
+  const v = new THREE.Vector3().crossVectors(nrm, u);
+  const P = loop.map(p => [p.dot(u), p.dot(v)]);
+
+  const A = P[ia], B = P[ib];
+  const EPS = 1e-9;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  /** 一、跟其他邊相交就不行（共用端點的那幾條要跳過） */
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    if (i === ia || i === ib || j === ia || j === ib) continue;
+    const C = P[i], D = P[j];
+    const d1 = cross(A, B, C), d2 = cross(A, B, D);
+    const d3 = cross(C, D, A), d4 = cross(C, D, B);
+    if (((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS)) &&
+        ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS))) return false;
+  }
+
+  /** 二、中點要落在多邊形裡面（射線法，⚠ 非凸一定要用這個而不是凸判定） */
+  const mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [xi, yi] = P[i], [xj, yj] = P[j];
+    if ((yi > my) !== (yj > my) &&
+        mx < (xj - xi) * (my - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** 兩支共用的那句話 —— ⛔ 訊息也只寫一次（坑第 31 條） */
+const OUTSIDE_REASON =
+  '這條線會跑到面的外面 —— 那個面是凹的（像 L 形），'
+  + '兩頭之間的直線穿出了邊界。換一組位置，讓線整條留在面裡面';
+
+// ═══════════════════════════════════════════════════════
 //  連接兩點（Connect Vertex Pairs）
 // ═══════════════════════════════════════════════════════
 
@@ -1644,6 +1736,15 @@ export function connectVerts(mesh, vA, vB) {
       ok: false,
       reason: '這兩個點在這個面上是連著的，中間切不出東西'
     };
+  }
+
+  /**
+   * 🔴 **凹的面（L 形）上，兩個角之間的直線可能穿出邊界。**
+   * 不擋的話面積會算多，而 χ、`validate()`、體積**全部照樣正確**
+   * （坑第 17 條）。見 `chordInsideFace()` 檔頭。
+   */
+  if (!chordInsideFace(loop.map(i => mesh.verts[i].p), lo, hi)) {
+    return { ok: false, reason: OUTSIDE_REASON };
   }
 
   const points = mesh.verts.map(v => v.p.clone());
@@ -1813,6 +1914,27 @@ export function splitFaceByEdges(mesh, heA, heB, t = 0.5) {
   newIdx.set(kA, points.length); points.push(ra.p);
   newIdx.set(kB, points.length); points.push(rb.p);
   const iA = newIdx.get(kA), iB = newIdx.get(kB);
+
+  /**
+   * 目標面插好點之後的迴圈 —— 先拿它問一次「這條線跑不跑得出去」。
+   *
+   * 🔴 **凹的面（L 形）上這是真的會發生的**，而且不擋的話面積會算多，
+   * 同時 χ、`validate()`、體積**全部照樣正確**（坑第 17 條）。
+   * 見 `chordInsideFace()` 檔頭 —— 那是 kang 2026-08-25 實測抓到的。
+   */
+  {
+    const seq = [], on = [];
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i], b = loop[(i + 1) % loop.length];
+      seq.push(a);
+      const mid = newIdx.get(kOf(a, b));
+      if (mid !== undefined) { on.push(seq.length); seq.push(mid); }
+    }
+    on.sort((x, y) => x - y);
+    if (!chordInsideFace(seq.map(i => points[i]), on[0], on[1])) {
+      return { ok: false, reason: OUTSIDE_REASON };
+    }
+  }
 
   /**
    * 標記帳本。🔴 **一條邊被插點就變成兩段，兩段都要繼承** ——
