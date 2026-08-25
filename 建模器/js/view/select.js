@@ -33,6 +33,19 @@ const TAP_TIME = 450;    // ms
 const EDGE_GRAB_PX = 14;
 const EDGE_GRAB_PX_TOUCH = 26;
 
+/**
+ * 🔴 **「顯示點」一次最多標幾個點。**
+ *
+ * 超過就不畫，並且**講出來** —— ⛔ 硬畫下去讓平板卡死是最糟的做法。
+ *
+ * ⚠ **這個數字是猜的，沒有量過。** kang 2026-08-25 問「電腦不夠好
+ * 會不會當機」時挑的：桌機幾乎確定沒問題（點是整批交給顯示卡的，
+ * 成本遠低於模型本身的三角形），但**平板的顯示晶片弱很多，而沙箱
+ * 連畫面都驗不了**。
+ * → **等 kang 在平板上實測，照真實結果調**。⛔ 不要為想像中的數字辯護。
+ */
+export const VERT_DOTS_MAX = 5000;
+
 export class Selection {
   /**
    * @param {SceneView} view
@@ -115,6 +128,13 @@ export class Selection {
      * **單選時兩者是同一個點**，所以它是跟多選一起才有意義的。
      */
     this.editPivot = 'median';
+
+    /**
+     * 🔴 **顯示點的開關**（kang 2026-08-25 要的）。
+     * 預設**開**：「邊上加點」加出來的點沒有它就等於看不見。
+     * ⚠ 而開關本身就是效能的保險 —— 覺得卡就關掉，不必等人修。
+     */
+    this.showVertexDots = true;
 
     /**
      * gizmo 掛的那個替身。
@@ -1225,7 +1245,46 @@ export class Selection {
    * 「選錯了」還是「程式算錯了」。kang 在貼合那一輪實測就回報過這件事
    * （坑第 24 條）：**正確不等於可用，可用的前提是使用者驗得出來。**
    */
+  /**
+   * 🔴 **顯示點：把選到那個物件所有的點標出來。**
+   *
+   * kang 2026-08-25：「角點還可以分辨..但是**新增的點**..
+   * 除非開線框才可以找的到位置」——「邊上加點」加在邊中間的點
+   * 沒有任何視覺線索，等於加了卻不知道加在哪（坑第 21 條）。
+   *
+   * ⚠ **只在編輯模式、而且過濾器吃得到點的時候畫**（`點` 或 `自動`）。
+   * 過濾器切在「邊」「面」時點根本選不到，標出來只是雜訊。
+   *
+   * 🔴 **點太多就不畫，而且要講出來**（`VERT_DOTS_MAX`）——
+   * ⛔ 硬畫下去讓平板卡死是最糟的做法（坑第 11 條的反面：
+   * 不是沉默退回，是沉默地把畫面弄壞）。
+   * ⚠ **上限是猜的，沒有量過** —— 等 kang 在平板上實測再照真實結果調。
+   *
+   * @returns {{shown:number, total:number, tooMany:boolean}}
+   */
+  refreshVertexDots() {
+    const obj = this.active;
+    const on = this.showVertexDots && this.editMode && obj
+            && (this.editFilter === 'vertex' || this.editFilter === 'auto');
+    if (!on) { this.view.clearVertexDots(); return { shown: 0, total: 0, tooMany: false }; }
+
+    const node = this.view.nodeOf(obj.id);
+    const mesh = obj.mesh();
+    if (!node || !mesh) { this.view.clearVertexDots(); return { shown: 0, total: 0, tooMany: false }; }
+
+    const total = mesh.verts.length;
+    if (total > VERT_DOTS_MAX) {
+      this.view.clearVertexDots();
+      return { shown: 0, total, tooMany: true };
+    }
+
+    node.updateMatrixWorld(true);
+    this.view.setVertexDots(mesh.verts.map(v => node.localToWorld(v.p.clone())));
+    return { shown: total, total, tooMany: false };
+  }
+
   _drawEditMark() {
+    this.refreshVertexDots();
     const act = this.editSel;
     const node = act && this.view.nodeOf(act.obj.id);
     if (!node) { this.view.clearPickMarks(); return; }

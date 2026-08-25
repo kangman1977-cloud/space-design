@@ -20,7 +20,7 @@ import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
-import { Selection, isTouch } from './view/select.js';
+import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
@@ -49,7 +49,13 @@ const doc = new Doc();
 const view = new SceneView($('cv'));
 
 const sel = new Selection(view, {
-  onChange: () => { panel.refresh(); updateBar(); },
+  /**
+   * ⚠ **`refreshVertexDots()` 要放在這裡**，不能只放在 `_drawEditMark()`：
+   * 那一支只在「子元素選取」變動時走，而**只選到物件、還沒點任何元素**
+   * 是最常見的起手式 —— 那時候白圈就該出現了。
+   * 〔重複呼叫沒關係：1000 個點重建一次是微秒級，而這裡是事件驅動不是每幀〕
+   */
+  onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
   onTransform: committing => {
     view.sync(doc);
     if (committing) commit('變換物件');
@@ -368,6 +374,7 @@ $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
+$('vertDots').onclick = () => toggleVertexDots();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
@@ -578,6 +585,8 @@ function toggleEditMode() {
   $('gEditXf').hidden = !on;
   updateEditNum();
   syncModeButtons();
+  /** ⚠ 離開編輯模式白圈要收掉 —— 那時候點根本選不到，留著就是雜訊 */
+  sel.refreshVertexDots();
   panel.refresh();
   updateBar();
   toast(on
@@ -668,6 +677,12 @@ function setEditFilter(kind) {
   for (const b of document.querySelectorAll('.efBtn')) {
     b.classList.toggle('on', b.dataset.f === kind);
   }
+  /**
+   * ⚠ 換過濾器要重畫點 —— 「顯示點」只在過濾器吃得到點時才畫
+   * （點／自動）。不重畫的話切到「面」之後那些白圈還留在畫面上，
+   * 而它們已經**點不到了** —— 畫面就開始騙人（坑第 20 條那個家族）。
+   */
+  sel.refreshVertexDots();
   panel.refresh();      // 面板寫著現在的過濾器與選到什麼，換了要跟著更新
   updateBar();
   updateEditNum();
@@ -1149,6 +1164,36 @@ function bisectSelected() {
             + '那裡的線會斷開 —— 換個位置切多半就過了');
   }
   toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **顯示點的開關**（kang 2026-08-25 要的）。
+ *
+ * > 「角點還可以分辨..但是**新增的點**..除非開線框才可以找的到位置」
+ *
+ * ⚠ **關掉的時候也要講一句。** 一顆按下去畫面上東西消失的按鈕，
+ * 不講的話跟「壞了」分不出來（坑第 21 條）。
+ *
+ * 🔴 **點太多的時候要講出實際數量** —— 只說「太多了」使用者不知道
+ * 差多少、也不知道該怎麼辦（坑第 20 條：把數字講出來）。
+ */
+function toggleVertexDots() {
+  sel.showVertexDots = !sel.showVertexDots;
+  $('vertDots').classList.toggle('on', sel.showVertexDots);
+  const r = sel.refreshVertexDots();
+
+  if (!sel.showVertexDots) { toast('點的標示關掉了'); return; }
+  if (r.tooMany) {
+    toast(`這個物件有 ${r.total} 個點，超過 ${VERT_DOTS_MAX} 個就不標了 —— `
+        + '全部標出來會看不清楚，在平板上也可能變慢', true);
+    return;
+  }
+  if (!sel.editMode) { toast('點的標示開了 —— 進「拉點線面」之後才看得到'); return; }
+  if (sel.editFilter !== 'vertex' && sel.editFilter !== 'auto') {
+    toast('點的標示開了 —— ⚠ 但現在的過濾器選不到點，切到「點」或「自動」才會顯示');
+    return;
+  }
+  toast(r.shown ? `標出 ${r.shown} 個點` : '點的標示開了 —— 先選一個物件');
 }
 
 /**

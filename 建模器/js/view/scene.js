@@ -508,6 +508,63 @@ export class SceneView {
     this._pickMarks = null;
   }
 
+  /**
+   * 🔴 **把一個物件所有的點標出來（編輯模式的「顯示點」）。**
+   *
+   * ── kang 2026-08-25 實測抓到的洞 ──────────────────────
+   * > 「角點還可以分辨..但是**新增的點**..除非開線框才可以找的到位置」
+   *
+   * 「邊上加點」加在邊中間的點**沒有任何視覺線索** —— 角點還有轉折可認，
+   * 中間的點什麼都沒有。等於加了點卻不知道加在哪（坑第 21 條）。
+   *
+   * ── 🔴 為什麼不能沿用 `setPickMarks()` 那條路 ────────────
+   * 那一支**每個點做一顆 `SphereGeometry(1.4, 12, 8)`** ≈ 200 個三角形
+   * 的獨立 Mesh。選取標記通常只有幾個，那樣寫沒問題；
+   * **但拿來畫「全部的點」就是 1000 顆球、20 萬個三角形。**
+   *
+   * → 這裡用 `THREE.Points`：**整批一次交給顯示卡**，
+   * 1000 個點的成本遠低於模型本身已經在畫的那些三角形。
+   * 〔kang 問「電腦不夠好會不會當機」—— 點的資料 1000 個約 12KB，
+   * 　不會爆記憶體；最壞是變慢，而開關就是最好的保險〕
+   *
+   * ── ⚠ `sizeAttenuation: false` 是刻意的 ─────────────────
+   * 點的大小**固定在螢幕像素**，拉遠拉近都一樣看得到。
+   * 現有的球會跟著遠近變大變小 —— 那對「選取標記」沒差（就那幾個），
+   * 對「找點在哪」是致命的：拉遠一點就全部縮成看不見。
+   *
+   * ⚠ **只在網格或選取變動時呼叫**，⛔ 不要放進每幀迴圈（坑第 22 條）。
+   *
+   * @param {THREE.Vector3[]} worldPts 世界座標的點，空陣列 ＝ 清掉
+   */
+  setVertexDots(worldPts) {
+    this.clearVertexDots();
+    if (!worldPts || !worldPts.length) return;
+
+    const pos = new Float32Array(worldPts.length * 3);
+    worldPts.forEach((p, i) => { pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z; });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 7,
+      sizeAttenuation: false,     // ★ 固定螢幕大小
+      depthTest: false            // 被面擋住的點也要看得到，否則背面的點找不到
+    }));
+    pts.renderOrder = 5;          // 在選取標記（6）底下 —— 選到的要蓋過一般的
+    pts.raycast = () => {};       // ⚠ 不參與點選，否則會擋住底下真正要點的東西
+    this.scene.add(pts);
+    this._vertDots = pts;
+  }
+
+  clearVertexDots() {
+    if (!this._vertDots) return;
+    this.scene.remove(this._vertDots);
+    this._vertDots.geometry.dispose();
+    this._vertDots.material.dispose();
+    this._vertDots = null;
+  }
+
   // ── 投影方式與標準視角 ────────────────────────────
 
   get isOrtho() { return this.camera === this.ortho; }
