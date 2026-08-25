@@ -31,7 +31,7 @@ import { faceFrame, edgeFrame, vertexPoint,
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
-         deleteFaces, fillHoles, bisect, worldAxisPlane,
+         deleteFaces, fillHoles, bisect, worldAxisPlane, connectVerts,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -367,6 +367,7 @@ $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bisect').onclick = () => bisectSelected();
+$('connectVerts').onclick = () => connectVertsSelected();
 /** 換軸要立刻換範圍提示 —— 不換的話那行字會變成謊話（鐵律三） */
 $('bisectAxis').onchange = () => updateBisectRange();
 $('fixNormals').onclick = () => fixNormalsOnSelected();
@@ -1148,6 +1149,80 @@ function bisectSelected() {
 }
 
 /**
+ * 🔴 **連接兩點：在一個面上選兩個角，中間長出一條線。**
+ *
+ * 四動作框架（加線／加面／移除／移動）的第四個案例 ——
+ * 加線 × 一圈邊（環切）／面的內縮輪廓（內縮）／平面（切一刀）／
+ * **兩個既有頂點**（這一顆）。
+ *
+ * ⚠ **它跟同組其他按鈕的選取條件不同**：環切要**一條邊**、內縮與導角
+ * 要**面或邊**、切一刀**什麼都不用選**，而這一顆要**正好兩個點**。
+ *
+ * 🔴 **第一版刻意只收「正好兩個」**（kang 2026-08-25 批准的範圍）。
+ * Blender 的 Pairs 可以一次連好幾對，但方塊頂面選四個角會有**兩條
+ * 對角線交叉在中間而沒有交點** —— 那裡會長出什麼**我沒有驗證過**。
+ * ⛔ 結果不唯一就不要猜（坑第 24 條）。
+ */
+function connectVertsSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先按「拉點線面」進入編輯模式，把過濾器切到「點」，選兩個點再按', true);
+    return;
+  }
+  if (els.some(e => e.kind !== 'vertex')) {
+    toast('「連接兩點」只吃點 —— 把上面的過濾器切到「點」，再選兩個角', true);
+    return;
+  }
+  /**
+   * ⚠ 數量不對時要**講出現在選了幾個**，⛔ 不可以只說「請選兩個點」——
+   * 使用者常常是「以為選了兩個、其實點到第三個」（坑第 20 條的近親：
+   * 畫面上數不出來就要由程式講）。
+   */
+  if (els.length !== 2) {
+    toast(`「連接兩點」要正好選兩個點，現在選了 ${els.length} 個。`
+        + '開上面那顆「加選」或按 Shift 點第二個；再點一次可以取消', true);
+    return;
+  }
+
+  const obj = els[0].obj;
+  const oldMesh = obj.mesh();
+  const r = connectVerts(oldMesh, els[0].vert, els[1].vert);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('連接兩點');
+
+  /**
+   * ⚠ 一定要在 commit() 之後才選 —— 跟環切、切一刀、擠出同一條理由：
+   * commit() 會走 revalidate()，而這裡換掉了整個網格物件，
+   * 那裡會把子元素選取清掉。先選後 commit 等於白做。
+   */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  const got = sel.selectEdges(obj, hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * ⚠ **一定要講「形狀沒有變」**。這一顆跟環切、內縮一樣是「只加線」，
+   * 而使用者按下去只會看到多一條線 —— 不講的話很容易以為它沒作用
+   * 或是偷偷改了什麼（坑第 21 條）。
+   */
+  const bits = ['已連接兩點　多了一條線，形狀沒有變'];
+  if (got) bits.push('新的線已選起來，用箭頭直接拉');
+  toast(bits.join('　'));
+}
+
+/**
  * 座標框旁邊那行範圍字。
  *
  * 🔴 **這不是裝飾。** 沒有它，使用者根本不知道該打什麼數字 ——
@@ -1851,6 +1926,26 @@ function updateBar() {
       + '只加線不改形狀，切完那一圈會自動選中'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
   updateBisectRange();
+
+  /**
+   * 連接兩點：**正好選到兩個點才給按。**
+   *
+   * ⚠ 這一顆的條件跟同組其他按鈕都不一樣，所以 title 要把
+   * 「現在差什麼」講清楚 —— 灰掉的按鈕不說話，使用者只會覺得壞了
+   * （坑第 11、21 條）。
+   */
+  const twoVerts = sel.editMode && sel.editCount === 2
+    && sel.editSels.every(e => e.kind === 'vertex');
+  $('connectVerts').disabled = !twoVerts;
+  $('connectVerts').title = twoVerts
+    ? '在這兩個點之間連一條線，把那個面切成兩塊。形狀不會變，新的線會自動選中'
+    : !sel.editMode
+      ? '先按「拉點線面」進入編輯模式'
+      : sel.editCount === 0
+        ? '把上面的過濾器切到「點」，然後選兩個點（開「加選」或按 Shift 選第二個）'
+        : sel.editSels.some(e => e.kind !== 'vertex')
+          ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選兩個角'
+          : `要正好兩個點，現在選了 ${sel.editCount} 個`;
 
   /**
    * 法向那一組：**不需要進編輯模式**，選到物件就能按 ——

@@ -7366,6 +7366,135 @@ const bisectPlane = (nx, ny, nz, d) => ({ n: new THREE.Vector3(nx, ny, nz), d })
 }
 
 // ═══════════════════════════════════════════════════════
+//  連接兩點（Connect Vertex Pairs）＝ 加線 × 兩個既有頂點
+// ═══════════════════════════════════════════════════════
+
+section('連接兩點：在一個面上連出一條線');
+
+/**
+ * 四動作框架的**第四個**案例，而且是最便宜的一個。
+ *
+ * ── 🔴 它比前三個多一條主斷言：**頂點數也不變** ──────────────
+ * 環切、內縮、切一刀都會**加點**，只有這一支不會 ——
+ * 兩個端點是使用者選的既有頂點。所以斷言是
+ * **V 不變、E ＋1、F ＋1、χ 不變、體積面積精確不變**。
+ *
+ * ── ⚠ 挑樣本要涵蓋不同的「網格結構」，不只是不同形狀（坑第 17 條）──
+ * 方塊頂面是**四邊形**、圓柱端面是 **32 邊形**，兩種都要走一次。
+ * 〔第 3.5 期就是只驗了錐體（全三角形）而漏掉四邊形，STL 壞了兩週〕
+ */
+const facePicker = (m, nSides, pred) => m.faces.find(f => {
+  const vs = m.faceLoop(f).map(he => he.v);
+  return vs.length === nSides && (!pred || vs.every(pred));
+});
+
+{
+  /** 案例一：方塊頂面連對角線。最基本的一條 */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const vol0 = box.volume(), area0 = box.area();
+  const v0 = box.verts.length, e0 = edgeCount(box), f0 = box.faces.length;
+  eq('前提：bake 之後方塊是 V8 E12 F6', `${v0}/${e0}/${f0}`, '8/12/6');
+
+  const top = facePicker(box, 4, v => Math.abs(v.p.y - 20) < 1e-9);
+  ok('前提：找得到頂面那個四邊形', !!top);
+  const L = box.faceLoop(top).map(he => he.v);
+
+  const r = edit.connectVerts(box, L[0], L[2]);
+  ok('對角兩個點連得起來', r.ok, r.reason);
+  const m = r.mesh;
+
+  eq('★★ V 8 → 8（不插新點，跟環切／切一刀不同）', m.verts.length, 8);
+  eq('E 12 → 13', edgeCount(m), 13);
+  eq('F 6 → 7', m.faces.length, 7);
+  eq('★★ χ 仍然是 2', chi(m), 2);
+  ok('　　仍然封閉', m.isClosed());
+  ok('　　結構沒有問題', m.validate().ok);
+
+  /** 🔴 主斷言：只加線 */
+  rel('★★ 體積精確不變', m.volume(), vol0);
+  rel('★★ 面積精確不變', m.area(), area0);
+
+  eq('★ 孤點 0 個（只加不減）', r.orphans, 0);
+  eq('新的線 1 條', r.newEdges.length, 1);
+  eq('　　而且標成 hard', [...m.edges()].filter(he => he.hard).length, 1);
+
+  /**
+   * 🔴 出口：不標 hard 的話這條線會被併回去 ——
+   * 那就是一顆按了畫面沒反應的按鈕（坑第 21 條，環切那一輪四個出口全中過）。
+   */
+  ok('★★ 再跑一次併面不會把新的線併回去', !edit.mergeCoplanarFaces(m).ok);
+  eq('★★ 頂面真的被切成兩區（6 → 7）',
+     new Set(m.faces.map(f => edit.regionOf(m, f).rid)).size, 7);
+
+  /** 存讀檔：不存的話開檔之後線就沒了，而形狀還在 */
+  const round = Mesh.fromJSON(JSON.parse(JSON.stringify(m.toJSON())));
+  eq('★ 存檔再開，新的線還在', [...round.edges()].filter(he => he.hard).length, 1);
+}
+
+{
+  /**
+   * 案例二：圓柱端面（32 邊形）。**跟方塊是不同的網格結構**。
+   * 連對徑 ＝ 把端面切成兩個 17 邊形。
+   */
+  const cyl = baked('cylinder', { r: 25, h: 70, seg: 32 });
+  const vol0 = cyl.volume(), area0 = cyl.area();
+  const v0 = cyl.verts.length, e0 = edgeCount(cyl), f0 = cyl.faces.length;
+
+  const cap = facePicker(cyl, 32);
+  ok('前提：找得到 32 邊形的端面', !!cap);
+  const L = cyl.faceLoop(cap).map(he => he.v);
+
+  const r = edit.connectVerts(cyl, L[0], L[16]);
+  ok('32 邊形端面連對徑', r.ok, r.reason);
+  eq('★★ V 不變', r.mesh.verts.length, v0);
+  eq('★ E ＋1', edgeCount(r.mesh), e0 + 1);
+  eq('★ F ＋1', r.mesh.faces.length, f0 + 1);
+  eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+  ok('　　仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+  rel('★★ 體積精確不變', r.mesh.volume(), vol0);
+  rel('★★ 面積精確不變', r.mesh.area(), area0);
+
+  /** 隔一個也要連得起來（切出一個三角形 ＋ 一個 31 邊形） */
+  const r2 = edit.connectVerts(cyl, L[0], L[2]);
+  ok('★ 隔一個點也連得起來', r2.ok, r2.reason);
+  rel('　　體積照樣精確不變', r2.mesh.volume(), vol0);
+}
+
+{
+  /**
+   * 🔴 **三種擋下來的情形，每一種的「原因」都要對。**
+   *
+   * ⚠ **這一組是沙箱實測抓到 bug 才加的**（2026-08-25）：
+   * 相鄰的兩個點**本來就同時屬於兩個面**（共用那條邊的左右兩片），
+   * 所以原本「同時在好幾個面上」那個檢查會**先觸發**，
+   * 使用者被指去想面的問題，而真正的原因是「本來就有線」。
+   * 〔坑第 34 條：不要給一個不存在的方向。導角那一輪才剛犯過〕
+   *
+   * → 相鄰改成**最先擋**，而且判準是「有沒有邊」不是迴圈上的位置。
+   */
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const top = facePicker(box, 4, v => Math.abs(v.p.y - 20) < 1e-9);
+  const L = box.faceLoop(top).map(he => he.v);
+
+  const adj = edit.connectVerts(box, L[0], L[1]);
+  ok('★★ 相鄰擋下來，而且說的是「本來就有線」',
+     !adj.ok && /本來就已經有一條線/.test(adj.reason || ''), adj.reason);
+  ok('★★ ⛔ 不可以說成「同時在好幾個面上」',
+     !/好幾個面|重疊/.test(adj.reason || ''), adj.reason);
+
+  const bot = box.verts.find(v => Math.abs(v.p.y + 20) < 1e-9);
+  const far = edit.connectVerts(box, L[0], bot);
+  ok('★ 跨面擋下來並說原因', !far.ok && /不在同一個面/.test(far.reason || ''));
+  ok('★ 而且老實說「跨過好幾個面的還沒做」，⛔ 不指一條不存在的路',
+     /還沒做/.test(far.reason || ''), far.reason);
+
+  const same = edit.connectVerts(box, L[0], L[0]);
+  ok('★ 同一個點擋下來並說原因', !same.ok && !!same.reason);
+
+  ok('★ 沒給點也擋下來', !edit.connectVerts(box, null, L[0]).ok);
+}
+
+// ═══════════════════════════════════════════════════════
 //  量測（kang 2026-08-25 提出：bake 之後就不知道真實尺寸了）
 // ═══════════════════════════════════════════════════════
 

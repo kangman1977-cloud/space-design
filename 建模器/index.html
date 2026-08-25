@@ -477,6 +477,19 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="bisectAt" type="number" step="0.5" value="0"
              title="切在哪裡（cm）：空間裡的實際座標，不是離物件邊緣多遠。旁邊寫著這個物件的範圍，打在範圍以外會擋下來">
       <span id="bisectRange" class="lbl" title="這個物件在該方向的範圍。座標要打在這中間才切得到"></span>
+      <!--
+        連接兩點：在一個面上選兩個角，中間長出一條線，那個面被切成兩塊。
+
+        ⚠ 跟「切一刀」的分工要分清楚，⛔ 兩顆的定位不可以糊在一起
+        （kang 2026-08-25 為切一刀拍板的那條）：
+          切一刀   ＝ 整個物件橫切，位置精確
+          環切     ＝ 順著形狀繞一圈
+          連接兩點 ＝ 在一個面裡面連一條線 ← 這顆
+
+        ⚠ 它是 Blender 的 Connect Vertex **Pairs**（單面），
+        不是 Path（跨面）—— 後者還沒做。
+      -->
+      <button id="connectVerts" disabled title="連接兩點：在同一個面上選兩個角，中間長出一條線，那個面被切成兩塊。形狀完全不變，新的線會自動選中，接著用箭頭拉就能做屋頂、折線。⚠ 兩個點要在同一個面上，而且不能是相鄰的（相鄰本來就有線了）">連接兩點</button>
     </div>
 
     <!--

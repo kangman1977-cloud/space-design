@@ -1519,6 +1519,186 @@ export function bisect(mesh, plane) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  連接兩點（Connect Vertex Pairs）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **連接兩點：在一個面上選兩個角，中間長出一條線，把那個面切成兩塊。**
+ *
+ * ── 它是「加線 × 兩個既有頂點」──────────────────────────
+ * 四動作框架（加線／加面／移除／移動）的**第四個**案例，而且是最便宜的一個：
+ * 環切是「加線 × 一圈邊」、內縮是「加線 × 面的內縮輪廓」、
+ * 切一刀是「加線 × 平面」，這一支是「加線 × 兩個既有頂點」。
+ *
+ * ⭐ **它比 `bisect()` 還簡單** —— `bisect()` 要先算平面跟每條邊的交點、
+ * 插新點，這一支的兩個端點**使用者直接給，本來就存在**。
+ * 骨架其餘部分逐項對應（帳本 → `preflightRebuild` → `cleanRebuild` →
+ * `applyMarks`），**沒有開任何新的重建路徑**。
+ *
+ * 🔴 **只加線，體積與面積精確不變**，而且**頂點數也不變**
+ * （環切、內縮、切一刀都會加點，只有這一支不會）。
+ *
+ * ── 🔴 它是 Blender 的 Connect Vertex **Pairs**，不是 Path ────────
+ * ⚠ **`外部參考-Blender編輯.md` 第 10.1 節把這兩個的名字寫反了**
+ * （2026-08-25 讀官方手冊內文才發現，該節已修正）。正確的是：
+ *
+ * | | 行為 |
+ * |---|---|
+ * | **Connect Vertex Pairs**（＝這一支）| 只連**共用同一個面**的兩個點，把那個面切成兩半 |
+ * | **Connect Vertex Path（J）** | **跨多個面**，依選取順序沿路徑切開 —— **還沒做** |
+ *
+ * ⛔ 擋下來的訊息**不可以**叫使用者「換個方式選」去做跨面的事 ——
+ * 那條路現在不存在，寫了就是坑第 34 條（指一條不存在的退路）。
+ *
+ * ── 新的那條線要標 `hard` ─────────────────────────────
+ * 切開的兩半是**共面**的，而全域規則是「共面的邊 ＝ 看不見的邊」。
+ * 不標 `hard` 的話四個出口全中（畫不出來、點不到、半塊面拉不動、
+ * 按壓平被併掉），這顆按鈕按下去畫面上什麼都不會變（坑第 21 條）。
+ *
+ * ── ⚠ 三種擋下來的情形，每一種都要講原因（坑第 11 條）────────
+ * | 情形 | 為什麼擋 |
+ * |---|---|
+ * | 兩個點**不在同一個面**上 | 那是 Path 要做的事，還沒做 |
+ * | 兩個點在那個面上**相鄰** | 它們之間**本來就有一條邊**了 |
+ * | 兩個點**同時在好幾個面**上 | 連下去會長出兩條一模一樣的線 ＝ 非流形。
+ *   ⚠ 這種形狀罕見，但**結果不唯一就不要猜**（坑第 24 條）|
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex} vA 第一個點
+ * @param {Vertex} vB 第二個點
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
+ *            newEdges?:Array, orphans?:number}}
+ *          `newEdges` ＝ 新長出來的那條線（一條），呼叫端拿它去自動選中
+ */
+export function connectVerts(mesh, vA, vB) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!vA || !vB) return { ok: false, reason: '要選兩個點' };
+  if (vA === vB) return { ok: false, reason: '選到的是同一個點，連不出線' };
+
+  const vi = mesh._vertIndex();
+  const ia = vi.get(vA.id), ib = vi.get(vB.id);
+  if (ia === undefined || ib === undefined) {
+    return { ok: false, reason: '選到的點不在這個物件上' };
+  }
+
+  /**
+   * 🔴 **相鄰要最先擋，而且判準是「有沒有邊」，不是迴圈上的位置。**
+   *
+   * ⚠ **順序錯了訊息就會說謊**（2026-08-25 沙箱實測抓到）：相鄰的兩個點
+   * 本來就同時屬於**兩個**面（共用那條邊的左右兩片），所以底下那個
+   * 「同時在好幾個面上」的檢查會**先觸發**，使用者被指去想面的問題，
+   * 而真正的原因是「**這兩點之間本來就有線**」。
+   * 〔坑第 34 條：不要給一個不存在的方向。導角那一輪才剛犯過同一個病〕
+   */
+  for (const he of mesh.edges()) {
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if ((a === ia && b === ib) || (a === ib && b === ia)) {
+      return {
+        ok: false,
+        reason: '這兩個點是相鄰的，它們之間本來就已經有一條線了'
+      };
+    }
+  }
+
+  /**
+   * 找「迴圈上同時有這兩個點」的面。
+   * ⚠ **要全部走完，不可以找到第一個就跳出** —— 找到兩個以上得擋下來，
+   * 而「只切第一個找到的」會讓結果取決於面的儲存順序（坑第 24 條）。
+   */
+  const cands = [];
+  for (const f of mesh.faces) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    const p = idx.indexOf(ia), q = idx.indexOf(ib);
+    if (p < 0 || q < 0) continue;
+    cands.push({ f, idx, lo: Math.min(p, q), hi: Math.max(p, q) });
+  }
+
+  if (!cands.length) {
+    return {
+      ok: false,
+      reason: '這兩個點不在同一個面上 —— 這一顆只能在一個面裡面連，'
+            + '跨過好幾個面的那一種還沒做'
+    };
+  }
+  if (cands.length > 1) {
+    return {
+      ok: false,
+      reason: `這兩個點同時在 ${cands.length} 個面上，連下去會長出兩條重疊的線`
+    };
+  }
+
+  const { f: target, idx: loop, lo, hi } = cands[0];
+  const n = loop.length;
+
+  /**
+   * ⚠ **保險絲**：切下去會生出一個只有兩個點的面，而 `fromFaceList()`
+   * 會**直接跳過**少於 3 點的面 —— 靜默掉一個面，形狀就破了。
+   * 〔這一段跟 `bisect()` 的 `q - p < 2` 是同一條規則〕
+   *
+   * ⚠ 上面「有沒有邊」那一關**正常情況下已經擋掉全部**，走到這裡代表
+   * 網格處於「面的迴圈上相鄰、卻沒有對應的邊」的壞狀態。
+   * ⛔ 留著不要拿掉，但**訊息要跟上面那則分得出來** —— 兩者的成因不同。
+   */
+  if (hi - lo < 2 || n - (hi - lo) < 2) {
+    return {
+      ok: false,
+      reason: '這兩個點在這個面上是連著的，中間切不出東西'
+    };
+  }
+
+  const points = mesh.verts.map(v => v.p.clone());
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+  /**
+   * 標記帳本，記在**重建前**的索引空間，最後透過 `remap` 一次搬過去。
+   * ⭐ 這一支不插新點，所以**沒有「一條邊被切成兩段」的問題**
+   * （那正是 `bisect()` 與 `loopCut()` 各自記一本帳的理由）——
+   * 既有的邊逐條原樣搬過去就好。
+   * 🔴 整包讀（`marksOf()`），⛔ 不要手寫「有哪幾樣」。
+   */
+  const marks = new Map();
+  for (const he of mesh.edges()) {
+    marks.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  }
+  marks.set(kOf(ia, ib), Object.assign({}, marks.get(kOf(ia, ib)), { hard: true }));
+
+  const faces = [];
+  for (const f of mesh.faces) {
+    const idx = f === target ? loop : mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    if (f !== target) { faces.push(idx); continue; }
+    faces.push(idx.slice(lo, hi + 1));
+    faces.push([...idx.slice(hi), ...idx.slice(0, lo + 1)]);
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `連下去做出壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const want = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x === undefined || y === undefined) continue;
+    want.set(kOf(x, y), m);
+  }
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  }
+
+  const na = to(ia), nb = to(ib);
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    newEdges: (na !== undefined && nb !== undefined) ? [[na, nb]] : [],
+    orphans: clean.dropped.orphans
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  內縮（Inset）
 // ═══════════════════════════════════════════════════════
 
