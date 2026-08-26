@@ -652,7 +652,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <div id="marqueeBox" hidden></div>
       <div id="toast"></div>
       <div id="status">
-        <div title="FPS 是畫面每秒更新幾次。三角形是「畫面上這些模型加起來有幾個三角形」——它只有模型真的改變時才會變，轉視角、切線框都不會影響它"><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
+        <!-- ⛔ 這裡不要加 title 說明：#status 是 pointer-events:none（見上面的 CSS），
+             滑鼠穿過去不會停在它身上，所以 title 永遠不會跳出來。
+             2026-08-26 加過一次，kang 實測時發現「我要怎麼看？」——
+             那正是「開清單前先問：使用者驗得出這個結果嗎」漏掉的一項。
+             ⚠ 拿掉 pointer-events:none 可以讓 title 生效，但那樣狀態列
+             就會擋住左下角那塊模型（連從那裡開始拖曳轉視角都會失效）——
+             為了一個說明賠掉一塊可以操作的畫面，不划算。 -->
+        <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
         <div><span class="dim2">物件</span> <b id="sObj">0</b>　<span class="dim2">已選</span> <b id="sSel">0</b></div>
         <div class="dim2" id="sInfo">點一下物件選取它</div>
       </div>
