@@ -36,6 +36,18 @@ const DOUBLE_TAP_MS = 350;
 const DOUBLE_TAP_MOVE = 16;   // px
 
 /**
+ * 🔴 **「畫線／點選」是主鍵那一顆，其餘的鍵不歸刀具管。**
+ *
+ * `PointerEvent.button === 0` ＝ 桌機左鍵，也是**觸控與觸控筆的主要接觸點**
+ * （兩者按下時都回 0）—— 所以一個常數同時涵蓋三種輸入，
+ * ⛔ 不必為 `pointerType` 各寫一段（坑第 31 條）。
+ *
+ * ⚠ 刀具模式下右鍵是**轉視角**、中鍵是**縮放**（見 `scene.js` 的
+ * `setKnifeInput()`），那兩顆按下去刀具要當作沒看到。
+ */
+const DRAW_BUTTON = 0;
+
+/**
  * 點多近才算點到那條邊，單位 px。
  * 觸控要放寬 —— 手指比游標粗得多，這跟平面規劃器的 HGRAB
  * （桌機 2px／觸控 14px）是同一件事。
@@ -447,14 +459,52 @@ export class Selection {
     const cv = this.view.canvas;
 
     cv.addEventListener('pointerdown', e => {
-      this._down = { x: e.clientX, y: e.clientY, t: performance.now() };
       /**
-       * 🔴 **刀具模式：按下去就開始記一筆畫。**
+       * 🔴 **哪一顆鍵，在按下去的當下就記起來。**
+       *
+       * ⚠ **⛔ 不可以等到 `pointerup` 再問** —— 那正是
+       * 「`TransformControls.axis` 是『滑鼠現在停在哪根把手上』」踩過的坑
+       * （2026-08-25）：**鍵也是初始狀態的一部分**。
+       *
+       * 🔴 **這一條是 kang 2026-08-26 實測抓到的**：原本四個監聽
+       * **完全沒有分是哪一顆鍵**，所以右鍵拖的時候 OrbitControls 在轉視角、
+       * 一筆畫的取樣器**同時也在記線** —— 他的原話：「跟轉視角功能撞一起」。
+       * ⚠ 沙箱驗不了這種事：資料層算出來的切點完全正確，錯的是「誰該收這個手勢」。
+       */
+      this._down = { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button };
+
+      /**
+       * 🔴 **第二根手指／第二顆鍵按下來 ＝ 這是轉視角，不是畫線。**
+       *
+       * ⚠ **平板上這一條才是重點**：兩指轉視角時，**第一根手指早就
+       * 開始畫線了** —— 不砍掉的話轉個視角就會憑空多出一條切線。
+       * 〔桌機的對應情形：左鍵按著再按右鍵〕
+       *
+       * ⭐ **⛔ 不用一個「現在有幾根手指」的集合去擋** —— 那種集合
+       * 只要漏收一次 `pointerup` 就會永遠卡住（症狀是「突然就畫不了了」）。
+       * 這裡問的是「**畫到一半又有人按下來**」，**它自己會清乾淨**。
+       */
+      if (this._stroke) {
+        this._stroke = null;
+        /**
+         * ⚠ 叫 `abandoned` 不叫 `cancelled`，是為了跟 `this._drag.cancelled`
+         * （拖曳中按 `Esc` 反悔）分開 —— 兩件不同的事用同一個字，
+         * 下一個人讀到會以為是同一回事。
+         */
+        this._down.abandoned = true;
+        if (this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
+      }
+
+      /**
+       * 🔴 **刀具模式：按下主鍵才開始記一筆畫。**
        * ⚠ 這時候還不知道使用者要輕點還是要拖 —— 兩種都先當成拖，
        * 放開手再用 `TAP_MOVE`／`TAP_TIME` 分。
        * ⛔ 不要在這裡就決定，那等於逼使用者先宣告他要做哪一種。
+       *
+       * ⭐ `button === 0` 同時涵蓋**桌機左鍵**與**觸控／觸控筆的主要接觸點**
+       * （兩者按下時都是 0）—— ⛔ 不必為 `pointerType` 各寫一段（坑第 31 條）。
        */
-      if (this.knifeMode && !this.tc.dragging) {
+      if (this.knifeMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
         const h = this._surfaceHit(e.clientX, e.clientY);
         this._stroke = h ? { obj: h.obj, node: h.node, pts: [h.pLocal], world: [h.world] } : null;
       }
@@ -529,6 +579,13 @@ export class Selection {
       if (stroke && this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
 
       /**
+       * 🔴 **被第二根手指／第二顆鍵砍掉的那一次，放開手也什麼都不做。**
+       * ⚠ 少了這一條，「兩指轉視角」放開時會**憑空多一個切點**
+       * （沒移動的話下面會把它當成輕點）。
+       */
+      if (d.abandoned) return;
+
+      /**
        * 框選：拖得夠遠才算框選，否則當成一般的點一下。
        * 不分這一刀的話，框選模式下就再也點不到單一物件了。
        */
@@ -552,6 +609,17 @@ export class Selection {
        * 但**一定要在 `pick()` 前面** —— 否則會變成選物件。
        */
       if (this.knifeMode) {
+        /**
+         * 🔴 **右鍵／中鍵在刀具模式下是轉視角與縮放，⛔ 不可以順便加一個切點。**
+         *
+         * ⚠ 判準用**按下去時記的那顆鍵**（`d.button`），⛔ 不是 `e.button` ——
+         * 理由跟上面 `pointerdown` 那一段一樣：鍵是初始狀態的一部分。
+         *
+         * ⚠ **這個限制只加在刀具模式裡。** 物件選取那條路
+         * （下面的 `pick()`）本來就不分鍵，而那是 kang 已經驗過的行為 ——
+         * ⛔ 不要順手把它一起改掉。
+         */
+        if (d.button !== DRAW_BUTTON) return;
         if (this.hooks.onKnifePick) {
           /**
            * 🔴 **快點兩下 ＝ 閉合迴圈並切下去；慢慢再點一次 ＝ 取消最後一點。**
