@@ -76,32 +76,16 @@ select {
 }
 
 /*
-  刀具的預覽線。
+  ⛔ **`#knifeLine` 已於 2026-08-26 移除，不要再加回來。**
 
-  🔴 沒有它就是「按下去才知道切到哪」，那不能用（坑第 21 條：
-  一個操作如果看起來沒作用，就必須有東西持續顯示它到底在做什麼）。
+  它是刀具第一版（螢幕上那條橘虛線）留下的殘骸 —— 元素與 CSS 都還在，
+  但**沒有任何一行程式在更新它**（grep 過整個 js/，沒有人寫 x2/y2）。
 
-  ⚠ 用 SVG 疊在畫布上，不畫在 3D 場景裡 —— 那條線是「螢幕上的線」，
-  它的意義本來就在螢幕座標系，硬投影到 3D 反而要決定一個沒有意義的深度。
-  〔跟框選那個矩形同一個做法〕
+  🔴 **第一版失敗的原因正是「畫在螢幕上」**：切點是**模型上的位置**，
+  畫在螢幕座標系裡，一轉視角就對不上（當時的症狀是「預覽一直亂跳」）。
+  現在的預覽畫在 3D 場景裡（`scene.js` 的 `setKnifePreview()`），
+  **一筆畫也走同一條路**，⛔ 不會把這個疊層挖回來。
 */
-#knifeLine {
-  /* 🔴 width/height 一定要明確給。
-     ⚠ **只寫 inset:0 是不夠的** —— SVG 是 replaced element，
-     寬高 auto 時用的是它自己的預設尺寸（300×150），
-     而 SVG 預設 overflow:hidden，畫在那個框外面的線**直接被裁掉**。
-     〔2026-08-25 kang 實測：「點第一下也沒看到橘線」。
-     　這是沙箱驗不了畫面的典型代價 —— 語法沒錯、邏輯沒錯，就是看不見〕 */
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  z-index: 4; pointer-events: none; overflow: visible;
-  /* 🔴 初始藏起來用 CSS，⛔ 不靠 `hidden` 屬性 ——
-     那是 HTML 元素的屬性，對 SVG 不保證生效（2026-08-25 實測踩到：
-     虛線藏不起來，殘留在畫面上）。JS 那邊一律改 style.display。 */
-  display: none;
-}
-#knifeLine line { stroke: #ff8c1a; stroke-width: 2; stroke-dasharray: 7 5; }
-/* 這一刀會切在模型上的哪條線 —— 比螢幕上那條虛線更重要 */
-#knifeLine polyline { fill: none; stroke: #ff8c1a; stroke-width: 2.5; }
 
 /* ══ 右側面板 ══════════════════════════════════════ */
 #panel {
@@ -538,7 +522,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⭐ 底層還是「切一刀」那個平面 —— 差別只在平面從你點的兩個
         位置算出來，不是從 X／Y／Z 選一個。
       -->
-      <button id="knife" disabled title="刀具（自由切）：按一下進入，在模型上點你要切過的位置（會吸到最近的邊），點完再按一次就切下去。同一個面點兩個位置就切開那個面；繞著模型一路點下去就能環繞切開。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」">刀具</button>
+      <button id="knife" disabled title="刀具（自由切）：按一下進入。兩種畫法可以混用 ——「輕點」在模型上點你要切過的位置（會吸到最近的邊），或「按住拖」直接劃一條線過表面（線穿過邊的地方就是切點）。點完再按一次就切下去，或在最後一點快點兩下接回起點。⚠ 刀具模式下轉視角改成：桌機按右鍵拖、平板用兩指。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」">刀具</button>
+      <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）">吸中點</button>
       <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>
       <!--
         連接兩點：在一個面上選兩個角，中間長出一條線，那個面被切成兩塊。
@@ -664,9 +649,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     <div id="stage">
       <canvas id="cv"></canvas>
       <div id="marqueeBox" hidden></div>
-      <!-- ⛔ 刻意沒有 hidden 屬性：那是 HTML 元素的東西，對 SVG 不保證生效。
-           初始隱藏靠 CSS 的 display:none，JS 也一律改 style.display。 -->
-      <svg id="knifeLine"><line x1="0" y1="0" x2="0" y2="0"/></svg>
       <div id="toast"></div>
       <div id="status">
         <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>

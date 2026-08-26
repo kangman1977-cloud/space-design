@@ -573,8 +573,47 @@ export class SceneView {
    */
   setKnifePreview(worldPts, dots) {
     this.clearKnifePreview();
+    this._knifePrev = this._buildLineOverlay('knifePreview', worldPts, dots, 0xff8c1a);
+  }
+
+  /**
+   * 🔴 **「切一刀」的即時預覽：打數字的當下就看得到會切在哪條線上。**
+   *
+   * ⚠ **它跟刀具是同一個病的兩張臉** —— 刀具那邊是「點兩個位置看不出
+   * 往深處切到哪」，這邊是「打一個座標看不出那個平面落在模型的哪裡」。
+   * 兩個都是坑第 21 條：**看不到作用的操作沒有人敢按。**
+   *
+   * ⭐ 算的那一半（`planeCrossSegments()`）**早就寫好而且測過了**，
+   * 只是刀具改設計之後沒有人在呼叫它 —— 這一輪把它接上來，
+   * ⛔ 不是留著一支沒人用的函式假裝還有退路（坑第 34 條）。
+   *
+   * 顏色刻意跟刀具的橘色分開（青色）：兩個功能同時只會出現一個，
+   * 但**它們的意思不同** —— 橘色是「你指定的位置」，青色是「程式算出來的結果」。
+   */
+  setCutPreview(worldPts) {
+    this.clearCutPreview();
+    this._cutPrev = this._buildLineOverlay('cutPreview', worldPts, null, 0x2ad4d4);
+  }
+
+  clearCutPreview() {
+    if (!this._cutPrev) return;
+    this.scene.remove(this._cutPrev);
+    this._cutPrev.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._cutPrev = null;
+  }
+
+  /**
+   * 兩種預覽共用的那一段。
+   *
+   * ⚠ **抽出來是刻意的**：原本要為「切一刀」再抄一份同樣的 45 行，
+   * 而兩份一定會漂（坑第 31 條：與其讓兩條路對齊，不如只留一條路）。
+   */
+  _buildLineOverlay(name, worldPts, dots, color) {
     const g = new THREE.Group();
-    g.name = 'knifePreview';
+    g.name = name;
 
     /** 段落：⚠ `LineSegments`（每兩點一段），⛔ 不是 `Line` */
     if (worldPts && worldPts.length >= 2) {
@@ -585,7 +624,7 @@ export class SceneView {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       const ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        color: 0xff8c1a,
+        color,
         depthTest: false      // 背面那一段也要看得到，否則只看得到一半
       }));
       ln.renderOrder = 7;
@@ -605,16 +644,73 @@ export class SceneView {
       const dg = new THREE.BufferGeometry();
       dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
       const pts = new THREE.Points(dg, new THREE.PointsMaterial({
-        color: 0xff8c1a, size: 11, sizeAttenuation: false, depthTest: false
+        color, size: 11, sizeAttenuation: false, depthTest: false
       }));
       pts.renderOrder = 8;
       g.add(pts);
     }
 
-    if (!g.children.length) return;
+    if (!g.children.length) return null;
     g.traverse(o => { o.raycast = () => {}; });
     this.scene.add(g);
-    this._knifePrev = g;
+    return g;
+  }
+
+  /**
+   * 🔴 **刀具模式下把「按住拖」讓給一筆畫，轉視角換到別的手勢。**
+   *
+   * ── ⚠ 為什麼一定要換，不能兩個並存 ──────────────────
+   * 「按住拖一條線」跟「按住拖轉視角」是**同一個動作**。
+   * 不換的話一筆畫永遠拿不到那個手勢，而模型還會跟著轉。
+   *
+   * ── 【實證 · 讀過 `lib/three/addons/controls/OrbitControls.js`】───
+   * ```
+   * 行 358   mouseButtons = { LEFT: ROTATE, MIDDLE: DOLLY, RIGHT: PAN }
+   * 行 371   touches      = { ONE: ROTATE, TWO: DOLLY_PAN }
+   * 行 1646  每次按下都重新讀 mouseButtons → 執行時改就生效
+   * 行 1720  滑鼠 switch 的 default 是 state = NONE
+   * 行 1820  觸控 switch 的 default 也是 state = NONE
+   * ```
+   * → **設成一個無效值（`-1`）＝ 那個手勢什麼都不做**，
+   *   而 `MOUSE.ROTATE` 與 `TOUCH.ROTATE` 都是 `0`，所以 `-1` 不會撞到任何一個。
+   *
+   * | | 平常 | 刀具模式下 |
+   * |---|---|---|
+   * | 桌機左鍵拖 | 轉視角 | **一筆畫** |
+   * | 桌機右鍵拖 | 平移 | **轉視角** |
+   * | 平板單指／觸控筆 | 轉視角 | **一筆畫** |
+   * | 平板兩指 | 縮放＋平移 | **轉視角＋縮放**（`DOLLY_ROTATE`）|
+   *
+   * ⭐ **平板那兩列才是重點** —— `touches` 跟 `mouseButtons` 是分開的兩個設定，
+   * 所以「筆用來畫、兩指用來轉」是直接成立的，不是勉強擠出來的。
+   *
+   * ⚠ **⛔ 不要拿 `Ctrl`／`Shift`／`Cmd` 當一筆畫的開關** ——
+   * 【實證 · 同一支檔案行 1677】`MOUSE.ROTATE` 分支裡那三個修飾鍵**已經被佔用**
+   * （按著會變成平移）。
+   *
+   * 🔴 **這是「進模式改設定、離開還原」的狀態，所以只有一個入口**
+   * （`select.js` 的 `setKnifeMode()`）—— ⛔ 不要在進出刀具的每一處各寫一次還原
+   * （坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義）。
+   */
+  setKnifeInput(on) {
+    /** 一個無效值 ＝ 那個手勢什麼都不做（兩個 switch 的 default 都是 NONE） */
+    const NONE = -1;
+    if (on) {
+      if (this._orbitSaved) return;          // 已經切過了，⛔ 不可以再存一次
+      this._orbitSaved = {
+        mouseButtons: { ...this.orbit.mouseButtons },
+        touches: { ...this.orbit.touches }
+      };
+      this.orbit.mouseButtons = {
+        LEFT: NONE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE
+      };
+      this.orbit.touches = { ONE: NONE, TWO: THREE.TOUCH.DOLLY_ROTATE };
+    } else {
+      if (!this._orbitSaved) return;         // 本來就沒切，沒有東西要還原
+      this.orbit.mouseButtons = this._orbitSaved.mouseButtons;
+      this.orbit.touches = this._orbitSaved.touches;
+      this._orbitSaved = null;
+    }
   }
 
   clearKnifePreview() {

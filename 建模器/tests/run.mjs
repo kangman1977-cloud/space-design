@@ -7703,74 +7703,20 @@ const newEdgeDir = (m, newEdge) => {
 }
 
 // ═══════════════════════════════════════════════════════
-//  刀具的地基：畫面上兩點 → 一個平面
+//  ⛔ 「刀具：螢幕兩點算出來的平面」那一節已於 2026-08-26 刪除
 // ═══════════════════════════════════════════════════════
 
-section('刀具：螢幕兩點算出來的平面');
-
 /**
- * 🔴 **這一節驗的是刀具唯一「新」的那一段。**
- * 切開網格本來就會（`bisect()`），刀具只是換一個方式**決定平面**。
+ * `planeFromTwoRays()` 連同它的 6 項測試一起刪了。
  *
- * ── 一個公式同時對兩種相機 ────────────────────────────
- * 平面過 `A = o1`、`B = o1 + d1`、`C = o2 + d2`：
+ * 那是刀具**第一版**的核心（螢幕上點兩點 → 一片往深處延伸的刀片），
+ * kang 2026-08-25 實測否決：「不知道要如何點兩點呈現我想要的位置」——
+ * 因為那個延伸方向使用者看不見。刀具改成「點一串模型上的位置」之後，
+ * 兩點定平面**沒有已知用途**。
  *
- * | 相機 | 退化成 |
- * |---|---|
- * | **透視** | 兩條射線同起點 → `d1 × d2` |
- * | **正交** | 兩條射線平行 → `d1 × (o2 − o1)` |
- *
- * ⛔ 不為兩種相機各寫一段（坑第 31 條）。
+ * ⛔ 留著一支沒人呼叫的函式 ＋ 還在跑的測試，等於在日誌上留一條
+ * 不存在的退路（坑第 34 條）。經過見 `HISTORY.md`。
  */
-{
-  const V = (x, y, z) => new THREE.Vector3(x, y, z);
-
-  /** 正交：兩條平行射線，起點差一個 X → 平面該是「垂直於 X」的那種嗎？*/
-  {
-    const dir = V(0, 0, -1);                       // 往 −Z 看
-    const r = edit.planeFromTwoRays(V(0, 0, 100), dir, V(0, 5, 100), dir);
-    ok('正交：兩條平行射線算得出平面', r.ok, r.reason);
-    /**
-     * 起點差在 Y、視線在 −Z → 平面含 Y 與 Z 兩個方向 → 法向是 ±X。
-     * ⚠ **正負無所謂**（平面沒有正反），所以比絕對值。
-     */
-    near('★★ 法向是 ±X（|x| = 1）', Math.abs(r.n.x), 1, 1e-9);
-    near('　　y 分量 0', Math.abs(r.n.y), 0, 1e-9);
-    near('　　z 分量 0', Math.abs(r.n.z), 0, 1e-9);
-    near('★ 平面過那兩條射線（d ＝ n·o1）', Math.abs(r.d), 0, 1e-9);
-  }
-
-  /** 透視：同一個起點、兩個不同方向 */
-  {
-    const o = V(0, 0, 100);
-    const r = edit.planeFromTwoRays(o, V(0, 0, -1), o, V(0.1, 0, -1).normalize());
-    ok('透視：同起點兩個方向算得出平面', r.ok, r.reason);
-    near('★★ 兩個方向都在平面上（1）', r.n.dot(V(0, 0, -1)), 0, 1e-9);
-    near('★★ 兩個方向都在平面上（2）', r.n.dot(V(0.1, 0, -1).normalize()), 0, 1e-9);
-    near('★ 相機那一點在平面上', r.n.dot(o) - r.d, 0, 1e-9);
-  }
-
-  /**
-   * 🔴 兩點太近要擋。⚠ 不擋的話法向是浮點雜訊 ——
-   * **切下去的位置會是隨機的**（坑第 24 條），而且形狀看起來還很正常。
-   */
-  {
-    const o = V(0, 0, 100), d = V(0, 0, -1);
-    const bad = edit.planeFromTwoRays(o, d, o, d);
-    ok('★★ 同一條射線（兩點重合）要擋下來', !bad.ok);
-    ok('　　而且要說原因是「離太近」', /太近/.test(bad.reason || ''), bad.reason);
-
-    /** ⚠ 幾乎重合也要擋 —— 邊界要驗，不能只驗完全重合 */
-    const tiny = edit.planeFromTwoRays(o, d, o, V(1e-9, 0, -1).normalize());
-    ok('★★ 幾乎重合也要擋', !tiny.ok);
-
-    /** ⭐ 而正常的點擊角度**不可以**被誤擋（誤報比漏報更糟，坑第 18 條） */
-    const okOne = edit.planeFromTwoRays(o, d, o, V(0.001, 0, -1).normalize());
-    ok('★★ 正常的小角度不可以被誤擋', okOne.ok, okOne.reason);
-  }
-
-  ok('★ 沒給射線要擋', !edit.planeFromTwoRays(null, null, null, null).ok);
-}
 
 {
   /**
@@ -7967,6 +7913,235 @@ section('刀具：這一刀會切在哪（預覽用的交線）');
   const onVert = edit.planeCrossSegments(oct, { n: new THREE.Vector3(1, 0, 0), d: 0 });
   ok('★★ 通過既有頂點時，沒有長度 0 的線段',
      onVert.every((p, i) => i % 2 === 1 || p.distanceTo(onVert[i + 1]) > 1e-6));
+}
+
+// ═══════════════════════════════════════════════════════
+//  一筆畫：拖一條線過表面 → 交點變成切點
+// ═══════════════════════════════════════════════════════
+
+section('刀具・一筆畫：一串表面點 → 一串切點');
+
+/**
+ * 🔴 **kang 2026-08-26 批准的三項輔助，第一項。**
+ * > 「按住拖一條線過表面 → 放開，**交點自動變成切點**」
+ *
+ * ── 🔴 主斷言：每相鄰兩個切點必定同屬一個面 ─────────────────
+ * 那正是 `connectVertsPath()` 的規則，也是**這一支唯一真正要保證的事**。
+ * 保證得到 → 產出的東西一定切得下去；保證不到 → 使用者只會看到
+ * 「切不下去」而完全不知道為什麼。
+ *
+ * ⭐ **它是結構保證不是碰運氣**：起點吸到 `f0` 的邊、第 i 個交點是
+ * `f_{i-1}|f_i` 的共用邊、終點吸到 `f_n` 的邊 —— 逐項可以推。
+ * 這一節就是那條推論的機械斷言。
+ *
+ * ── ⚠ 沙箱驗得了什麼、驗不了什麼 ──────────────────────────
+ * **驗得了**：切點算得對不對、切下去體積面積變不變、退化情形擋不擋。
+ * **驗不了**：手感、`OrbitControls` 那個手勢換得對不對、平板兩指 ——
+ * 那一半只有 kang 實際開起來才算數（鐵律五）。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const stroke = await import('../js/core/stroke.js');
+
+  /** 一個切點落在哪些面上（一條邊最多屬於兩個面） */
+  const facesOfPick = (m, pk) => {
+    const di = m._vertIndex();
+    const out = new Set();
+    for (const he of m.halfEdges) {
+      const a = di.get(he.v.id), b = di.get(he.to.id);
+      if ((a === pk.a && b === pk.b) || (a === pk.b && b === pk.a)) {
+        if (he.face) out.add(he.face);
+      }
+    }
+    return out;
+  };
+
+  /** 🔴 主斷言：每相鄰兩個切點都找得到一個共同的面 */
+  const chainOK = (m, picks) => {
+    for (let i = 0; i + 1 < picks.length; i++) {
+      const A = facesOfPick(m, picks[i]), B = facesOfPick(m, picks[i + 1]);
+      if (![...A].some(f => B.has(f))) return false;
+    }
+    return true;
+  };
+
+  const box = baked('box', { w: 60, h: 45, d: 40 });
+  const top = box.bounds().max.y;
+  const xhi = box.bounds().max.x, xlo = box.bounds().min.x;
+  const ylo = box.bounds().min.y;
+  eq('前提：bake 過的方塊是 6 個面（不是 12 個三角形）', box.faces.length, 6);
+
+  /** ① 只在一個面裡劃：兩端吸到那個面的邊，中間 0 個交點 */
+  {
+    const pts = Array.from({ length: 21 }, (_, i) => V(-25 + 50 * i / 20, top, 7));
+    const r = stroke.strokeToPicks(box, pts);
+    ok('① 頂面橫劃 算得出切點', r.ok, r.reason);
+    eq('★ 兩端各一個，共 2 個切點', r.picks.length, 2);
+    eq('★★ 中間沒有穿過任何一條邊', r.crossings, 0);
+    ok('★★★ 相鄰兩個切點同屬一個面', chainOK(box, r.picks));
+
+    /**
+     * 🔴 **切點要落在使用者劃的位置上，不是隨便一個地方。**
+     * ⚠ 這一條沒有的話，「算得出切點」通過了也不代表切在對的地方。
+     */
+    ok('★★★ 兩個切點的 z 都是使用者劃的 7（⛔ 不是邊的中點）',
+       r.picks.every(p => Math.abs(p.p.z - 7) < 1e-9));
+
+    const k = edit.knifePath(box, r.picks);
+    ok('★★ 切得下去', k.ok, k.reason);
+    eq('★ 切成 1 段', k.segments, 1);
+    rel('★★★ 體積精確不變', k.mesh.volume(), box.volume());
+    rel('★★★ 表面積精確不變', k.mesh.area(), box.area());
+    eq('★★ χ 仍是 2', chi(k.mesh), 2);
+    eq('★ 頂面被切成兩塊（面數 +1）', k.mesh.faces.length, box.faces.length + 1);
+  }
+
+  /** ② 吸中點：**只有落點變**，其餘一格都不動 */
+  {
+    const pts = Array.from({ length: 21 }, (_, i) => V(-25 + 50 * i / 20, top, 7));
+    const a = stroke.strokeToPicks(box, pts);
+    const b = stroke.strokeToPicks(box, pts, { snapMid: true });
+    ok('② 吸中點也算得出來', b.ok, b.reason);
+    eq('★ 切點個數跟不吸中點一樣', b.picks.length, a.picks.length);
+    ok('★★ 落在同樣那兩條邊上',
+       b.picks.every((p, i) => p.a === a.picks[i].a && p.b === a.picks[i].b));
+    ok('★★★ 落點真的移到邊的正中間了（z 從 7 變 0）',
+       b.picks.every(p => Math.abs(p.p.z) < 1e-9));
+    /**
+     * ⚠ **這一條的兩半要分清楚**：中點是 `z = 0`，使用者劃的是 `z = 7`。
+     * 〔寫這條時第一次比錯了對象（拿 `z − 7` 去比「不是中點」），
+     * 　而它**當場就紅了** —— 那正是斷言該有的樣子〕
+     */
+    ok('★★ 而不吸中點時 ⛔ 不可以自己跑到中點（z = 0）去',
+       a.picks.every(p => Math.abs(p.p.z) > 1e-6));
+  }
+
+  /** ③ 跨面：頂面 → 側面，中間要生出一個交點 */
+  {
+    const pts = [];
+    for (let i = 0; i <= 10; i++) pts.push(V(-10 + 36 * i / 10, top, 0));
+    for (let i = 1; i <= 10; i++) pts.push(V(xhi, top - 20 * i / 10, 0));
+    const r = stroke.strokeToPicks(box, pts);
+    ok('③ 頂面→側面 算得出切點', r.ok, r.reason);
+    eq('★★ 中間穿過 1 條邊', r.crossings, 1);
+    eq('★ 共 3 個切點', r.picks.length, 3);
+    ok('★★★ 相鄰兩個切點同屬一個面', chainOK(box, r.picks));
+
+    const k = edit.knifePath(box, r.picks);
+    ok('★★ 切得下去', k.ok, k.reason);
+    eq('★ 切成 2 段', k.segments, 2);
+    rel('★★★ 體積精確不變', k.mesh.volume(), box.volume());
+    rel('★★★ 表面積精確不變', k.mesh.area(), box.area());
+    eq('★★ χ 仍是 2', chi(k.mesh), 2);
+  }
+
+  /**
+   * ④ 🔴 **劃太快：只有兩個取樣點就跨過整個面。**
+   *
+   * ⚠ **這一條是這支檔案存在的理由之一** —— 手一快，`pointermove`
+   * 中間那些點根本不會發生，而兩端的面**不相鄰**。
+   * ⛔ 不可以猜一條邊（坑第 24 條），要對半切下去重新問。
+   */
+  {
+    const r = stroke.strokeToPicks(box, [V(-20, top, 0), V(xhi, 0, 0)]);
+    ok('④ 只有兩個取樣點也接得起來（靠細分）', r.ok, r.reason);
+    eq('★★ 一樣找到 1 個交點', r.crossings, 1);
+    ok('★★★ 相鄰兩個切點同屬一個面', chainOK(box, r.picks));
+    const k = edit.knifePath(box, r.picks);
+    ok('★★ 切得下去', k.ok, k.reason);
+    rel('★★★ 體積精確不變', k.mesh.volume(), box.volume());
+  }
+
+  /** ⑤ 環繞一圈：四個面走完 */
+  {
+    const pts = [];
+    for (let i = 0; i <= 8; i++) pts.push(V(xlo + (xhi - xlo) * i / 8, top, 0));
+    for (let i = 1; i <= 8; i++) pts.push(V(xhi, top + (ylo - top) * i / 8, 0));
+    for (let i = 1; i <= 8; i++) pts.push(V(xhi + (xlo - xhi) * i / 8, ylo, 0));
+    for (let i = 1; i <= 8; i++) pts.push(V(xlo, ylo + (top - ylo) * i / 8, 0));
+    const r = stroke.strokeToPicks(box, pts);
+    ok('⑤ 環繞一圈 算得出切點', r.ok, r.reason);
+    eq('★★ 穿過 4 條邊（四個面的交界）', r.crossings, 4);
+    ok('★★★ 相鄰兩個切點同屬一個面', chainOK(box, r.picks));
+    const k = edit.knifePath(box, r.picks);
+    ok('★★ 切得下去', k.ok, k.reason);
+    eq('★ 切成 4 段', k.segments, 4);
+    rel('★★★ 體積精確不變', k.mesh.volume(), box.volume());
+    rel('★★★ 表面積精確不變', k.mesh.area(), box.area());
+    eq('★★ χ 仍是 2', chi(k.mesh), 2);
+  }
+
+  /**
+   * ⑥ 🔴 **打在角落上要被推開，而且要回報。**
+   *
+   * ⚠ `knifePath()` 會因為「太靠近端點」把**整筆**退回。
+   * 一筆畫的交點是算出來的、不是使用者指定的 —— 為了一個不巧的位置
+   * 把整筆丟掉不划算。但 ⛔ **推了不可以不講**（坑第 11 條）。
+   */
+  {
+    const r = stroke.strokeToPicks(box, [V(-29.999, top, -19.999), V(29.999, top, 19.999)]);
+    ok('⑥ 幾乎打在角落上 還是算得出來', r.ok, r.reason);
+    eq('★★★ 而且明講推開了 2 個', r.nudged, 2);
+    ok('★★ 推開的幅度低於可切容許值（0.1mm，⛔ 不會改變做出來的東西）',
+       r.picks.every(p => Math.min(
+         p.p.distanceTo(box.verts[p.a].p), p.p.distanceTo(box.verts[p.b].p)
+       ) <= edit.PLANAR_TOL_CM * 2));
+    const k = edit.knifePath(box, r.picks);
+    ok('★★★ 推開之後 knifePath 不再退回', k.ok, k.reason);
+    rel('★★ 體積精確不變', k.mesh.volume(), box.volume());
+  }
+
+  /** ⑦ 曲面：圓柱腰上繞半圈，每一片 seg 都要穿過去 */
+  {
+    const cyl = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const pts = [];
+    for (let i = 0; i <= 60; i++) {
+      const a = Math.PI * i / 60;
+      pts.push(V(25 * Math.cos(a), 0, 25 * Math.sin(a)));
+    }
+    const r = stroke.strokeToPicks(cyl, pts);
+    ok('⑦ 圓柱腰繞半圈 算得出切點', r.ok, r.reason);
+    /** 半圈 ＝ 32 片裡的 16 片 → 中間 16 條直立邊 */
+    eq('★★ 穿過 16 條直立邊（32 片的一半）', r.crossings, 16);
+    ok('★★★ 相鄰兩個切點同屬一個面', chainOK(cyl, r.picks));
+    const k = edit.knifePath(cyl, r.picks);
+    ok('★★ 切得下去', k.ok, k.reason);
+    eq('★ 切成 16 段', k.segments, 16);
+    rel('★★★ 體積精確不變', k.mesh.volume(), cyl.volume());
+    rel('★★★ 表面積精確不變', k.mesh.area(), cyl.area());
+    eq('★★ χ 仍是 2', chi(k.mesh), 2);
+  }
+
+  /**
+   * ⑧ 🔴 **退化的輸入要擋，而且要講得出下一步。**
+   * ⚠ 訊息一定要指向**真的走得通**的路（坑第 34 條）——
+   * 這裡是「拖長一點，或改用點的」，兩條都真的存在。
+   */
+  {
+    const a = stroke.strokeToPicks(box, [V(0, top, 0), V(0.001, top, 0)]);
+    ok('⑧ 太短要擋', !a.ok);
+    ok('　 而且要說「拖長一點，或改用點的」', /改用點的/.test(a.reason || ''), a.reason);
+    ok('★ 只有一個點要擋', !stroke.strokeToPicks(box, [V(0, top, 0)]).ok);
+    ok('★ 沒給點也不會壞', !stroke.strokeToPicks(box, null).ok);
+    ok('★ 沒給網格也不會壞', !stroke.strokeToPicks(null, [V(0, 0, 0), V(1, 1, 1)]).ok);
+  }
+
+  /** ⑨ 兩個小工具本身 */
+  {
+    const f = box.faces[0];
+    const nb = [...box.faceLoop(f)].find(he => he.twin && he.twin.face)?.twin.face;
+    ok('⑨ 相鄰的兩個面找得到共用邊', !!stroke.sharedEdge(box, f, nb));
+    eq('★ 同一個面沒有共用邊', stroke.sharedEdge(box, f, f), null);
+    /** 兩條垂直交叉的線段：最近點就在 a→b 的正中間 */
+    near('★★ closestParamOnEdge：正交交叉 → t ＝ 0.5',
+         stroke.closestParamOnEdge(V(0, -5, 0), V(0, 5, 0), V(-10, 0, 0), V(10, 0, 0)),
+         0.5, 1e-12);
+    /** 落在延長線上要夾回 0～1，⛔ 不可以跑到線段外面 */
+    eq('★★ 落在延長線外要夾回 1',
+       stroke.closestParamOnEdge(V(50, -5, 0), V(50, 5, 0), V(-10, 0, 0), V(10, 0, 0)), 1);
+    eq('★★ 另一頭夾回 0',
+       stroke.closestParamOnEdge(V(-50, -5, 0), V(-50, 5, 0), V(-10, 0, 0), V(10, 0, 0)), 0);
+  }
 }
 
 // ═══════════════════════════════════════════════════════

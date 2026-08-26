@@ -26,6 +26,16 @@ const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
 
 /**
+ * 「快點兩下」的門檻。
+ *
+ * ⚠ **`DOUBLE_TAP_MOVE` 比 `TAP_MOVE` 鬆**：兩下是兩次獨立的按下，
+ * 手指本來就會偏一點；而 `TAP_MOVE` 管的是**同一次按下**中途有沒有移動，
+ * 那件事嚴格得多。⛔ 不要為了「少一個常數」把兩者合用。
+ */
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_MOVE = 16;   // px
+
+/**
  * 點多近才算點到那條邊，單位 px。
  * 觸控要放寬 —— 手指比游標粗得多，這跟平面規劃器的 HGRAB
  * （桌機 2px／觸控 14px）是同一件事。
@@ -88,6 +98,38 @@ export class Selection {
      * 平板沒有 Esc，⛔ 不可以只給鍵盤的出路。
      */
     this.knifeMode = false;
+
+    /**
+     * 🔴 **一筆畫：按住拖過表面，交點自動變成切點**（kang 2026-08-26 批准）。
+     *
+     * ⭐ **兩種輸入並存，⛔ 不做成模式切換** —— 底下 `pointerup` 那道
+     * `if (dist > TAP_MOVE || dt > TAP_TIME) return;` **本來就分得出**
+     * 「輕點」與「拖曳」，拖曳目前只是被丟掉，接起來就好。
+     * 同一次切線裡兩種還可以混用（先拖一段、再輕點微調）。
+     *
+     * 這裡只存**取樣**（物件本地座標）。把它變成切點是
+     * `core/stroke.js` 的事，而且**只在放開手的那一刻算一次** ——
+     * `nearestFace()` 是 O(面數)，⛔ 絕對不可以放進 `pointermove`（坑第 22 條）。
+     */
+    this._stroke = null;
+
+    /**
+     * 上一次刀具輕點的時間與位置，用來認「快點兩下」。
+     *
+     * ⚠ **慢慢再點同一處還是「取消最後一點」，一格都沒變**（kang 拍板）——
+     * 快慢是唯一的差別，所以只需要記一個時間。
+     */
+    this._lastKnifeTap = null;
+
+    /**
+     * 🔴 **吸中點：切點自動落在邊的正中間。**
+     *
+     * ⚠ **開關要有兩條路**（kang 2026-08-26 拍板）：桌機按 `Shift`，
+     * 或按工具列那顆開關 —— **平板沒有 Shift 鍵**，
+     * 只做 Shift 等於那一項在平板上不存在。
+     * 〔跟「框選做成模式不做成 Shift＋拖曳」同一個理由〕
+     */
+    this.knifeSnapMid = false;
 
     /**
      * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
@@ -406,6 +448,16 @@ export class Selection {
 
     cv.addEventListener('pointerdown', e => {
       this._down = { x: e.clientX, y: e.clientY, t: performance.now() };
+      /**
+       * 🔴 **刀具模式：按下去就開始記一筆畫。**
+       * ⚠ 這時候還不知道使用者要輕點還是要拖 —— 兩種都先當成拖，
+       * 放開手再用 `TAP_MOVE`／`TAP_TIME` 分。
+       * ⛔ 不要在這裡就決定，那等於逼使用者先宣告他要做哪一種。
+       */
+      if (this.knifeMode && !this.tc.dragging) {
+        const h = this._surfaceHit(e.clientX, e.clientY);
+        this._stroke = h ? { obj: h.obj, node: h.node, pts: [h.pLocal], world: [h.world] } : null;
+      }
       if (this.marqueeMode && !this.tc.dragging) {
         const r = this._toCanvasPx(e.clientX, e.clientY);
         this._marq = { ax: r.x, ay: r.y, bx: r.x, by: r.y };
@@ -417,25 +469,64 @@ export class Selection {
 
     cv.addEventListener('pointermove', e => {
       /**
-       * 🔴 刀具的預覽線要跟著游標／筆尖走 —— 沒有它就是
-       * 「按下去才知道切到哪」（坑第 21 條）。
-       * ⚠ 只在刀具模式下算，⛔ 不可以每次移動都做事（坑第 22 條）。
+       * 🔴 **一筆畫要看得見自己畫到哪** —— 沒有預覽就是「放開手才知道
+       * 切到哪」（坑第 21 條：有時候看起來沒作用的操作要持續顯示它有沒有作用）。
+       *
+       * ⚠ **這裡只做 raycast，⛔ 不算切點** —— 算切點要跑 `nearestFace()`，
+       * 那是 O(面數)，放進 `pointermove` 就是坑第 22 條。
+       * 切點統一在放開手時算一次。
        */
+      if (this._stroke) {
+        const h = this._surfaceHit(e.clientX, e.clientY);
+        /** ⚠ 只收同一個物件上的取樣：混著收會做出跨物件的線（改到沒在看的物件）*/
+        if (h && h.obj === this._stroke.obj) {
+          this._stroke.pts.push(h.pLocal);
+          this._stroke.world.push(h.world);
+          if (this.hooks.onKnifeStrokeMove) {
+            this.hooks.onKnifeStrokeMove(this._stroke.world);
+          }
+        }
+      }
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
       this._drawMarquee();
     });
 
-    cv.addEventListener('pointercancel', () => this._endMarquee(null, false));
+    cv.addEventListener('pointercancel', () => {
+      this._endMarquee(null, false);
+      this._stroke = null;
+      if (this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
+    });
 
     cv.addEventListener('pointerup', e => {
       const d = this._down;
       this._down = null;
+      const stroke = this._stroke;
+      this._stroke = null;
       if (!d) return;
 
       const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
       const dt = performance.now() - d.t;
+
+      /**
+       * 🔴 **一筆畫：拖得夠遠就是畫線，不是點選。**
+       *
+       * ⚠ 判準借用下面那道現成的 `TAP_MOVE` —— ⛔ 不要另外定一個門檻。
+       * 兩個門檻遲早會不一致，而症狀是「有時候變成點選、有時候變成畫線」，
+       * 使用者只會覺得這個工具不可靠（坑第 31 條）。
+       *
+       * ⚠ **`TAP_TIME` 不算在內**：慢慢地、仔細地描一條線是很正常的事，
+       * 按太久就把它當成輕點會讓人白畫一次。
+       */
+      if (stroke && dist > TAP_MOVE) {
+        if (this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
+        if (this.hooks.onKnifeStroke) {
+          this.hooks.onKnifeStroke(stroke.obj, stroke.pts, this._wantSnapMid(e));
+        }
+        return;
+      }
+      if (stroke && this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
 
       /**
        * 框選：拖得夠遠才算框選，否則當成一般的點一下。
@@ -462,7 +553,24 @@ export class Selection {
        */
       if (this.knifeMode) {
         if (this.hooks.onKnifePick) {
-          this.hooks.onKnifePick(this.pickEdgePoint(e.clientX, e.clientY));
+          /**
+           * 🔴 **快點兩下 ＝ 閉合迴圈並切下去；慢慢再點一次 ＝ 取消最後一點。**
+           * 〔kang 2026-08-26 拍板。**逐點按的行為一格都沒變** ——
+           * 　快慢是唯一的差別〕
+           *
+           * ⚠ **時間與位置兩個條件都要**：只看時間的話，快速連點兩個
+           * 不同的位置會被誤判成閉合；只看位置的話，就跟「取消最後一點」
+           * 完全分不開。
+           */
+          const now = performance.now();
+          const lt = this._lastKnifeTap;
+          const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
+                        && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
+          this._lastKnifeTap = { x: e.clientX, y: e.clientY, t: now };
+          this.hooks.onKnifePick(
+            this.pickEdgePoint(e.clientX, e.clientY, this._wantSnapMid(e)),
+            { double: isDouble }
+          );
         }
         return;
       }
@@ -668,31 +776,17 @@ export class Selection {
   }
 
   /**
-   * 🔴 **螢幕座標 → 一條世界射線**（刀具的入口）。
+   * ⛔ **`screenRay()` 已於 2026-08-26 刪除。**
    *
-   * ⚠ **刀具點的是畫面上的任意位置，不是元素** ——
-   * 所以不走 `pickElement()`（那一支要打到東西才回話）。
-   * 使用者在物件外面點也算數：那條線照樣定義得出平面。
+   * 它是刀具**第一版**的入口（螢幕座標 → 一條世界射線 → `planeFromTwoRays()`）。
+   * 那一版被 kang 實測否決，而這一支跟著沒有人呼叫了。
    *
-   * ⭐ `Raycaster` 對**透視與正交都認得**，回來的
-   * `origin`／`direction` 直接餵給 `planeFromTwoRays()`：
-   * 透視時兩次的 `origin` 相同、正交時兩次的 `direction` 相同，
-   * 而那一支**一個公式就把兩種都涵蓋了**。
+   * ⚠ **它原本不在待辦的那三個殘骸裡** —— 是清殘骸時 grep 才發現的**第四個**。
+   * 〔又一次印證：殘骸要用 grep 找，⛔ 不要照清單推〕
    *
-   * @returns {{origin: THREE.Vector3, direction: THREE.Vector3, x:number, y:number}}
+   * 🔴 **一筆畫不會把它挖回來**：一筆畫要的是「射線打到**模型表面**的哪一點」
+   * （`_surfaceHit()`），不是「一條射線的起點與方向」。
    */
-  screenRay(clientX, clientY) {
-    const r = this.view.canvas.getBoundingClientRect();
-    this._ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
-    this._ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
-    this._ray.setFromCamera(this._ndc, this.view.camera);
-    return {
-      origin: this._ray.ray.origin.clone(),
-      direction: this._ray.ray.direction.clone().normalize(),
-      x: clientX - r.left,          // 畫布內的像素座標，預覽線要用
-      y: clientY - r.top
-    };
-  }
 
   /**
    * 🔴 **刀具：點畫面 → 吸到最近的那條邊，並算出「邊上的哪個位置」。**
@@ -712,7 +806,15 @@ export class Selection {
    * @returns {null|{obj, a:number, b:number, p:THREE.Vector3, world:THREE.Vector3}}
    *          `a`／`b` ＝ 那條邊兩端的頂點索引；`p` ＝ 本地座標的落點
    */
-  pickEdgePoint(clientX, clientY) {
+  /**
+   * 射線打到模型表面的哪一點。
+   *
+   * ⚠ **抽出來是刻意的**：`pickEdgePoint()` 與一筆畫的取樣做的是
+   * **同一件事的前半段**，兩份會漂（坑第 31 條）。
+   *
+   * @returns {null|{obj, node, pLocal:THREE.Vector3, world:THREE.Vector3}}
+   */
+  _surfaceHit(clientX, clientY) {
     const r = this._toCanvasPx(clientX, clientY);
     this._ndc.x = (r.x / r.w) * 2 - 1;
     this._ndc.y = -(r.y / r.h) * 2 + 1;
@@ -730,8 +832,28 @@ export class Selection {
     const node = this.view.nodeOf(id);
     if (!obj || !node) return null;
 
+    return { obj, node, pLocal: node.worldToLocal(hit.point.clone()), world: hit.point.clone() };
+  }
+
+  /**
+   * 這一下要不要吸中點。
+   *
+   * 🔴 **兩條路都算數**：工具列那顆開關，或桌機按著 `Shift`。
+   * ⚠ 平板沒有 `Shift`，所以開關那條路**不是方便，是唯一的路**。
+   */
+  _wantSnapMid(e) {
+    return this.knifeSnapMid || !!(e && e.shiftKey);
+  }
+
+  /**
+   * @param {boolean} [snapMid] 吸到那條邊的正中間
+   */
+  pickEdgePoint(clientX, clientY, snapMid = false) {
+    const h = this._surfaceHit(clientX, clientY);
+    if (!h) return null;
+    const { obj, node, pLocal } = h;
+
     const mesh = obj.mesh();
-    const pLocal = node.worldToLocal(hit.point.clone());
     const near = nearestMarkableEdge(mesh, pLocal);
     if (!near || !near.he) return null;
 
@@ -741,6 +863,8 @@ export class Selection {
     const L2 = ab.lengthSq();
     let s = L2 > 0 ? pLocal.clone().sub(a).dot(ab) / L2 : 0;
     s = Math.max(0, Math.min(1, s));
+    /** 🔴 吸中點：**只換這一個數字**，其餘一格都不動 */
+    if (snapMid) s = 0.5;
     const p = a.clone().lerp(b, s);
 
     const vi = mesh._vertIndex();
@@ -1714,6 +1838,19 @@ export class Selection {
     if (this.helper) {
       this.helper.visible = !this.inPickMode;
     }
+    /**
+     * 🔴 **「按住拖」在刀具模式下要讓給一筆畫，轉視角換到右鍵／兩指。**
+     *
+     * ⚠ **這是唯一的入口。** 進出刀具有四條路
+     * （`toggleKnifeMode`／`cancelKnifeMode`／`exitOtherModes`／切完自動退出），
+     * 在那四處各寫一次還原就是靠紀律 —— 漏掉一處的症狀是
+     * **離開刀具之後左鍵再也轉不動視角**，而且沒有任何錯誤。
+     * 〔坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義〕
+     */
+    if (this.view && this.view.setKnifeInput) this.view.setKnifeInput(this.knifeMode);
+    /** 換模式就把上一次輕點的時間忘掉，⛔ 不要讓它跨模式湊成一次「雙擊」 */
+    this._lastKnifeTap = null;
+    this._stroke = null;
     return this.knifeMode;
   }
 
