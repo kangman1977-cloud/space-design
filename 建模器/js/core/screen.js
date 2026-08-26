@@ -77,6 +77,100 @@ export function normRect(x1, y1, x2, y2) {
 }
 
 /**
+ * 一個世界座標的點投影到螢幕上的哪裡。
+ *
+ * @returns {{x:number,y:number}|null} null ＝ 在相機後面或算不出來
+ */
+export function projectPoint(p, camera, w, h) {
+  if (!p || !camera) return null;
+  const q = p.clone().applyMatrix4(camera.matrixWorldInverse);
+  if (camera.isPerspectiveCamera && q.z >= -1e-6) return null;
+  q.applyMatrix4(camera.projectionMatrix);
+  const x = (q.x * 0.5 + 0.5) * w;
+  const y = (-q.y * 0.5 + 0.5) * h;
+  return (Number.isFinite(x) && Number.isFinite(y)) ? { x, y } : null;
+}
+
+/** 一個點在不在框裡 */
+export function pointInRect(s, rect) {
+  return !!s && !!rect && s.x >= rect.x0 && s.x <= rect.x1 && s.y >= rect.y0 && s.y <= rect.y1;
+}
+
+/**
+ * 一條線段有沒有碰到框（兩端在框裡、或穿過框）。
+ *
+ * ⚠ **⛔ 不可以只看兩端在不在框裡** —— 一條長邊可以整條橫跨框、
+ * 兩端都在外面，那時候使用者明明框到它了卻選不到。
+ * 用「線段 vs 矩形」的標準判定：先看端點，再看跟四條邊有沒有交叉。
+ */
+export function segHitRect(a, b, rect) {
+  if (!a || !b || !rect) return false;
+  if (pointInRect(a, rect) || pointInRect(b, rect)) return true;
+  /** 整條都在框的同一側 → 不可能碰到（便宜的早退） */
+  if ((a.x < rect.x0 && b.x < rect.x0) || (a.x > rect.x1 && b.x > rect.x1)) return false;
+  if ((a.y < rect.y0 && b.y < rect.y0) || (a.y > rect.y1 && b.y > rect.y1)) return false;
+  const cross = (p, q, r, s) => {
+    const d = (q.x - p.x) * (s.y - r.y) - (q.y - p.y) * (s.x - r.x);
+    if (Math.abs(d) < 1e-12) return false;
+    const t = ((r.x - p.x) * (s.y - r.y) - (r.y - p.y) * (s.x - r.x)) / d;
+    const u = ((r.x - p.x) * (q.y - p.y) - (r.y - p.y) * (q.x - p.x)) / d;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+  const c = [
+    { x: rect.x0, y: rect.y0 }, { x: rect.x1, y: rect.y0 },
+    { x: rect.x1, y: rect.y1 }, { x: rect.x0, y: rect.y1 }
+  ];
+  for (let i = 0; i < 4; i++) if (cross(a, b, c[i], c[(i + 1) % 4])) return true;
+  return false;
+}
+
+/**
+ * 🔴 **框選子元素：哪些點／邊／面落在框裡。**
+ *
+ * ── 🔴 連背面一起選（kang 2026-08-26 拍板）─────────────
+ * > 跟刀具那條「**點到哪切到哪**」同一個作風 ——
+ * > 而且**選一整條經線、選一整圈**這種事本來就要包含背面。
+ *
+ * ⚠ **代價是「會選到看不見的東西」**，所以呼叫端**一定要講出數量**
+ * （坑第 11、21 條：選了什麼看不出來，比沒選到更難查）。
+ * ⛔ 不可以安靜地多選一堆。
+ *
+ * ── 各自的判準 ────────────────────────────────────────
+ * | 型別 | 算選到的條件 |
+ * |---|---|
+ * | 點 | 投影落在框裡 |
+ * | 邊 | 線段**碰到**框（⛔ 不是兩端都要在框裡）|
+ * | 面 | **重心**落在框裡 |
+ *
+ * ⚠ **面為什麼看重心，不看「有沒有碰到」**：一個大面只要邊角掃到框
+ * 就被選走的話，框選會變得完全不可控 —— 而面通常是一片一片挑的。
+ * 〔跟「碰到就算」那條物件層級的規則**刻意不同**，理由寫在這裡：
+ * 　物件的外框比實體大所以要放寬，面就是實體本身，不必放寬〕
+ *
+ * @param {{verts?:Array,edges?:Array,faces?:Array}} items
+ *        每一項都是 `{el, pts:THREE.Vector3[]}`（世界座標）：
+ *        點給 1 個、邊給 2 個、面給 1 個（重心）
+ * @returns {{verts:Array, edges:Array, faces:Array}} 選到的 `el`
+ */
+export function elementsInRect(items, rect, camera, w, h) {
+  const out = { verts: [], edges: [], faces: [] };
+  if (!items || !rect || !camera) return out;
+  const pr = p => projectPoint(p, camera, w, h);
+
+  for (const it of (items.verts || [])) {
+    if (pointInRect(pr(it.pts[0]), rect)) out.verts.push(it.el);
+  }
+  for (const it of (items.edges || [])) {
+    const a = pr(it.pts[0]), b = pr(it.pts[1]);
+    if (a && b && segHitRect(a, b, rect)) out.edges.push(it.el);
+  }
+  for (const it of (items.faces || [])) {
+    if (pointInRect(pr(it.pts[0]), rect)) out.faces.push(it.el);
+  }
+  return out;
+}
+
+/**
  * 哪些物件落在框裡。
  *
  * @param {object} opt.enclose true ＝ 要整個包住才算（Illustrator 的行為）；

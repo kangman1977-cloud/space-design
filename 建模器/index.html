@@ -433,7 +433,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         選一圈：跟環切共用同一支 edgeRing()，只是不切、只選。
         環切已經把走訪寫好了，這顆按鈕幾乎是免費的。
       -->
-      <button id="selRing" disabled title="選一圈：從選到的那條邊繞出一整圈邊，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個">選一圈</button>
+      <button id="selRing" disabled title="選一圈：從選到的那條邊【橫著跨過】四邊形繞一圈，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個。⚠ 跟「選一條線」不同：這個是繞著物件一圈">選一圈</button>
+      <button id="selLoop" disabled title="選一條線：從選到的那條邊【順著同一條線】一直走到底（球上選一條經線邊 → 整條經線從極走到極）。⚠ 需要四價的點：方塊與圓柱的角是三價，走不動只會選到一條，那是正常的。要選一整條經線標成分片切割線就用這個">選一條線</button>
       <!--
         全選邊：kang 2026-08-25 實測逼出來的。
 

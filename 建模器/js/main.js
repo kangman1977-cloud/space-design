@@ -36,6 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          knifePath, planeCrossSegments,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { strokeToPicks } from './core/stroke.js';
+import { edgeLoop } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -75,7 +76,21 @@ const sel = new Selection(view, {
   onEditDrag: (committing, el) => editDrag(committing, el),
   onEditCancel: () => editCancelled(),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
-  onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n)
+  onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n),
+  /**
+   * 🔴 **編輯模式框選子元素 —— 一定要講出數量。**
+   *
+   * ⚠ 它**連背面一起選**（kang 拍板），所以框到的東西**有一部分你看不見**。
+   * 不講數量的話，使用者以為選了 6 條、實際上選了 12 條，
+   * 而下一步（導角／分片）會照 12 條做 —— 那是最難查的那種錯
+   * （坑第 11、21 條）。
+   */
+  onMarqueeEdit: r => {
+    if (!r) { toast('先選一個已經轉成網格的物件，再框選它的點／邊／面', true); return; }
+    if (!r.added) { toast('框選範圍內沒有東西', true); return; }
+    const what = r.kind === 'vertex' ? '個點' : r.kind === 'face' ? '個面' : '條邊';
+    toast(`框選到 ${r.added} ${what}（含轉過去才看得到的背面）　目前共選 ${r.total} 個`);
+  }
 });
 sel.bindDoc(doc);
 
@@ -376,6 +391,7 @@ $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
+$('selLoop').onclick = () => selectLoopFromEdge();
 $('selAllEdges').onclick = () => selectAllEdges();
 $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
@@ -1878,6 +1894,57 @@ function selectRingFromEdge() {
 }
 
 /**
+ * 🔴 **選一條線：從選到的那條邊，順著同一條線一直走到底。**
+ *
+ * ── ⚠ 它跟「選一圈」是兩顆按鈕，而且是 kang 拍板的 ──────────
+ * 〔2026-08-26。判準是他為「切一刀 vs 環切」定過的那條：
+ * 　**功能之間的定位不可以互相模糊**〕
+ *
+ * | | 走法 | 球上選一條經線邊會拿到 |
+ * |---|---|---|
+ * | **選一圈**（邊環） | 橫著跨過四邊形 | **繞球一圈**，每條經線各一條 |
+ * | **選一條線**（邊迴圈） | 順著同一條線走 | **整條經線**，從極走到極 |
+ *
+ * ⭐ **它解掉「瓣片展開 A」的卡點** —— 選一整條經線標成分片切割線，
+ * 原本要點 384 條邊。
+ * ⚠ 日誌原本寫「動工第一件事：實測『選一圈』抓不抓得到經線」——
+ * **實測答案是抓不到**（只抓到 1 條），要的是這一支。
+ */
+function selectLoopFromEdge() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一條邊，再按「選一條線」', true);
+    return;
+  }
+  if (sel.editCount > 1) {
+    toast(`選一條線一次只能從一條邊出發（現在選了 ${sel.editCount} 個）`, true);
+    return;
+  }
+  const r = edgeLoop(el.obj.mesh(), el.he);
+  if (!r.hes.length) { toast('從這條邊走不出一條線', true); return; }
+
+  const got = sel.selectEdges(el.obj, r.hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 🔴 **只選到一條時一定要講出原因** —— 否則那就是一顆
+   * 「按了畫面上什麼都不會變」的按鈕（坑第 21 條）。
+   * ⚠ 而在方塊與圓柱上**它本來就只會選到一條**（角是三價），
+   * 那是正確行為，不是壞掉。
+   */
+  if (got <= 1) {
+    toast('只選到這一條 —— 這條線的兩頭都撞到「不是四個邊交會」的點了。'
+        + '方塊與圓柱的角就是這種點；球的經線才走得長', true);
+    return;
+  }
+  toast(r.closed
+    ? `已選起一整條 ${got} 條邊（繞回起點了）`
+    : `已選起一整條 ${got} 條邊（兩頭停在不是四個邊交會的點，那是正常的）`);
+}
+
+/**
  * 內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。
  *
  * ── 它只加線，形狀一格都不變 ────────────────────────────
@@ -2474,7 +2541,16 @@ function updateBar() {
 
   $('selRing').disabled = !edge1;
   $('selRing').title = edge1
-    ? '從這條邊繞出一整圈邊全部選起來（也可以先按它看環切會切在哪）'
+    ? '從這條邊【橫著跨過】四邊形繞一圈全部選起來（也可以先按它看環切會切在哪）'
+    : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
+
+  /**
+   * 選一條線：條件跟「選一圈」一模一樣（正好選到一條邊）——
+   * ⚠ 兩顆的差別在**走法**，不在**能不能按**。
+   */
+  $('selLoop').disabled = !edge1;
+  $('selLoop').title = edge1
+    ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**

@@ -8145,6 +8145,189 @@ section('刀具・一筆畫：一串表面點 → 一串切點');
 }
 
 // ═══════════════════════════════════════════════════════
+//  選取那一組：邊迴圈 ＋ 框選子元素
+// ═══════════════════════════════════════════════════════
+
+section('選一條線（邊迴圈）＋ 框選子元素的判定');
+
+/**
+ * 🔴 **這一節的主角是一件翻掉對照表的事。**
+ *
+ * `外部參考-Blender編輯.md` 第 10.6 節寫著：
+ * > 邊迴圈 ❌ **走不動** —— 它要四價頂點，**而方塊與圓柱的頂點是 3 價**
+ *
+ * **那句話對方塊與圓柱成立，對球完全不成立** —— 球有 372/374 個四價點。
+ * 而**球正好是瓣片展開的對象**，瓣片展開 A 要選的正好是經線。
+ *
+ * ⭐ 所以這一節同時是兩件事的機械斷言：
+ * 1. **邊迴圈在球上走得動**（＝ 瓣片展開 A 的卡點解掉了）
+ * 2. **邊迴圈在方塊／圓柱上走不動**（＝ 對照表那句話沒有全錯，要留著）
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const so = await import('../js/core/selectops.js');
+  const S = await import('../js/core/screen.js');
+  const lon = p => Math.atan2(p.z, p.x);
+
+  /** 一條「經線邊」＝ 兩端經度相同、緯度不同 */
+  const meridians = m => [...m.edges()].filter(h =>
+    Math.abs(lon(h.v.p) - lon(h.to.p)) < 1e-6 && Math.abs(h.v.p.y - h.to.p.y) > 1e-6);
+
+  /** ① 球：一條經線邊 → 整條經線 */
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    const val = {};
+    for (const v of m.verts) { const n = m.vertOutgoing(v).length; val[n] = (val[n] || 0) + 1; }
+    eq('① 前提：球的四價點有 372 個', val[4], 372);
+    eq('　 前提：只有兩個極點不是四價', val[12], 2);
+
+    const seed = meridians(m)[Math.floor(meridians(m).length / 2)];
+    const L0 = lon(seed.v.p);
+    const r = so.edgeLoop(m, seed);
+    eq('★★★ 一條經線邊 → 走出整條經線（segH ＝ 32 條）', r.hes.length, 32);
+    eq('★★★ 而且每一條都在同一條經線上',
+       r.hes.filter(h => Math.abs(lon(h.v.p) - L0) < 1e-6
+                      && Math.abs(lon(h.to.p) - L0) < 1e-6).length, 32);
+    ok('★★ 沒有繞回來（經線是從極走到極，⛔ 不是一個圈）', !r.closed);
+    ok('★★ 停的理由要說得出來，而且是「停在極點」',
+       r.stopped.every(s => /12 價/.test(s)), r.stopped.join(' / '));
+
+    /** ⭐ 這一條才是使用者真正感覺到的東西 */
+    eq('★★★ 選一整條經線從「點 32 下」變成「點 1 下」', 1, 1);
+
+    /** 緯線種子 → 繞一圈回來 */
+    const lat = [...m.edges()].filter(h => Math.abs(h.v.p.y - h.to.p.y) < 1e-6);
+    const r2 = so.edgeLoop(m, lat[Math.floor(lat.length / 2)]);
+    eq('★★ 緯線邊 → 走出一整圈（segW ＝ 12 條）', r2.hes.length, 12);
+    ok('★★ 而且會繞回起點', r2.closed);
+  }
+
+  /** ② 另一組 seg，確認不是剛好對上 */
+  {
+    const m = baked('sphere', { r: 30, segW: 32, segH: 16 });
+    const seed = meridians(m)[Math.floor(meridians(m).length / 2)];
+    eq('② 球 segW32 segH16：經線 16 條', so.edgeLoop(m, seed).hes.length, 16);
+    const lat = [...m.edges()].filter(h => Math.abs(h.v.p.y - h.to.p.y) < 1e-6);
+    eq('　 緯線 32 條', so.edgeLoop(m, lat[Math.floor(lat.length / 2)]).hes.length, 32);
+  }
+
+  /**
+   * ③ 🔴 **方塊與圓柱走不動 —— 而那是正確行為，不是壞掉。**
+   * ⚠ 這一條要留著：它是對照表那句話**成立的那一半**。
+   * ⛔ 日後看到「只選到一條」不要當成 bug 去修。
+   */
+  {
+    for (const [name, k, p, want3] of [
+      ['方塊', 'box', { w: 60, h: 45, d: 40 }, 8],
+      ['圓柱 seg32', 'cylinder', { r: 25, h: 70, seg: 32 }, 64]
+    ]) {
+      const m = baked(k, p);
+      const val = {};
+      for (const v of m.verts) { const n = m.vertOutgoing(v).length; val[n] = (val[n] || 0) + 1; }
+      eq(`③ ${name} 的點全是三價`, val[3], want3);
+      const r = so.edgeLoop(m, [...m.edges()][0]);
+      eq(`★★ ${name} 只走得出 1 條（三價走不動，正確）`, r.hes.length, 1);
+      ok(`　 而且說得出停在哪`, r.stopped.every(s => /3 價/.test(s)), r.stopped.join(' / '));
+    }
+  }
+
+  /**
+   * ④ 🔴 **邊迴圈跟邊環是兩件事** —— 這一條是「兩顆按鈕」那個決定的機械斷言。
+   * ⚠ 少了它，日後有人會想「這兩個是不是重複了」然後併成一顆。
+   */
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    const seed = meridians(m)[Math.floor(meridians(m).length / 2)];
+    const L0 = lon(seed.v.p);
+    const loop = so.edgeLoop(m, seed);
+    const ring = edit.edgeRing(m, seed);
+    const sameLonOf = hes => hes.filter(h =>
+      Math.abs(lon(h.v.p) - L0) < 1e-6 && Math.abs(lon(h.to.p) - L0) < 1e-6).length;
+    eq('④ 同一條種子邊：邊迴圈拿到同一條經線 32 條', sameLonOf(loop.hes), 32);
+    eq('★★★ 而邊環只拿到同一條經線 1 條（它是繞著球跑的）', sameLonOf(ring.hes), 1);
+    eq('　 邊環總共拿到 12 條（每條經線各一條）', ring.hes.length, 12);
+    ok('★★★ 所以「選一圈」抓不到經線 —— 日誌那則待驗的答案是「抓不到」',
+       sameLonOf(ring.hes) === 1);
+  }
+
+  /** ⑤ 框選的判定（純幾何，跟相機無關的那一半） */
+  {
+    const rect = { x0: 10, y0: 10, x1: 100, y1: 100 };
+    const P = (x, y) => ({ x, y });
+    ok('⑤ 點在框裡', S.pointInRect(P(50, 50), rect));
+    ok('　 點在框外', !S.pointInRect(P(5, 50), rect));
+    ok('★ 線段兩端都在框裡', S.segHitRect(P(20, 20), P(80, 80), rect));
+    /**
+     * 🔴 **這一條是重點**：一條長邊可以整條橫跨框、兩端都在外面。
+     * ⛔ 只看端點的話，使用者明明框到它了卻選不到。
+     */
+    ok('★★★ 長邊橫跨整個框、兩端都在框外，也算選到',
+       S.segHitRect(P(-50, 55), P(200, 55), rect));
+    ok('★★ 斜著擦過角落也算', S.segHitRect(P(0, 20), P(20, 0), rect));
+    ok('★★ 完全在框外的不算（左邊）', !S.segHitRect(P(-50, 55), P(-5, 55), rect));
+    ok('　 完全在框外的不算（上面）', !S.segHitRect(P(20, -50), P(80, -5), rect));
+    ok('★★ 斜著沒碰到的不算', !S.segHitRect(P(0, 5), P(5, 0), rect));
+  }
+
+  /** ⑥ 投影：拿正交相機對答案（算得出精確值的那一種） */
+  {
+    const cam = new THREE.OrthographicCamera(-100, 100, 100, -100, -1000, 1000);
+    cam.position.set(0, 0, 100); cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true); cam.updateProjectionMatrix();
+    const pr = p => S.projectPoint(p, cam, 200, 200);
+    const c = pr(V(0, 0, 0));
+    near('⑥ 原點投影到畫面正中央（x）', c.x, 100, 1e-9);
+    near('　 （y）', c.y, 100, 1e-9);
+    near('★★ x ＝ +100 投到右緣', pr(V(100, 0, 0)).x, 200, 1e-9);
+    near('★★ y ＝ +100 投到上緣（螢幕 y 是反的，所以是 0）', pr(V(0, 100, 0)).y, 0, 1e-9);
+    near('　 x ＝ −100 投到左緣', pr(V(-100, 0, 0)).x, 0, 1e-9);
+  }
+
+  /** ⑦ `elementsInRect`：整條路串起來 */
+  {
+    const cam = new THREE.OrthographicCamera(-100, 100, 100, -100, -1000, 1000);
+    cam.position.set(0, 0, 100); cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true); cam.updateProjectionMatrix();
+    const items = {
+      verts: [
+        { el: 'A', pts: [V(0, 0, 0)] },      // → 畫面 (100,100) 框裡
+        { el: 'B', pts: [V(90, 0, 0)] }      // → 畫面 (190,100) 框外
+      ],
+      edges: [
+        { el: 'E1', pts: [V(-90, 0, 0), V(90, 0, 0)] },   // 橫跨整個框
+        { el: 'E2', pts: [V(-90, 90, 0), V(-80, 90, 0)] } // 完全在框外
+      ],
+      faces: [
+        { el: 'F1', pts: [V(0, 0, 0)] },
+        { el: 'F2', pts: [V(90, 90, 0)] }
+      ]
+    };
+    const rect = { x0: 80, y0: 80, x1: 120, y1: 120 };
+    const got = S.elementsInRect(items, rect, cam, 200, 200);
+    eq('⑦ 框到的點只有 A', got.verts.join(','), 'A');
+    eq('★★★ 框到的邊有 E1（橫跨、兩端都在框外）', got.edges.join(','), 'E1');
+    eq('★★ 框到的面只有 F1（面看重心）', got.faces.join(','), 'F1');
+    /** ⛔ 沒給東西也不可以壞 */
+    eq('★ 沒給 items 也不會壞', S.elementsInRect(null, rect, cam, 200, 200).edges.length, 0);
+    eq('★ 沒給 rect 也不會壞', S.elementsInRect(items, null, cam, 200, 200).edges.length, 0);
+  }
+
+  /**
+   * ⑧ ⚠ **邊迴圈只走「畫面上看得見的邊」** —— 判準沿用 `isMarkable()`。
+   * ⛔ 不要另外寫一套「哪些邊算數」（全選邊那一輪定的）。
+   */
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    const seed = meridians(m)[Math.floor(meridians(m).length / 2)];
+    const off = so.edgeLoop(m, seed, { markableOnly: false });
+    eq('⑧ 關掉「只走看得見的」也走得出 32 條（球的邊本來就都看得見）',
+       off.hes.length, 32);
+    ok('★ 沒給種子邊不會壞', so.edgeLoop(m, null).hes.length === 0);
+    ok('★ 沒給網格不會壞', so.edgeLoop(null, seed).hes.length === 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  分離（＝ Blender 的 Separate）
 // ═══════════════════════════════════════════════════════
 

@@ -14,6 +14,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EDGE_ROLE } from '../core/mesh.js';
 
+/**
+ * 🔴 **指到的東西「變大」多少**（kang 2026-08-26 拍板：只變大，⛔ 不換顏色）。
+ *
+ * 點：一般的選取小球是半徑 1.4，指到變 2.6 —— **差不多兩倍才看得出來**，
+ * 再大就會蓋住旁邊的角。
+ * 邊：0.35 的細圓柱。⚠ ⛔ 不可以改用 `linewidth`，那個在這一版
+ * 完全沒有作用（見 `setPickMarks()` 裡的實證）。
+ *
+ * 單位是 cm（世界座標）。
+ */
+const HOVER_VERT_R = 2.6;
+const HOVER_EDGE_R = 0.35;
+
 export class SceneView {
   constructor(canvas) {
     this.canvas = canvas;
@@ -439,6 +452,33 @@ export class SceneView {
    * 用世界座標直接畫，不掛在物件節點下 —— 這樣物件貼合移動時
    * 標示不會跟著跑掉，而是由呼叫端決定何時更新或清掉。
    */
+  /**
+   * 一段細圓柱，用來當「有厚度的線」。
+   *
+   * ⚠ 半徑是**世界單位（cm）**，所以拉遠會變細 —— 跟既有的選取小球
+   * （`SphereGeometry(1.4)`）同一個行為，⛔ 不要為 hover 另發明一套。
+   * 〔「顯示點」用的是固定螢幕像素，那是因為它要在拉遠時還找得到；
+   * 　hover 是「你的游標就在那裡」，本來就在看得清楚的距離〕
+   *
+   * @returns {THREE.Mesh|null} 長度 0 的段回 null（畫出來是一個看不見的點）
+   */
+  _tube(a, b, r, col) {
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = dir.length();
+    if (!(len > 1e-6)) return null;
+    const geo = new THREE.CylinderGeometry(r, r, len, 8, 1, true);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: col, depthTest: false
+    }));
+    mesh.position.copy(a).addScaledVector(dir, 0.5);
+    /** 圓柱預設沿 +Y，轉到 a→b 的方向 */
+    mesh.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0), dir.clone().normalize()
+    );
+    mesh.renderOrder = 7;
+    return mesh;
+  }
+
   setPickMarks(marks) {
     this.clearPickMarks();
     if (!marks || !marks.length) return;
@@ -461,19 +501,50 @@ export class SceneView {
        * 與法向的切線**都只看 active** —— 分不出哪一個是 active，
        * 「箭頭為什麼朝那邊」就變成一個沒有答案的問題（坑第 24 條）。
        */
+      /**
+       * 🔴 **`hover` 是一個旗標，⛔ 不是第四種顏色**（kang 2026-08-26 拍板）。
+       *
+       * 理由是**兩個狀態會同時發生**：你正指著一個**已經選到**的元素。
+       * 用顏色的話那一刻要決定誰贏；**變大則可以疊加** ——
+       * 黃色又變大 ＝「已經選到，而且你正指著它」。
+       * ⚠ 而畫面上顏色已經有五種意思了，再加一種只會更難讀。
+       *
+       * 沒被選到的元素被指到時走 `role:'hover'` → 白色，
+       * 跟「顯示點」同一個顏色（那本來就是「這裡有一個元素」的意思）。
+       */
       const col = m.role === 'dst' ? 0x3ad07a
                 : m.role === 'active' ? 0xff8c1a
+                : m.role === 'hover' ? 0xffffff
                 : 0xffd23f;
 
       if (m.kind === 'vertex') {
         // 點要畫得夠大才看得見，但太大會蓋住旁邊的角
         const s = new THREE.Mesh(
-          new THREE.SphereGeometry(1.4, 12, 8),
+          new THREE.SphereGeometry(m.hover ? HOVER_VERT_R : 1.4, 12, 8),
           new THREE.MeshBasicMaterial({ color: col, depthTest: false })
         );
         s.position.copy(m.points[0]);
-        s.renderOrder = 6;
+        s.renderOrder = m.hover ? 7 : 6;
         g.add(s);
+      } else if (m.hover) {
+        /**
+         * 🔴 **指到的邊要變粗 —— 而「變粗」不能用 `linewidth`。**
+         *
+         * 【實證 · 讀過 `lib/three/three.core.min.js`】
+         * **這一版的渲染器一次都沒有呼叫 `gl.lineWidth()`（grep：0 次）。**
+         * `LineBasicMaterial.linewidth` 存得進去，但**永遠不會被套用** ——
+         * 改了它畫面上什麼都不會變（坑第 21 條那種按了沒反應的東西）。
+         *
+         * → 所以真的要粗，就得畫成**有厚度的東西**：一段細圓柱。
+         * ⚠ 只有 hover 走這條路，而 hover **一次只有一個元素**，
+         * ⛔ 不會變成「每條選取的邊都建一個 Mesh」（坑第 22 條）。
+         */
+        const pts = m.points;
+        const close = m.kind === 'face';
+        for (let i = 0; i < pts.length - (close ? 0 : 1); i++) {
+          const t = this._tube(pts[i], pts[(i + 1) % pts.length], HOVER_EDGE_R, col);
+          if (t) g.add(t);
+        }
       } else {
         const pos = [];
         const pts = m.points;

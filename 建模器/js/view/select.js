@@ -13,9 +13,9 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams }
+import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams, markableEdges }
   from '../unfold/seam.js';
-import { objectsInRect, normRect } from '../core/screen.js';
+import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -46,6 +46,35 @@ const DOUBLE_TAP_MOVE = 16;   // px
  * `setKnifeInput()`），那兩顆按下去刀具要當作沒看到。
  */
 const DRAW_BUTTON = 0;
+
+/**
+ * 🔴 **面數超過這個就不問「指到哪個面」**（hover 專用）。
+ *
+ * ── 這個數字是量出來的，⛔ 不是猜的 ────────────────────
+ * 【實證 · 沙箱量的】`nearestFace()` 每次呼叫的成本（它內部每次都跑
+ * `computeNormals()`，所以是 O(面數)，而且是線性的）：
+ *
+ * | 面數 | 每次 | 佔一幀（16.7ms） |
+ * |---|---|---|
+ * | 512 | 0.32 ms | 1.9% |
+ * | 1922 | 1.04 ms | 6.2% |
+ * | 3042 | 1.69 ms | 10.1% |
+ * | 4610 | 2.40 ms | 14.4% |
+ * | 8706 | 4.50 ms | 26.9% |
+ *
+ * 換算下來大約 **0.52 µs／面**。給 hover 的預算訂 **2 ms**（一幀的 12%），
+ * 換算是 3846 面 —— **取 3500 留一點餘裕**。
+ *
+ * ⚠ **`VERT_DOTS_MAX = 5000` 是猜的**（日誌自己註明「沒有量過」）——
+ * ⛔ 這一個不要再犯同一個病。
+ *
+ * ⭐ **點與邊不受這條限制**：點是 0.089 ms（8064 個點），
+ * 邊是 1.6 ms（16768 條），兩個都遠比面便宜。
+ *
+ * ⚠ **平板不必納入考量** —— 手指沒碰到螢幕就沒有 hover 事件，
+ * 這條路在平板上根本不會被走到。
+ */
+const HOVER_FACE_MAX = 3500;
 
 /**
  * 點多近才算點到那條邊，單位 px。
@@ -177,6 +206,23 @@ export class Selection {
     this.editMode = false;
     /** 'auto' | 'vertex' | 'edge' | 'face' —— 選取過濾器 */
     this.editFilter = 'auto';
+
+    /**
+     * 🔴 **指到哪就亮哪（hover）**：游標底下的那個元素，⛔ 不是選取。
+     *
+     * kang 2026-08-26 提出並拍板。它補的是坑第 21 條那個洞 ——
+     * 他做方塊 12 條邊圓角時「就是不行」，病因是**漏選一條看不出來**。
+     *
+     * 🔴 **唯一的硬規則：算它一定要呼叫 `pickElement()` 本人。**
+     * ⛔ 不可以另寫一套「找最近的」—— 兩套的話畫面說會選到 A、
+     * 按下去選到 B，那**比沒有提示更糟**（坑第 31 條）。
+     *
+     * ⚠ **`_hoverRaf` 是節流用的**：`pointermove` 一秒可以來上百次，
+     * 而算一次最貴要 2ms —— **一幀最多算一次**就夠了（坑第 22 條）。
+     */
+    this._hover = null;
+    this._hoverRaf = 0;
+    this._hoverAt = null;
 
     /**
      * 🔴 **目前選到的子元素，有順序的陣列。順序即 active（最後一筆）。**
@@ -537,11 +583,24 @@ export class Selection {
           }
         }
       }
+      /**
+       * 🔴 **hover：只在編輯模式、而且沒有正在做別的事的時候算。**
+       * ⚠ 拖曳中（gizmo／框選／一筆畫）算它沒有意義，只是白花時間。
+       */
+      if (this.editMode && !this.tc.dragging && !this._stroke && !this._marq && !this._down) {
+        this._queueHover(e.clientX, e.clientY);
+      } else if (this._hover) {
+        this._setHover(null);
+      }
+
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
       this._drawMarquee();
     });
+
+    /** 游標離開畫布 → 那個「指著」的狀態就不成立了，⛔ 不要留在畫面上 */
+    cv.addEventListener('pointerleave', () => this._setHover(null));
 
     cv.addEventListener('pointercancel', () => {
       this._endMarquee(null, false);
@@ -683,13 +742,97 @@ export class Selection {
     const box = cv.getBoundingClientRect();
     const rect = normRect(m.ax, m.ay, m.bx, m.by);
 
-    const entries = this._doc.objects.map(o => ({ id: o.id, box: worldBounds(o) }));
-    const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
-
     // 按著 Shift 或開著「加選」就是往現有選取上加，跟點選的規矩一致
     const additive = (e && e.shiftKey) || this.multi;
+
+    /**
+     * 🔴 **編輯模式下框的是子元素，不是物件。**
+     *
+     * ⚠ 這是對照表上列著的缺口：「框選 ✅ 物件層級 —— **編輯模式下
+     * 框選子元素沒有**」。而多選只能一個一個點正是選取那一組要解的病。
+     */
+    if (this.editMode) { this._marqueeEdit(rect, box, additive); return; }
+
+    const entries = this._doc.objects.map(o => ({ id: o.id, box: worldBounds(o) }));
+    const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
     this.set(additive ? [...new Set([...this.ids, ...hits])] : hits);
     if (this.hooks.onMarquee) this.hooks.onMarquee(hits.length);
+  }
+
+  /**
+   * 🔴 **框選子元素（編輯模式）。**
+   *
+   * ── 🔴 連背面一起選（kang 2026-08-26 拍板）─────────────
+   * 跟刀具那條「**點到哪切到哪**」同一個作風，而且**選一整條經線、
+   * 選一整圈**這種事本來就要包含背面。
+   *
+   * ⚠ **代價是會選到看不見的東西** —— 所以**一定要講出數量**
+   * （坑第 11、21 條）。⛔ 不可以安靜地多選一堆。
+   *
+   * ── ⚠ 一次只框一個物件 ────────────────────────────────
+   * 框到的元素屬於哪個網格必須是確定的 —— 跨物件的話後面每一個
+   * 編輯動作都會問「這是誰的索引」。這條跟刀具那條
+   * 「一次只切一個物件」是同一個理由。
+   *
+   * ── ⚠ 判準跟過濾器連動 ────────────────────────────────
+   * 過濾器是「邊」就只框邊。`'auto'` 時**優先給邊** ——
+   * 一框下去同時選到點、邊、面的話型別會混，而多選規定同型別。
+   * 〔⭐ 選邊是這顆按鈕的主要用途：12 條邊圓角、一整條經線都是邊〕
+   */
+  _marqueeEdit(rect, box, additive) {
+    const obj = this.active;
+    if (!obj || obj.isParametric) {
+      if (this.hooks.onMarqueeEdit) this.hooks.onMarqueeEdit(null);
+      return;
+    }
+    const node = this.view.nodeOf(obj.id);
+    if (!node) return;
+    node.updateMatrixWorld(true);
+    const mesh = obj.mesh();
+    const toWorld = p => node.localToWorld(p.clone());
+    const f = this.editFilter;
+
+    const items = { verts: [], edges: [], faces: [] };
+    if (f === 'vertex') {
+      for (const v of mesh.verts) {
+        if (v.he) items.verts.push({ el: { obj, kind: 'vertex', vert: v }, pts: [toWorld(v.p)] });
+      }
+    } else if (f === 'face') {
+      mesh.computeNormals();
+      for (const face of mesh.faces) {
+        const vs = mesh.faceVerts(face);
+        if (!vs.length) continue;
+        const c = new THREE.Vector3();
+        for (const v of vs) c.add(v.p);
+        c.divideScalar(vs.length);
+        items.faces.push({ el: { obj, kind: 'face', face }, pts: [toWorld(c)] });
+      }
+    } else {
+      /** `'auto'` 與 `'edge'` 都走邊 —— 判準用 `isMarkable()`，⛔ 不另寫一套 */
+      for (const he of markableEdges(mesh)) {
+        items.edges.push({
+          el: { obj, kind: 'edge', he },
+          pts: [toWorld(he.v.p), toWorld(he.to.p)]
+        });
+      }
+    }
+
+    const got = elementsInRect(items, rect, this.view.camera, box.width, box.height);
+    const els = [...got.verts, ...got.edges, ...got.faces];
+    for (const el of els) el.mesh = mesh;
+
+    if (!additive) this.editSels = [];
+    for (const el of els) {
+      /** 同一次多選裡型別必須一致 —— 跟 `pickEdit()` 同一條規矩 */
+      if (this.editSels.length && this.editSels[0].kind !== el.kind) continue;
+      if (this.editSels.some(x => this._sameHover(x, el))) continue;
+      this.editSels.push(el);
+    }
+    if (this.editSels.length) { this._attachEditProxy(); }
+    this._drawEditMark();
+    if (this.hooks.onMarqueeEdit) {
+      this.hooks.onMarqueeEdit({ added: els.length, total: this.editSels.length, kind: els[0] && els[0].kind });
+    }
   }
 
   /**
@@ -911,6 +1054,80 @@ export class Selection {
    */
   _wantSnapMid(e) {
     return this.knifeSnapMid || !!(e && e.shiftKey);
+  }
+
+  // ── 指到哪就亮哪（hover）────────────────────────────
+
+  /**
+   * 記下座標，**一幀最多算一次**。
+   *
+   * ⭐ 判準跟 `sel.active` 那次同一招：**與其在每個事件都算一次，
+   * 不如換成「該畫的時候才算」**。`pointermove` 一秒上百次，
+   * 而畫面一秒也才 60 幀 —— 多算的部分**沒有任何人看得到**。
+   */
+  _queueHover(clientX, clientY) {
+    this._hoverAt = { x: clientX, y: clientY };
+    if (this._hoverRaf) return;
+    this._hoverRaf = requestAnimationFrame(() => {
+      this._hoverRaf = 0;
+      const at = this._hoverAt;
+      if (at) this._runHover(at.x, at.y);
+    });
+  }
+
+  /**
+   * 🔴 **算「現在指到什麼」—— 呼叫的是選取本人那一支。**
+   *
+   * ⚠ **跟過濾器連動不是取巧**：過濾器**本來就已經決定了
+   * 「你現在選得到什麼」**。過濾器是「點」卻去算面，算出來的東西
+   * 使用者根本選不到 —— 那才是說謊。
+   *
+   * ⚠ 順便也是最有效的那道保險：只問點的話最貴 0.089 ms。
+   */
+  _runHover(clientX, clientY) {
+    const f = this.editFilter;
+    let only = f === 'auto' ? null : f;
+
+    /**
+     * 🔴 **面太多就不問面**（`HOVER_FACE_MAX`，量出來的）。
+     * ⚠ 這時候把 `only` 收成 `'edge'`，**⛔ 不是整個放棄** ——
+     * 點與邊很便宜，而它們正是選取最常用的兩種。
+     */
+    if (only === null || only === 'face') {
+      const act = this.active;
+      const n = act && !act.isParametric ? act.mesh().faces.length : 0;
+      if (n > HOVER_FACE_MAX) only = (f === 'face') ? 'none' : 'edge';
+    }
+    if (only === 'none') { this._setHover(null); return; }
+
+    const el = this.pickElement(clientX, clientY, {
+      vertex: f === 'auto' || f === 'vertex',
+      requireMarkable: true,
+      only
+    });
+    this._setHover(el && el.kind !== 'blocked' ? el : null);
+  }
+
+  /** 換人才重畫 —— ⛔ 每一幀都重建一次標記是白工（坑第 22 條） */
+  _setHover(el) {
+    if (this._sameHover(this._hover, el)) return;
+    this._hover = el;
+    this._drawEditMark();
+  }
+
+  /**
+   * 兩次 hover 指的是不是同一個東西。
+   *
+   * ⚠ **比的是元素物件本身**（`vert`／`he`／`face`），⛔ 不比索引 ——
+   * 網格一被重建索引就變了，而那時候元素物件也換了，所以物件比較才是對的。
+   * ⚠ 邊要連 `twin` 一起認：同一條邊有兩個 half-edge 物件。
+   */
+  _sameHover(a, b) {
+    if (!a || !b) return a === b;
+    if (a.kind !== b.kind || a.obj !== b.obj) return false;
+    if (a.kind === 'vertex') return a.vert === b.vert;
+    if (a.kind === 'face') return a.face === b.face;
+    return a.he === b.he || a.he === (b.he && b.he.twin);
   }
 
   /**
@@ -1638,7 +1855,73 @@ export class Selection {
         }
       }
     }
+
+    /**
+     * 🔴 **指到的那個東西：變大，⛔ 不換顏色**（kang 2026-08-26 拍板）。
+     *
+     * ⭐ **已經選到的就疊在原本那個標記上**（`hover: true`），
+     * 於是「黃色又變大」＝「已經選到，而且你正指著它」。
+     * ⚠ 這正是不用顏色的理由：兩個狀態會同時發生，
+     * 換顏色的話那一刻要決定誰贏，而那個決定怎麼做都會騙人。
+     *
+     * 沒被選到的則另外加一個 `role:'hover'` 的白色標記。
+     */
+    this._appendHoverMark(marks);
+
     this.view.setPickMarks(marks);
+  }
+
+  /** 把 hover 疊到既有標記上，或另外加一個 */
+  _appendHoverMark(marks) {
+    const h = this._hover;
+    if (!h) return;
+    const node = this.view.nodeOf(h.obj.id);
+    if (!node) return;
+    node.updateMatrixWorld(true);
+    const toWorld = p => node.localToWorld(p.clone());
+
+    /** 已經選到了 → 疊上去就好，⛔ 不要再畫一份（會有 z-fighting） */
+    const already = this.editSels.some(el => this._sameHover(el, h));
+    if (already) {
+      for (const m of marks) m.hover = m.hover || this._markIsFor(m, h, toWorld);
+      if (marks.some(m => m.hover)) return;
+    }
+
+    if (h.kind === 'vertex') {
+      marks.push({ kind: 'vertex', points: [toWorld(h.vert.p)], role: 'hover', hover: true });
+    } else if (h.kind === 'edge') {
+      marks.push({
+        kind: 'edge', points: [toWorld(h.he.v.p), toWorld(h.he.to.p)],
+        role: 'hover', hover: true
+      });
+    } else if (h.kind === 'face') {
+      const mesh = h.obj.mesh();
+      for (const [a, b] of regionBoundaryEdges(mesh, h.face)) {
+        marks.push({
+          kind: 'edge', points: [toWorld(a.p), toWorld(b.p)], role: 'hover', hover: true
+        });
+      }
+    }
+  }
+
+  /**
+   * 這個既有標記畫的是不是 hover 指到的那個元素。
+   *
+   * ⚠ 用**世界座標端點比對**，因為 `marks` 裡存的已經是座標、不是元素了。
+   * 容許值取 `1e-9`：那是同一個 `Vector3` 經過同一條換算的差距，
+   * ⛔ 不是「差不多就好」的容許值。
+   */
+  _markIsFor(m, h, toWorld) {
+    if (h.kind === 'vertex') {
+      return m.kind === 'vertex' && m.points[0].distanceTo(toWorld(h.vert.p)) < 1e-9;
+    }
+    if (h.kind === 'edge' && m.kind === 'edge') {
+      const a = toWorld(h.he.v.p), b = toWorld(h.he.to.p);
+      const [p, q] = m.points;
+      return (p.distanceTo(a) < 1e-9 && q.distanceTo(b) < 1e-9)
+          || (p.distanceTo(b) < 1e-9 && q.distanceTo(a) < 1e-9);
+    }
+    return false;
   }
 
   /**
