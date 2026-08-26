@@ -62,7 +62,7 @@ const { unfoldMesh } = await import('../js/unfold/flatten.js');
 // part.js 是文件物件與展開引擎之間的轉接層，不碰 DOM，所以測得到
 const { unfoldObject } = await import('../js/unfold/part.js');
 const seam = await import('../js/unfold/seam.js');
-const { drawProgram, toSVG, titleLines, labelWidth } = await import('../js/out/sheet.js');
+const { drawProgram, toSVG, titleLines, labelWidth, pointInPoly } = await import('../js/out/sheet.js');
 const { sliceProgram, sliceTitleLines, progSVG } = await import('../js/out/sheet.js');
 const { toDXF, UNITS, sliceDXF, cutLayer } = await import('../js/out/dxf.js');
 // 剖面分切。切片是純幾何、定位孔是純幾何，兩個都不碰 DOM，所以整條路測得到。
@@ -8141,6 +8141,122 @@ section('刀具・一筆畫：一串表面點 → 一串切點');
        stroke.closestParamOnEdge(V(50, -5, 0), V(50, 5, 0), V(-10, 0, 0), V(10, 0, 0)), 1);
     eq('★★ 另一頭夾回 0',
        stroke.closestParamOnEdge(V(-50, -5, 0), V(-50, 5, 0), V(-10, 0, 0), V(10, 0, 0)), 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  接合編號要印在「有料的地方」，而且讀得出來
+// ═══════════════════════════════════════════════════════
+
+section('接合編號：落在料上 ＋ 不互相壓');
+
+/**
+ * 🔴 **kang 2026-08-26 重現出來的，而且真正的病比他回報的嚴重。**
+ *
+ * 他回報的是「疊在一起」。查下去發現**環形端面（管的兩個端面）
+ * 有一半的號碼印在洞裡** —— 那塊料會被挖掉。
+ *
+ * 病因是一行規則：號碼「往片的**重心**那一側縮」。
+ * 而環形片的重心在**洞的正中央**，所以內圈那一半被往洞裡推。
+ *
+ * → 判準改成「**落在料上**」（`pointInPoly(outline)`）。
+ * ⭐ 環形片沒有 `holes` 資料，它的 `outline` 是一條穿過缺口繞內圈再繞回來的
+ *   封閉線 —— **那條線本身就已經把洞排除掉了**。
+ *
+ * ── 🔴 為什麼這個 bug 活這麼久：既有的檢查碰不到它 ──────────
+ * 「第 3 期：標註不可以疊在一起」那一組**只比同一排的 y**
+ * （它是為了尺寸那一排寫的），而接合編號是**散在片內各處**的。
+ * ⛔ 所以這裡另外用一個**真正的 2D 外框相交**檢查。
+ */
+{
+  const markSeams = (m, deg = 60) => {
+    for (const he of m.edges()) {
+      const d = m.dihedral(he);
+      if (d !== null && Math.abs(d * 180 / Math.PI) > deg) m.setRole(he, EDGE_ROLE.CUT);
+    }
+    return m;
+  };
+  const jointsOf = prog => prog.items.filter(i => i.t === 'text' && i.style === 'joint');
+  /** 🔴 真正的 2D 檢查：兩個字的外框有沒有相交（⛔ 不是只比同一排） */
+  const clashes = list => {
+    const bs = list.map(it => {
+      const w = labelWidth(it.s, it.size);
+      return { x0: it.x - w / 2, x1: it.x + w / 2, y0: it.y - it.size * 0.8, y1: it.y + it.size * 0.25 };
+    });
+    let n = 0;
+    for (let i = 0; i < bs.length; i++) for (let k = i + 1; k < bs.length; k++) {
+      const a = bs[i], b = bs[k];
+      if (a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0) n++;
+    }
+    return n;
+  };
+
+  const t = 0.2, rule = makeRule('paper', t);
+  const tube = markSeams(buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }, t));
+  const r = unfoldMesh(tube, rule);
+  eq('前提：kang 那組參數攤出 4 片', r.pieces.length, 4);
+
+  /** 環形端面 ＝ 外框 50×50 的那兩片 */
+  const rings = r.pieces.filter(p => Math.abs(p.width - 50) < 1 && Math.abs(p.height - 50) < 1);
+  eq('前提：其中兩片是環形端面', rings.length, 2);
+
+  for (const ring of rings) {
+    const prog = drawProgram(ring, { rule });
+    const js = jointsOf(prog);
+    eq('前提：這一片有 66 個接合編號', js.length, 66);
+
+    /**
+     * 🔴 **主斷言：一個號碼都不可以印在洞裡。**
+     * ⚠ 修之前是 **32 個 / 66 個**掉在洞裡（實測）。
+     */
+    const off = js.filter(it => !pointInPoly(it.x, it.y, ring.outline));
+    eq('★★★ 接合編號沒有一個落在料外（洞裡）', off.length, 0);
+
+    /**
+     * ⚠ 缺口那裡**還會剩一對** —— 同一個號碼的兩端在缺口碰頭，
+     * 那是缺口本身的幾何，跟字大小無關。
+     * ⛔ 期望值寫 0 的話就是把一個做不到的目標釘進測試。
+     */
+    ok('★★ 靠太近的最多剩 1 對（修之前是 13 對）', clashes(js) <= 1, `${clashes(js)} 對`);
+
+    /** ⭐ 這片料只有 5cm 寬要塞 66 個號碼 → 字一定得縮 */
+    ok('★★ 塞不下的片，字有縮小（⛔ 不是硬塞 1.8）',
+       prog.jointInfo && prog.jointInfo.size < 1.8, JSON.stringify(prog.jointInfo));
+  }
+
+  /**
+   * 🔴 **「本來就不擠的片一格都不可以變」，⛔ 不是「所有側面都不變」。**
+   *
+   * ⚠ **這一條的期望值我第一次寫錯了，是測試當場抓到的**（2026-08-26）：
+   * 我寫「兩片側面都維持 1.8」，實測**內側面是 1.4**。
+   *
+   * 查下去發現那是**正確行為**：內側面（125.46 × 70）在 1.8 的時候
+   * **本來就壓了 30 對**，梯子往下掉一級到 1.4 才不壓 —— 那正是這一輪要修的事。
+   * ⭐ 真正該釘的是「**本來就不擠的不要動它**」，而不是「側面都別動」。
+   */
+  const outer = r.pieces.find(p => p.height > 60 && p.width > 150);   // 外側面 156.83
+  const inner = r.pieces.find(p => p.height > 60 && p.width < 150);   // 內側面 125.46
+  ok('前提：找得到外側面與內側面', !!outer && !!inner);
+
+  {
+    const prog = drawProgram(outer, { rule });
+    eq('★★★ 外側面本來就不擠 → 字高仍是 1.8（跟改之前逐字相同）', prog.jointInfo.size, 1.8);
+    eq('★★ 而且完全不互相壓', clashes(jointsOf(prog)), 0);
+  }
+  {
+    const prog = drawProgram(inner, { rule });
+    ok('★★★ 內側面本來就在壓 → 字有縮（1.8 → 1.4）', prog.jointInfo.size < 1.8,
+       String(prog.jointInfo.size));
+    eq('★★★ 縮完之後完全不壓（修之前是 30 對）', clashes(jointsOf(prog)), 0);
+  }
+
+  /** `pointInPoly` 本身 */
+  {
+    const sq = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+    ok('★ pointInPoly：裡面', pointInPoly(5, 5, sq));
+    ok('★ pointInPoly：外面', !pointInPoly(15, 5, sq));
+    ok('★ 點數不夠不會壞', !pointInPoly(5, 5, [{ x: 0, y: 0 }, { x: 1, y: 1 }]));
+    ok('★ 沒給多邊形不會壞', !pointInPoly(5, 5, null));
   }
 }
 
