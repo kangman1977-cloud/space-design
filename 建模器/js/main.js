@@ -2426,10 +2426,37 @@ window.addEventListener('keydown', e => {
 
 // ── 狀態列 ────────────────────────────────────────────
 
+/**
+ * 🔴 **狀態列的「三角形」＝ 這些模型有幾個三角形，⛔ 不是「這一幀畫了幾個」。**
+ *
+ * 〔kang 2026-08-26 拍板改的。他的話：「**三角形數字…亂跳**」〕
+ *
+ * ── 舊的那個數字錯在哪 ────────────────────────────────
+ * 原本用 `renderer.info.render.triangles`，那是**上一幀顯示卡實際畫出去的數量**：
+ * 轉個視角就變（畫面外的被剔除）、切線框就掉（線框走的是線不是三角形）、
+ * gizmo 在不在也算、連陰影那一趟也被算進去。
+ * **而標籤寫的是「三角形」** —— 人讀到的是「這個模型有多複雜」。
+ * 那是坑第 20 條：**把內部的數字放上介面之前，先問這個數字的單位是什麼。**
+ *
+ * ⚠ **而「亂跳」還有第二個原因**：舊的更新寫在 `loop()` 裡，
+ * 而且**只有 FPS 數字剛好變了才順便更新** —— 所以它顯示的是
+ * 一串不相干時刻的快照，中間跳過的完全看不到。那一行已經拿掉了。
+ *
+ * ⭐ 現在這個數字**只在模型真的變了才會變**，看得懂也對得起來。
+ */
+function modelTriangles() {
+  let n = 0;
+  for (const o of doc.objects) {
+    const m = o.mesh && o.mesh();
+    if (m) n += m.triangleCount();
+  }
+  return n;
+}
+
 function updateBar() {
   $('sObj').textContent = doc.objects.length;
   $('sSel').textContent = sel.count;
-  $('sTri').textContent = view.triangles.toLocaleString();
+  $('sTri').textContent = modelTriangles().toLocaleString();
   $('sFps').textContent = view.fps || '–';
 
   $('undo').disabled = !hist.canUndo;
@@ -2839,7 +2866,13 @@ function loop() {
   const fpsEl = $('sFps');
   if (fpsEl.textContent !== String(view.fps)) {
     fpsEl.textContent = view.fps || '–';
-    $('sTri').textContent = view.triangles.toLocaleString();
+    /**
+     * ⛔ **這裡不再更新「三角形」那一格**（2026-08-26）。
+     * 它現在是**模型的屬性**，只有模型變了才會變，
+     * 由 `updateBar()` 負責 —— ⛔ 不可以掛在每幀迴圈上。
+     * 〔掛在這裡正是「亂跳」的第二個原因：它只有 FPS 剛好變了才更新，
+     * 　所以顯示的是一串不相干時刻的快照〕
+     */
   }
 }
 

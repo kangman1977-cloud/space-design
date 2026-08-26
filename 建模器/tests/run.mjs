@@ -8145,6 +8145,84 @@ section('刀具・一筆畫：一串表面點 → 一串切點');
 }
 
 // ═══════════════════════════════════════════════════════
+//  狀態列的「三角形」＝ 模型的屬性，不是「這一幀畫了幾個」
+// ═══════════════════════════════════════════════════════
+
+section('三角形數：mesh.triangleCount()');
+
+/**
+ * 🔴 **kang 2026-08-26：「三角形數字…亂跳」。**
+ *
+ * 病因有兩個，都跟幾何無關：
+ * 1. 顯示的是 `renderer.info.render.triangles`（**上一幀畫出去的**），
+ *    會隨視角、線框模式、gizmo、陰影而變 —— 而標籤寫「三角形」（坑第 20 條）
+ * 2. 更新掛在 `loop()` 裡，而且**只有 FPS 剛好變了才更新** ——
+ *    所以顯示的是一串不相干時刻的快照
+ *
+ * → 改成 `mesh.triangleCount()`：**模型的屬性，穩定**。
+ *
+ * ── ⭐ 這一節驗的是那個「不必真的三角化」的捷徑 ────────────
+ * **任何簡單多邊形三角化之後剛好 `n − 2` 個三角形。**
+ * ⚠ 那是一個假設，**要驗，不可以推論** —— 特別是**凹的面**走的是
+ * 耳切那條路，跟凸的扇形是兩支不同的程式。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  /** 真的去三角化，逐面加總 —— 拿它當已知正確的答案 */
+  const byTriangulating = m => {
+    let n = 0;
+    for (const f of m.faces) n += m.faceTriangles(f).length;
+    return n;
+  };
+
+  for (const [name, k, p, want] of [
+    ['方塊', 'box', { w: 60, h: 45, d: 40 }, 12],
+    ['圓柱 seg32', 'cylinder', { r: 25, h: 70, seg: 32 }, 124],
+    ['球 32×16', 'sphere', { r: 30, segW: 32, segH: 16 }, 960],
+    ['管', 'tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }, 256],
+    ['圓角方塊', 'roundBox', { w: 60, h: 45, d: 40, r: 8, segR: 4 }, 76],
+    ['角柱 8 邊', 'prism', { r: 30, h: 50, sides: 8 }, 28],
+    ['平板', 'plate', { w: 100, d: 60 }, 2],
+    ['圓錐 seg12', 'cone', { r: 30, h: 70, seg: 12 }, 28]
+  ]) {
+    const m = baked(k, p);
+    eq(`★★★ ${name}：Σ(n−2) ＝ 真的三角化的總數`, m.triangleCount(), byTriangulating(m));
+    eq(`　 ${name}：而且是 ${want}`, m.triangleCount(), want);
+  }
+
+  /**
+   * 🔴 **凹的面一定要單獨驗** —— 它走的是耳切，跟凸的扇形是兩支程式。
+   * ⚠ 只驗參數體的話這一條完全不會被走到（參數體的面全是凸的）。
+   */
+  {
+    const pts = [V(0, 0, 0), V(40, 0, 0), V(40, 20, 0), V(20, 20, 0), V(20, 40, 0), V(0, 40, 0)];
+    const L = Mesh.fromFaceList(pts, [[0, 1, 2, 3, 4, 5]]);
+    L.computeNormals();
+    eq('★★★ 凹的 L 形面（走耳切）也是 n−2', L.triangleCount(), byTriangulating(L));
+    eq('　 6 個頂點 → 4 個三角形', L.triangleCount(), 4);
+  }
+
+  /** ⛔ 空網格不可以壞 */
+  eq('★ 空網格回 0', new Mesh().triangleCount(), 0);
+
+  /**
+   * ⚠ **這個數字要跟「編輯之後」也對得起來** ——
+   * 加線只加面，三角形數會跟著變，⛔ 不可以停在舊值。
+   */
+  {
+    const box = baked('box', { w: 60, h: 45, d: 40 });
+    const before = box.triangleCount();
+    const side = [...box.edges()].find(he => Math.abs(he.v.p.y - he.to.p.y) > 1);
+    const lc = edit.loopCut(box, side, { cuts: 1 });
+    ok('前提：環切切得下去', lc.ok, lc.reason);
+    eq('★★ 環切之後三角形數跟著變（⛔ 不會停在舊值）',
+       lc.mesh.triangleCount() > before, true);
+    eq('★★ 而且仍然 ＝ 真的三角化的總數',
+       lc.mesh.triangleCount(), byTriangulating(lc.mesh));
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  選取那一組：邊迴圈 ＋ 框選子元素
 // ═══════════════════════════════════════════════════════
 

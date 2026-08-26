@@ -906,5 +906,18 @@ export class SceneView {
   }
 
   get fps() { return this._fps.value; }
-  get triangles() { return this.renderer.info.render.triangles; }
+  /**
+   * ⛔ **`get triangles()` 已於 2026-08-26 刪除，⛔ 不要加回來。**
+   *
+   * 它回傳的是 `renderer.info.render.triangles` ——
+   * **上一幀顯示卡實際畫出去的三角形數**，會隨視角、線框模式、
+   * gizmo 在不在、陰影而變。
+   *
+   * 🔴 而狀態列的標籤寫的是「三角形」，人讀到的是「這個模型有多複雜」——
+   * **標籤跟數字的意思對不起來**（坑第 20 條），kang 的說法是「數字…亂跳」。
+   *
+   * → 狀態列改用 `mesh.triangleCount()`（模型的屬性，穩定）。
+   * ⚠ 真的要「這一幀畫了幾個」再回來接 `renderer.info`，
+   * 但那時候**標籤要跟著改**，⛔ 不可以再叫「三角形」。
+   */
 }

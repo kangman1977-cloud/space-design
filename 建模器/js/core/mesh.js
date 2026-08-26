@@ -270,6 +270,36 @@ export class Mesh {
    *
    * @returns {Array<[Vertex,Vertex,Vertex]>} 繞向跟面一致
    */
+  /**
+   * 🔴 **這個網格三角化之後會有幾個三角形。**
+   *
+   * ── 這一支是給狀態列用的（kang 2026-08-26）─────────────
+   * 狀態列原本顯示的是 `renderer.info.render.triangles`，
+   * 那是「**上一幀顯示卡實際畫了幾個**」——會隨視角、線框模式、
+   * gizmo 在不在、陰影而變，而標籤寫的是「三角形」。
+   * **標籤跟數字的意思對不起來**（坑第 20 條），而且看起來像亂跳。
+   * → kang 拍板改成**這個模型有幾個三角形**：穩定、跟視角無關。
+   *
+   * ── ⭐ 不必真的去三角化 ────────────────────────────────
+   * **任何簡單多邊形三角化之後剛好是 `n − 2` 個三角形**，跟凸不凸無關。
+   * 所以只要把每個面的 `頂點數 − 2` 加起來就好 ——
+   * O(面數)，而且**一個暫存陣列都不配置**（坑第 22 條）。
+   *
+   * ⚠ **這是量出來的，不是推的**：方塊／圓柱／球／管／圓角方塊／角柱／
+   * 平板／圓錐，以及一個**凹的 L 形面**（走耳切那條路），
+   * `faceTriangles()` 的總數與 `Σ(n−2)` **全部相同**。已釘成測試。
+   *
+   * @returns {number}
+   */
+  triangleCount() {
+    let n = 0;
+    for (const f of this.faces) {
+      const k = this.faceLoop(f).length;
+      if (k >= 3) n += k - 2;
+    }
+    return n;
+  }
+
   faceTriangles(face) {
     const vs = this.faceVerts(face);
     if (vs.length < 3) return [];
