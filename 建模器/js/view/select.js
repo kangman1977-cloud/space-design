@@ -1603,6 +1603,33 @@ export class Selection {
   }
 
   /**
+   * 直接指定要選哪幾個面（不經過點選）。
+   *
+   * 「選相似」用它把**同一類的面**一次選起來（例如球的全部 32 片 seg）。
+   *
+   * ⚠ **這一支是 2026-08-27 才補的，在那之前只有單數的 `selectFace()`** ——
+   * 因為在那之前**沒有任何一條路會一次選好幾個面**：擠出、內縮一次都只吃
+   * 一個面。⛔ 所以它不是「早就該有卻漏寫」，是選相似第一次需要它。
+   *
+   * ⚠ 跟 `selectEdges()` 一樣，一定要在 `commit()` **之後**呼叫。
+   *
+   * @param {object} obj
+   * @param {object[]} faces
+   * @returns {number} 實際選起來的個數
+   */
+  selectFaces(obj, faces) {
+    const list = (faces || []).filter(Boolean);
+    if (!obj || !list.length) { this.clearEditSel(); return 0; }
+    const mesh = obj.mesh();
+    this.editSels = list.map(face => ({ obj, kind: 'face', face, mesh }));
+    this._drag = null;
+    this._attachEditProxy();
+    this._drawEditMark();
+    if (this.hooks.onChange) this.hooks.onChange(this);
+    return this.editSels.length;
+  }
+
+  /**
    * 直接指定要選哪幾條邊（不經過點選）。
    *
    * 環切之後用它把**新切出來的那一圈邊**整圈選起來，箭頭立刻停在上面，

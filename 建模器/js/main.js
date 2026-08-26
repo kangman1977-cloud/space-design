@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          knifePath, planeCrossSegments,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -393,6 +393,8 @@ $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
 $('selAllEdges').onclick = () => selectAllEdges();
+$('selSharp').onclick = () => selectSharpEdges();
+$('selSimilar').onclick = () => selectSimilar();
 $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
@@ -1945,6 +1947,107 @@ function selectLoopFromEdge() {
 }
 
 /**
+ * 🔴 **選轉角：依夾角一次選出所有折起來的邊。**
+ *
+ * ── ⭐ 它對分片是一條捷徑（對照表標 ⭐⭐）────────────────
+ * 一次選出所有轉角，再決定哪幾條要標成切割線 —— ⛔ 不必一條一條點。
+ *
+ * ── ⚠ 平板按下去是 0 條，而那一定要講出原因 ───────────
+ * 平板整圈都是**邊界邊**（只有一側有面），`isMarkable()` 早就擋掉了 ——
+ * 理由是「它本來就是外輪廓」。**安靜地沒反應 ＝ 坑第 21 條**，
+ * 所以這裡把 `boundarySkipped` 拿出來講。
+ *
+ * ── ⚠ 講數量，而且講得出使用者驗得出來的數字 ────────────
+ * 方塊 30 度應該是 **12 條**、32 段圓柱應該是 **2 條**（上下兩圈，
+ * 側面夾角只有 11.25 度）。⭐ **他數得出來的數字才有對答案的價值**
+ * 〔「開清單時要講數量與形狀」那條〕。
+ */
+function selectSharpEdges() {
+  const obj = sel.active;
+  if (!sel.editMode || !obj) {
+    toast('先按「拉點線面」進入編輯模式，選到物件再按「選轉角」', true);
+    return;
+  }
+  const deg = +$('sharpDeg').value;
+  if (!Number.isFinite(deg) || deg <= 0) {
+    toast('「幾度以上算轉角」要打一個大於 0 的數字', true);
+    return;
+  }
+
+  const r = sharpEdges(obj.mesh(), deg);
+  if (!r.hes.length) {
+    /**
+     * 🔴 **兩種 0 條的原因完全不同，一定要分開講** ——
+     * 「這個形狀沒有那麼折的地方」是調數字就有救，
+     * 「整圈都是開口邊緣」是調數字永遠沒救。
+     */
+    if (r.scanned === 0 && r.boundarySkipped > 0) {
+      toast(`沒有選到 —— 這個物件看得見的邊全部是【開口邊緣】`
+          + `（${r.boundarySkipped} 條，只有一側有面，例如平板的四周）。`
+          + `開口邊緣沒有夾角可以算，它本來就是外輪廓`, true);
+    } else {
+      toast(`沒有一條邊折得到 ${deg} 度（掃過 ${r.scanned} 條）。`
+          + `把度數調小一點再按一次`, true);
+    }
+    return;
+  }
+
+  const got = sel.selectEdges(obj, r.hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const parts = [`已選起 ${got} 條轉角（${deg} 度以上，掃過 ${r.scanned} 條）`];
+  /** 凹凸分開講：谷折那幾條在展開圖上是另一種折線，值得先看到 */
+  if (r.convex && r.concave) parts.push(`凸角 ${r.convex} 條、凹角 ${r.concave} 條`);
+  if (r.boundarySkipped) parts.push(`另有 ${r.boundarySkipped} 條開口邊緣沒有算進來`);
+  toast(parts.join('　'));
+}
+
+/**
+ * 🔴 **選相似：跟【最後選的】那一個同一類的，全部選起來。**
+ *
+ * ── ⚠ 種子是 active，不是第一個選的 ────────────────────
+ * 跟「中心 ＝ 最後選的」「法向的切線看 active」同一套 ——
+ * ⛔ 橘色那個元素的意義不可以在不同功能底下不一樣。
+ *
+ * ── ⚠ 判準跟型別對不起來時要講，⛔ 不可以安靜地回 0 個 ────
+ * 〔坑第 11 條：沉默地退回是最糟的做法〕
+ */
+function selectSimilar() {
+  const el = sel.editSel;
+  if (!sel.editMode || !el) {
+    toast('先在編輯模式下選一個面或一條邊當範本，再按「選相似」', true);
+    return;
+  }
+  const mode = $('similarMode').value;
+  const r = similarTo(el.obj.mesh(), el, mode);
+  if (r.reason) { toast(r.reason, true); return; }
+
+  const label = $('similarMode').selectedOptions[0].textContent;
+  let got = 0;
+  if (r.kind === 'face') got = sel.selectFaces(el.obj, r.faces);
+  else got = sel.selectEdges(el.obj, r.hes);
+
+  if (!got) { toast(`沒有找到${label}的元素（掃過 ${r.scanned} 個）`, true); return; }
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * ⚠ **「1 個」要特別講** —— 那表示只選到範本自己，
+   * 使用者會以為按鈕壞了（坑第 21 條）。
+   */
+  if (got === 1) {
+    toast(`只選到 1 個 —— 這個物件上沒有其他${label}的`
+        + `${r.kind === 'face' ? '面' : '邊'}（掃過 ${r.scanned} 個）`, true);
+    return;
+  }
+  toast(`已依【${label}】選起 ${got} 個${r.kind === 'face' ? '面' : '邊'}`
+      + `（掃過 ${r.scanned} 個）`);
+}
+
+/**
  * 內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。
  *
  * ── 它只加線，形狀一格都不變 ────────────────────────────
@@ -2589,6 +2692,29 @@ function updateBar() {
   $('selAllEdges').title = canAll
     ? '把這個物件所有看得見的邊一次選起來（方塊 12 條）。要做整個物件的導角／圓角就先按它'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
+
+  /**
+   * 選轉角：**跟「全選邊」同一個條件** —— 選到物件就給按，不必先選邊。
+   * ⚠ 它掃的是整個物件，種子不是「現在選到哪一條」。
+   */
+  $('selSharp').disabled = !canAll;
+  $('sharpDeg').disabled = !canAll;
+  $('selSharp').title = canAll
+    ? '把所有【折起來】的邊一次選起來（夾角大於旁邊那個度數）。標分片切割線的捷徑'
+    : '先按「拉點線面」進入編輯模式，再選一個物件';
+
+  /**
+   * 選相似：**一定要先選到一個元素當範本** ——
+   * 「相似」是跟誰相似，沒有範本就沒有答案（坑第 24 條）。
+   * ⚠ 種子是 **active（最後選的那一個）**，跟「中心＝最後選的」同一套。
+   */
+  const canSimilar = sel.editMode && !!sel.editSel;
+  $('selSimilar').disabled = !canSimilar;
+  $('similarMode').disabled = !canSimilar;
+  $('selSimilar').title = canSimilar
+    ? `跟【最後選的那一個${sel.editSel.kind === 'edge' ? '邊' : sel.editSel.kind === 'face' ? '面' : '點'}】同一類的全部選起來`
+    : (sel.editMode ? '先選一個面或一條邊當範本'
+                    : '先按「拉點線面」進入編輯模式，再選一個面或一條邊');
 
   /**
    * 任意切線：**選到物件就給按，不必選任何元素** ——

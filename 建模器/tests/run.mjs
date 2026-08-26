@@ -8522,6 +8522,174 @@ section('選一條線（邊迴圈）＋ 框選子元素的判定');
 }
 
 // ═══════════════════════════════════════════════════════
+//  選取第二批：選轉角（依銳邊）＋ 選相似
+// ═══════════════════════════════════════════════════════
+
+section('選轉角（依銳邊）＋ 選相似');
+
+/**
+ * 🔴 **這一節的數字全部是「使用者自己數得出來」的。**
+ *
+ * 方塊 12 條、六角柱 18 條、球 360 個四邊形 —— 都可以用手算對答案，
+ * 而不是「跑出來多少就寫多少」。〔鐵律三：**讓兩個數字互相對得起來**〕
+ */
+{
+  const so2 = await import('../js/core/selectops.js');
+
+  /** ① 方塊：最基本的對答案 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    eq('① 方塊 30 度 → 12 條轉角', so2.sharpEdges(m, 30).hes.length, 12);
+    eq('★ 而且 12 條全部是凸角（山折），凹角 0 條',
+       so2.sharpEdges(m, 30).convex, 12);
+    eq('　 凹角 0 條', so2.sharpEdges(m, 30).concave, 0);
+    eq('★ 掃過的邊 ＝ 12（＝ 全選邊選到的數量，兩支同一個判準）',
+       so2.sharpEdges(m, 30).scanned, 12);
+
+    /**
+     * 🔴 **門檻容許值的立條實例，⛔ 不要刪這三條。**
+     * 方塊的角**正好 90.0000 度**，沒有 `THRESH_TOL_DEG`
+     * 打 90 會選到 0 條 —— 而使用者當然認為 90 度的角是 90 度。
+     */
+    eq('★★★ 門檻正好等於實際夾角（90）→ 選得到，⛔ 不是 0',
+       so2.sharpEdges(m, 90).hes.length, 12);
+    eq('★★ 89 度 → 還是 12 條', so2.sharpEdges(m, 89).hes.length, 12);
+    eq('★★ 91 度 → 0 條（方塊沒有比 90 更折的角）',
+       so2.sharpEdges(m, 91).hes.length, 0);
+  }
+
+  /** ② 六角柱：兩種夾角混在一起，門檻真的在挑東西 */
+  {
+    const m = baked('prism', { sides: 6, r: 30, h: 60 });
+    eq('② 六角柱 60 度 → 18 條（側面 6 條 ＋ 上下各 6 條）',
+       so2.sharpEdges(m, 60).hes.length, 18);
+    eq('★★ 61 度 → 12 條（側面那 6 條被門檻擋掉，只剩上下的 90 度角）',
+       so2.sharpEdges(m, 61).hes.length, 12);
+    /** ⭐ 18 ＝ 6 ＋ 12，兩個數字互相對得起來 */
+    eq('★ 兩者相差正好是側面的 6 條',
+       so2.sharpEdges(m, 60).hes.length - so2.sharpEdges(m, 61).hes.length, 6);
+  }
+
+  /** ③ 圓柱：門檻擋掉 seg 的小折角，正是這顆按鈕的用途 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    eq('③ 圓柱 seg32　30 度 → 64 條（上下兩圈蓋子邊，各 32 條）',
+       so2.sharpEdges(m, 30).hes.length, 64);
+    eq('★★ 10 度 → 96 條（側面那 32 條也進來了）',
+       so2.sharpEdges(m, 10).hes.length, 96);
+    /** 🔴 32 段圓柱側面的夾角 ＝ 360/32 ＝ 11.25 度，這條在對那個數學 */
+    eq('★★★ 11.3 度 → 64 條（側面夾角 11.25 度，剛好被擋在外面）',
+       so2.sharpEdges(m, 11.3).hes.length, 64);
+    eq('　 96 ＝ 64 ＋ 32（側面的段數）',
+       so2.sharpEdges(m, 10).hes.length, 64 + 32);
+  }
+
+  /**
+   * ④ 🔴 **平板：0 條，而且原因跟「形狀不夠折」完全不同。**
+   * 它整圈都是**邊界邊**（只有一側有面）—— `isMarkable()` 擋掉的。
+   * ⚠ 呼叫端要靠 `scanned === 0 && boundarySkipped > 0` 分辨這兩種 0，
+   * 否則使用者調度數調到死也不會有反應（坑第 21 條）。
+   */
+  {
+    const m = baked('plate', { w: 100, d: 60, segW: 1, segD: 1 });
+    const r = so2.sharpEdges(m, 30);
+    eq('④ 平板 → 0 條', r.hes.length, 0);
+    eq('★★★ 而且掃過的邊是 0（不是「掃過了但都不夠折」）', r.scanned, 0);
+    eq('★★★ 邊界邊 4 條 —— 呼叫端就是靠這個講出真正的原因',
+       r.boundarySkipped, 4);
+    eq('★★ 度數調到 1 度還是 0 條（調數字永遠沒救，所以一定要講）',
+       so2.sharpEdges(m, 1).hes.length, 0);
+  }
+
+  /** ⑤ 折板：夾角 11.25／22.5，門檻挑得動 */
+  {
+    const m = baked('bend', {});
+    eq('⑤ L 型折板 30 度 → 0 條（折彎被 arcSeg 分成 22.5 度的小段）',
+       so2.sharpEdges(m, 30).hes.length, 0);
+    eq('★★ 22 度 → 3 條', so2.sharpEdges(m, 22).hes.length, 3);
+    ok('★ 折板有邊界邊（它是開放的板件）',
+       so2.sharpEdges(m, 30).boundarySkipped > 0);
+  }
+
+  /** ⑥ 壞輸入不會壞 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    eq('⑥ 沒給網格不會壞', so2.sharpEdges(null, 30).hes.length, 0);
+    eq('★ 門檻不是數字不會壞', so2.sharpEdges(m, NaN).hes.length, 0);
+  }
+
+  /** ⑦ 選相似：方塊，四種判準各對一次答案 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const f0 = m.faces[0];
+    const seedF = { kind: 'face', face: f0 };
+    eq('⑦ 方塊【同法向】→ 1 個（六個面朝向都不同）',
+       so2.similarTo(m, seedF, 'normal').faces.length, 1);
+    eq('★★ 方塊【同面積】→ 2 個（對面那一片一樣大）',
+       so2.similarTo(m, seedF, 'area').faces.length, 2);
+    eq('★★ 方塊【同邊數】→ 6 個（六個面都是四邊形）',
+       so2.similarTo(m, seedF, 'sides').faces.length, 6);
+
+    const e60 = [...m.edges()].find(h => Math.abs(h.v.p.distanceTo(h.to.p) - 60) < 1e-9);
+    eq('★★ 方塊【同邊長】60 → 4 條（60×45×40 的長邊有四條）',
+       so2.similarTo(m, { kind: 'edge', he: e60 }, 'length').hes.length, 4);
+  }
+
+  /**
+   * ⑧ 🔴 **球：這一組的數字全部可以手算，⛔ 不是抄跑出來的結果。**
+   * segW12 × segH32 → 極點兩圈是三角形（12×2 ＝ 24 個），
+   * 其餘是四邊形（12×30 ＝ 360 個），合計 384。
+   */
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    eq('⑧ 前提：球一共 384 個面', m.faces.length, 384);
+    const quad = m.faces.find(f => m.faceVerts(f).length === 4);
+    eq('★★★ 【同邊數】從一個四邊形出發 → 360 個（＝ 12 × 30，兩圈三角形不算）',
+       so2.similarTo(m, { kind: 'face', face: quad }, 'sides').faces.length, 360);
+    eq('　 而 360 ＋ 24 ＝ 384（極點兩圈各 12 個三角形）',
+       360 + 24, m.faces.length);
+
+    const tri = m.faces.find(f => m.faceVerts(f).length === 3);
+    eq('★★ 從一個三角形出發 → 24 個（極點那兩圈）',
+       so2.similarTo(m, { kind: 'face', face: tri }, 'sides').faces.length, 24);
+    eq('★★ 【同面積】從極點的三角形出發 → 24 個（南北極對稱，各 12）',
+       so2.similarTo(m, { kind: 'face', face: tri }, 'area').faces.length, 24);
+  }
+
+  /**
+   * ⑨ 🔴 **判準跟型別對不起來要「講」，⛔ 不可以安靜地回 0 個。**
+   * 〔坑第 11 條：沉默地退回是最糟的做法〕
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const he = [...m.edges()][0];
+    const r1 = so2.similarTo(m, { kind: 'edge', he }, 'area');
+    ok('⑨ 選到邊卻挑「同面積」→ 要給得出理由', !!r1.reason, r1.reason);
+    eq('★ 而且不回傳任何元素', r1.faces.length + r1.hes.length, 0);
+
+    const r2 = so2.similarTo(m, { kind: 'face', face: m.faces[0] }, 'length');
+    ok('★★ 選到面卻挑「同邊長」→ 也要給得出理由', !!r2.reason, r2.reason);
+    ok('★ 沒選任何東西也要給得出理由', !!so2.similarTo(m, null, 'area').reason);
+  }
+
+  /**
+   * ⑩ 🔴 **容許值是 0.01 cm，而且它必須真的在做事。**
+   * 差 0.005 cm（比容許值小）要算一樣，差 0.05 cm（比它大）要算不一樣。
+   * ⚠ 這一條守的是坑第 25、26 條：**容許值要有物理意義，⛔ 不是 1e-6。**
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    eq('⑩ 容許值就是 0.01 cm', so2.SIMILAR_TOL_CM, 0.01);
+    const he = [...m.edges()].find(h => Math.abs(h.v.p.distanceTo(h.to.p) - 60) < 1e-9);
+    const seedE = { kind: 'edge', he };
+    eq('★★ 容許值放大到 6 cm → 60 與 45 的邊算成同一類（4 ＋ 4 ＝ 8 條）',
+       so2.similarTo(m, seedE, 'length', { tolCm: 16 }).hes.length, 8);
+    eq('★★ 容許值縮到 0.001 cm → 還是 4 條（真的一樣長，不是靠容許值湊的）',
+       so2.similarTo(m, seedE, 'length', { tolCm: 0.001 }).hes.length, 4);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  分離（＝ Blender 的 Separate）
 // ═══════════════════════════════════════════════════════
 

@@ -448,6 +448,29 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="selAllEdges" disabled title="全選邊：把這個物件所有看得見的邊一次選起來。要做整個物件的導角／圓角就先按它 —— 方塊 12 條邊不必再一條一條點">全選邊</button>
       <!--
+        選轉角：依夾角一次選出模型上所有折起來的邊（Blender 的 Select Sharp Edges）。
+
+        🔴 對分片是一條捷徑 —— 一次選出所有轉角，再決定哪幾條要標成切割線。
+        ⚠ 邊界邊（平板四周、洞口那一圈）選不進來：它沒有夾角可以算，
+        　 而 isMarkable() 早就擋掉了（「本來就是外輪廓」）。
+        　 → 所以平板按下去是 0 條，那個情形一定要講出原因（坑第 21 條）。
+      -->
+      <button id="selSharp" disabled title="選轉角：把模型上所有【折起來】的邊一次選起來（夾角大於旁邊那個度數的）。標分片切割線時先按它，不必一條一條點。⚠ 平板的四周、洞口那一圈是【開口邊緣】，沒有夾角可以算，選不進來">選轉角</button>
+      <input id="sharpDeg" type="number" min="1" max="180" step="1" value="30"
+             title="幾度以上算轉角：方塊的角是 90 度、32 段圓柱的側面只有 11.25 度。放大只選明顯的折角，調小連緩轉角也選進來">
+      <!--
+        選相似：跟【最後選的】那一個同一類的，全部選起來。
+        四種判準是 kang 2026-08-27 選的，四種都要。
+        種子用 active（橘色那個）—— 跟「中心＝最後選的」同一套。
+      -->
+      <button id="selSimilar" disabled title="選相似：跟【最後選的】那一個同一類的元素全部選起來。要選起球的全部 32 片就用它，不必點 32 下。判準在旁邊挑">選相似</button>
+      <select id="similarMode" title="什麼叫「相似」：同法向＝朝同一個方向的面；同面積＝一樣大的面；同邊長＝一樣長的邊；同邊數＝三角形選三角形、四邊形選四邊形">
+        <option value="normal">同法向</option>
+        <option value="area">同面積</option>
+        <option value="length">同邊長</option>
+        <option value="sides">同邊數</option>
+      </select>
+      <!--
         內縮：沿著面的外緣往面內長一圈邊。只加線、形狀不變。
         內圈那個新面會自動選中 → 接著用「拉面」沿法向推，就是凹槽／面板開口／邊框。
         （不做 Blender 的 Depth，理由同擠出方案 C：一個動作一件事）
