@@ -9891,27 +9891,57 @@ section('量測：選到的東西有多大');
      */
     const e60 = edgeEl(edgeOf(60));
 
-    // ── 總計：不管選幾個都只有一個字 ──
+    /**
+     * ── 總計：一整塊讀數（畫面左下角）──────────────────
+     *
+     * ⚠ **逐行驗，⛔ 不要把整串寫死** —— 最後一行是重心座標，
+     * 寫死等於把座標也綁進來，而那個已經有 measureSelection 那一節在守。
+     * 〔kang 2026-08-27 實測退回第一版（標在元素上、擋住 XYZ 拉桿），
+     * 　改成左下角一塊之後，這一組字從「一句話」變成「四行」〕
+     */
     {
-      const r1 = L(box, [e60], I, { mode: 'total' });
-      eq('總計 單選一條邊 → 1 個字', r1.items.length, 1);
-      eq('　　字就是長度＋單位', r1.items[0].text, '60.00 cm');
+      const rowsOf = (els, opt) => (L(box, els, I, opt || { mode: 'total' })
+        .items[0]?.text || '').split('\n');
 
-      const r4 = L(box, ring, I, { mode: 'total' });
-      eq('★ 總計 選 4 條邊 → 還是只有 1 個字', r4.items.length, 1);
+      const r1 = L(box, [e60], I, { mode: 'total' });
+      eq('總計 單選一條邊 → 1 塊讀數', r1.items.length, 1);
+      const a = rowsOf([e60]);
+      eq('　　三行：選到什麼／長度／重心', a.length, 3);
+      eq('　　第一行 選到幾個（⛔ 沒有單位就不是數量）', a[0], '1 條邊');
+      eq('　　第二行 長度＋單位', a[1], '長度 60.00 cm');
+      ok('　　最後一行是重心座標', a[2].startsWith('重心 X ') && a[2].endsWith(' cm'));
+
       /**
        * 🔴 **多選一定要連數量與單位一起寫。**
-       * 那個字站在重心上、⛔ 不站在任何一條邊上，只寫「210.00」會被
-       * 讀成「某一條有這麼長」——「講數量與形狀」那條規則的守門員。
+       * 只寫「210.00」會被讀成「某一條有這麼長」——
+       * 「講數量與形狀」那條規則的守門員。
        */
-      eq('★★ 總計 多選要寫出「幾條邊」', r4.items[0].text, '4 條邊\n總長 210.00 cm');
-      ok('★ 總計 那個字站在重心上',
-        r4.items[0].pos.distanceTo(measure.measureSelection(box, ring, I).center) < 1e-9);
+      const b = rowsOf(ring);
+      eq('★ 總計 選 4 條邊 → 還是只有 1 塊', L(box, ring, I, { mode: 'total' }).items.length, 1);
+      eq('★★ 總計 多選要寫出「幾條邊」', b[0], '4 條邊（共 4 個頂點）');
+      eq('★ 　　總長', b[1], '總長 210.00 cm');
+      eq('★ 　　多選才有外框（頂面那圈是平的，Y 是 0）',
+        b[2], '外框 60.00 × 0.00 × 45.00 cm');
+      ok('★ 總計 那串字講的位置是重心',
+        L(box, ring, I, { mode: 'total' }).items[0].pos
+          .distanceTo(measure.measureSelection(box, ring, I).center) < 1e-9);
 
-      const rf = L(box, [faceEl(top)], I, { mode: 'total' });
-      eq('總計 單選一個面 → 面積＋cm²', rf.items[0].text, '2700.00 cm²');
-      const rf6 = L(box, box.faces.map(faceEl), I, { mode: 'total' });
-      eq('★ 總計 全選六個面 → 1 個字、寫總面積', rf6.items[0].text, '6 個面\n總面積 13800.00 cm²');
+      const c = rowsOf([faceEl(top)]);
+      eq('總計 單選一個面 第一行', c[0], '1 個面');
+      eq('★ 　　面積與周長同一行（⚠ 面積是 cm²）',
+        c[1], '面積 2700.00 cm²　周長 210.00 cm');
+
+      const d = rowsOf(box.faces.map(faceEl));
+      eq('★ 總計 全選六個面 第一行', d[0], '6 個面（共 8 個頂點）');
+      eq('★★ 　　總面積，⛔ 沒有周長（多選時共用的邊會被算兩次）',
+        d[1], '總面積 13800.00 cm²');
+      eq('★ 　　外框 ＝ 方塊本身', d[2], '外框 60.00 × 40.00 × 45.00 cm');
+
+      /** ⚠ 單選一個點：上面那些量全是 null，最後一行改講「座標」⛔ 不講「重心」 */
+      const v = box.verts[0];
+      const e = rowsOf([{ kind: 'vertex', vert: v }]);
+      eq('★ 單選一個點 → 兩行', e.length, 2);
+      eq('　　⛔ 不寫「重心」，寫「座標」', e[1].startsWith('座標 X '), true);
     }
 
     // ── 每一個：字數 ＝ 元素數，而且各標各的 ──
@@ -9986,8 +10016,8 @@ section('量測：選到的東西有多大');
       const S2 = new THREE.Matrix4().makeScale(2, 2, 2);
       eq('★★ 放大 2 倍 每一個的字也 2 倍',
         L(box, [e60], S2, { mode: 'each' }).items[0].text, '120.00 cm');
-      eq('★★ 放大 2 倍 總計的字也跟著',
-        L(box, ring, S2, { mode: 'total' }).items[0].text, '4 條邊\n總長 420.00 cm');
+      eq('★★ 放大 2 倍 總計那一塊也跟著',
+        L(box, ring, S2, { mode: 'total' }).items[0].text.split('\n')[1], '總長 420.00 cm');
     }
 
     // ── 沒有選取就一個字都沒有，⛔ 不要回一個空字串的標籤 ──

@@ -203,23 +203,38 @@ function fmtXYZ(p) {
 const UNIT_OF = { vertex: '個點', edge: '條邊', face: '個面' };
 
 /**
- * 🔴 **選到的東西該在 3D 畫面上標什麼字、標在哪裡。**
+ * 🔴 **選到的東西該顯示什麼字、那串字講的是哪裡。**
  *
  * kang 2026-08-25 拍板「**只有選到的才顯示**」，跟 Blender 的
  * Measurement overlay 一致 —— 方塊 12 條邊全標就已經看不清楚了。
  *
- * ── 兩種模式（kang 2026-08-27 拍板做成可切換）─────────────
- * 他的原話：「**是不是有一個選項可以變換標示..不然一起出現可能會很擠**」。
+ * ── 兩種模式 ─────────────────────────────────────────
  *
- * | 模式 | 選 32 條邊時 |
- * |---|---|
- * | `'total'`（預設）| **1 個字**，在整份選取的重心：「32 條邊　總長 156.83 cm」|
- * | `'each'` | **32 個字**，每條邊中間各一個：「4.90 cm」|
+ * | 模式 | 選 32 條邊時 | 畫在哪 |
+ * |---|---|---|
+ * | `'total'` | **一整塊讀數**（幾條／總長／外框／重心）| 🔴 **畫面左下角**，固定位置 |
+ * | `'each'` | **32 個字**，每條邊中間各一個：「4.90 cm」| 元素身上（3D Sprite）|
  *
- * 🔴 **`'total'` 多選時一定要連數量一起寫**（「32 條邊」那半）——
- * 那個字站在重心上、**不站在任何一個元素上**，只寫「156.83」會被
- * 讀成「某一條有這麼長」。⭐ 而且兩個數字擺在一起就互相驗得起來：
- * 156.83 ÷ 32 ＝ 4.90，對不上就會被**使用者**看見（鐵律三）。
+ * 🔴🔴 **`'total'` ⛔ 不畫在元素上了 —— kang 2026-08-27 實測當場退回。**
+ *
+ * > 他的原話：「**顯示位置..目前顯示集中在 XYZ 控制軸..這樣很難選**」
+ *
+ * ⚠ **病因是設計上必然，⛔ 不是巧合**：那個字站在選取的重心上，
+ * 而 **gizmo 掛的就是同一個點**（兩邊都借 `elementCenter()`）——
+ * 所以它們**一定**搶同一個位置，結果是數字擋住拉桿、拉桿擋住數字。
+ * ⭐ 左下角那塊**不指向任何位置**，所以它擋不到任何東西。
+ *
+ * ⚠ **⛔ 這跟刀具第一版那個坑不一樣**：那次失敗是因為那條線
+ * **指著模型上的某個位置**，畫在螢幕座標系就對不上。
+ * 左下角這塊就像旁邊的 FPS 那格，⛔ 不指向任何地方。
+ *
+ * ⏭ **`'each'` 暫時沒有介面入口**（kang 2026-08-27：「**每一個先暫時收起來...
+ * 我思考一下還有甚麼方式可以呈現..會在跟你說想法**」）——
+ * ⛔ **不是不做，也 ⛔ 不是殘骸**：程式與測試都留著等他的想法。
+ *
+ * 🔴 **多選時一定要連數量一起寫**（「32 條邊」那半）——
+ * 只寫「156.83」會被讀成「某一條有這麼長」。⭐ 而且兩個數字擺在一起
+ * 就互相驗得起來：156.83 ÷ 32 ＝ 4.90，對不上會被**使用者**看見（鐵律三）。
  *
  * ── ⛔ 數字不在這裡另算一份 ──────────────────────────────
  * 總計那一組直接問 `measureSelection()`，**跟右邊面板同一個來源**。
@@ -249,24 +264,49 @@ export function measureLabels(mesh, els, M, opt = {}) {
   if (!mesh || !Array.isArray(els) || !els.length) return none;
   const kind = els[0].kind;
 
-  // ── 總計：一個字，站在重心上 ──────────────────────────
+  // ── 總計：一整塊讀數（畫在畫面左下角，⛔ 不畫在元素上）──
   if (mode === 'total') {
     const ms = measureSelection(mesh, els, M, pivot, tolDeg);
     if (!ms) return none;
 
     const many = els.length > 1;
-    const head = many ? `${els.length} ${UNIT_OF[kind] || '個'}\n` : '';
-    let body;
-    if (kind === 'edge') {
-      body = `${many ? '總長 ' : ''}${fmtCm(ms.length || 0)} cm`;
-    } else if (kind === 'face') {
-      body = `${many ? '總面積 ' : ''}${fmtCm(ms.area || 0)} cm²`;
-    } else {
-      // 點：單選就是它自己的位置；多選時重心才是那個字站的地方，要講明
-      body = (many ? '重心 ' : '') + fmtXYZ(ms.center);
+    const rows = [];
+
+    /** 第一行：選到幾個、什麼型別。⛔ 沒有單位就不是數量（坑第 20 條）*/
+    rows.push(many
+      ? `${els.length} ${UNIT_OF[kind] || '個'}（共 ${ms.vertCount} 個頂點）`
+      : `1 ${UNIT_OF[kind] || '個'}`);
+
+    /** 第二行：尺寸。⚠ 哪些量有意義是 `measureSelection()` 決定的，這裡只管排版 */
+    const dim = [];
+    if (ms.length !== null) dim.push(`${many ? '總長' : '長度'} ${fmtCm(ms.length)} cm`);
+    if (ms.area !== null) dim.push(`${many ? '總面積' : '面積'} ${fmtCm(ms.area)} cm²`);
+    if (ms.perimeter !== null) dim.push(`周長 ${fmtCm(ms.perimeter)} cm`);
+    if (ms.holes) dim.push(`（有 ${ms.holes} 個洞，周長只算外緣）`);
+    if (dim.length) rows.push(dim.join('　'));
+
+    /** 第三行：外框。只有多選才有意義（單選一條邊的外框就是它自己）*/
+    if (many) {
+      rows.push(`外框 ${fmtCm(ms.size.x)} × ${fmtCm(ms.size.y)} × ${fmtCm(ms.size.z)} cm`);
     }
+
+    /**
+     * 最後一行：座標。
+     * ⚠ 單選一個點時上面那些量全是 `null`，所以這一行就是它**自己的位置**，
+     * ⛔ 不要寫「重心」—— 一個點的重心就是它自己，那兩個字只會讓人多想一次。
+     */
+    const isOneVert = kind === 'vertex' && !many;
+    rows.push((isOneVert ? '座標' : (many && pivot === 'active' ? '中心（最後選的）' : '重心'))
+      + ` X ${fmtCm(ms.center.x)}　Y ${fmtCm(ms.center.y)}　Z ${fmtCm(ms.center.z)} cm`);
+
+    /**
+     * ⚠ **`pos` 在這個模式下呼叫端用不到**（左下角那塊是固定位置）——
+     * 但它照樣要給：`measureLabels()` 是純資料函式，
+     * 回「這串字 ＋ 它講的是哪裡」才是完整的描述，用不用是呼叫端的事。
+     * ⭐ 而且測試守著它，⛔ 不是殘骸。
+     */
     return {
-      items: [{ text: head + body, pos: ms.center.clone() }],
+      items: [{ text: rows.join('\n'), pos: ms.center.clone() }],
       total: 1, shown: 1, tooMany: false
     };
   }

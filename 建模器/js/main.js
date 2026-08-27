@@ -21,7 +21,6 @@ import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
-import { MEASURE_LABELS_MAX } from './core/measure.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
@@ -60,6 +59,13 @@ const sel = new Selection(view, {
    * 〔重複呼叫沒關係：1000 個點重建一次是微秒級，而這裡是事件驅動不是每幀〕
    */
   onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
+  /**
+   * 量測讀數變了 → 重畫左下角那一塊。
+   * ⚠ `select.js` 刻意**不碰 DOM**（它是 view 層），所以字從這裡進 HTML。
+   * ⭐ 走 hook ⛔ 不是讓 main.js 自己去問，是因為重畫的時機
+   * （選取變動、清空選取、換模式）**只有 select.js 知道**。
+   */
+  onMeasure: r => updateMeasureBox(r),
   /** 刀具：點下去吸到最近的邊，`hit` 帶著那條邊與邊上的落點 */
   onKnifePick: (hit, info) => knifePick(hit, info),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
@@ -408,7 +414,7 @@ $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
-$('measureMode').onchange = () => changeMeasureMode();
+$('measureHud').onclick = () => toggleMeasureHud();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
@@ -1708,32 +1714,58 @@ function toggleVertexDots() {
 }
 
 /**
- * 🔴 **標尺寸：把量到的數字畫到 3D 畫面上**（量測第 2 步）。
+ * 🔴 **量測讀數：把左下角那一塊填好**（量測第 2 步）。
+ *
+ * 那串字是 `measureLabels('total')` 產生的 —— ⛔ 這裡**不算任何數字**，
+ * 只把換行變成 `<br>`。⭐ 跟右邊面板同一個 `measureSelection()` 來源。
+ *
+ * ⚠ **沒東西可寫就整塊藏起來**，⛔ 不要留一個空框在那裡
+ * （一個永遠佔著位置的空盒子，比沒有它更讓人以為壞了）。
+ *
+ * 🔴 **第一行是「選到幾個」，⛔ 用灰色**（`mHead`）——
+ * 它是**標題不是數字**，跟底下那些量放同一個顏色就分不出主從了。
+ */
+function updateMeasureBox(r) {
+  const box = $('measureBox');
+  const rows = (r && r.hudText) ? r.hudText.split('\n') : [];
+  if (!rows.length) { box.hidden = true; box.innerHTML = ''; return; }
+
+  box.hidden = false;
+  box.innerHTML = rows
+    .map((s, i) => i === 0
+      ? `<div class="mHead">${esc(s)}</div>`
+      // 數字加粗：一行裡文字與數字混著，不分開的話讀的人要自己找
+      : `<div>${esc(s).replace(/(-?\d+\.\d+)/g, '<b>$1</b>')}</div>`)
+    .join('');
+}
+
+/** ⚠ 這串字是程式產生的、⛔ 不含使用者輸入，但照樣跳脫 —— 物件名字日後可能被寫進來 */
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+/**
+ * 🔴 **標尺寸的開關**（量測第 2 步）。
  *
  * kang 2026-08-25 拍板「**只有選到的才顯示**」；
- * 2026-08-27 又拍板做成**三段可切換**（「不然一起出現可能會很擠」）。
+ * 2026-08-27 實測退回第一版的位置 ——「顯示集中在 XYZ 控制軸..這樣很難選」，
+ * 所以讀數改到**畫面左下角**那一塊。
  *
- * ⚠ **每一次換都要講一句**，包含關掉的時候 ——
- * 一個換過去畫面上字消失／變多的下拉，不講就跟壞掉分不出來（坑第 21 條）。
+ * ⚠ **關掉的時候也要講一句。** 一顆按下去畫面上東西消失的按鈕，
+ * 不講的話跟「壞了」分不出來（坑第 21 條）。
  *
- * 🔴 **超過上限的時候要講出實際數量**，⛔ 不可以只說「太多了」
- * （坑第 20 條：把數字講出來，使用者才知道差多少、該怎麼辦）。
+ * ⏭ **原本還有一段「每一個」，kang 決定先收起來** ——
+ * `sel.setMeasureMode('each')` 還收得下，只是**目前沒有介面在傳它**。
  */
-function changeMeasureMode() {
-  const mode = $('measureMode').value;
-  const r = sel.setMeasureMode(mode);
+function toggleMeasureHud() {
+  const on = sel.measureMode === 'off';
+  const r = sel.setMeasureMode(on ? 'total' : 'off');
+  $('measureHud').classList.toggle('on', on);
 
-  if (mode === 'off') { toast('尺寸的標示關掉了 —— 右邊面板那一行不受影響'); return; }
-  if (r.tooMany) {
-    toast(`選到 ${r.total} 個，超過 ${MEASURE_LABELS_MAX} 個就不標了 —— `
-        + '全部標出來會擠成一團，在平板上也可能變慢。切回「總計」只會標一個字', true);
-    return;
-  }
-  if (!sel.editMode) { toast('尺寸的標示開了 —— 進「拉點線面」之後才看得到'); return; }
-  if (!r.shown) { toast('尺寸的標示開了 —— 先選一個點、邊或面'); return; }
-  toast(mode === 'each'
-    ? `每一個都標：畫面上 ${r.shown} 個數字`
-    : '總計：畫面上 1 個數字，寫在選取的重心上');
+  if (!on) { toast('尺寸的讀數關掉了 —— ⚠ 右邊面板那一行不受影響'); return; }
+  if (!sel.editMode) { toast('尺寸的讀數開了 —— 進「拉點線面」之後才看得到'); return; }
+  if (!r.shown) { toast('尺寸的讀數開了 —— 先選一個點、邊或面'); return; }
+  toast('尺寸的讀數開了 —— 在畫面左下角，FPS 那塊的右邊');
 }
 
 /**

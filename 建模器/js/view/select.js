@@ -1883,27 +1883,47 @@ export class Selection {
    *          `tooMany` ＝ 超過上限整批沒畫，**呼叫端必須講出實際數量**
    */
   refreshMeasureLabels() {
-    const none = { shown: 0, total: 0, tooMany: false };
+    const none = { shown: 0, total: 0, tooMany: false, hudText: '' };
     const act = this.editSel;
     const on = this.measureMode !== 'off' && this.editMode && act;
-    if (!on) { this.view.clearMeasureLabels(); return none; }
+
+    const give = r => { this.hooks.onMeasure?.(r); return r; };
+    if (!on) { this.view.clearMeasureLabels(); return give(none); }
 
     const node = this.view.nodeOf(act.obj.id);
     const mesh = act.obj.mesh();
-    if (!node || !mesh) { this.view.clearMeasureLabels(); return none; }
+    if (!node || !mesh) { this.view.clearMeasureLabels(); return give(none); }
 
     node.updateMatrixWorld(true);
     const r = measureLabels(mesh, this.editSels, node.matrixWorld, {
       mode: this.measureMode, pivot: this.editPivot
     });
-    this.view.setMeasureLabels(r.items);
-    return { shown: r.shown, total: r.total, tooMany: r.tooMany };
+
+    /**
+     * 🔴 **`'total'` ⛔ 不畫進 3D 場景** —— 它是畫面左下角那一塊。
+     * 〔kang 2026-08-27 實測退回：「顯示集中在 XYZ 控制軸..這樣很難選」——
+     * 　那個字站在重心上，而 gizmo 掛的就是同一個點，兩者一定搶位置〕
+     *
+     * ⚠ **這一支 ⛔ 不碰 DOM**：它是 view 層，只把字交出去，
+     * 由 `main.js` 的 `updateMeasureBox()` 寫進 `#measureBox`。
+     */
+    const hudText = this.measureMode === 'total' ? (r.items[0]?.text || '') : '';
+    if (this.measureMode === 'total') this.view.clearMeasureLabels();
+    else this.view.setMeasureLabels(r.items);
+
+    return give({ shown: r.shown, total: r.total, tooMany: r.tooMany, hudText });
   }
 
   /**
    * 換「標尺寸」的模式。
+   *
+   * ⏭ **`'each'` 目前沒有任何介面在傳進來**（kang 2026-08-27 決定
+   * 「每一個先暫時收起來…會在跟你說想法」）——
+   * ⛔ **這裡刻意還收得下它**，等他的想法回來時 ⛔ 不必再改這一支。
+   * 🔴 ⚠ 但這代表「寫好了而使用者按不到」，⛔ 不可以安靜地留著：
+   * 日誌待辦有一條掛著它，`index.html` 那顆按鈕上面的註解也寫了。
+   *
    * ⚠ 換完要立刻重畫，⛔ 不能等下一次選取變動 —— 那就是一顆按了沒反應的按鈕。
-   * @returns {{shown:number,total:number,tooMany:boolean}} 呼叫端拿去講數量
    */
   setMeasureMode(mode) {
     this.measureMode = (mode === 'off' || mode === 'each') ? mode : 'total';

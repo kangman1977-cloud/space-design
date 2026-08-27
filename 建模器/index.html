@@ -219,17 +219,52 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
 .anaFoot { margin-top: 10px; font-size: 11px; color: #565c66; }
 
 /* ══ 狀態列 ════════════════════════════════════════ */
-#status {
+/*
+  左下角那一列。⚠ 定位在這個容器上，⛔ 不在裡面兩塊各自身上。
+
+  🔴 原本 #status 自己 absolute。多一塊「量測讀數」之後，要讓兩塊
+  並排而且【永遠不重疊】—— 靠給第二塊寫死一個 left 值辦不到，
+  因為 #status 的寬度會隨內容變（物件名字一長就撞上去），
+  而那種撞法【畫面上看起來只是擠在一起，不會有任何東西報錯】。
+  → 包成 flex，寬度自己排開。
+
+  pointer-events:none 從 #status 搬到這裡（意思不變：整列都穿得過去）。
+*/
+#hud {
   position: absolute;
   left: calc(10px + env(safe-area-inset-left));
   bottom: calc(10px + env(safe-area-inset-bottom));
+  display: flex; align-items: flex-end; gap: 10px;
+  pointer-events: none;
+  /*
+    ⚠ 兩塊加起來約 445px。平板直向（768）放得下，⛔ 但更窄的畫面會超出去。
+    flex-wrap 是便宜的保險：塞不下就換行往上長（跟工具列 .grp 同一個作風），
+    ⛔ 不會被切掉、也不會把畫面撐寬。
+  */
+  flex-wrap: wrap; max-width: calc(100% - 20px);
+}
+#status, #measureBox {
   padding: 8px 12px; border-radius: 8px;
   background: rgba(20,23,28,.85); border: 1px solid #3a3f48;
-  font-size: 12px; line-height: 1.65; pointer-events: none;
+  font-size: 12px; line-height: 1.65;
   font-variant-numeric: tabular-nums;
 }
 #status b { color: #7fd7a5; font-weight: 600; }
 #status .dim2 { color: #8b93a1; }
+
+/*
+  量測讀數（量測第 2 步）：選到的點／邊／面有多大。
+
+  🔴 為什麼在左下角，⛔ 不是標在元素身上：kang 2026-08-27 實測退回 ——
+  「顯示位置..目前顯示集中在 XYZ 控制軸..這樣很難選」。
+  數字站在選取的重心上，而 gizmo 掛的就是同一個點，兩者【一定】會搶位置。
+
+  字比狀態列大一點（13px）—— 它是【要讀出數字】的，不是狀態指示。
+  沒選到子元素時整塊 hidden，⛔ 不留一個空框在那裡。
+*/
+#measureBox { font-size: 13px; color: #e8eaed; }
+#measureBox b { color: #ffe07a; font-weight: 600; }
+#measureBox .mHead { color: #8b93a1; font-size: 12px; }
 
 /* ══ 提示條 ════════════════════════════════════════ */
 #toast {
@@ -420,22 +455,25 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="vertDots" class="on" title="顯示點：把這個物件所有的點標成小白圈。「邊上加點」加在邊中間的點沒有它就看不到位置。⚠ 只在過濾器是「點」或「自動」時有作用；覺得卡就關掉">顯示點</button>
       <!--
-        標尺寸（量測第 2 步）：把選到的尺寸畫到 3D 畫面上。
-        右邊面板那一行永遠照舊，這裡補的是「不必把視線移到右邊」那一半。
+        標尺寸（量測第 2 步）：選到的點／邊／面有多大，顯示在【畫面左下角】。
 
-        🔴 做成三段可切換而不是開關，是 kang 2026-08-27 拍板的：
-        　　「是不是有一個選項可以變換標示..不然一起出現可能會很擠」。
-        預設「總計」也是他選的 —— 永遠只有一個字，不可能擠。
+        🔴 2026-08-27 kang 實測當場退回了第一版（原本標在元素身上）：
+        　　「顯示位置..目前顯示集中在 XYZ 控制軸..這樣很難選」。
+        　　病因是設計上必然 —— 那個字站在選取的重心上，而 gizmo 掛的
+        　　就是同一個點，兩者一定搶位置。
+
+        ⏭ 原本還有一段「每一個」（32 條邊各標自己的長度，標在元素身上），
+        　　kang 同日決定「每一個先暫時收起來...我思考一下還有甚麼方式
+        　　可以呈現..會在跟你說想法」——
+        　　⛔ 不是不做：measureLabels() 的 'each' 與它的測試都還在，
+        　　只是【介面上暫時沒有入口】。等他的想法再接回來。
+        　　→ 剩兩段就是開關，所以做成按鈕（跟旁邊「顯示點」同一個作風，
+        　　　 平板也比兩選項的下拉好按）。
 
         ⚠ 放在「顯示點」旁邊而不是「檢視」那一組，理由跟它一樣：
         　　只在編輯模式、選到子元素時才有意義，跟檢視模式無關。
       -->
-      <span class="lbl">標尺寸</span>
-      <select id="measureMode" title="把選到的尺寸畫到 3D 畫面上（右邊面板那一行不受影響）。總計＝不管選幾個都只標一個字，寫在整份選取的重心上；每一個＝每條邊、每個面各標自己的數字，⚠ 選很多時會擠成一團">
-        <option value="total">總計</option>
-        <option value="each">每一個</option>
-        <option value="off">關</option>
-      </select>
+      <button id="measureHud" class="on" title="標尺寸：選到的點／邊／面有多大，顯示在【畫面左下角】那一塊（⛔ 不會擋住 XYZ 拉桿）。邊看長度、面看面積與周長、多選看總計與外框，每一種都附重心座標。⚠ 右邊面板那一行不受這顆按鈕影響">標尺寸</button>
       <button id="extrude" disabled title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
       <button id="flatten" disabled title="壓平：把選到的面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變（圓柱那一段會被削平）。想把好幾片 seg 變成一個平面就用它">壓平</button>
       <!--
@@ -701,17 +739,26 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <canvas id="cv"></canvas>
       <div id="marqueeBox" hidden></div>
       <div id="toast"></div>
-      <div id="status">
-        <!-- ⛔ 這裡不要加 title 說明：#status 是 pointer-events:none（見上面的 CSS），
-             滑鼠穿過去不會停在它身上，所以 title 永遠不會跳出來。
-             2026-08-26 加過一次，kang 實測時發現「我要怎麼看？」——
-             那正是「開清單前先問：使用者驗得出這個結果嗎」漏掉的一項。
-             ⚠ 拿掉 pointer-events:none 可以讓 title 生效，但那樣狀態列
-             就會擋住左下角那塊模型（連從那裡開始拖曳轉視角都會失效）——
-             為了一個說明賠掉一塊可以操作的畫面，不划算。 -->
-        <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
-        <div><span class="dim2">物件</span> <b id="sObj">0</b>　<span class="dim2">已選</span> <b id="sSel">0</b></div>
-        <div class="dim2" id="sInfo">點一下物件選取它</div>
+      <div id="hud">
+        <div id="status">
+          <!-- ⛔ 這裡不要加 title 說明：#hud 是 pointer-events:none（見上面的 CSS），
+               滑鼠穿過去不會停在它身上，所以 title 永遠不會跳出來。
+               2026-08-26 加過一次，kang 實測時發現「我要怎麼看？」——
+               那正是「開清單前先問：使用者驗得出這個結果嗎」漏掉的一項。
+               ⚠ 拿掉 pointer-events:none 可以讓 title 生效，但那樣這一列
+               就會擋住左下角那塊模型（連從那裡開始拖曳轉視角都會失效）——
+               為了一個說明賠掉一塊可以操作的畫面，不划算。
+               ⚠ 2026-08-27 那個屬性搬到 #hud 了，意思不變：整列都穿得過去。 -->
+          <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
+          <div><span class="dim2">物件</span> <b id="sObj">0</b>　<span class="dim2">已選</span> <b id="sSel">0</b></div>
+          <div class="dim2" id="sInfo">點一下物件選取它</div>
+        </div>
+        <!--
+          量測讀數。內容由 js/main.js 的 updateMeasureBox() 填，
+          而那串字是 js/core/measure.js 的 measureLabels('total') 產生的
+          —— ⛔ 跟右邊面板同一個 measureSelection() 來源，⛔ 不另算一份。
+        -->
+        <div id="measureBox" hidden></div>
       </div>
     </div>
 
