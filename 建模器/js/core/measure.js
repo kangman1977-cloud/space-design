@@ -274,34 +274,139 @@ function repPoint(mesh, el, M, tolDeg) {
  *
  * @returns {string[]} 報不出來就回空陣列（⛔ 不回一行「算不出來」佔位）
  */
+/**
+ * 🔴 **選到的這些邊，連不連成「一條」線？**
+ *
+ * ── ⚠ 這一關是 kang 2026-08-27 用四張實測截圖逼出來的 ────
+ * 第一版**沒有這一關**，於是只要選到的不是「平平的一整圈」，
+ * 上面那三行就會給出一組**沒有意義、但看起來很正常的數字**：
+ *
+ * | 他選的 | 邊 : 點 | 畫面亂寫 | 實際 |
+ * |---|---|---|---|
+ * | 圓柱**直立**的邊 | 32 : 64 | 每段弦長 **70.00** | 70 是**柱高**，⛔ 跟圓無關 |
+ * | 圓柱**上下兩圈** | 64 : 64 | 半徑 **39.21** | 這根圓柱半徑是 **25** |
+ * | 圓柱 `全選邊` | 96 : 64 | 差 **2307.25** | ⛔ 完全沒有意義 |
+ * | 球的**半條經線** | 16 : 17 | 視為理想圓 **188.50** | 那是**整圈**，他只選了半圈 |
+ *
+ * 🔴🔴 **⛔ 判準不是「數量對不對」** —— 中間那一列 **64 : 64** 剛好
+ * 「邊數 ＝ 點數」，用數量檢查會**放它過關**，而它其實是**兩圈**。
+ * 〔鐵律二：連續幾種聽起來很對的規則都失敗時，多半是**問錯問題**了。
+ * 　⭐ 同一句話上一次出現在 `選一圈面`：先用 `closed`、再用「面數＝＝邊數」，
+ * 　兩個都被 kang 的實測打掉，正解是「選到的面全部都是四邊形」——
+ * 　**那次也不是數量問題**〕
+ *
+ * ⭐ **真正要問的是「它長得像不像一條線」**，兩件事：
+ * **① 每個角上最多只有兩條邊交會　② 只有一段（⛔ 不是分成好幾段）**
+ *
+ * @returns {{closed:boolean, reason:null}|{reason:string}}
+ *          `closed` ＝ 首尾接回來了（⛔ 不是的話就是一段開放的弧）
+ */
+function edgeChain(els) {
+  const deg = new Map(), adj = new Map();
+  const touch = (a, b) => {
+    deg.set(a, (deg.get(a) || 0) + 1);
+    if (!adj.has(a)) adj.set(a, []);
+    adj.get(a).push(b);
+  };
+  for (const e of els) { touch(e.he.v, e.he.to); touch(e.he.to, e.he.v); }
+
+  /** ① 有角上超過兩條邊 → 那是一張網，⛔ 不是一條線〔`全選邊` 那張〕*/
+  let branch = 0;
+  for (const d of deg.values()) if (d > 2) branch++;
+  if (branch) {
+    return { reason: `有 ${branch} 個角上不只兩條邊交會，這不是一整圈` };
+  }
+
+  /** ② 走一遍看分成幾段〔上下兩圈 ＝ 2 段；32 條直立邊 ＝ 32 段〕*/
+  const seen = new Set();
+  let blocks = 0;
+  for (const v of deg.keys()) {
+    if (seen.has(v)) continue;
+    blocks++;
+    const st = [v];
+    seen.add(v);
+    while (st.length) {
+      const x = st.pop();
+      for (const y of (adj.get(x) || [])) if (!seen.has(y)) { seen.add(y); st.push(y); }
+    }
+  }
+  if (blocks > 1) {
+    return { reason: `這 ${els.length} 條邊分成 ${blocks} 段，⛔ 不是一整圈` };
+  }
+
+  /** ③ 端點數：0 ＝ 接回來了、2 ＝ 一段開放的弧，其餘不成立 */
+  let ends = 0;
+  for (const d of deg.values()) if (d === 1) ends++;
+  if (ends !== 0 && ends !== 2) return { reason: '這些邊沒有連成一條' };
+  return { closed: ends === 0, reason: null };
+}
+
+/**
+ * 🔴 **「平」的容許值：0.01 cm ＝ 0.1 mm。**
+ *
+ * ⚠ **⛔ 不用 1e-6** —— 那是浮點數的尺度，⛔ 不是板材的尺度（坑第 25、26 條）。
+ * ⭐ 0.01 cm 的理由是現成的，而且就寫在這支檔案開頭：
+ * **它正是 `MEASURE_DP` 兩位小數的解析度，也是可切容許值。**
+ */
+const CIRCLE_FLAT_TOL_CM = 0.01;
+
 function circleRows(mesh, els, M, tolDeg) {
   const kind = els[0].kind;
-  /** ⚠ 只對「一圈邊」有意義。面有自己的周長，點沒有段數可言 */
+  /** ⚠ 只對邊有意義。面有自己的周長，點沒有段數可言 */
   if (kind !== 'edge') return [];
 
+  /**
+   * 🔴 **擋下來的時候要講清楚是被什麼擋住的，⛔ 不是沉默地不顯示。**
+   * 〔坑第 11 條：沉默地退回，使用者會以為功能壞掉了。
+   * 　而日誌那條「寫『不行』一定要寫清楚被什麼擋住」在這裡也成立〕
+   */
+  const chain = edgeChain(els);
+  if (chain.reason) return [`⚠ ${chain.reason}，圓算不出來`];
+
   const r = toCircle(mesh, els, { tolDeg, dryRun: true });
-  if (!r || !r.ok) return [];
+  if (!r || !r.ok) return [`⚠ ${(r && r.reason) || '這些點排不出一個圓'}`];
+
+  /** 第 2 關：歪掉的一圈算出來的半徑沒有意義〔他選 32 條直立邊那張，差 25 cm〕*/
+  if (r.flattened > CIRCLE_FLAT_TOL_CM) {
+    return [`⚠ 這一圈是歪的（最遠差 ${fmtCm(r.flattened)} cm），圓算不出來`];
+  }
 
   const R = r.fitted;
-  const ideal = 2 * Math.PI * R;
-  const mesh1 = els.reduce((s, e) => s + edgeLength(e.he, M), 0);
   const seg = els.length;
+  const chords = els.map(e => edgeLength(e.he, M));
+  const mesh1 = chords.reduce((s, c) => s + c, 0);
+
+  /**
+   * 🔴 **接回來了就跟「整個圓」比；只選了一段就跟「那一段的弧」比。**
+   *
+   * ⚠ **這一格是 kang 的球那張逼出來的**：他選了**半條經線**，
+   * 而畫面拿 2πR（**整圈**）去比 —— 差額變成「另外半圈的長度」，
+   * ⛔ 那不是誤差，是**比錯對象**。
+   *
+   * 一段弧的理想長度 ＝ Σ 每一段的圓心角 × R，
+   * 而每一段的圓心角由**它自己的弦長**回推：`2·asin(弦/2R)`。
+   * ⭐ 球那張因此會從「188.50 差 94.40」變成「**94.25 差 0.15**」。
+   *
+   * ⚠ `clamp` 是保險：弦比直徑長時 `asin` 會回 NaN ——
+   * 那種情形前兩關通常已經擋掉，但**⛔ 不要留一個會回 NaN 的算式**。
+   */
+  const ideal = chain.closed
+    ? 2 * Math.PI * R
+    : chords.reduce((s, c) => s + 2 * R * Math.asin(Math.min(1, c / (2 * R))), 0);
 
   /**
    * ⚠ **半徑是網格自己的座標算出來的**（`toCircle` 不吃矩陣），
    * 而網格真值那一半是**世界座標**。物件被縮放過時兩者對不起來，
-   * ⛔ 不可以讓它安靜地錯 —— 講出來。
-   * 〔跟結構分析「表面積沒有含縮放」那一條同一個處理方式〕
+   * ⛔ 這一項還沒解 —— 見日誌待辦。
    */
-  const rows = [
-    `這一圈當成圓：半徑 ${fmtCm(R)} cm　${seg} 段`,
+  return [
+    chain.closed
+      ? `這一圈當成圓：半徑 ${fmtCm(R)} cm　${seg} 段`
+      : `這一段當成圓弧：半徑 ${fmtCm(R)} cm　${seg} 段`,
     `每段弦長 ${fmtCm(mesh1 / seg)} cm`,
-    `網格真值 ${fmtCm(mesh1)}　視為理想圓 ${fmtCm(ideal)}　差 ${fmtCm(Math.abs(ideal - mesh1))} cm`
+    `網格真值 ${fmtCm(mesh1)}　${chain.closed ? '視為理想圓' : '視為理想弧'} `
+      + `${fmtCm(ideal)}　差 ${fmtCm(Math.abs(ideal - mesh1))} cm`
   ];
-  if (r.flattened > 1e-6) {
-    rows.push(`（這一圈不在同一個平面上，最遠差 ${fmtCm(r.flattened)} cm）`);
-  }
-  return rows;
 }
 
 export function pairDistance(mesh, els, M, tolDeg = 0.5) {

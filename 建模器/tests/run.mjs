@@ -10149,6 +10149,101 @@ section('量測：選到的東西有多大');
     }
 
     /**
+     * ═══════════════════════════════════════════════
+     *  🔴🔴 kang 2026-08-27 的四張實測截圖，逐一釘成測試
+     *
+     *  ⚠ **第一版四個全部給出「看起來很正常但沒有意義」的數字** ——
+     *  因為我只驗了「完美的一圈」（圓柱圓蓋、方塊四條邊）。
+     *  🔴 那正是坑第 17 條：**挑樣本要涵蓋不同的「網格結構」，
+     *  ⛔ 不只是不同的形狀** —— 只驗了一類等於沒驗。
+     * ═══════════════════════════════════════════════
+     */
+    {
+      const C = (m, e) => measure.measureLabels(m, e, I2, { mode: 'total', circle: true })
+        .items[0].text;
+      const cylEl = he => ({ kind: 'edge', he });
+
+      // ① 圓柱「直立」的 32 條邊：互不相連（32 邊 64 點）
+      {
+        const up = [...cyl.edges()].filter(he =>
+          Math.abs(he.v.p.y - he.to.p.y) > 1e-6).map(cylEl);
+        ok('① 圓柱有一堆直立的邊', up.length >= 32);
+        const t = C(cyl, up.slice(0, 32));
+        ok('★★ ① 32 條直立邊 → 講「分成 32 段」，⛔ 不報圓',
+          t.includes('分成 32 段') && t.includes('圓算不出來'));
+        ok('★★ 　　⛔ 而且不再印「每段弦長」那種沒有意義的數字',
+          !t.includes('每段弦長'));
+      }
+
+      // ② 圓柱上下「兩圈」：🔴 邊數 ＝ 點數 ＝ 64，數量檢查會放它過關
+      {
+        const botY = cyl.verts.reduce((m, v) => Math.min(m, v.p.y), 1e9);
+        const bothRings = [...cyl.edges()].filter(he => {
+          const sameY = Math.abs(he.v.p.y - he.to.p.y) < 1e-9;
+          const atCap = Math.abs(he.v.p.y - topY) < 1e-9 || Math.abs(he.v.p.y - botY) < 1e-9;
+          return sameY && atCap;
+        }).map(cylEl);
+        eq('② 上下兩圈是 64 條邊', bothRings.length, 64);
+        const vs = new Set();
+        for (const e of bothRings) { vs.add(e.he.v); vs.add(e.he.to); }
+        eq('🔴 ② 而且它的點數也是 64 —— ⛔ 數量檢查放它過關', vs.size, 64);
+        const t = C(cyl, bothRings);
+        ok('★★ ② 兩圈 → 講「分成 2 段」，⛔ 不報圓',
+          t.includes('分成 2 段') && t.includes('圓算不出來'));
+        ok('★★ 　　⛔ 不再報那個假半徑 39.21', !t.includes('當成圓'));
+      }
+
+      // ③ 圓柱「全選邊」96 條：每個角上 3 條邊交會
+      {
+        const all = [...cyl.edges()].map(cylEl);
+        eq('③ 圓柱全部是 96 條邊', all.length, 96);
+        const t = C(cyl, all);
+        ok('★★ ③ 全選邊 → 講「角上不只兩條邊交會」，⛔ 不報圓',
+          t.includes('不只兩條邊交會') && t.includes('圓算不出來'));
+      }
+
+      // ④ 球的「半條經線」：一段開放的弧（16 邊 17 點）
+      {
+        const sph = baked('sphere', { r: 30, segW: 32, segH: 16 });
+        /**
+         * 找一條經線 ＝ **同一個方位角**往下走。
+         * ⚠ **⛔ 不可以找「x 與 z 都一樣」的邊** —— 同一條經線上的點，
+         * 緯度不同、離軸半徑就不同，所以 x 與 z **本來就會變**。
+         * 〔寫這節時實際踩到：那樣一條都找不到〕
+         * ⚠ 碰到極點的邊要跳過（x＝z＝0，方位角沒有定義）。
+         */
+        const eps = 1e-6;
+        const ang = p => Math.atan2(p.z, p.x);
+        const onAxis = p => Math.hypot(p.x, p.z) < eps;
+        const vertical = [...sph.edges()].filter(he =>
+          !onAxis(he.v.p) && !onAxis(he.to.p)
+          && Math.abs(ang(he.v.p) - ang(he.to.p)) < eps
+          && Math.abs(he.v.p.y - he.to.p.y) > eps);
+        ok('④ 球上找得到往下走的邊', vertical.length > 0);
+        const a0 = ang(vertical[0].v.p);
+        const meridian = vertical
+          .filter(he => Math.abs(ang(he.v.p) - a0) < eps).map(cylEl);
+        ok('④ 挑出其中一條經線（一段開放的鏈）', meridian.length >= 3);
+
+        const t = C(sph, meridian);
+        /**
+         * 🔴 **它 ⛔ 不再拿 2πR（整圈）去比** ——
+         * 一段開放的弧要跟**那一段的弧**比，⭐ 而那才是對得起來的數字。
+         */
+        ok('★★ ④ 半條經線 → 講「這一段當成圓弧」，⛔ 不是「這一圈當成圓」',
+          t.includes('當成圓弧') && !t.includes('當成圓：'));
+        ok('★★ 　　而且是「視為理想弧」，⛔ 不是「視為理想圓」',
+          t.includes('視為理想弧') && !t.includes('視為理想圓'));
+
+        /** ⭐ 差額要很小 —— 那正是「比對了正確的對象」的證據 */
+        const line = t.split('\n').find(s => s.startsWith('網格真值'));
+        const diff = parseFloat(line.split('差 ')[1]);
+        ok(`★★ 　　差額很小（${line.split('差 ')[1]}）—— ⛔ 不再是「另外半圈的長度」`,
+          diff < 1);
+      }
+    }
+
+    /**
      * ⚠ **方塊的四條邊照樣報得出一個圓，而那是刻意的** ——
      * 🔴 那正是「⛔ 不判斷是不是圓」的意思：**使用者按了開關就表示他要問**。
      * ⛔ 反過來說，這也是它 ⛔ 不可以自動顯示的證據（那就變成誤報）。
