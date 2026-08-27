@@ -297,7 +297,6 @@ export function loopFaces(mesh, he0) {
 
   const r = edgeRing(mesh, he0);
   out.edges = r.hes.length;
-  out.closed = r.closed;
 
   /**
    * ⚠ **一定要去重**：`edgeRing()` 兩個方向各走一次，
@@ -310,6 +309,31 @@ export function loopFaces(mesh, he0) {
     seen.add(he.face.id);
     out.faces.push(he.face);
   }
+
+  /**
+   * 🔴 **`closed` ⛔ 不可以照抄 `edgeRing()` 的** —— 那是**邊環**繞沒繞回來，
+   * 不是**面迴圈**繞沒繞回來，而兩者會分岔。
+   *
+   * 【實證 2026-08-27，kang 實測問出來的】圓柱 seg32，點「圓蓋與側面之間」
+   * 那一圈的一條邊 → 只選到 **2 個面**（一片側面 ＋ 一個 32 邊形的圓蓋，
+   * **穿不過去就停了**），而 `edgeRing()` 回 `closed=true`
+   * → toast 會說「**已選起一整圈 2 個面（繞回來了）**」。
+   * ⛔ **它根本沒繞回來。**〔坑第 18 條：誤報比漏報更糟〕
+   *
+   * ⭐ **判準：選到的面 ⛔ 全部都是四邊形。**
+   * **面迴圈只穿得過四邊形** —— 收進來一個不是四邊形的面，
+   * 就等於**撞牆停在那裡**的證據（圓柱的圓蓋、圓錐的底、球的極點扇形）。
+   *
+   * ⚠ **⛔ 不要改用「面數 ＝＝ 穿過的邊數」** —— 2026-08-27 試過，
+   * **在那個案例裡兩個數字剛好都是 2，分不出來。**
+   * 〔又一次「聽起來很對的規則失敗 ＝ 問錯問題」（鐵律二）：
+   * 　該問的不是「數量對不對」，而是「**有沒有撞到走不過去的東西**」〕
+   *
+   * ⚠ 仍然要 `&& r.closed`：開放的殼走到邊界停下來時，
+   * 選到的面**全部都是四邊形**，但它一樣沒有繞回來。
+   */
+  const allQuad = out.faces.every(f => mesh.faceLoop(f).length === 4);
+  out.closed = r.closed && allQuad;
   return out;
 }
 

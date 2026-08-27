@@ -8856,8 +8856,33 @@ section('選一圈面：跟「選一圈」同一條路，但收的是面');
     eq('⑤ 回傳的面 ⛔ 沒有重複', uniq, r.faces.length);
   }
 
-  /** ⑥ 壞輸入不會壞 */
-  eq('⑥ 沒給網格不會壞', so6.loopFaces(null, null).faces.length, 0);
+  /**
+   * ⑥ 🔴🔴 **`closed` ⛔ 不可以照抄邊環的 —— kang 2026-08-27 實測問出來的。**
+   *
+   * 圓柱點「圓蓋與側面之間」那一圈的邊：只選到 **2 個面**
+   * （一片側面 ＋ 一個 32 邊形的圓蓋，穿不過去就停了），
+   * 而 `edgeRing()` 回 `closed=true` → toast 會說
+   * 「已選起一整圈 **2 個面**（**繞回來了**）」—— ⛔ 它根本沒繞回來。
+   * 〔坑第 18 條：誤報比漏報更糟〕
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    let he = null;
+    for (const e of m.edges()) {
+      if (!e.face || !e.twin || !e.twin.face) continue;
+      const a = m.faceLoop(e.face).length, b = m.faceLoop(e.twin.face).length;
+      if ((a === 4 && b > 4) || (b === 4 && a > 4)) { he = e; break; }
+    }
+    ok('⑥（前置）找得到「圓蓋與側面之間」那一圈的邊', !!he);
+    const r = so6.loopFaces(m, he);
+    eq('★ 只選到 2 個面（撞到圓蓋就停）', r.faces.length, 2);
+    ok('★★★ ⛔ closed 要是 false —— 它沒有繞回來', r.closed === false);
+    ok('★★ 而 edgeRing 自己說 true（⛔ 所以不能照抄）',
+      edit.edgeRing(m, he).closed === true);
+  }
+
+  /** ⑦ 壞輸入不會壞 */
+  eq('⑦ 沒給網格不會壞', so6.loopFaces(null, null).faces.length, 0);
 }
 
 // ═══════════════════════════════════════════════════════
