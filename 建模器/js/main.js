@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          knifePath, planeCrossSegments, toCircle,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -393,6 +393,7 @@ $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
+$('selRingFaces').onclick = () => selectFaceRingFromEdge();
 $('selAllEdges').onclick = () => selectAllEdges();
 $('selSharp').onclick = () => selectSharpEdges();
 $('selSimilar').onclick = () => selectSimilar();
@@ -1007,7 +1008,15 @@ function updateEditNum() {
   if (lbl) lbl.textContent = NAME[info.mode] || '數值';
 }
 
-function setEditFilter(kind) {
+/**
+ * @param {string} kind 點／邊／面／自動
+ * @param {boolean} [quiet] ⛔ 不要自己跳提示 —— 給「按鈕順手換模式」用。
+ *        〔2026-08-27「選一圈面」加的：它換完模式**還要再講一句自己的話**，
+ *        　兩則 toast 疊在一起後面那則會蓋掉前面那則。
+ *        ⚠ **⛔ 不要因此另外抄一份切換流程** —— 這支還做了
+ *        `refreshVertexDots()` 等四件事，抄一份就是兩條要對齊的路（坑第 31 條）〕
+ */
+function setEditFilter(kind, quiet = false) {
   const r = sel.setEditFilter(kind);
   for (const b of document.querySelectorAll('.efBtn')) {
     b.classList.toggle('on', b.dataset.f === kind);
@@ -1026,6 +1035,7 @@ function setEditFilter(kind) {
    * ⚠ **少掉幾個一定要講。** 換過濾器會清掉「不合這個型別的」選取，
    * 而選取安靜地變少最讓人不敢相信工具 —— 他會以為加選壞了（坑第 11、21 條）。
    */
+  if (quiet) return;
   toast(r.dropped
     ? `現在只選「${FILTER_NAME[kind]}」　已取消 ${r.dropped} 個不是${FILTER_NAME[kind]}的選取`
     : `現在只選「${FILTER_NAME[kind]}」`);
@@ -1999,6 +2009,57 @@ function selectRingFromEdge() {
 }
 
 /**
+ * 🔴 **選一圈面：跟「選一圈」走同一條路，但選起來的是面。**
+ *
+ * ── ⭐ 走訪一行新的都沒有 ────────────────────────────
+ * `loopFaces()` ＝ `edgeRing()` 走訪時穿進去的那些面。
+ * **邊環與面迴圈本來就是同一條路徑的兩種讀法。**
+ *
+ * ── 🔴 為什麼種子是「一條邊」而不是「一個面」──────────────
+ * **一個四邊形有兩個方向**，從面出發結果不唯一（坑第 24 條）。
+ * ⚠ 這也是它跟 Blender 的差別：Blender 用「游標離哪條邊近」暗示方向，
+ * 而我們的操作是平板優先 —— **明確點一條邊比猜游標位置可靠**。
+ *
+ * ── ⚠ 順序不能反：先換過濾器，再選面 ──────────────────
+ * 🔴 `setEditFilter()` **會清掉不合型別的選取**（它自己回報 `dropped`）。
+ * 反過來寫的話：選好 32 個面 → 切到「面」→ **32 個面全部被清光**，
+ * 而畫面上什麼都不會發生。〔「東西安靜地不見了」那一類，坑第 21 條〕
+ * ⛔ 所以 `el.obj` 與 `el.he` 一定要**先存起來**再切。
+ */
+function selectFaceRingFromEdge() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一條邊，再按「選一圈面」', true);
+    return;
+  }
+  if (sel.editCount > 1) {
+    toast(`選一圈面一次只能從一條邊出發（現在選了 ${sel.editCount} 個）`, true);
+    return;
+  }
+
+  /** ⚠ 先存 —— 下一行就會把選取清掉 */
+  const obj = el.obj;
+  const r = loopFaces(obj.mesh(), el.he);
+  if (!r.faces.length) { toast('從這條邊繞不出一圈面', true); return; }
+
+  setEditFilter('face', true);          // quiet：⛔ 它的提示會蓋掉下面那句
+  const got = sel.selectFaces(obj, r.faces);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * ⚠ **講數量，而且講「面」** —— 沒有單位就不是數量。
+   * 〔kang 2026-08-27 反問過「360 個甚麼?邊?」〕
+   * ⭐ 順帶講一句模式換了，⛔ 不要讓他發現時以為自己按錯。
+   */
+  toast(r.closed
+    ? `已選起一整圈 ${got} 個面（繞回來了）　上面那排已切到「面」`
+    : `已選起 ${got} 個面（沒有繞回來 —— 撞到不是四邊形的面就會停，那是正常的）　`
+      + '上面那排已切到「面」');
+}
+
+/**
  * 🔴 **選一條線：從選到的那條邊，順著同一條線一直走到底。**
  *
  * ── ⚠ 它跟「選一圈」是兩顆按鈕，而且是 kang 拍板的 ──────────
@@ -2786,6 +2847,16 @@ function updateBar() {
   $('selLoop').disabled = !edge1;
   $('selLoop').title = edge1
     ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）'
+    : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
+
+  /**
+   * 選一圈面：條件跟另外兩顆一樣（正好選到一條邊）。
+   * ⚠ **⛔ 不要因為它「選出來的是面」就改成要先選面** ——
+   * 從一個面出發有兩個方向，結果不唯一（坑第 24 條）。
+   */
+  $('selRingFaces').disabled = !edge1;
+  $('selRingFaces').title = edge1
+    ? '跟「選一圈」走同一條路，但選起來的是【面】（一整圈側面）。按下去會自動切到「面」'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**

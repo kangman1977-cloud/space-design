@@ -21,6 +21,13 @@
 
 import * as THREE from 'three';
 import { markableEdges } from '../unfold/seam.js';
+/**
+ * ⚠ **單向相依，⛔ 不會繞回來**：`edit.js` 只 import `mesh` / `region` /
+ * `flatten` / `svgPath`，**沒有 import 本檔**（2026-08-27 查過）。
+ * ⭐ 借 `edgeRing()` 是刻意的 —— 面迴圈跟邊環是**同一條路徑的兩種讀法**，
+ * ⛔ 不要為了避免跨檔就在這裡重寫一支走訪。
+ */
+import { edgeRing } from './edit.js';
 
 /**
  * 🔴 **「一樣大」「一樣長」的容許值：0.01 cm。**
@@ -247,6 +254,61 @@ export function boundaryEdges(mesh) {
       }
     }
     out.biggest = Math.max(out.biggest, size);
+  }
+  return out;
+}
+
+/**
+ * 🔴 **面迴圈：繞一圈的那些「面」。**
+ *
+ * ── ⚠ 它 ⛔ 不叫 `faceLoop`，理由是撞名 ──────────────────
+ * **`mesh.faceLoop(f)` 早就存在，而且意思完全不同**（一個面自己的
+ * 半邊迴圈）。⛔ 兩支名字一樣意思不同，比名字醜難查得多。
+ *
+ * ── ⭐ 一行新的數學都沒有 ────────────────────────────
+ * **面迴圈 ＝ `edgeRing()` 走訪時「穿進去的那些面」。**
+ * 邊環與面迴圈本來就是同一條路徑的兩種讀法（一個讀邊、一個讀面）——
+ * 所以 ⛔ **不要另外寫一支走訪**，那會變成兩條要對齊的路（坑第 31 條）。
+ * 〔kang 2026-08-25 批准的四動作框架的又一例：新功能 ＝ 既有零件換個組合〕
+ *
+ * ── 🔴 種子一定是「一條邊」，⛔ 不能是「一個面」───────────
+ * **一個四邊形有兩個方向**，從面出發的話**結果不唯一**（坑第 24 條：
+ * 不唯一就補條件補到唯一，補不到就明講）。
+ * 所以介面沿用 `選一圈` 那一套：先點一條邊，再按按鈕。
+ *
+ * ── 實測（2026-08-27 沙箱）────────────────────────────
+ * | 模型 | 選起來幾個面 |
+ * |---|---|
+ * | 方塊 | **4**（繞一圈的側面，⛔ 不含頂底） |
+ * | 圓柱 seg32 | **32** |
+ * | 球 segW12 segH32 | **12**（同一條緯度帶繞一圈） |
+ *
+ * ⚠ **撞到不是四邊形的面就會停** —— 那是 `edgeRing()` 本來的行為
+ * （`loop.length !== 4` 就 break），⛔ 不是這一支的限制。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge} he0 種子邊
+ * @returns {{faces:Face[], edges:number, closed:boolean}}
+ *          `faces` ⛔ 已去重　`edges` 穿過幾條邊　`closed` 有沒有繞回來
+ */
+export function loopFaces(mesh, he0) {
+  const out = { faces: [], edges: 0, closed: false };
+  if (!mesh || !he0) return out;
+
+  const r = edgeRing(mesh, he0);
+  out.edges = r.hes.length;
+  out.closed = r.closed;
+
+  /**
+   * ⚠ **一定要去重**：`edgeRing()` 兩個方向各走一次，
+   * 而種子那個面**兩邊都會經過** —— 不去重的話它會被選兩次，
+   * 數量也會多報一個。
+   */
+  const seen = new Set();
+  for (const he of r.hes) {
+    if (!he.face || seen.has(he.face.id)) continue;
+    seen.add(he.face.id);
+    out.faces.push(he.face);
   }
   return out;
 }

@@ -8777,6 +8777,90 @@ section('破洞在哪裡：找出邊界邊並分成幾個洞');
 }
 
 // ═══════════════════════════════════════════════════════
+//  選一圈面（＝ Blender 的 Face Loop Select）
+// ═══════════════════════════════════════════════════════
+
+section('選一圈面：跟「選一圈」同一條路，但收的是面');
+
+/**
+ * 🔴 **這一節守的是「⛔ 不要為了收面而重寫一支走訪」。**
+ *
+ * **面迴圈 ＝ `edgeRing()` 走訪時穿進去的那些面** —— 邊環與面迴圈
+ * 本來就是同一條路徑的兩種讀法。⛔ 另寫一支就是兩條要對齊的路（坑第 31 條）。
+ *
+ * ⚠ **所以這裡一定要驗「兩者的數字對得起來」** ——
+ * 那正是鐵律三：**讓兩個數字互相對得起來，錯誤才會自己現形。**
+ */
+{
+  const so6 = await import('../js/core/selectops.js');
+
+  /** 找一條「兩側都是四邊形」的邊當種子 —— ⛔ 不然走第一步就停了 */
+  const quadSeed = m => {
+    const es = [...m.edges()];
+    return es.find(he => he.face && he.twin && he.twin.face
+      && m.faceLoop(he.face).length === 4
+      && m.faceLoop(he.twin.face).length === 4) || es[0];
+  };
+
+  /** ① 方塊：繞一圈的側面 4 個，⛔ 不含頂底 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const r = so6.loopFaces(m, quadSeed(m));
+    eq('① 方塊 → 【4】個面（繞一圈的側面）', r.faces.length, 4);
+    ok('★★ ⛔ 不含頂底（總共 6 個面）', r.faces.length < m.faces.length);
+    ok('★ 繞回來了', r.closed);
+  }
+
+  /** ② 圓柱 seg32 → 32 個側面 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const r = so6.loopFaces(m, quadSeed(m));
+    eq('② 圓柱 seg32 → 【32】個面', r.faces.length, 32);
+    ok('★ 繞回來了', r.closed);
+  }
+
+  /** ③ 球 segW12 → 同一條緯度帶繞一圈 12 個 */
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    const r = so6.loopFaces(m, quadSeed(m));
+    eq('③ 球 segW12 → 【12】個面（一條緯度帶）', r.faces.length, 12);
+  }
+
+  /**
+   * ④ 🔴🔴 **整節最重要：面的個數要跟邊環的條數對得起來。**
+   * 閉環時**每穿過一條邊就進到一個新的面**，所以兩者必須相等。
+   * ⛔ 對不上就是「另外寫了一支走訪」或「忘了去重」。
+   */
+  {
+    for (const [nm, m] of [
+      ['方塊', baked('box', { w: 60, h: 45, d: 40 })],
+      ['圓柱', baked('cylinder', { r: 25, h: 70, seg: 32 })],
+      ['球', baked('sphere', { r: 30, segW: 12, segH: 32 })]
+    ]) {
+      const seed = quadSeed(m);
+      const face = so6.loopFaces(m, seed);
+      const ring = edit.edgeRing(m, seed);
+      ok(`④ ${nm}：面數 ${face.faces.length} ＝ 邊環條數 ${ring.hes.length}`,
+        face.closed ? face.faces.length === ring.hes.length : true);
+    }
+  }
+
+  /**
+   * ⑤ 🔴 **去重**：`edgeRing()` 兩個方向各走一次，種子那個面**兩邊都會經過**。
+   * ⛔ 不去重的話它會被選兩次，數量也會多報一個。
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const r = so6.loopFaces(m, quadSeed(m));
+    const uniq = new Set(r.faces.map(f => f.id)).size;
+    eq('⑤ 回傳的面 ⛔ 沒有重複', uniq, r.faces.length);
+  }
+
+  /** ⑥ 壞輸入不會壞 */
+  eq('⑥ 沒給網格不會壞', so6.loopFaces(null, null).faces.length, 0);
+}
+
+// ═══════════════════════════════════════════════════════
 //  非流形邊在哪裡（＝ 對照表的「依特徵全選」第二項）
 // ═══════════════════════════════════════════════════════
 
