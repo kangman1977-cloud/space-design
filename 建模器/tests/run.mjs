@@ -8690,6 +8690,167 @@ section('選轉角（依銳邊）＋ 選相似');
 }
 
 // ═══════════════════════════════════════════════════════
+//  變成正圓（＝ Blender 的 To Circle）
+// ═══════════════════════════════════════════════════════
+
+section('變成正圓：把歪掉的一圈點推回一個圓');
+
+/**
+ * 🔴 **這一節守著三條紅線**：
+ * 1. **推完要真的是圓**（再量一次偏差 ≈ 0）
+ * 2. **⛔ 不可以把點平均分佈** —— 那是對照表上另一個獨立項目
+ * 3. **`dryRun` ⛔ 一個頂點都不准動**
+ */
+{
+  const cap = m => m.faces.find(f => m.faceVerts(f).length > 4);
+
+  /** ① 本來就是圓 → 擬合值就是它原本的半徑 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const r = edit.toCircle(m, { kind: 'face', face: cap(m) }, { dryRun: true });
+    near('① 圓柱 r25 的蓋子，擬合半徑 ＝ 25', r.fitted, 25, 1e-6);
+    ok('★ 本來就共面（壓平量 ＝ 0）', r.flattened < 1e-9, r.flattened);
+  }
+
+  /**
+   * ② 🔴 **故意把一個點拉歪 1.5cm** ——
+   * ⭐ **這一條跟日誌「已經證明的事」那張表對得起來**：
+   * 那裡 2026-08-23 獨立實測記的是「最大偏差 0.04074」。
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    m.faceVerts(f)[0].p.x += 1.5;
+    const d = edit.toCircle(m, { kind: 'face', face: f }, { dryRun: true });
+    near('② 拉歪 1.5cm → 半徑最多差 0.0407（★ 對得上日誌那張表的 0.04074）',
+         d.before, 0.04074, 1e-4);
+
+    const r = edit.toCircle(m, { kind: 'face', face: f });
+    eq('★★ 推了 32 個點', r.moved, 32);
+    const after = edit.toCircle(m, { kind: 'face', face: f }, { dryRun: true });
+    ok('★★★ 推完再量一次，偏差 ≈ 0（真的收斂了）', after.before < 1e-9, after.before);
+  }
+
+  /** ③ 指定半徑 → 每個點都精確落在那個半徑上 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    const r = edit.toCircle(m, { kind: 'face', face: f }, { radius: 40 });
+    eq('③ 指定半徑 40', r.radius, 40);
+    const vs = m.faceVerts(f);
+    const c = new THREE.Vector3();
+    vs.forEach(v => c.add(v.p)); c.divideScalar(vs.length);
+    const rs = vs.map(v => v.p.distanceTo(c));
+    near('★★ 最小半徑 40', Math.min(...rs), 40, 1e-9);
+    near('★★ 最大半徑 40', Math.max(...rs), 40, 1e-9);
+  }
+
+  /**
+   * ④ 🔴🔴 **⛔ 不可以把點平均分佈** —— 每個點保持自己的角度。
+   * 作法：把一圈點的角度**故意弄不均勻**（隔一個往旁邊轉），
+   * 推完之後那個不均勻**必須still在**。
+   * 〔平均分佈是對照表上的 Space Evenly，混進來就是「功能定位互相模糊」〕
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    const vs = m.faceVerts(f);
+    const c0 = new THREE.Vector3();
+    vs.forEach(v => c0.add(v.p)); c0.divideScalar(vs.length);
+    const ang = v => Math.atan2(v.p.z - c0.z, v.p.x - c0.x);
+
+    /** 把偶數號的點沿圓周擠向下一個點 → 角度變成疏密相間 */
+    for (let i = 0; i < vs.length; i += 2) {
+      const a = ang(vs[i]) + 0.05;
+      const rr = Math.hypot(vs[i].p.x - c0.x, vs[i].p.z - c0.z);
+      vs[i].p.x = c0.x + rr * Math.cos(a);
+      vs[i].p.z = c0.z + rr * Math.sin(a);
+    }
+    const gapsBefore = vs.map((v, i) =>
+      Math.abs(ang(vs[(i + 1) % vs.length]) - ang(v)));
+    const spreadBefore = Math.max(...gapsBefore) - Math.min(...gapsBefore);
+
+    edit.toCircle(m, { kind: 'face', face: f });
+
+    const gapsAfter = vs.map((v, i) =>
+      Math.abs(ang(vs[(i + 1) % vs.length]) - ang(v)));
+    const spreadAfter = Math.max(...gapsAfter) - Math.min(...gapsAfter);
+
+    ok('④ 推之前角度是疏密相間的', spreadBefore > 0.05, spreadBefore);
+    ok('★★★ ⛔ 推完之後那個疏密【仍然在】—— 沒有被平均分佈掉',
+       Math.abs(spreadAfter - spreadBefore) < 1e-6,
+       `前 ${spreadBefore.toFixed(6)} → 後 ${spreadAfter.toFixed(6)}`);
+  }
+
+  /**
+   * ⑤ ⭐ **推成正圓之後量周長，對得上「尺寸的依據」那張表。**
+   * 32 段、半徑 25 的正多邊形，弦長和 ＝ 2×32×25×sin(π/32) ＝ 156.827…
+   * 🔴 那正是日誌那張表寫的 **156.83**（而 2πr ＝ 157.08 是理想圓）。
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    edit.toCircle(m, { kind: 'face', face: f }, { radius: 25 });
+    const vs = m.faceVerts(f);
+    let peri = 0;
+    for (let i = 0; i < vs.length; i++) peri += vs[i].p.distanceTo(vs[(i + 1) % vs.length].p);
+    const want = 2 * 32 * 25 * Math.sin(Math.PI / 32);
+    near('⑤ 推成 r25 的正圓後，周長 ＝ 2·32·25·sin(π/32)', peri, want, 1e-6);
+    near('★★★ 而那個數字就是「尺寸的依據」那張表的 156.83', peri, 156.827, 1e-3);
+    ok('★★ ⛔ 它不是 2πr（157.08）—— 網格裡沒有曲面',
+       Math.abs(peri - 2 * Math.PI * 25) > 0.2, peri);
+  }
+
+  /** ⑥ 不共面的一圈會被壓平，而且壓多少要講得出來 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    m.faceVerts(f)[0].p.y += 3;
+    const d = edit.toCircle(m, { kind: 'face', face: f }, { dryRun: true });
+    ok('⑥ 拉出平面 3cm → 壓平量講得出來', d.flattened > 2, d.flattened);
+    edit.toCircle(m, { kind: 'face', face: f });
+    const after = edit.toCircle(m, { kind: 'face', face: f }, { dryRun: true });
+    ok('★★★ 推完真的共面了', after.flattened < 1e-9, after.flattened);
+  }
+
+  /** ⑦ 🔴 dryRun ⛔ 一個頂點都不准動 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const f = cap(m);
+    m.faceVerts(f)[0].p.x += 1.5;
+    const snap = m.faceVerts(f).map(v => v.p.clone());
+    const d = edit.toCircle(m, { kind: 'face', face: f }, { dryRun: true });
+    ok('⑦ dryRun 一個頂點都沒動',
+       m.faceVerts(f).every((v, i) => v.p.equals(snap[i])));
+    eq('★ 而且它自己說 moved ＝ 0', d.moved, 0);
+    const r = edit.toCircle(m, { kind: 'face', face: f });
+    near('★★ 兩次算出來的半徑一樣（⛔ 沒有第二份算法）', r.fitted, d.fitted, 1e-12);
+  }
+
+  /** ⑧ 方塊的面：4 個點也推得成圓（矩形 → 正方形） */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const f = m.faces[0];
+    const r = edit.toCircle(m, { kind: 'face', face: f });
+    const vs = m.faceVerts(f);
+    const c = new THREE.Vector3();
+    vs.forEach(v => c.add(v.p)); c.divideScalar(vs.length);
+    const rs = vs.map(v => v.p.distanceTo(c));
+    ok('⑧ 方塊的面（4 點）推得成圓', r.ok);
+    near('★★ 四個角離中心一樣遠', Math.max(...rs) - Math.min(...rs), 0, 1e-9);
+  }
+
+  /** ⑨ 壞輸入不會壞 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    ok('⑨ 沒選東西要給得出理由', !!edit.toCircle(m, null).reason);
+    const he = [...m.edges()][0];
+    ok('★ 只選一條邊（2 個點）要給得出理由',
+       !!edit.toCircle(m, { kind: 'edge', he }).reason);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 //  分離（＝ Blender 的 Separate）
 // ═══════════════════════════════════════════════════════
 

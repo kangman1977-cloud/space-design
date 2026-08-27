@@ -33,7 +33,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
-         knifePath, planeCrossSegments,
+         knifePath, planeCrossSegments, toCircle,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo } from './core/selectops.js';
@@ -389,6 +389,7 @@ $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
+$('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
@@ -1320,6 +1321,108 @@ function flattenSelected() {
     const now = sel.editSel && sel.editSel.face
       ? obj.mesh().faceVerts(sel.editSel.face).length : 0;
     bits.push(now ? `已併成一個 ${now} 邊形` : `已併掉 ${merged} 個面`);
+  }
+  toast(bits.join('　'));
+}
+
+/**
+ * 「變成正圓」那顆按鈕的狀態 ＋ **半徑欄位自動填入擬合值**。
+ *
+ * ── ⚠ 為什麼要記一個 key ────────────────────────────
+ * `updateBar()` 會被很多事件呼叫，**每次都覆寫欄位會把使用者剛打的數字吃掉**。
+ * 所以只在「**選取的內容真的變了**」的時候才填。
+ * 〔坑第 21 條的反面：這次要小心的是「按了畫面上不該變的東西卻變了」〕
+ */
+let _circleKey = null;
+
+function updateToCircleBtn() {
+  const can = sel.editMode && sel.editCount > 0;
+  let verts = [];
+  if (can) {
+    try { verts = elementVerts(sel.active.mesh(), sel.editSels); } catch { verts = []; }
+  }
+  const ok = verts.length >= 3;
+
+  $('toCircle').disabled = !ok;
+  $('circleR').disabled = !ok;
+  $('toCircle').title = ok
+    ? `把選到的 ${verts.length} 個點推回一個正圓（會先壓到同一個平面）`
+    : (sel.editMode ? '至少要選到 3 個點 —— 選一個面，或開「加選」選一圈邊'
+                    : '先按「拉點線面」進入編輯模式，再選一圈點或一個面');
+
+  /** 選取沒變就不要碰欄位 */
+  const key = ok ? verts.map(v => v.id).join(',') : null;
+  if (key === _circleKey) return;
+  _circleKey = key;
+  if (!ok) return;
+
+  /**
+   * ⚠ **只是「量」，⛔ 一個點都不動** —— 靠 `toCircle()` 的 `dryRun`。
+   * 〔⛔ 不要自己再算一次擬合：那就是「同一件事有兩份」，兩份一定會不同步〕
+   */
+  const probe = toCircle(sel.active.mesh(), sel.editSels, { dryRun: true });
+  $('circleR').value = probe.ok ? probe.fitted.toFixed(3) : '';
+}
+
+/**
+ * 🔴 **變成正圓：把選到的那一圈點推回一個正圓。**
+ *
+ * ⚠ **它做兩件事，兩件都要講出來**：① 壓到同一個平面 ② 推到同一個半徑。
+ * 使用者付出的是兩種代價，只講一個等於沒講。
+ *
+ * ⚠ **本來就已經是圓、而且沒有指定新半徑時什麼都不做** ——
+ * 悶著記一步「什麼都沒改」的 Undo，使用者會以為壞掉了（照壓平那支的規矩）。
+ */
+function toCircleSelected() {
+  if (!sel.editMode || !sel.editCount) {
+    toast('先在編輯模式下選一圈點或一個面，再按「變成正圓」', true);
+    return;
+  }
+  const obj = sel.active;
+  const oldMesh = obj.mesh();
+
+  const typed = parseFloat($('circleR').value);
+  const want = Number.isFinite(typed) && typed > 0 ? typed : undefined;
+
+  /** 先量一次，決定要不要動手 */
+  const probe = toCircle(oldMesh, sel.editSels, { radius: want, dryRun: true });
+  if (!probe.ok) { toast(probe.reason, true); return; }
+
+  /**
+   * 「本來就圓」的判準用 0.01 cm ＝ **切得出來的精度**，
+   * ⛔ 不是浮點數的尺度（坑第 25、26 條）。
+   * ⚠ 但**指定了半徑就一定要照做** —— 他要從 25 變成 40 是合法的要求。
+   */
+  const already = probe.before < PLANAR_TOL_CM && probe.flattened < PLANAR_TOL_CM;
+  const sameR = want === undefined || Math.abs(want - probe.fitted) < PLANAR_TOL_CM;
+  if (already && sameR) {
+    toast(`這一圈本來就已經是圓了（半徑 ${probe.fitted.toFixed(3)} cm）—— 沒有東西要推。`
+        + '要改成別的大小就在旁邊打一個半徑');
+    return;
+  }
+
+  const r = toCircle(oldMesh, sel.editSels, { radius: want });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  refreshAfterEdit(oldMesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(`變成正圓（半徑 ${r.radius.toFixed(2)}）`);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  $('circleR').value = r.radius.toFixed(3);
+  _circleKey = null;
+
+  /**
+   * 🔴 **兩種代價分開講，而且都是他驗得出來的數字。**
+   * 〔鐵律三：讓兩個數字互相對得起來〕
+   */
+  const bits = [`已推成正圓：${r.moved} 個點，半徑 ${r.radius.toFixed(3)} cm`];
+  if (r.before >= PLANAR_TOL_CM) bits.push(`原本半徑最多差 ${r.before.toFixed(3)} cm`);
+  if (r.flattened >= PLANAR_TOL_CM) bits.push(`順便壓平了 ${r.flattened.toFixed(3)} cm`);
+  if (want !== undefined && Math.abs(want - r.fitted) >= PLANAR_TOL_CM) {
+    bits.push(`⚠ 你指定的 ${want} 跟最接近的 ${r.fitted.toFixed(3)} 差 ${Math.abs(want - r.fitted).toFixed(3)}，形狀會變比較多`);
   }
   toast(bits.join('　'));
 }
@@ -2641,6 +2744,8 @@ function updateBar() {
         : '把這個面壓平。⚠ 本來就是平的話不會有動作')
     : (sel.editMode ? '先選一個面（可以開「加選」選好幾個）'
                     : '先按「拉點線面」進入編輯模式，再選面');
+
+  updateToCircleBtn();
 
   /**
    * 環切：**選到一條邊才給按**。

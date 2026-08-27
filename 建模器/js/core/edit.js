@@ -751,6 +751,224 @@ export function remapElements(oldMesh, newMesh, els, remap, tolDeg = 0.5) {
  *          `before` ＝ 壓平前最遠的點離那個平面多遠（cm）——
  *          本來就在平面上時它是 0，呼叫端據此講「這個面本來就是平的」
  */
+/**
+ * 🔴 **一組點的最佳擬合平面**（Jacobi 特徵分解，⛔ 不依賴點的順序）。
+ *
+ * ── ⚠ 為什麼 ⛔ 不能用 `elementBasis()` ────────────────
+ * 那一支的法向來自**面的法向**。而「變成正圓」選的多半是**一圈邊**
+ * （例如環切出來的那一圈），那些邊的法向朝四面八方散開，
+ * **加起來會接近零向量**，基底就退化了。
+ *
+ * ── ⚠ 也 ⛔ 不能用 Newell（`computeFaceNormal()` 那一套）────
+ * Newell 要**繞圈順序**，而選取的順序是使用者點的順序，不是繞圈順序。
+ * 〔`elementVerts()` 回傳的順序沒有幾何意義〕
+ *
+ * → 所以走協方差矩陣：**最小特徵值對應的特徵向量 ＝ 平面法向**。
+ *   對稱 3×3 用 Jacobi 轉一轉就好，⛔ 不必引第三方線性代數函式庫。
+ *
+ * @returns {{normal:THREE.Vector3, center:THREE.Vector3, dev:number}}
+ *          `dev` ＝ 最遠的點離那個平面多遠（cm）
+ */
+function fitPlane(pts) {
+  const c = new THREE.Vector3();
+  for (const p of pts) c.add(p);
+  c.divideScalar(pts.length);
+
+  /** 協方差（對稱，只算上三角再鏡射） */
+  let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+  for (const p of pts) {
+    const dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+    xx += dx * dx; xy += dx * dy; xz += dx * dz;
+    yy += dy * dy; yz += dy * dz; zz += dz * dz;
+  }
+  let A = [[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]];
+  let V = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+  /** Jacobi：把最大的非對角元素轉成 0，重複到夠小 */
+  for (let sweep = 0; sweep < 24; sweep++) {
+    let p = 0, q = 1, big = Math.abs(A[0][1]);
+    if (Math.abs(A[0][2]) > big) { big = Math.abs(A[0][2]); p = 0; q = 2; }
+    if (Math.abs(A[1][2]) > big) { big = Math.abs(A[1][2]); p = 1; q = 2; }
+    if (big < 1e-14) break;
+
+    const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+    const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+    const cs = 1 / Math.sqrt(t * t + 1), sn = t * cs;
+
+    const rot = (M) => {
+      for (let k = 0; k < 3; k++) {
+        const mkp = M[k][p], mkq = M[k][q];
+        M[k][p] = cs * mkp - sn * mkq;
+        M[k][q] = sn * mkp + cs * mkq;
+      }
+    };
+    rot(A);
+    A = A[0].map((_, i) => A.map(r => r[i]));   // 轉置
+    rot(A);
+    A = A[0].map((_, i) => A.map(r => r[i]));
+    rot(V);
+  }
+
+  /** 最小特徵值那一欄 ＝ 法向 */
+  let mi = 0;
+  if (A[1][1] < A[mi][mi]) mi = 1;
+  if (A[2][2] < A[mi][mi]) mi = 2;
+  const normal = new THREE.Vector3(V[0][mi], V[1][mi], V[2][mi]).normalize();
+
+  let dev = 0;
+  for (const p of pts) {
+    dev = Math.max(dev, Math.abs(normal.dot(new THREE.Vector3().subVectors(p, c))));
+  }
+  return { normal, center: c, dev };
+}
+
+/**
+ * 🔴 **變成正圓：把選到的那一圈點推回一個正圓**（＝ Blender 的 To Circle）。
+ *
+ * ── 它是什麼 ────────────────────────────────────────
+ * 使用者選一圈點（或一圈邊、一個面的外緣），按下去 →
+ * **那些點被推到同一個平面上的同一個圓上。**
+ *
+ * ⭐ **⛔ 它不需要「這一圈是不是圓」的判斷** ——
+ * **使用者選了那一圈，就表示他要它變圓。**
+ * 〔2026-08-27 重測翻掉的那件事：正多邊形的頂點永遠共圓、矩形四個角
+ * 　也永遠共圓，所以「共不共圓」根本選不出使用者心裡想的圓。
+ * 　那個判斷只有「自動報告這一圈是圓」才需要，而它目前無解〕
+ *
+ * ── ⚠ 它做兩件事，而且兩件都要講出來 ──────────────────
+ * **① 壓到同一個平面　② 推到同一個半徑。**
+ * 不壓平的話結果不是一個圓，是一條在空間裡歪掉的閉曲線。
+ * 呼叫端要把 `flattened`（壓掉多少）跟 `before`（半徑原本差多少）**分開講** ——
+ * 那是使用者付出的兩種代價。
+ *
+ * ── 🔴 ⛔ 它不做「把點平均分佈」────────────────────────
+ * 每個點**保持自己的角度**，只調整到半徑上。
+ * 平均分佈（Space Evenly）是對照表上**另一個獨立項目**，
+ * 混進來就是「**功能之間的定位互相模糊**」（kang 定的那條）。
+ *
+ * ── 🔴 `dryRun`：只量不改 ─────────────────────────────
+ * 介面有兩個地方需要「先知道答案再決定要不要動手」：
+ * **① 半徑欄位的預設值**（選到東西的當下就要填）、
+ * **② 判斷「本來就已經是圓」**（那時候什麼都不該做，⛔ 也不該記一步 Undo）。
+ * ⛔ **沒有它，那兩件事都得先把網格改掉才問得出來。**
+ *
+ * @param {Mesh} mesh
+ * @param {object|object[]} el
+ * @param {{radius?:number, tolDeg?:number, dryRun?:boolean}} [opt]
+ *        `radius` ⛔ 沒給就用擬合出來的（＝ 點移動最少的那個圓）
+ *        `dryRun` 只回答數字，**一個頂點都不動**
+ * @returns {{ok:boolean, reason?:string, moved:number, radius:number,
+ *            fitted:number, before:number, flattened:number}}
+ *          `fitted` ＝ 擬合出來的半徑（介面拿它當預設值）
+ *          `before` ＝ 推之前，各點半徑最多差多少（cm）
+ *          `flattened` ＝ 壓平之前最遠的點離平面多遠（cm）
+ */
+export function toCircle(mesh, el, opt = {}) {
+  const tolDeg = opt.tolDeg ?? 0.5;
+  const nil = { moved: 0, radius: 0, fitted: 0, before: 0, flattened: 0 };
+  const verts = elementVerts(mesh, el, tolDeg);
+  if (verts.length < 3) {
+    return { ok: false, reason: '至少要選到 3 個點才推得成圓', ...nil };
+  }
+
+  const pts = verts.map(v => v.p);
+  const pl = fitPlane(pts);
+
+  /** 平面上的兩軸。⚠ ex 不能跟法向平行，挑一個最不平行的世界軸當種子 */
+  const n = pl.normal;
+  const seed = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0)
+             : new THREE.Vector3(0, 1, 0);
+  const ex = new THREE.Vector3().crossVectors(seed, n).normalize();
+  const ey = new THREE.Vector3().crossVectors(n, ex).normalize();
+
+  /** 投影到平面座標 */
+  const P = pts.map(p => {
+    const d = new THREE.Vector3().subVectors(p, pl.center);
+    return [d.dot(ex), d.dot(ey)];
+  });
+
+  /**
+   * 圓心與半徑：最小平方（Kasa）。
+   * ⚠ 它解的是代數距離不是幾何距離 —— 對「一圈繞得差不多滿的點」
+   * 兩者幾乎一樣，而我們的對象正是這種（一圈邊、一個面的外緣）。
+   */
+  let Sx = 0, Sy = 0, Sxx = 0, Syy = 0, Sxy = 0, Sxxx = 0, Syyy = 0, Sxyy = 0, Sxxy = 0;
+  for (const [x, y] of P) {
+    Sx += x; Sy += y; Sxx += x * x; Syy += y * y; Sxy += x * y;
+    Sxxx += x * x * x; Syyy += y * y * y; Sxyy += x * y * y; Sxxy += x * x * y;
+  }
+  const N = P.length;
+  const sol = solve3x3(
+    [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, N]],
+    [-(Sxxx + Sxyy), -(Sxxy + Syyy), -(Sxx + Syy)]);
+  if (!sol) {
+    return { ok: false, reason: '這些點排不出一個圓（可能連成一直線）', ...nil };
+  }
+  const cx = -sol[0] / 2, cy = -sol[1] / 2;
+  const r2 = cx * cx + cy * cy - sol[2];
+  if (!(r2 > 0)) {
+    return { ok: false, reason: '這些點排不出一個圓（可能連成一直線）', ...nil };
+  }
+  const fitted = Math.sqrt(r2);
+
+  const radius = Number.isFinite(opt.radius) && opt.radius > 0 ? opt.radius : fitted;
+
+  /** 推之前各點半徑差多少 —— 那是使用者驗得出來的「原本歪多少」 */
+  let before = 0;
+  for (const [x, y] of P) {
+    before = Math.max(before, Math.abs(Math.hypot(x - cx, y - cy) - fitted));
+  }
+
+  /** 圓心（3D） */
+  const O = pl.center.clone().addScaledVector(ex, cx).addScaledVector(ey, cy);
+
+  /** 🔴 只量不改：所有數字都算完了，⛔ 在寫回去之前就回傳 */
+  if (opt.dryRun) {
+    return { ok: true, moved: 0, radius, fitted, before, flattened: pl.dev };
+  }
+
+  let moved = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x, y] = P[i];
+    let dx = x - cx, dy = y - cy;
+    const L = Math.hypot(dx, dy);
+    /**
+     * ⚠ **剛好落在圓心上的點沒有角度可以保持** —— 那是資訊真的不存在
+     * （跟 `arcSeg` 下限是 2 同一類，坑第 10 條）。
+     * ⛔ 不猜一個方向給它，原地不動並讓呼叫端算得出來。
+     */
+    if (L < 1e-12) continue;
+    dx /= L; dy /= L;
+    const np = O.clone().addScaledVector(ex, dx * radius).addScaledVector(ey, dy * radius);
+    if (!np.equals(verts[i].p)) moved++;
+    verts[i].p.copy(np);
+  }
+
+  return { ok: true, moved, radius, fitted, before, flattened: pl.dev };
+}
+
+/** 3×3 線性方程組（高斯消去 ＋ 部分軸選）。解不出來回 null */
+function solve3x3(A, b) {
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let i = 0; i < 3; i++) {
+    let p = i;
+    for (let k = i + 1; k < 3; k++) if (Math.abs(M[k][i]) > Math.abs(M[p][i])) p = k;
+    if (Math.abs(M[p][i]) < 1e-14) return null;
+    [M[i], M[p]] = [M[p], M[i]];
+    for (let k = i + 1; k < 3; k++) {
+      const f = M[k][i] / M[i][i];
+      for (let j = i; j < 4; j++) M[k][j] -= f * M[i][j];
+    }
+  }
+  const x = [0, 0, 0];
+  for (let i = 2; i >= 0; i--) {
+    let s = M[i][3];
+    for (let j = i + 1; j < 3; j++) s -= M[i][j] * x[j];
+    x[i] = s / M[i][i];
+  }
+  return x;
+}
+
 export function flattenElements(mesh, el, pivot = 'median', tolDeg = 0.5) {
   const verts = elementVerts(mesh, el, tolDeg);
   if (verts.length < 3) {
