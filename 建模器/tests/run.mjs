@@ -8989,6 +8989,36 @@ section('有面貼反了：報得出來，而且指得到「修法向」');
     eq('★ 而修法向也老實說修不了', edit.recalcNormalsOutside(m).ambiguousEdges, 1);
   }
 
+  /**
+   * ⑦ 🔴🔴 **`翻面` 做出來的狀態 —— 這是三種病裡唯一使用者做得出來的。**
+   *
+   * ⚠ **2026-08-27 kang 實測翻掉了一條清單**：我寫「點選一個面，按 `翻面`」，
+   * 而 **`翻面` 翻的是整個物件**（`edit.js` 明文：「我們沒有理由提供一個
+   * 製造『一個面貼反』的按鈕」）。所以他驗到的根本是另一則。
+   * 🔴 **那一則當時沒有出路** —— 只說「印出來會內外相反」，⛔ 沒說按哪顆。
+   */
+  {
+    const m = baked('box', { w: 10, h: 10, d: 10 });
+    const f = edit.flipNormals(m);
+    ok('⑦ 按「翻面」翻得動', f.ok && !!f.mesh);
+
+    eq('★★ ⛔ 它不是「貼反了」（整個翻，繞向仍然一致）',
+      so5.reversedFaceEdges(f.mesh).edges, 0);
+    ok('★ 而且仍然是封閉的', f.mesh.validate().closed);
+    ok('★★ 只有體積變成負的', stlVolume(tri(f.mesh)) < 0);
+
+    const c = printCheck(f.mesh, tri(f.mesh), {});
+    eq('★★ 恰好【1】則問題', c.issues.length, 1);
+    eq('★★ kind 是 inward', c.issues[0].kind, 'inward');
+    ok('★★★ 訊息裡指得到「修法向」那顆按鈕', /修法向/.test(c.issues[0].text));
+
+    /** 🔴 出路要真的走得通（坑第 34 條的機械版） */
+    const fx = edit.recalcNormalsOutside(f.mesh);
+    ok('★★★ 按「修法向」之後一則問題都沒有',
+      printCheck(fx.mesh, tri(fx.mesh), {}).issues.length === 0);
+    ok('★★ 而且體積回到正的', stlVolume(tri(fx.mesh)) > 0);
+  }
+
   /** ⑥ 壞輸入不會壞 */
   eq('⑥ 沒給網格不會壞', so5.reversedFaceEdges(null).edges, 0);
 }
