@@ -21,6 +21,7 @@ import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
          remapElements }
   from '../core/edit.js';
+import { measureLabels } from '../core/measure.js';
 
 const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
@@ -256,6 +257,23 @@ export class Selection {
      * ⚠ 而開關本身就是效能的保險 —— 覺得卡就關掉，不必等人修。
      */
     this.showVertexDots = true;
+
+    /**
+     * 🔴 **標尺寸：把量到的數字畫在 3D 畫面上**（量測第 2 步）。
+     *
+     * kang 2026-08-27 拍板做成**三段可切換**，⛔ 不是開關 ——
+     * 他的原話：「**是不是有一個選項可以變換標示..不然一起出現可能會很擠**」。
+     *
+     * | 值 | 選 32 條邊時畫面上 |
+     * |---|---|
+     * | `'off'` | 一個字都沒有 |
+     * | `'total'`（預設）| **1 個字**在重心：「32 條邊／總長 156.83 cm」|
+     * | `'each'` | **32 個字**，每條邊中間各一個：「4.90 cm」|
+     *
+     * 預設 `'total'` 也是 kang 選的：**永遠只有一個字，不可能擠**，
+     * 而且一選到東西就看得到 —— ⛔ 預設關掉的話這個功能等於不存在（坑第 21 條）。
+     */
+    this.measureMode = 'total';
 
     /**
      * gizmo 掛的那個替身。
@@ -1457,6 +1475,14 @@ export class Selection {
     this._drag = null;              // 快照跟著選取走，選取沒了就對不上任何東西
     if (this._proxy.parent) this._proxy.parent.remove(this._proxy);
     this.view.clearPickMarks();
+    /**
+     * 🔴 **這一支⛔ 不走 `_drawEditMark()`**（它直接清標記），
+     * 所以量測的字要在這裡自己收掉 —— ⛔ 漏掉的症狀是
+     * **選取已經沒了，數字還賴在畫面上**（坑第 21 條的反面）。
+     * ⭐ 呼叫 `refreshMeasureLabels()` 而不是 `view.clearMeasureLabels()`：
+     * 那一支**讀當下狀態自己算**，⛔ 不必在這裡再抄一次「什麼時候該清」。
+     */
+    this.refreshMeasureLabels();
     this.tc.detach();
   }
 
@@ -1842,8 +1868,51 @@ export class Selection {
     return { shown: total, total, tooMany: false };
   }
 
+  /**
+   * 🔴 **量測第 2 步：把選到的尺寸標到 3D 畫面上。**
+   *
+   * kang 2026-08-25 拍板「**只有選到的才顯示**」——
+   * 所以它跟選取綁在一起，掛在 `_drawEditMark()` 底下，
+   * ⭐ **⛔ 不另外開一條「選取變了要通知我」的鏈** —— 那一支已經是
+   * 十六個寫入點共同的出海口，再開一條就是第二份會漂的東西（坑第 31 條）。
+   *
+   * ⛔ **數字不在這裡算**，一律問 `measureLabels()`（純函式、測得到，
+   * 而且跟右邊面板同一個 `measureSelection()` 來源）。
+   *
+   * @returns {{shown:number,total:number,tooMany:boolean}}
+   *          `tooMany` ＝ 超過上限整批沒畫，**呼叫端必須講出實際數量**
+   */
+  refreshMeasureLabels() {
+    const none = { shown: 0, total: 0, tooMany: false };
+    const act = this.editSel;
+    const on = this.measureMode !== 'off' && this.editMode && act;
+    if (!on) { this.view.clearMeasureLabels(); return none; }
+
+    const node = this.view.nodeOf(act.obj.id);
+    const mesh = act.obj.mesh();
+    if (!node || !mesh) { this.view.clearMeasureLabels(); return none; }
+
+    node.updateMatrixWorld(true);
+    const r = measureLabels(mesh, this.editSels, node.matrixWorld, {
+      mode: this.measureMode, pivot: this.editPivot
+    });
+    this.view.setMeasureLabels(r.items);
+    return { shown: r.shown, total: r.total, tooMany: r.tooMany };
+  }
+
+  /**
+   * 換「標尺寸」的模式。
+   * ⚠ 換完要立刻重畫，⛔ 不能等下一次選取變動 —— 那就是一顆按了沒反應的按鈕。
+   * @returns {{shown:number,total:number,tooMany:boolean}} 呼叫端拿去講數量
+   */
+  setMeasureMode(mode) {
+    this.measureMode = (mode === 'off' || mode === 'each') ? mode : 'total';
+    return this.refreshMeasureLabels();
+  }
+
   _drawEditMark() {
     this.refreshVertexDots();
+    this.refreshMeasureLabels();
     const act = this.editSel;
     const node = act && this.view.nodeOf(act.obj.id);
     if (!node) { this.view.clearPickMarks(); return; }

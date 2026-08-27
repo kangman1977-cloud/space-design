@@ -834,6 +834,159 @@ export class SceneView {
     return g;
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  量測第 2 步：把數字畫到 3D 畫面上
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * 🔴 **把量測的字擺到 3D 場景裡。**
+   *
+   * ── ⛔ 為什麼不畫在螢幕座標上 ────────────────────────────
+   * `index.html` 那段墓碑註解寫得很清楚：刀具第一版就是**畫在螢幕上**，
+   * 而切點是**模型上的位置** —— 一轉視角就對不上（症狀是「預覽一直亂跳」），
+   * 那個疊層已經整個移除了。**量測的字指的也是模型上的位置**，
+   * ⛔ 不會把同一個坑再挖一次。
+   *
+   * ── 做法照 `select.js` 的三個軸標 ────────────────────────
+   * canvas 畫字 → `CanvasTexture` → `Sprite`，`depthTest:false`。
+   * ⭐ 那一套 kang 已經實測過了，⛔ 不另外發明第二種畫字的方式。
+   *
+   * ⚠ **跟軸標的兩個差別，都是刻意的**：
+   * 1. **數量會隨選取成長**（軸標永遠是 3 個）→ 所以要 `dispose()`
+   *    舊的材質與貼圖，⛔ 漏掉就是記憶體一路長上去，**而畫面完全正常**。
+   *    上限由 `measureLabels()` 的 `MEASURE_LABELS_MAX` 擋在前面。
+   * 2. **字底下加一層半透明深底**。軸標是單一個字母、又跟拉桿同色系，
+   *    只描邊就夠；量測是一串數字，疊在亮面上光靠描邊讀不出來。
+   *
+   * @param {{text:string,pos:THREE.Vector3}[]} items `measureLabels()` 回的
+   */
+  setMeasureLabels(items) {
+    this.clearMeasureLabels();
+    if (!items || !items.length) return;
+
+    const g = new THREE.Group();
+    g.name = 'measureLabels';
+    for (const it of items) {
+      if (!it || !it.pos) continue;
+      const sp = this._makeTextSprite(String(it.text ?? ''));
+      sp.position.copy(it.pos);
+      g.add(sp);
+    }
+    if (!g.children.length) return;
+
+    g.traverse(o => { o.raycast = () => {}; });   // ⛔ 不參與點選，否則會擋住物件
+    this.scene.add(g);
+    this._measureLabels = g;
+    /** 立刻擺一次大小，⛔ 不要等下一幀 —— 那一幀會看到字忽大忽小閃一下 */
+    this._syncMeasureLabelScale();
+  }
+
+  clearMeasureLabels() {
+    if (!this._measureLabels) return;
+    this.scene.remove(this._measureLabels);
+    this._measureLabels.traverse(o => {
+      if (o.material) {
+        // 🔴 貼圖要自己 dispose，⛔ `material.dispose()` 不會連 map 一起收
+        if (o.material.map) o.material.map.dispose();
+        o.material.dispose();
+      }
+    });
+    this._measureLabels = null;
+  }
+
+  /** 一串字（可含 `\n`）→ 一個 Sprite。⚠ 字級與留白都是 canvas 的像素，跟世界座標無關 */
+  _makeTextSprite(text) {
+    const FS = 44;                 // canvas 上的字級（px）
+    const LINE = Math.round(FS * 1.28);
+    const PAD_X = 18, PAD_Y = 10;
+    const lines = text.split('\n');
+
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d');
+    const font = `600 ${FS}px "Noto Sans TC", Arial, sans-serif`;
+    g.font = font;
+    let w = 0;
+    for (const s of lines) w = Math.max(w, g.measureText(s).width);
+
+    cv.width = Math.ceil(w) + PAD_X * 2;
+    cv.height = LINE * lines.length + PAD_Y * 2;
+
+    // ⚠ 改過 canvas 尺寸之後 context 會被重設，字型要重新指定
+    g.font = font;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+
+    /** 半透明深底：亮面上的白字光靠描邊讀不出來 */
+    const r = 12;
+    g.fillStyle = 'rgba(20,23,28,0.78)';
+    g.beginPath();
+    g.moveTo(r, 0);
+    g.arcTo(cv.width, 0, cv.width, cv.height, r);
+    g.arcTo(cv.width, cv.height, 0, cv.height, r);
+    g.arcTo(0, cv.height, 0, 0, r);
+    g.arcTo(0, 0, cv.width, 0, r);
+    g.fill();
+
+    g.lineWidth = 5;
+    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.fillStyle = '#ffe07a';        // 跟「選到的東西」那個黃色同一家
+    lines.forEach((s, i) => {
+      const y = PAD_Y + LINE * i + LINE / 2;
+      g.strokeText(s, cv.width / 2, y);
+      g.fillText(s, cv.width / 2, y);
+    });
+
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthTest: false, depthWrite: false
+    }));
+    /** 99：畫在模型上面，但**讓在 gizmo 的 X／Y／Z 底下**（那三個字是 100）*/
+    sp.renderOrder = 99;
+    sp.userData.aspect = cv.width / cv.height;
+    sp.userData.rows = lines.length;
+    return sp;
+  }
+
+  /**
+   * 每一幀把字調成「不管拉遠拉近都一樣大」。
+   *
+   * 🔴 **⛔ 不可以只擺一次就不管** —— 不調的話字會跟著模型一起縮，
+   * 拉遠就小到讀不出來，而使用者看到的是「這個功能有時候沒作用」
+   * （鐵律：那多半是狀態依賴，這裡的狀態是相機距離）。
+   *
+   * 算法照抄 `select.js` `syncGizmoLabels()` 那一段（它又是照抄
+   * TransformControls 的）——⭐ **兩處用同一個 factor，字才不會跟箭頭脫節**。
+   *
+   * ⚠ **每一幀跑，所以裡面只有固定次數的向量運算**，
+   * 而且總數被 `MEASURE_LABELS_MAX` 擋住，⛔ 不會隨模型大小成長（坑第 22 條）。
+   */
+  _syncMeasureLabelScale() {
+    const g = this._measureLabels;
+    if (!g) return;
+    const cam = this.camera;
+
+    /** 單行字要佔畫面的比例（factor 的倍數）。比軸標小一點 —— 那是一串數字不是一個字母 */
+    const LABEL_H = 0.055;
+
+    let orthoFactor = 0;
+    const camPos = new THREE.Vector3();
+    if (cam.isOrthographicCamera) {
+      orthoFactor = (cam.top - cam.bottom) / cam.zoom;
+    } else {
+      cam.getWorldPosition(camPos);
+    }
+
+    for (const sp of g.children) {
+      const factor = cam.isOrthographicCamera
+        ? orthoFactor
+        : sp.position.distanceTo(camPos)
+          * Math.min(1.9 * Math.tan(Math.PI * cam.fov / 360) / cam.zoom, 7);
+      const h = factor * LABEL_H * (sp.userData.rows || 1);
+      sp.scale.set(h * (sp.userData.aspect || 2), h, 1);
+    }
+  }
+
   /**
    * 🔴 **刀具模式下把「按住拖」讓給一筆畫，轉視角換到別的手勢。**
    *
@@ -1009,6 +1162,13 @@ export class SceneView {
     }
 
     this.orbit.update();
+    /**
+     * ⚠ **一定要在 `orbit.update()` 之後**：阻尼還在動的那幾幀相機還會再移，
+     * 先算的話字的大小會慢一幀 —— 轉視角時看起來就是「字在抖」。
+     * ⭐ 掛在這裡是因為 `render()` 是每一幀**必經的唯一入口**，
+     * ⛔ 不必再開第二條同步鏈（坑第 31 條）。
+     */
+    this._syncMeasureLabelScale();
     this.renderer.render(this.scene, this.camera);
   }
 

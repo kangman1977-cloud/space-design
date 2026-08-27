@@ -9865,6 +9865,139 @@ section('量測：選到的東西有多大');
     eq('沒有選取回 null', measure.measureSelection(box, [], I), null);
     eq('選取是 null 也回 null', measure.measureSelection(box, null, I), null);
   }
+
+  // ═══════════════════════════════════════════════════
+  //  第 2 步：畫到 3D 畫面上（measureLabels）
+  //
+  //  ⚠ 這裡驗的是「**哪個位置該出現哪一串字**」這份純資料 ——
+  //  畫成 Sprite 那一半沙箱驗不了（沒有畫面），要 kang 實測。
+  // ═══════════════════════════════════════════════════
+  {
+    const L = measure.measureLabels;
+    const top = box.faces.find(f =>
+      Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+    const ring = [...box.edges()].filter(he => {
+      const len = measure.edgeLength(he, I);
+      return (Math.abs(len - 60) < 1e-9 || Math.abs(len - 45) < 1e-9)
+        && Math.abs(he.v.p.y - he.to.p.y) < 1e-9
+        && Math.abs(he.v.p.y - box.verts.reduce((mx, v) => Math.max(mx, v.p.y), -1e9)) < 1e-9;
+    }).map(edgeEl);
+
+    /**
+     * ⚠ **一定要指名挑「長度 60 的那一條」，⛔ 不可以拿 `ring[0]`** ——
+     * 那一圈裡兩條 60、兩條 45，第一條是哪一種**沒有保證**。
+     * 〔寫這節時實際踩到：期待 120 得到 90（＝45×2），
+     * 　⛔ 那是測試選錯樣本，程式是對的〕
+     */
+    const e60 = edgeEl(edgeOf(60));
+
+    // ── 總計：不管選幾個都只有一個字 ──
+    {
+      const r1 = L(box, [e60], I, { mode: 'total' });
+      eq('總計 單選一條邊 → 1 個字', r1.items.length, 1);
+      eq('　　字就是長度＋單位', r1.items[0].text, '60.00 cm');
+
+      const r4 = L(box, ring, I, { mode: 'total' });
+      eq('★ 總計 選 4 條邊 → 還是只有 1 個字', r4.items.length, 1);
+      /**
+       * 🔴 **多選一定要連數量與單位一起寫。**
+       * 那個字站在重心上、⛔ 不站在任何一條邊上，只寫「210.00」會被
+       * 讀成「某一條有這麼長」——「講數量與形狀」那條規則的守門員。
+       */
+      eq('★★ 總計 多選要寫出「幾條邊」', r4.items[0].text, '4 條邊\n總長 210.00 cm');
+      ok('★ 總計 那個字站在重心上',
+        r4.items[0].pos.distanceTo(measure.measureSelection(box, ring, I).center) < 1e-9);
+
+      const rf = L(box, [faceEl(top)], I, { mode: 'total' });
+      eq('總計 單選一個面 → 面積＋cm²', rf.items[0].text, '2700.00 cm²');
+      const rf6 = L(box, box.faces.map(faceEl), I, { mode: 'total' });
+      eq('★ 總計 全選六個面 → 1 個字、寫總面積', rf6.items[0].text, '6 個面\n總面積 13800.00 cm²');
+    }
+
+    // ── 每一個：字數 ＝ 元素數，而且各標各的 ──
+    {
+      const r = L(box, ring, I, { mode: 'each' });
+      eq('★ 每一個 選 4 條邊 → 4 個字', r.items.length, 4);
+      const texts = r.items.map(i => i.text).sort();
+      eq('　　四個字是兩個 60、兩個 45',
+        texts.join(','), '45.00 cm,45.00 cm,60.00 cm,60.00 cm');
+
+      /**
+       * 🔴 **兩個數字互相對得起來**（鐵律三）：
+       * 每一條各自的長度加起來，⛔ 必須等於「總計」那個字裡的總長。
+       * 對不上就是兩邊各算了一份 —— 而那正是坑第 31 條。
+       */
+      let sum = 0;
+      for (const it of r.items) sum += parseFloat(it.text);
+      rel('★★ 每一個 加起來 ＝ 總計那個字的 210', sum, 210);
+
+      // 字要站在邊的中點上，⛔ 不是端點
+      const one = L(box, [e60], I, { mode: 'each' }).items[0];
+      const mid = e60.he.v.p.clone().add(e60.he.to.p).multiplyScalar(0.5);
+      ok('★ 每一個 邊的字站在中點', one.pos.distanceTo(mid) < 1e-9);
+    }
+
+    // ── ⚠ 面：同一個共面區域只標一次（⛔ 不可以兩個字疊在一起）──
+    {
+      const r = L(box, [faceEl(top), faceEl(top)], I, { mode: 'each' });
+      eq('★★ 同一個面選兩次 → 只標 1 個字', r.items.length, 1);
+      eq('　　而且 total 也只算 1 個', r.total, 1);
+      /**
+       * ★ 面的字要站在**那一片自己的重心**上（＝ gizmo 掛的那個點）。
+       * ⛔ 不驗的話，字跑到別片上也不會有任何東西報錯 ——
+       * 數字是對的，指的東西是錯的（坑第 20 條的近親）。
+       */
+      const cTop = measure.measureSelection(box, [faceEl(top)], I).center;
+      ok('★★ 面的字站在那一片的重心上',
+        L(box, [faceEl(top)], I, { mode: 'each' }).items[0].pos.distanceTo(cTop) < 1e-9);
+
+      const r6 = L(box, box.faces.map(faceEl), I, { mode: 'each' });
+      eq('每一個 全選六個面 → 6 個字', r6.items.length, 6);
+      ok('★ 六個字各站各的位置（⛔ 沒有兩個疊在一起）',
+        new Set(r6.items.map(i => `${i.pos.x.toFixed(4)},${i.pos.y.toFixed(4)},${i.pos.z.toFixed(4)}`)).size === 6);
+      const areas = r6.items.map(i => i.text).sort();
+      eq('　　六個字就是六個面積',
+        areas.join(','),
+        '1800.00 cm²,1800.00 cm²,2400.00 cm²,2400.00 cm²,2700.00 cm²,2700.00 cm²');
+    }
+
+    // ── 點：寫座標（kang 2026-08-27 選的）──
+    {
+      const v = box.verts.find(v2 => Math.abs(v2.p.y) > 1e-9) || box.verts[0];
+      const r = L(box, [{ kind: 'vertex', vert: v }], I, { mode: 'each' });
+      eq('點 寫成一串座標', r.items[0].text,
+        `(${measure.fmtCm(v.p.x)}, ${measure.fmtCm(v.p.y)}, ${measure.fmtCm(v.p.z)})`);
+      ok('點 字就站在那個點上', r.items[0].pos.distanceTo(v.p) < 1e-9);
+    }
+
+    // ── 🔴 上限：超過就整批不畫，而且要回報實際數量 ──
+    {
+      const r = L(box, box.faces.map(faceEl), I, { mode: 'each', max: 3 });
+      eq('★★ 超過上限 一個字都不畫', r.items.length, 0);
+      eq('★★ 　　但要講得出實際幾個', r.total, 6);
+      eq('★★ 　　而且要說得出是被擋掉的', r.tooMany, true);
+      // 總計不受上限影響 —— 它永遠只有一個字
+      eq('★ 總計不受上限影響', L(box, box.faces.map(faceEl), I,
+        { mode: 'total', max: 3 }).items.length, 1);
+    }
+
+    // ── 🔴 一律世界座標：跟 measureSelection 同一條 ──
+    {
+      const S2 = new THREE.Matrix4().makeScale(2, 2, 2);
+      eq('★★ 放大 2 倍 每一個的字也 2 倍',
+        L(box, [e60], S2, { mode: 'each' }).items[0].text, '120.00 cm');
+      eq('★★ 放大 2 倍 總計的字也跟著',
+        L(box, ring, S2, { mode: 'total' }).items[0].text, '4 條邊\n總長 420.00 cm');
+    }
+
+    // ── 沒有選取就一個字都沒有，⛔ 不要回一個空字串的標籤 ──
+    {
+      eq('沒有選取 → 0 個字', L(box, [], I, { mode: 'each' }).items.length, 0);
+      eq('選取是 null → 0 個字', L(box, null, I, { mode: 'total' }).items.length, 0);
+      eq('　　而且 tooMany 是 false（⛔ 不是被擋掉，是本來就沒有）',
+        L(box, [], I, { mode: 'each' }).tooMany, false);
+    }
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

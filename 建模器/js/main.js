@@ -21,6 +21,7 @@ import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
+import { MEASURE_LABELS_MAX } from './core/measure.js';
 import { Panel, fillPrimMenu } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
@@ -407,6 +408,7 @@ $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
+$('measureMode').onchange = () => changeMeasureMode();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
@@ -1703,6 +1705,35 @@ function toggleVertexDots() {
     return;
   }
   toast(r.shown ? `標出 ${r.shown} 個點` : '點的標示開了 —— 先選一個物件');
+}
+
+/**
+ * 🔴 **標尺寸：把量到的數字畫到 3D 畫面上**（量測第 2 步）。
+ *
+ * kang 2026-08-25 拍板「**只有選到的才顯示**」；
+ * 2026-08-27 又拍板做成**三段可切換**（「不然一起出現可能會很擠」）。
+ *
+ * ⚠ **每一次換都要講一句**，包含關掉的時候 ——
+ * 一個換過去畫面上字消失／變多的下拉，不講就跟壞掉分不出來（坑第 21 條）。
+ *
+ * 🔴 **超過上限的時候要講出實際數量**，⛔ 不可以只說「太多了」
+ * （坑第 20 條：把數字講出來，使用者才知道差多少、該怎麼辦）。
+ */
+function changeMeasureMode() {
+  const mode = $('measureMode').value;
+  const r = sel.setMeasureMode(mode);
+
+  if (mode === 'off') { toast('尺寸的標示關掉了 —— 右邊面板那一行不受影響'); return; }
+  if (r.tooMany) {
+    toast(`選到 ${r.total} 個，超過 ${MEASURE_LABELS_MAX} 個就不標了 —— `
+        + '全部標出來會擠成一團，在平板上也可能變慢。切回「總計」只會標一個字', true);
+    return;
+  }
+  if (!sel.editMode) { toast('尺寸的標示開了 —— 進「拉點線面」之後才看得到'); return; }
+  if (!r.shown) { toast('尺寸的標示開了 —— 先選一個點、邊或面'); return; }
+  toast(mode === 'each'
+    ? `每一個都標：畫面上 ${r.shown} 個數字`
+    : '總計：畫面上 1 個數字，寫在選取的重心上');
 }
 
 /**

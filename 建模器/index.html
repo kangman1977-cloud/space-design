@@ -419,6 +419,23 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         🔴 開關本身就是效能的保險 —— 覺得卡就關掉，不必等人修。
       -->
       <button id="vertDots" class="on" title="顯示點：把這個物件所有的點標成小白圈。「邊上加點」加在邊中間的點沒有它就看不到位置。⚠ 只在過濾器是「點」或「自動」時有作用；覺得卡就關掉">顯示點</button>
+      <!--
+        標尺寸（量測第 2 步）：把選到的尺寸畫到 3D 畫面上。
+        右邊面板那一行永遠照舊，這裡補的是「不必把視線移到右邊」那一半。
+
+        🔴 做成三段可切換而不是開關，是 kang 2026-08-27 拍板的：
+        　　「是不是有一個選項可以變換標示..不然一起出現可能會很擠」。
+        預設「總計」也是他選的 —— 永遠只有一個字，不可能擠。
+
+        ⚠ 放在「顯示點」旁邊而不是「檢視」那一組，理由跟它一樣：
+        　　只在編輯模式、選到子元素時才有意義，跟檢視模式無關。
+      -->
+      <span class="lbl">標尺寸</span>
+      <select id="measureMode" title="把選到的尺寸畫到 3D 畫面上（右邊面板那一行不受影響）。總計＝不管選幾個都只標一個字，寫在整份選取的重心上；每一個＝每條邊、每個面各標自己的數字，⚠ 選很多時會擠成一團">
+        <option value="total">總計</option>
+        <option value="each">每一個</option>
+        <option value="off">關</option>
+      </select>
       <button id="extrude" disabled title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
       <button id="flatten" disabled title="壓平：把選到的面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變（圓柱那一段會被削平）。想把好幾片 seg 變成一個平面就用它">壓平</button>
       <!--

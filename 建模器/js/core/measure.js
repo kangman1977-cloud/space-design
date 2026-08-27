@@ -41,6 +41,14 @@
  * · 怎麼把數字畫到畫面上 → `js/ui/toolbar.js`、`js/view/scene.js`
  * · 展開圖上的尺寸標註   → `js/out/sheet.js`
  * · 圓的半徑／弧長／弦長 → 還沒做，見日誌待辦「圓弧擬合接上介面」
+ *
+ * ── 第 2 步：畫到 3D 畫面上（2026-08-27 加）─────────────
+ * `measureLabels()` 回的是「**哪個位置該出現哪一串字**」，
+ * 純資料、不碰 DOM 也不碰 three.js 的場景 —— 所以測得到。
+ * 怎麼把它變成畫面上的字是 `scene.js` `setMeasureLabels()` 的事。
+ *
+ * ⭐ **這是這個專案的老招**：出圖也是拆成「決定畫什麼」（純資料）
+ * 與「怎麼畫出來」兩層，所以連「圖上標了什麼」都測得到。
  */
 
 import * as THREE from 'three';
@@ -164,4 +172,156 @@ export function measureSelection(mesh, els, M, pivot = 'median', tolDeg = 0.5) {
     size: box.getSize(new THREE.Vector3()),
     length, area, perimeter, holes
   };
+}
+
+// ═══════════════════════════════════════════════════════
+//  第 2 步：把數字畫到 3D 畫面上
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **「每一個」模式最多標幾個。**
+ *
+ * ⚠ **這個數字是猜的，沒有量過** —— 跟 `VERT_DOTS_MAX` 同一個誠實標記。
+ * 每一個標籤是一張 canvas 材質 ＋ 一個 Sprite，**比 `VERT_DOTS_MAX`
+ * 那種一整批走一個 `THREE.Points` 的東西貴得多**，所以上限低很多。
+ *
+ * 手上的實際數量：選一圈面 32、球一條經線 32、圓柱全選邊 96、
+ * 球全選邊 960（← 這個一定要擋）。
+ *
+ * 🔴 **超過就不標，而且要講出實際數量**（坑第 11 條的反面：
+ * ⛔ 不是沉默退回，是沉默地把畫面弄糊）。
+ * 等 kang 平板實測再照真實結果調，⛔ 不要為想像中的數字辯護。
+ */
+export const MEASURE_LABELS_MAX = 200;
+
+/** 座標寫成一串。⚠ 這串字最長，是「點」那一種佔位置比別人大的原因 */
+function fmtXYZ(p) {
+  return `(${fmtCm(p.x)}, ${fmtCm(p.y)}, ${fmtCm(p.z)})`;
+}
+
+/** 量詞：邊論條、面與點論個。⛔ 不要只寫數字（坑第 20 條：單位沒講就不是數量）*/
+const UNIT_OF = { vertex: '個點', edge: '條邊', face: '個面' };
+
+/**
+ * 🔴 **選到的東西該在 3D 畫面上標什麼字、標在哪裡。**
+ *
+ * kang 2026-08-25 拍板「**只有選到的才顯示**」，跟 Blender 的
+ * Measurement overlay 一致 —— 方塊 12 條邊全標就已經看不清楚了。
+ *
+ * ── 兩種模式（kang 2026-08-27 拍板做成可切換）─────────────
+ * 他的原話：「**是不是有一個選項可以變換標示..不然一起出現可能會很擠**」。
+ *
+ * | 模式 | 選 32 條邊時 |
+ * |---|---|
+ * | `'total'`（預設）| **1 個字**，在整份選取的重心：「32 條邊　總長 156.83 cm」|
+ * | `'each'` | **32 個字**，每條邊中間各一個：「4.90 cm」|
+ *
+ * 🔴 **`'total'` 多選時一定要連數量一起寫**（「32 條邊」那半）——
+ * 那個字站在重心上、**不站在任何一個元素上**，只寫「156.83」會被
+ * 讀成「某一條有這麼長」。⭐ 而且兩個數字擺在一起就互相驗得起來：
+ * 156.83 ÷ 32 ＝ 4.90，對不上就會被**使用者**看見（鐵律三）。
+ *
+ * ── ⛔ 數字不在這裡另算一份 ──────────────────────────────
+ * 總計那一組直接問 `measureSelection()`，**跟右邊面板同一個來源**。
+ * 兩邊各算一次的話遲早會不一致，而且畫面上看不出來（坑第 31 條）。
+ *
+ * ── ⚠ 面：同一個共面區域只標一次 ────────────────────────
+ * 「一個面」是共面區域不是三角形。同一個區域被選到兩個 face element 時
+ * 硬標兩次，畫面上就是兩個字疊在一起（而且數字一模一樣）。
+ *
+ * ⚠ **`planarRegions()` 在這裡只跑一次**，⛔ 不是每個面跑一次
+ * （它是掃全網格的，選 32 個面就會變成掃 32 遍 —— 坑第 3、22 條）。
+ *
+ * @param {'total'|'each'} opt.mode
+ * @param {'median'|'active'} opt.pivot 跟 gizmo 掛的中心同一個
+ * @returns {{items:{text:string,pos:THREE.Vector3}[],
+ *            total:number, shown:number, tooMany:boolean}}
+ *          `total` ＝ 這份選取在 `'each'` 下**本來會有幾個字**；
+ *          `tooMany` ＝ 被上限擋掉了，呼叫端**必須講出來**
+ */
+export function measureLabels(mesh, els, M, opt = {}) {
+  const mode = opt.mode === 'each' ? 'each' : 'total';
+  const pivot = opt.pivot || 'median';
+  const tolDeg = opt.tolDeg ?? 0.5;
+  const max = opt.max ?? MEASURE_LABELS_MAX;
+  const none = { items: [], total: 0, shown: 0, tooMany: false };
+
+  if (!mesh || !Array.isArray(els) || !els.length) return none;
+  const kind = els[0].kind;
+
+  // ── 總計：一個字，站在重心上 ──────────────────────────
+  if (mode === 'total') {
+    const ms = measureSelection(mesh, els, M, pivot, tolDeg);
+    if (!ms) return none;
+
+    const many = els.length > 1;
+    const head = many ? `${els.length} ${UNIT_OF[kind] || '個'}\n` : '';
+    let body;
+    if (kind === 'edge') {
+      body = `${many ? '總長 ' : ''}${fmtCm(ms.length || 0)} cm`;
+    } else if (kind === 'face') {
+      body = `${many ? '總面積 ' : ''}${fmtCm(ms.area || 0)} cm²`;
+    } else {
+      // 點：單選就是它自己的位置；多選時重心才是那個字站的地方，要講明
+      body = (many ? '重心 ' : '') + fmtXYZ(ms.center);
+    }
+    return {
+      items: [{ text: head + body, pos: ms.center.clone() }],
+      total: 1, shown: 1, tooMany: false
+    };
+  }
+
+  // ── 每一個：先數，超過上限就整批不畫 ──────────────────
+  /** 面要先摺成「不重複的共面區域」才知道實際會有幾個字 */
+  let units = els;
+  let regionOfEl = null;
+  if (kind === 'face') {
+    const regions = planarRegions(mesh, tolDeg);          // ★ 只跑一次
+    const byId = new Map(regions.map(r => [r.id, r]));
+    regionOfEl = new Map();
+    const seen = new Set();
+    units = [];
+    for (const e of els) {
+      if (!e.face) continue;
+      const reg = byId.get(e.face.region) || regions.find(r => r.faces.includes(e.face));
+      if (!reg || seen.has(reg)) continue;
+      seen.add(reg);
+      regionOfEl.set(e, reg);
+      units.push(e);
+    }
+  }
+
+  const total = units.length;
+  if (!total) return none;
+  if (total > max) return { items: [], total, shown: 0, tooMany: true };
+
+  const items = [];
+  for (const e of units) {
+    if (kind === 'edge') {
+      const a = e.he.v.p.clone().applyMatrix4(M);
+      const b = e.he.to.p.clone().applyMatrix4(M);
+      items.push({
+        text: `${fmtCm(a.distanceTo(b))} cm`,
+        pos: a.clone().add(b).multiplyScalar(0.5)          // 邊的中點
+      });
+
+    } else if (kind === 'face') {
+      const m = regionMeasure(mesh, regionOfEl.get(e), M);
+      items.push({
+        text: `${fmtCm(m.area)} cm²`,
+        /**
+         * ⚠ **位置借 `elementCenter()`，⛔ 不自己再算一次平均** ——
+         * 那正是 gizmo 掛的那個點，所以**字會長在箭頭那裡**，
+         * 使用者不必猜這個數字在講哪一片（規格「重心借 elementCenter」同一條）。
+         */
+        pos: elementCenter(mesh, e, tolDeg).applyMatrix4(M)
+      });
+
+    } else {
+      const p = e.vert.p.clone().applyMatrix4(M);
+      items.push({ text: fmtXYZ(p), pos: p });
+    }
+  }
+
+  return { items, total, shown: items.length, tooMany: false };
 }
