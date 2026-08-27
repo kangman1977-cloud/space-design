@@ -415,6 +415,7 @@ $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('measureHud').onclick = () => toggleMeasureHud();
+$('measureCircle').onclick = () => toggleMeasureCircle();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
@@ -1766,6 +1767,35 @@ function toggleMeasureHud() {
   if (!sel.editMode) { toast('尺寸的讀數開了 —— 進「拉點線面」之後才看得到'); return; }
   if (!r.shown) { toast('尺寸的讀數開了 —— 先選一個點、邊或面'); return; }
   toast('尺寸的讀數開了 —— 在畫面左下角，FPS 那塊的右邊');
+}
+
+/**
+ * 🔴 **量圓的開關**（量測第 4 步）。
+ *
+ * ⛔ **它不判斷「這一圈是不是圓」** —— 那個判斷無解（正多邊形的頂點
+ * 永遠共圓、矩形四個角也永遠共圓）。**按了就表示他要問**，
+ * 跟「變成正圓」繞過同一個判準的方式一樣。
+ *
+ * ⚠ **開了卻沒東西可報時要講一句** —— 一顆按下去畫面沒反應的按鈕
+ * 跟壞掉分不出來（坑第 21 條）。而「⛔ 只對邊有效」是使用者猜不到的。
+ */
+function toggleMeasureCircle() {
+  const on = !sel.showCircle;
+  const r = sel.setShowCircle(on);
+  $('measureCircle').classList.toggle('on', on);
+
+  if (!on) { toast('量圓關掉了'); return; }
+  if (sel.measureMode === 'off') {
+    toast('量圓開了 —— ⚠ 但「標尺寸」是關的，左下角那塊不會出現。先把它打開', true);
+    return;
+  }
+  if (!sel.editMode) { toast('量圓開了 —— 進「拉點線面」之後才看得到'); return; }
+  const k = sel.editSel && sel.editSel.kind;
+  if (k && k !== 'edge') {
+    toast('量圓開了 —— ⚠ 它只看「邊」。選一整圈邊（例如圓柱的一個圓蓋）才報得出來');
+    return;
+  }
+  toast('量圓開了 —— 選一整圈邊，左下角會多報半徑、幾段、每段弦長');
 }
 
 /**

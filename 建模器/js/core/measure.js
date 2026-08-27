@@ -53,7 +53,7 @@
 
 import * as THREE from 'three';
 import { planarRegions } from './region.js';
-import { elementVerts, elementCenter } from './edit.js';
+import { elementVerts, elementCenter, toCircle } from './edit.js';
 
 /** 小數點兩位 —— kang 2026-08-25 選的。0.01 cm ＝ 0.1mm，正好是可切容許值 */
 export const MEASURE_DP = 2;
@@ -203,6 +203,119 @@ function fmtXYZ(p) {
 const UNIT_OF = { vertex: '個點', edge: '條邊', face: '個面' };
 
 /**
+ * 一個元素的**代表點**（世界座標）：點就是自己、邊取中點、面取重心。
+ *
+ * ⚠ 面借 `elementCenter()`，⛔ 不自己再算一次平均 —— 那正是 gizmo 掛的那個點。
+ */
+function repPoint(mesh, el, M, tolDeg) {
+  if (el.kind === 'vertex') return el.vert.p.clone().applyMatrix4(M);
+  if (el.kind === 'edge') {
+    return el.he.v.p.clone().add(el.he.to.p).multiplyScalar(0.5).applyMatrix4(M);
+  }
+  return elementCenter(mesh, el, tolDeg).applyMatrix4(M);
+}
+
+/**
+ * 🔴 **量測第 4 步（一）：兩個元素之間的距離。**
+ *
+ * ── ⛔ 為什麼不走「貼合那套先點一個再點一個」──────────────
+ * `規格\建模器-量測.md` 原本寫「介面已經有了 ＝ 貼合」，**那條路 ⛔ 不走**：
+ *
+ * 1. 貼合是**物件層級**的模式，它甚至**明文擋掉「同一個物件」** ——
+ *    而量距離最常見的正是**同一個物件上的兩個點**
+ * 2. 新增一個模式 ＝ 新增模式互斥問題〔瓣片展開 A 就卡在那裡：
+ *    `setEditMode(false)` 會把選取清光〕
+ * 3. ⭐ **編輯模式的多選已經能選兩個同型別元素** —— ⛔ 一行新的選取程式都不用寫
+ *
+ * ── ⚠ 代價，要講出來 ──────────────────────────────────
+ * **⛔ 量不到跨型別**（點到面）—— 因為 `editSels` 刻意不准混型別。
+ * ⚠ 而「點到面的直線距離」＝ 點到那一片的重心，本來也不是使用者要的東西；
+ * 他要的是**垂直距離**，而那一項 **kang 2026-08-27 決定先不做**
+ * 〔理由：「邊到面」「面到面」的垂直距離**結果不唯一**，坑第 24 條〕。
+ *
+ * ── 🔴 剛好兩個才有意義 ───────────────────────────────
+ * 距離本來就是**兩個**東西之間的事。⛔ 選 3 個時不要硬湊一個數字
+ * （那會是「沒有人驗得出來」的量 —— 跟多選面的周長回 `null` 同一條）。
+ *
+ * ⭐ **`dx/dy/dz` 跟 `d` 互相驗得起來**：√(dx²+dy²+dz²) ＝ d，
+ * 對不上會被**使用者**看見（鐵律三）。而且三軸差多少對**對齊與定位**最實用。
+ *
+ * @returns {null|{d:number, dx:number, dy:number, dz:number}}
+ *          `null` ＝ ⛔ 不是剛好兩個（或型別不同），**不硬湊**
+ */
+/**
+ * 🔴 **量測第 4 步（二）：這一圈當成圓來看，是多大的圓。**
+ *
+ * ── 🔴🔴 它 ⛔ 不需要「這一圈是不是圓」的判斷 ─────────────
+ * 那個判斷**目前無解**，而且是查出來的，⛔ 不是還沒想到：
+ * **正多邊形的頂點永遠共圓、矩形的四個角也永遠共圓**
+ * 〔【實證 2026-08-27】方塊每個面都被判成圓，偏差 3.55e-15；
+ * 　六角柱的蓋子在數學上真的是一個圓（外接圓半徑 30）〕。
+ *
+ * ⭐ **繞過的方式跟 `變成正圓` 一模一樣**（`edit.js` 那一支的註解）：
+ * > **使用者按了那顆開關又選了這一圈，就表示他要問這一圈的圓。**
+ *
+ * 🔴 **所以 `量圓` 一定是「⛔ 預設關的開關」** ——
+ * 自動顯示就等於自動判斷，那會在方塊的四條邊上報一個半徑 36.06 的圓，
+ * 而**那是誤報**（坑第 18 條：誤報會讓人學會忽略整個欄位）。
+ *
+ * ── ⛔ 數字不另算一份 ────────────────────────────────
+ * 半徑走 `toCircle(dryRun)` —— **跟 `變成正圓` 那個半徑欄同一個來源**。
+ * ⚠ `edit.js` 那一支的註解明文寫著「⛔ 不要自己再算一次擬合」。
+ * 網格真值走 `measureSelection().length`，**跟上面那幾行同一個來源**。
+ *
+ * ── 🔴 弦長是真值，2πR 是參考 ───────────────────────────
+ * > **展開尺寸 ＝ 網格攤平後的總和。**（日誌「尺寸的依據」）
+ *
+ * 156.83 是那個模型的**真值**；157.08 算的是一個**從來沒被做出來過的理想圓**。
+ * ⛔ **看到差額不要以為那是誤差要補回去** —— 想更接近圓就**把 seg 開高**，
+ * 那是建模階段的決定，⛔ 不是量測階段要修的事。
+ * ⭐ 所以那一行明寫「視為理想圓」，⛔ 不寫「正確周長」。
+ *
+ * @returns {string[]} 報不出來就回空陣列（⛔ 不回一行「算不出來」佔位）
+ */
+function circleRows(mesh, els, M, tolDeg) {
+  const kind = els[0].kind;
+  /** ⚠ 只對「一圈邊」有意義。面有自己的周長，點沒有段數可言 */
+  if (kind !== 'edge') return [];
+
+  const r = toCircle(mesh, els, { tolDeg, dryRun: true });
+  if (!r || !r.ok) return [];
+
+  const R = r.fitted;
+  const ideal = 2 * Math.PI * R;
+  const mesh1 = els.reduce((s, e) => s + edgeLength(e.he, M), 0);
+  const seg = els.length;
+
+  /**
+   * ⚠ **半徑是網格自己的座標算出來的**（`toCircle` 不吃矩陣），
+   * 而網格真值那一半是**世界座標**。物件被縮放過時兩者對不起來，
+   * ⛔ 不可以讓它安靜地錯 —— 講出來。
+   * 〔跟結構分析「表面積沒有含縮放」那一條同一個處理方式〕
+   */
+  const rows = [
+    `這一圈當成圓：半徑 ${fmtCm(R)} cm　${seg} 段`,
+    `每段弦長 ${fmtCm(mesh1 / seg)} cm`,
+    `網格真值 ${fmtCm(mesh1)}　視為理想圓 ${fmtCm(ideal)}　差 ${fmtCm(Math.abs(ideal - mesh1))} cm`
+  ];
+  if (r.flattened > 1e-6) {
+    rows.push(`（這一圈不在同一個平面上，最遠差 ${fmtCm(r.flattened)} cm）`);
+  }
+  return rows;
+}
+
+export function pairDistance(mesh, els, M, tolDeg = 0.5) {
+  if (!mesh || !Array.isArray(els) || els.length !== 2) return null;
+  if (els[0].kind !== els[1].kind) return null;      // editSels 本來就不准混，這是保險
+  const a = repPoint(mesh, els[0], M, tolDeg);
+  const b = repPoint(mesh, els[1], M, tolDeg);
+  return {
+    d: a.distanceTo(b),
+    dx: Math.abs(b.x - a.x), dy: Math.abs(b.y - a.y), dz: Math.abs(b.z - a.z)
+  };
+}
+
+/**
  * 🔴 **選到的東西該顯示什麼字、那串字講的是哪裡。**
  *
  * kang 2026-08-25 拍板「**只有選到的才顯示**」，跟 Blender 的
@@ -298,6 +411,16 @@ export function measureLabels(mesh, els, M, opt = {}) {
     const isOneVert = kind === 'vertex' && !many;
     rows.push((isOneVert ? '座標' : (many && pivot === 'active' ? '中心（最後選的）' : '重心'))
       + ` X ${fmtCm(ms.center.x)}　Y ${fmtCm(ms.center.y)}　Z ${fmtCm(ms.center.z)} cm`);
+
+    /** 第 4 步（一）：剛好兩個 → 多報距離。⛔ 三個以上不硬湊 */
+    const pd = pairDistance(mesh, els, M, tolDeg);
+    if (pd) {
+      rows.push(`距離 ${fmtCm(pd.d)} cm`);
+      rows.push(`ΔX ${fmtCm(pd.dx)}　ΔY ${fmtCm(pd.dy)}　ΔZ ${fmtCm(pd.dz)} cm`);
+    }
+
+    /** 第 4 步（二）：`量圓` 開著才報。⛔ 關著時一個字都不多（見 `circleRows()`）*/
+    if (opt.circle) rows.push(...circleRows(mesh, els, M, tolDeg));
 
     /**
      * ⚠ **`pos` 在這個模式下呼叫端用不到**（左下角那塊是固定位置）——

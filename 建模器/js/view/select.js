@@ -276,6 +276,20 @@ export class Selection {
     this.measureMode = 'total';
 
     /**
+     * 🔴 **量圓：把選到的那一圈當成圓，報半徑／段數／弦長**（量測第 4 步）。
+     *
+     * ⛔ **預設關，而且它一定要是開關** —— 自動顯示就等於**自動判斷
+     * 「這一圈是不是圓」，而那個判斷目前無解**：正多邊形的頂點永遠共圓、
+     * 矩形的四個角也永遠共圓〔實證：方塊每個面都被判成圓〕。
+     * 自動報的話會在方塊的四條邊上報一個半徑 36.06 的圓 —— **那是誤報**
+     * （坑第 18 條：誤報會讓人學會忽略整個欄位）。
+     *
+     * ⭐ **開關就是繞過那個判準的方式**，跟 `變成正圓` 同一招：
+     * **使用者按了它又選了這一圈，就表示他要問這一圈的圓。**
+     */
+    this.showCircle = false;
+
+    /**
      * gizmo 掛的那個替身。
      *
      * TransformControls 只能掛 Object3D，而「一個頂點」不是 Object3D。
@@ -1896,7 +1910,13 @@ export class Selection {
 
     node.updateMatrixWorld(true);
     const r = measureLabels(mesh, this.editSels, node.matrixWorld, {
-      mode: this.measureMode, pivot: this.editPivot
+      mode: this.measureMode, pivot: this.editPivot,
+      /**
+       * ⭐ **現算，⛔ 不存**：`量圓` 只是一個旗標，每次重畫都重新問
+       * `toCircle(dryRun)` —— 選取一變數字自然就對，
+       * ⛔ 沒有第二份資料，也就沒有東西會不同步（坑第 31 條）。
+       */
+      circle: this.showCircle
     });
 
     /**
@@ -1927,6 +1947,15 @@ export class Selection {
    */
   setMeasureMode(mode) {
     this.measureMode = (mode === 'off' || mode === 'each') ? mode : 'total';
+    return this.refreshMeasureLabels();
+  }
+
+  /**
+   * 開關「量圓」。
+   * ⚠ 換完要立刻重畫，⛔ 不能等下一次選取變動 —— 那就是一顆按了沒反應的按鈕。
+   */
+  setShowCircle(on) {
+    this.showCircle = !!on;
     return this.refreshMeasureLabels();
   }
 

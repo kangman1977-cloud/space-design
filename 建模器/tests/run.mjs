@@ -10028,6 +10028,144 @@ section('量測：選到的東西有多大');
         L(box, [], I, { mode: 'each' }).tooMany, false);
     }
   }
+
+  // ═══════════════════════════════════════════════════
+  //  第 4 步（一）：兩個元素之間的距離
+  //
+  //  ⛔ 不走「貼合那套先點一個再點一個」——
+  //  貼合是物件層級、還明文擋掉「同一個物件」，而量距離最常見的
+  //  正是同一個物件上的兩個點。走編輯模式的多選，⛔ 0 行新的選取程式。
+  // ═══════════════════════════════════════════════════
+  {
+    const D = measure.pairDistance;
+    const vertEl = v => ({ kind: 'vertex', vert: v });
+
+    /** 方塊 60×45×40：取空間對角的兩個角 —— ⭐ 對角線剛好是整數 85 */
+    const lo = box.verts.reduce((a, v) => (v.p.x + v.p.y + v.p.z < a.p.x + a.p.y + a.p.z ? v : a));
+    const hi = box.verts.reduce((a, v) => (v.p.x + v.p.y + v.p.z > a.p.x + a.p.y + a.p.z ? v : a));
+    const r = D(box, [vertEl(lo), vertEl(hi)], I);
+
+    ok('★ 兩個角 有距離', !!r);
+    rel('★★ 方塊的空間對角線 ＝ 85（60² ＋ 40² ＋ 45² ＝ 85²）', r.d, 85);
+    rel('　　ΔX', r.dx, 60);
+    rel('　　ΔY', r.dy, 40);
+    rel('　　ΔZ', r.dz, 45);
+    /**
+     * 🔴 **兩個數字互相驗得起來**（鐵律三）：√(dx²+dy²+dz²) ⛔ 必須等於 d。
+     * 對不上就是兩邊各算了一份 —— 而使用者在畫面上就看得出來。
+     */
+    rel('★★ √(ΔX²+ΔY²+ΔZ²) ＝ 距離', Math.hypot(r.dx, r.dy, r.dz), r.d);
+
+    // ── 🔴 剛好兩個才有意義，⛔ 其餘不硬湊 ──
+    eq('★★ 只選 1 個 → null（⛔ 不硬湊）', D(box, [vertEl(lo)], I), null);
+    eq('★★ 選 3 個 → null', D(box, [vertEl(lo), vertEl(hi), vertEl(box.verts[1])], I), null);
+    eq('沒有選取 → null', D(box, [], I), null);
+
+    // ── 邊取中點、面取重心 ──
+    {
+      const top = box.faces.find(f =>
+        Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+      const bot = box.faces.find(f => f !== top &&
+        Math.abs(measure.measureSelection(box, [faceEl(f)], I).area - 2700) < 1e-6);
+      const rf = D(box, [faceEl(top), faceEl(bot)], I);
+      rel('★ 上下兩片 60×45 的面 重心距離 ＝ 高 40', rf.d, 40);
+      rel('　　ΔY ＝ 40、ΔX 與 ΔZ ＝ 0', rf.dy, 40);
+      ok('　　（⛔ 沒有橫向位移）', Math.abs(rf.dx) < 1e-9 && Math.abs(rf.dz) < 1e-9);
+    }
+
+    // ── 🔴 一律世界座標 ──
+    {
+      const S2 = new THREE.Matrix4().makeScale(2, 2, 2);
+      rel('★★ 放大 2 倍 距離也 2 倍', D(box, [vertEl(lo), vertEl(hi)], S2).d, 170);
+      const T = new THREE.Matrix4().makeTranslation(100, -50, 7);
+      rel('★★ 整個搬走 距離不變（剛體運動）', D(box, [vertEl(lo), vertEl(hi)], T).d, 85);
+    }
+
+    // ── 接到左下角那一塊：剛好兩個時多兩行 ──
+    {
+      const rows = measure.measureLabels(box, [vertEl(lo), vertEl(hi)], I,
+        { mode: 'total' }).items[0].text.split('\n');
+      ok('★ 兩個點的讀數裡有「距離」那一行', rows.some(s => s.startsWith('距離 85.00 cm')));
+      ok('★ 　　也有 ΔX/ΔY/ΔZ 那一行', rows.some(s => s.startsWith('ΔX 60.00')));
+
+      const one = measure.measureLabels(box, [vertEl(lo)], I,
+        { mode: 'total' }).items[0].text;
+      ok('★★ 只選一個 → ⛔ 讀數裡沒有「距離」', !one.includes('距離'));
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  第 4 步（二）：量圓
+  //
+  //  🔴 它 ⛔ 不判斷「這一圈是不是圓」—— 那個判斷無解
+  //  （正多邊形的頂點永遠共圓、矩形四個角也永遠共圓）。
+  //  ⭐ 使用者按了那顆開關又選了這一圈，就表示他要問。
+  // ═══════════════════════════════════════════════════
+  {
+    const cyl = baked('cylinder', { r: 25, h: 60, seg: 32 });
+    const I2 = new THREE.Matrix4();
+    const topY = cyl.verts.reduce((m, v) => Math.max(m, v.p.y), -1e9);
+    /** 圓蓋那一圈：兩端點都在最高處 */
+    const capRing = [...cyl.edges()].filter(he =>
+      Math.abs(he.v.p.y - topY) < 1e-9 && Math.abs(he.to.p.y - topY) < 1e-9)
+      .map(he => ({ kind: 'edge', he }));
+    eq('圓柱 seg32 的圓蓋那一圈是 32 條邊', capRing.length, 32);
+
+    const txt = measure.measureLabels(cyl, capRing, I2,
+      { mode: 'total', circle: true }).items[0].text;
+    const rows = txt.split('\n');
+
+    /**
+     * 🔴🔴 **這一組數字就是日誌「尺寸的依據」那張表的畫面版。**
+     * 弦長 ＝ 2R·sin(π/32) ＝ 4.9009，×32 ＝ 156.83；2πR ＝ 157.08；差 0.25。
+     * ⛔ **那個差額是資訊，不是誤差** —— 想更接近圓要回頭把 seg 開高。
+     */
+    ok('★★ 報得出半徑 25.00、32 段',
+      rows.some(s => s === '這一圈當成圓：半徑 25.00 cm　32 段'));
+    ok('★★ 每段弦長 4.90（＝ 2R·sin(π/32)）',
+      rows.some(s => s === '每段弦長 4.90 cm'));
+    ok('★★ 網格真值 156.83／視為理想圓 157.08／差 0.25',
+      rows.some(s => s === '網格真值 156.83　視為理想圓 157.08　差 0.25 cm'));
+    /** ⭐ 那三個數字自己對得起來：156.83 ÷ 32 ＝ 4.90 */
+    rel('★★ 弦長 × 段數 ＝ 網格真值', 4.9009 * 32, 156.8275, 1e-3);
+    rel('★★ 2πR ⛔ 不等於網格真值（差 0.25，⭐ 那是資訊不是誤差）',
+      2 * Math.PI * 25 - 156.8275, 0.2521, 1e-3);
+
+    // ── ⛔ 關著的時候一個字都不多 ──
+    {
+      const off = measure.measureLabels(cyl, capRing, I2, { mode: 'total' }).items[0].text;
+      ok('★★ 量圓關著 → ⛔ 讀數裡沒有「當成圓」', !off.includes('當成圓'));
+      eq('★ 　　行數也少三行', off.split('\n').length, rows.length - 3);
+    }
+
+    // ── ⚠ 只看邊：面與點回空 ──
+    {
+      const f = measure.measureLabels(cyl, [{ kind: 'face', face: cyl.faces[0] }], I2,
+        { mode: 'total', circle: true }).items[0].text;
+      ok('★ 選到「面」→ ⛔ 不報圓（面有自己的周長）', !f.includes('當成圓'));
+      const v = measure.measureLabels(cyl, [{ kind: 'vertex', vert: cyl.verts[0] }], I2,
+        { mode: 'total', circle: true }).items[0].text;
+      ok('★ 選到「點」→ ⛔ 不報圓（沒有段數可言）', !v.includes('當成圓'));
+    }
+
+    /**
+     * ⚠ **方塊的四條邊照樣報得出一個圓，而那是刻意的** ——
+     * 🔴 那正是「⛔ 不判斷是不是圓」的意思：**使用者按了開關就表示他要問**。
+     * ⛔ 反過來說，這也是它 ⛔ 不可以自動顯示的證據（那就變成誤報）。
+     */
+    {
+      const ring = [...box.edges()].filter(he => {
+        const len = measure.edgeLength(he, I);
+        return (Math.abs(len - 60) < 1e-9 || Math.abs(len - 45) < 1e-9)
+          && Math.abs(he.v.p.y - he.to.p.y) < 1e-9
+          && Math.abs(he.v.p.y - box.verts.reduce((mx, v) => Math.max(mx, v.p.y), -1e9)) < 1e-9;
+      }).map(he => ({ kind: 'edge', he }));
+      const t = measure.measureLabels(box, ring, I, { mode: 'total', circle: true }).items[0].text;
+      ok('★★ 方塊那四條邊也報得出圓 —— ⛔ 這是刻意的，⛔ 不是 bug',
+        t.includes('當成圓'));
+      ok('★★ 　　所以它 ⛔ 絕不可以自動顯示（那就是誤報）', t.includes('4 段'));
+    }
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
