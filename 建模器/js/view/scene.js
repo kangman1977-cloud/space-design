@@ -262,7 +262,14 @@ export class SceneView {
    * 跟 markSeamsDirty() 同一條理由：讓畫面每幀去猜有沒有變，
    * 成本是所有人一起付；明講一聲的成本是零（坑第 3、22 條）。
    */
-  markGeomDirty() { this._geomDirty = true; }
+  /**
+   * ⚠ **順手清掉破洞的紅線** —— 幾何一變，那些線就可能是謊話了
+   * （補洞之後紅線還在，使用者會以為沒補成功）。
+   * 🔴 **這是「加新功能時順手檢查舊訊息有沒有過期」那條的預防版**：
+   * ⛔ 與其日後記得在每個編輯功能裡清一次，不如綁在
+   * 「**幾何變了**」這個每次都會走到的訊號上（坑第 31 條）。
+   */
+  markGeomDirty() { this._geomDirty = true; this.clearHolePreview(); }
 
   /**
    * 板件要不要在畫面上加厚，以及加多少。
@@ -674,6 +681,35 @@ export class SceneView {
       if (o.material) o.material.dispose();
     });
     this._cutPrev = null;
+  }
+
+  /**
+   * 🔴 **破洞在哪裡：把模型上「只有一邊有面」的邊標出來。**
+   *
+   * ⚠ **它跟另外兩種預覽是同一個病的第三張臉**（坑第 21 條）——
+   * 「3D 列印」面板**早就在說「不是封閉的，有 N 條邊界邊」**，
+   * 但**只給數字，指不出來在哪**，使用者只能自己一條一條找。
+   *
+   * ⭐ **顏色用紅色，跟另外兩種分開**，因為它的意思是第三種：
+   * 橘色 ＝ 你指定的位置、青色 ＝ 程式算出來的結果、
+   * **紅色 ＝ 這裡有問題**。
+   *
+   * ⚠ **它 ⛔ 不是選取** —— 選取那條路要為邊界邊開第二個例外
+   * （`isMarkable()` 刻意擋掉它們），而使用者要的只是看得到。
+   */
+  setHolePreview(worldPts) {
+    this.clearHolePreview();
+    this._holePrev = this._buildLineOverlay('holePreview', worldPts, null, 0xff2d55);
+  }
+
+  clearHolePreview() {
+    if (!this._holePrev) return;
+    this.scene.remove(this._holePrev);
+    this._holePrev.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._holePrev = null;
   }
 
   /**

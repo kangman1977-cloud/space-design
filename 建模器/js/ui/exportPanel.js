@@ -17,6 +17,7 @@ import { triangles, dropToBed, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
+import { boundaryEdges } from '../core/selectops.js';
 
 const LS_KEY = 'modeler_export3d';
 
@@ -104,7 +105,12 @@ export class ExportPanel {
     });
   }
 
-  open() { this.el.hidden = false; this.run(); }
+  /**
+   * ⚠ **開視窗時清掉上一次標的紅線** —— 使用者回來重新檢查了，
+   * 舊的標記還留著只會分不清哪次是哪次。
+   * 〔另一條清除路徑在 `scene.js` 的 `markGeomDirty()`：幾何一變就清〕
+   */
+  open() { this.app.view.clearHolePreview(); this.el.hidden = false; this.run(); }
   close() { this.el.hidden = true; }
   get isOpen() { return !this.el.hidden; }
 
@@ -209,10 +215,76 @@ export class ExportPanel {
          `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table>`;
 
     for (const i of c.issues) {
-      card.appendChild(box(i.level === 'bad' ? 'uwWarn' : 'uwSkip',
-        (i.level === 'bad' ? '✗ ' : '⚠ ') + i.text));
+      const b = box(i.level === 'bad' ? 'uwWarn' : 'uwSkip',
+        (i.level === 'bad' ? '✗ ' : '⚠ ') + i.text);
+
+      /**
+       * 🔴 **「不是封閉的」那一則要給得出出路。**
+       *
+       * ⚠ **這是這個檔案自己的檔頭承諾的事，而它一直沒做到** ——
+       * 檔頭寫著「講得出是哪裡的問題，因為半邊結構本來就知道邊界在哪」，
+       * **但這則訊息只給了「有 N 條邊界邊」這個數字。**
+       * 使用者只能自己在幾百條線裡找。〔坑第 11 條：講了問題卻沒有出路〕
+       *
+       * → 加一顆「指出來」，按下去把破洞畫在 3D 畫面上（紅線）。
+       */
+      if (!c.closed && /封閉/.test(i.text)) {
+        const btn = document.createElement('button');
+        /** ⚠ `mini` 是這一組面板既有的按鈕樣式（關閉鈕用的），⛔ 不要發明新的 */
+        btn.className = 'mini';
+        btn.textContent = '指出來';
+        btn.title = '把破掉的地方在畫面上標成紅線，並關掉這個視窗';
+        btn.onclick = () => this._showHoles(it.obj);
+        b.appendChild(document.createTextNode(' '));
+        b.appendChild(btn);
+      }
+      card.appendChild(b);
     }
     return card;
+  }
+
+  /**
+   * 🔴 **把這個物件的破洞畫在 3D 畫面上。**
+   *
+   * ⚠ **⛔ 一律從 `obj.mesh()` 重算，⛔ 不用檢查表那份 `it.mesh`** ——
+   * 板件會被 `shell()` 加厚成另一個網格，**那上面的邊在畫面上不存在**。
+   * 〔坑第 30 條的同一類：判斷依據要用畫面上真的有的東西〕
+   *
+   * ⚠ **畫完要關掉這個視窗** —— 它有一層遮罩蓋住 3D 畫面，
+   * 不關的話標了也看不到（那就等於沒標）。
+   */
+  _showHoles(obj) {
+    const mesh = obj.mesh();
+    const r = boundaryEdges(mesh);
+    const view = this.app.view;
+
+    if (!r.hes.length) {
+      this.app.toast('這個物件本身沒有破洞 —— '
+        + '報「不是封閉的」是因為它是一張沒有厚度的面，給它板厚就會自動加厚', true);
+      return;
+    }
+
+    /** 本地 → 世界：跟刀具、切一刀的預覽同一套座標 */
+    const m4 = obj.matrix();
+    const pts = [];
+    for (const he of r.hes) {
+      pts.push(he.v.p.clone().applyMatrix4(m4), he.to.p.clone().applyMatrix4(m4));
+    }
+    /**
+     * ⚠ **順序不能反：先關視窗，再畫線。**
+     * 關視窗那條路上如果有人呼叫 `markGeomDirty()`，就會把剛畫的線清掉 ——
+     * 那就變成「按了畫面上什麼都不會變」（坑第 21 條）。
+     */
+    this.close();
+    view.setHolePreview(pts);
+
+    /**
+     * ⚠ **講「幾個洞」⛔ 不要只講「幾條邊」** —— 使用者修的是洞，
+     * 而 47 條邊可能只是一個洞。〔「講數量與形狀」那條〕
+     */
+    this.app.toast(
+      `已用紅線標出 ${r.holes} 個破洞（共 ${r.hes.length} 條邊，`
+      + `最大那個洞 ${r.biggest} 條）　用「補洞」可以補起來`);
   }
 
   // ── 匯出 ────────────────────────────────────────────

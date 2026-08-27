@@ -8690,6 +8690,93 @@ section('選轉角（依銳邊）＋ 選相似');
 }
 
 // ═══════════════════════════════════════════════════════
+//  破洞在哪裡（＝ 對照表的「依特徵全選」）
+// ═══════════════════════════════════════════════════════
+
+section('破洞在哪裡：找出邊界邊並分成幾個洞');
+
+/**
+ * 🔴 **這一節守的是「講了問題要給得出出路」**（坑第 11 條）。
+ *
+ * `printCheck()` 早就在報「不是封閉的（有 N 條邊界邊）」，那是 bad 級 ——
+ * **代表印不出來** —— 但它只給數字，指不出來在哪。
+ *
+ * ⭐ **「幾個洞」比「幾條邊」重要** —— 使用者修的是洞，
+ * 而 47 條邊可能只是一個洞。所以分組那一半才是這一支的價值。
+ */
+{
+  const so3 = await import('../js/core/selectops.js');
+
+  /** ① 封閉的東西一個洞都沒有 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const r = so3.boundaryEdges(m);
+    eq('① 方塊（封閉）→ 0 條邊界邊', r.hes.length, 0);
+    eq('★ 0 個洞', r.holes, 0);
+    ok('★ 而且跟 mesh.isClosed() 對得起來', m.isClosed() === (r.hes.length === 0));
+  }
+
+  /** ② 板件：一張面的四周就是一個洞 */
+  {
+    const m = baked('plate', { w: 100, d: 60, segW: 1, segD: 1 });
+    const r = so3.boundaryEdges(m);
+    eq('② 平板 → 4 條邊界邊', r.hes.length, 4);
+    eq('★★ 而且是【1 個】洞，⛔ 不是 4 個', r.holes, 1);
+  }
+
+  /**
+   * ③ 🔴 **開口圓柱：兩個開口 ＝ 兩個洞。**
+   * ⭐ 這一條在驗分組**分得開** —— 上下兩圈各 32 條，
+   * 它們之間沒有共用頂點，⛔ 不可以被併成一個。
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32, openEnded: true });
+    const r = so3.boundaryEdges(m);
+    eq('③ 開口圓柱 seg32 → 64 條邊界邊', r.hes.length, 64);
+    eq('★★★ 分成【2 個】洞（上下兩個開口）', r.holes, 2);
+    eq('★★ 每個洞 32 條', r.biggest, 32);
+    eq('　 而 64 ＝ 2 × 32', r.hes.length, r.holes * r.biggest);
+  }
+
+  /**
+   * ④ 🔴🔴 **分組真正的考驗：相鄰的兩個面刪掉，要併成【一個】洞。**
+   * ⚠ 刪對面的兩個面是 2 個洞（各 4 條）；
+   * 刪**相鄰**的兩個面是 **1 個洞 6 條**（兩個正方形併成 L 形開口）。
+   * ⛔ 分組寫錯的話這裡會變成 2 個洞 8 條。
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const a = m.faces[0];
+    let b = null;
+    for (const he of m.faceLoop(a)) {
+      const nb = he.twin && he.twin.face;
+      if (nb && nb !== a) { b = nb; break; }
+    }
+    const del = edit.deleteFaces(m, [{ kind: 'face', face: a }, { kind: 'face', face: b }]);
+    const mm = del.ok && del.mesh ? del.mesh : m;
+    const r = so3.boundaryEdges(mm);
+    eq('④ 刪掉【相鄰】的兩個面 → 6 條邊界邊', r.hes.length, 6);
+    eq('★★★ 併成【1 個】洞，⛔ 不是 2 個', r.holes, 1);
+  }
+
+  /** ⑤ 對面的兩個面 → 真的是兩個洞 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const a = m.faces[0];
+    const opp = m.faces.find(f => f !== a &&
+      m.computeFaceNormal(f).dot(m.computeFaceNormal(a)) < -0.99);
+    const del = edit.deleteFaces(m, [{ kind: 'face', face: a }, { kind: 'face', face: opp }]);
+    const mm = del.ok && del.mesh ? del.mesh : m;
+    const r = so3.boundaryEdges(mm);
+    eq('⑤ 刪掉【對面】的兩個面 → 8 條邊界邊', r.hes.length, 8);
+    eq('★★ 是【2 個】洞（它們沒有共用的角）', r.holes, 2);
+  }
+
+  /** ⑥ 壞輸入不會壞 */
+  eq('⑥ 沒給網格不會壞', so3.boundaryEdges(null).hes.length, 0);
+}
+
+// ═══════════════════════════════════════════════════════
 //  變成正圓（＝ Blender 的 To Circle）
 // ═══════════════════════════════════════════════════════
 

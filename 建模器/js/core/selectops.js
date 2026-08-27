@@ -168,6 +168,71 @@ export function edgeLoop(mesh, he0, opt = {}) {
 }
 
 /**
+ * 🔴 **破洞在哪裡：找出模型上所有「只有一邊有面」的邊，並分成幾個洞。**
+ *
+ * ── 它拿來做什麼（＝ 對照表的「依特徵全選」，標 ⭐⭐）────────
+ * **3D 列印要的東西必須是完全密封的**，有洞就印失敗或印出空殼。
+ * 而 `stl.js` 的 `printCheck()` **早就在報這件事**（bad 級，
+ * 「不是封閉的（有 N 條邊界邊）」）—— **卻只給數字，指不出來在哪。**
+ * 〔坑第 11 條的近親：**講了問題卻沒有出路**〕
+ *
+ * ── ⚠ 它 ⛔ 不走選取，只回答「哪幾條」───────────────────
+ * 呼叫端拿去**畫在畫面上**（像刀具的預覽線那樣）。
+ * 🔴 **⛔ 不要改成把它們選起來** —— `isMarkable()` 第一行就把邊界邊擋掉了
+ * （「它本來就是外輪廓」），要選就得為它開**第二個例外**，
+ * 而那條規則開一次例外**有四個出口全要改**（環切那一輪實測過）。
+ * ⭐ 而使用者要的是「**看得到**」，補洞那顆按鈕本來就存在。
+ *
+ * ── ⚠ 洞的分組 ⛔ 不用 `_buildBoundaryLoops()` 串好的迴圈 ────
+ * 那一支用 `Map<頂點id, 邊界半邊>` 串 next/prev，**一個頂點只放得下一條**
+ * （日誌待辦記著這個限制，刪除面已經因此被擋掉一種情形）。
+ * → 這裡改用**沿共用頂點的連通分量**分組，不依賴那個串接。
+ *
+ * @param {Mesh} mesh
+ * @returns {{hes:HalfEdge[], holes:number, biggest:number}}
+ *          `hes` 每條邊只出現一次　`holes` 幾個洞
+ *          `biggest` 最大那個洞有幾條邊
+ */
+export function boundaryEdges(mesh) {
+  const out = { hes: [], holes: 0, biggest: 0 };
+  if (!mesh) return out;
+
+  for (const he of mesh.edges()) {
+    if (!he.twin || !he.face || !he.twin.face) out.hes.push(he);
+  }
+  if (!out.hes.length) return out;
+
+  /** 沿「共用頂點」把邊界邊分組 ＝ 一組就是一個洞 */
+  const byVert = new Map();
+  const add = (v, i) => {
+    if (!byVert.has(v.id)) byVert.set(v.id, []);
+    byVert.get(v.id).push(i);
+  };
+  out.hes.forEach((he, i) => { add(he.v, i); add(he.to, i); });
+
+  const seen = new Set();
+  for (let i = 0; i < out.hes.length; i++) {
+    if (seen.has(i)) continue;
+    out.holes++;
+    let size = 0;
+    const stack = [i];
+    seen.add(i);
+    while (stack.length) {
+      const cur = stack.pop();
+      size++;
+      const he = out.hes[cur];
+      for (const v of [he.v, he.to]) {
+        for (const nb of byVert.get(v.id) || []) {
+          if (!seen.has(nb)) { seen.add(nb); stack.push(nb); }
+        }
+      }
+    }
+    out.biggest = Math.max(out.biggest, size);
+  }
+  return out;
+}
+
+/**
  * 🔴 **依銳邊（工具列「選轉角」）：把模型上所有「折起來」的邊一次選起來。**
  *
  * ── 它拿來做什麼 ──────────────────────────────────────
