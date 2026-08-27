@@ -8777,6 +8777,223 @@ section('破洞在哪裡：找出邊界邊並分成幾個洞');
 }
 
 // ═══════════════════════════════════════════════════════
+//  非流形邊在哪裡（＝ 對照表的「依特徵全選」第二項）
+// ═══════════════════════════════════════════════════════
+
+section('非流形邊：找出被 3 個以上的面共用的邊');
+
+/**
+ * 🔴 **這一節守兩件事，第二件比第一件重要。**
+ *
+ * 一、**找得到非流形邊**（`printCheck()` 原本只報得出頂點索引）。
+ *
+ * 二、🔴 **破洞 ⛔ 不可以再把非流形邊算進去** —— 那是一個既有的誤報
+ * （坑第 18 條），2026-08-27 沙箱抓到的：
+ * 一條邊被 3 個面共用時 `fromFaceList()` 只配得出一組 twin，
+ * **第三個面那條半邊配不到** → 被補成邊界半邊 → 破洞把它當成洞回報，
+ * 而 toast 正叫使用者去按 `補洞` —— **那條邊補不起來。**
+ * 〔坑第 34 條：⛔ 不要指一條不存在的退路〕
+ *
+ * ⚠ **樣本一定要自己用 `fromFaceList()` 建** ——
+ * 九種參數基本體一個都做不出非流形，布林也會把它消掉。
+ */
+{
+  const so4 = await import('../js/core/selectops.js');
+  const V = a => a.map(p => new THREE.Vector3(...p));
+
+  /**
+   * 教科書級的樣本：三個四邊形共用同一條邊（T 形接面）。
+   * ⭐ 三片「翅膀」各有 3 條外圍邊 ＝ 真正的破洞 9 條，
+   *    共用的那一條是非流形，⛔ 不算破洞。
+   */
+  const tee = () => Mesh.fromFaceList(
+    V([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],
+       [10, -10, 0], [0, -10, 0], [10, 0, 10], [0, 0, 10]]),
+    [[0, 1, 2, 3], [0, 1, 4, 5], [1, 0, 6, 7]]);
+
+  /** ① 找得到，而且數量與「被幾個面共用」都對 */
+  {
+    const r = so4.nonManifoldEdges(tee());
+    eq('① T 形接面 → 【1】條非流形邊', r.edges, 1);
+    eq('★★ 涉及【3】個面', r.faces, 3);
+    eq('★ 最嚴重那條被 3 個面共用', r.worst, 3);
+    eq('★★ 畫線用的半邊已去重 ＝ 1 條', r.hes.length, 1);
+  }
+
+  /**
+   * ② 🔴🔴 **這一項是整節最重要的：破洞要從 10 條變成 9 條。**
+   * ⛔ 改壞的症狀是它回 10 —— 而那第 10 條**補不起來**。
+   */
+  {
+    const r = so4.boundaryEdges(tee());
+    eq('② 破洞只算【9】條，⛔ 不含那條非流形', r.hes.length, 9);
+    eq('★★★ 而且講得出扣掉了【1】條', r.nonManifold, 1);
+    eq('★ 三片翅膀的開口連在同一條邊上 ＝ 1 個洞', r.holes, 1);
+  }
+
+  /** ③ 乾淨的封閉模型：兩邊都要是 0（⛔ 不可以誤報） */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    eq('③ 方塊 → 0 條非流形邊', so4.nonManifoldEdges(m).edges, 0);
+    eq('★ 破洞也是 0', so4.boundaryEdges(m).hes.length, 0);
+  }
+  {
+    const m = baked('sphere', { r: 30, segW: 12, segH: 32 });
+    eq('　 球也是 0 條非流形邊', so4.nonManifoldEdges(m).edges, 0);
+  }
+
+  /**
+   * ④ 🔴 **真的破了一個洞，非流形要是 0。**
+   * ⭐ 這一項守的是**反向**：⛔ 不可以把普通的破洞誤判成非流形，
+   * 否則破洞那顆按鈕會把它扣掉 —— **一個真的洞就此消失在報告裡**。
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const del = edit.deleteFaces(m, [{ kind: 'face', face: m.faces[0] }]);
+    const mm = del.ok && del.mesh ? del.mesh : m;
+    eq('④ 刪掉一個面 → 0 條非流形邊', so4.nonManifoldEdges(mm).edges, 0);
+    ok('★★ 破洞照舊報得出來', so4.boundaryEdges(mm).hes.length > 0);
+    eq('★ 而且一條都沒被扣掉', so4.boundaryEdges(mm).nonManifold, 0);
+  }
+
+  /**
+   * ⑤ 🔴 **`printCheck()` 要單獨報這一則，而且要標得出 `kind`。**
+   * ⚠ 面板那兩顆「指出來」是靠 `kind` 認的 ——
+   * 靠訊息文字認的話，改一句中文按鈕就會無聲消失。
+   */
+  {
+    const m = tee();
+    const c = printCheck(m, triangles(m), {});
+    const hit = c.issues.filter(i => i.kind === 'nonmanifold');
+    eq('⑤ printCheck 報【1】則非流形', hit.length, 1);
+    ok('★★ 是 bad 級（＝ 印不出來）', hit[0].level === 'bad');
+    ok('★★★ 訊息裡有「3 個以上的面」，⛔ 不是頂點索引',
+      /3 個以上的面/.test(hit[0].text));
+    ok('★★ 而且明講「補洞」補不了它', /補洞/.test(hit[0].text));
+    eq('★★ ⛔ 沒有第二則在講同一件事',
+      c.issues.filter(i => /非流形/.test(i.text)).length, 1);
+
+    /**
+     * 🔴🔴 **報告上的條數，要跟按下「指出來」亮出來的紅線是同一個數字。**
+     * ⚠ 原本用 `v.boundaryHalfEdges`（含非流形）→ 報告說 10、紅線只有 9。
+     * ⛔ 對不起來的兩個數字沒有人查得出原因。
+     */
+    const op = c.issues.find(i => i.kind === 'open');
+    ok('★★★ 「不是封閉的」報的條數 ＝ 紅線的條數（9）', /9 條邊界邊/.test(op.text));
+    eq('　 而紅線真的是 9 條', so4.boundaryEdges(m).hes.length, 9);
+  }
+
+  /** ⑥ 壞輸入不會壞 */
+  eq('⑥ 沒給網格不會壞', so4.nonManifoldEdges(null).edges, 0);
+}
+
+// ═══════════════════════════════════════════════════════
+//  有面貼反了（＝ 使用者按「翻面」只選一個面）
+// ═══════════════════════════════════════════════════════
+
+section('有面貼反了：報得出來，而且指得到「修法向」');
+
+/**
+ * 🔴 **這一節守的是「一句看得懂的話 ＋ 一條走得到的出路」。**
+ *
+ * ⚠ **這是三種病裡唯一使用者做得出來的**（`翻面` 只選一個面），
+ * 而它原本報的是「網格結構有問題：**邊 2→1 出現兩次（非流形…）**」——
+ * `2` 跟 `1` 是頂點索引，**畫面上沒有這種東西**。
+ *
+ * 🔴 **而且它會連帶讓另外三則說謊**（實測，全部壓掉了）：
+ * 破洞說 6 條（那個方塊一個洞都沒有）、
+ * 「網格結構有問題：**半邊 113 沒有 next**」、
+ * 「由 **2 個**互不相連的塊組成」（那是一個方塊）。
+ * ⛔ 三則都是「貼反了」的症狀，⛔ 不是三個獨立的病。
+ */
+{
+  const so5 = await import('../js/core/selectops.js');
+  /**
+   * ⚠ **`triangles()` 吃的是 options 物件，⛔ 不是位置參數。**
+   * 〔2026-08-27 寫測試時傳成 `triangles(m, matrix4, 1)` —— `Matrix4` 有一個
+   * 　叫 `scale` 的**方法**，於是 `opt.scale ?? 1` 拿到那個函式，
+   * 　`multiplyScalar(函式)` 把每個座標變成 NaN。**而測試照樣通過** ——
+   * 　`NaN <= 0` 是 false，那則體積檢查就靜靜地跳過了。
+   * 　抓到它的是「修完體積要是正的」那一項，⛔ 不是語法檢查〕
+   */
+  const tri = m => triangles(m);
+  const V = a => a.map(p => new THREE.Vector3(...p));
+
+  /** 方塊，只把第一個面翻過來 */
+  const flipOne = () => {
+    const box = baked('box', { w: 10, h: 10, d: 10 });
+    const vi = box._vertIndex();
+    const fl = box.faces.map(f => box.faceVerts(f).map(v => vi.get(v.id)));
+    return Mesh.fromFaceList(box.verts.map(v => v.p.clone()),
+      fl.map((f, i) => (i === 0 ? f.slice().reverse() : f)));
+  };
+
+  /** ① 乾淨的方塊 ⛔ 不可以誤報 */
+  {
+    const m = baked('box', { w: 10, h: 10, d: 10 });
+    eq('① 乾淨方塊 → 0 條貼反的邊', so5.reversedFaceEdges(m).edges, 0);
+    eq('★ printCheck 一則問題都沒有', printCheck(m, tri(m), {}).issues.length, 0);
+  }
+
+  /** ② 翻一個面 → 抓得到 */
+  {
+    const m = flipOne();
+    const r = so5.reversedFaceEdges(m);
+    ok('② 翻一個面 → 抓得到貼反的邊', r.edges > 0);
+    ok('★ 而且講得出涉及幾個面', r.faces > 0);
+    eq('★★ ⛔ 它不是非流形（真非流形是 0 條）',
+      so5.nonManifoldEdges(m).edges, 0);
+  }
+
+  /**
+   * ③ 🔴🔴 **整節最重要：只報一則，而且那一則指得到「修法向」。**
+   * ⛔ 改壞的症狀是報了四則，其中三則在講不存在的東西。
+   */
+  {
+    const c = printCheck(flipOne(), tri(flipOne()), {});
+    eq('③ 恰好【1】則問題，⛔ 不是四則', c.issues.length, 1);
+    eq('★★ kind 是 flipped', c.issues[0].kind, 'flipped');
+    ok('★★★ 訊息裡指得到「修法向」那顆按鈕', /修法向/.test(c.issues[0].text));
+    ok('★★ 用「正反面貼反了」講，⛔ 不是頂點索引',
+      /貼反/.test(c.issues[0].text) && !/邊 \d+→\d+/.test(c.issues[0].text));
+    ok('★★ ⛔ 沒有人再說「有幾個破洞」', !c.issues.some(i => i.kind === 'open'));
+    ok('★★ ⛔ 沒有人再說「2 個互不相連的塊」', !c.issues.some(i => /互不相連/.test(i.text)));
+  }
+
+  /**
+   * ④ 🔴🔴 **出路真的走得通** —— 按下去要全部歸零。
+   * ⭐ 這一項是「⛔ 不要指一條不存在的退路」（坑第 34 條）的機械版：
+   * 訊息叫人按 `修法向`，那就驗一次按下去到底行不行。
+   */
+  {
+    const fx = edit.recalcNormalsOutside(flipOne());
+    ok('④ 按「修法向」修得動', fx.ok && !!fx.mesh);
+    eq('★★★ 修完 0 條貼反的邊', so5.reversedFaceEdges(fx.mesh).edges, 0);
+    eq('★★★ 修完 printCheck 一則問題都沒有',
+      printCheck(fx.mesh, tri(fx.mesh), {}).issues.length, 0);
+    ok('★★ 而且體積是正的（朝外）', stlVolume(tri(fx.mesh)) > 0);
+  }
+
+  /**
+   * ⑤ ⚠ **真非流形 ⛔ 不可以被算成「貼反了」** ——
+   * T 形接面上那條邊同方向出現兩次，但它的病是「黏了 3 片」，
+   * 而 `修法向` 明確修不了（它自己回報 `ambiguousEdges`）。
+   */
+  {
+    const m = Mesh.fromFaceList(
+      V([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],
+         [10, -10, 0], [0, -10, 0], [10, 0, 10], [0, 0, 10]]),
+      [[0, 1, 2, 3], [0, 1, 4, 5], [1, 0, 6, 7]]);
+    eq('⑤ T 形接面 → 0 條「貼反」', so5.reversedFaceEdges(m).edges, 0);
+    eq('★★ 它是非流形（1 條），兩者⛔不重疊', so5.nonManifoldEdges(m).edges, 1);
+    eq('★ 而修法向也老實說修不了', edit.recalcNormalsOutside(m).ambiguousEdges, 1);
+  }
+
+  /** ⑥ 壞輸入不會壞 */
+  eq('⑥ 沒給網格不會壞', so5.reversedFaceEdges(null).edges, 0);
+}
+
+// ═══════════════════════════════════════════════════════
 //  變成正圓（＝ Blender 的 To Circle）
 // ═══════════════════════════════════════════════════════
 

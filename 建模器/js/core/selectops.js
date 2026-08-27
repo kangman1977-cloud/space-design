@@ -194,11 +194,30 @@ export function edgeLoop(mesh, he0, opt = {}) {
  *          `biggest` 最大那個洞有幾條邊
  */
 export function boundaryEdges(mesh) {
-  const out = { hes: [], holes: 0, biggest: 0 };
+  const out = { hes: [], holes: 0, biggest: 0, nonManifold: 0 };
   if (!mesh) return out;
 
+  /**
+   * 🔴 **非流形邊會偽裝成邊界邊，⛔ 要先扣掉。**
+   *
+   * ⚠ **這是一個既有的誤報，2026-08-27 沙箱實測抓到**（坑第 18 條）：
+   * 一條邊被 3 個面共用時，`fromFaceList()` 只配得出一組 twin，
+   * **第三個面那條半邊配不到** → `_buildBoundaryLoops()` 把它補成邊界半邊
+   * → 這一支就把它當成破洞回報。
+   *
+   * 【實證】三個四邊形共用一條邊：外圍真的破了 9 條，
+   * 這一支卻回 10 條 —— 多出來的那條**補不起來**，
+   * 而 toast 正叫使用者去按 `補洞`。〔坑第 34 條：不要指一條不存在的退路〕
+   *
+   * ⭐ 扣掉之後那條邊 ⛔ 不是消失，是**改由 `nonManifoldEdges()` 用紫線回報**。
+   */
+  const nm = new Set(nonManifoldKeys(mesh));
+
   for (const he of mesh.edges()) {
-    if (!he.twin || !he.face || !he.twin.face) out.hes.push(he);
+    if (!he.twin || !he.face || !he.twin.face) {
+      if (nm.size && nm.has(edgeKeyOf(he.v.id, he.to.id))) { out.nonManifold++; continue; }
+      out.hes.push(he);
+    }
   }
   if (!out.hes.length) return out;
 
@@ -228,6 +247,159 @@ export function boundaryEdges(mesh) {
       }
     }
     out.biggest = Math.max(out.biggest, size);
+  }
+  return out;
+}
+
+// ── 非流形邊 ─────────────────────────────────────────────
+
+/** 無向邊的 key。⚠ 用頂點 **id**，⛔ 不用索引 —— 索引要另外建表，而 id 本來就唯一 */
+function edgeKeyOf(a, b) { return a < b ? `${a}-${b}` : `${b}-${a}`; }
+
+/**
+ * 🔴 **無向邊 → 用到它的面**。⛔ 不走 `he.twin`。
+ *
+ * ⚠ **這是整支的關鍵，而且 `edit.js` 的 `recalcNormalsOutside()` 早就這樣做了**
+ * （那裡的註解寫著理由）：**半邊結構配不出 3 個面共用一條邊的情形** ——
+ * `fromFaceList()` 只配 `a→b` 與 `b→a` 一組 twin，第三個面那條就落單了。
+ * 🔴 **所以「哪幾條邊是非流形」這個問題，半邊結構自己答不出來，
+ * 一定要從面的頂點繞行重新數一次。**
+ */
+function faceEdgeMap(mesh) {
+  const by = new Map();
+  for (const f of mesh.faces) {
+    const vs = mesh.faceVerts(f);
+    for (let i = 0; i < vs.length; i++) {
+      const k = edgeKeyOf(vs[i].id, vs[(i + 1) % vs.length].id);
+      if (!by.has(k)) by.set(k, []);
+      by.get(k).push(f);
+    }
+  }
+  return by;
+}
+
+/** 被 3 個以上的面共用的無向邊 key。內部用，⛔ 不對外 */
+function nonManifoldKeys(mesh) {
+  if (!mesh || !mesh.faces.length) return [];
+  const out = [];
+  for (const [k, fs] of faceEdgeMap(mesh)) if (fs.length > 2) out.push(k);
+  return out;
+}
+
+/**
+ * 🔴 **有沒有面「貼反了」：找出兩個面在同一條邊上走同方向的地方。**
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * 每個面都有正反面，正面要一致朝外。**有一片貼反了，切片軟體就會
+ * 以為那一小塊是內部**，印出來會缺一角或整個失敗。
+ * ⭐ **出路早就存在**：工具列的 `修法向`（`recalcNormalsOutside()`）。
+ *
+ * ── 🔴 為什麼一定要跟「非流形」分開 ────────────────────
+ * ⚠ **`mesh.js` 把這兩件事講成同一句話**：
+ * 「邊 a→b 出現兩次（非流形，這條邊被兩個以上的面共用）」——
+ * **貼反了的方塊會吐出這句，而它一條非流形邊都沒有。**
+ * 【實證 2026-08-27】方塊翻掉一個面：`mesh.issues` 說「非流形」6 次，
+ * `nonManifoldEdges()` 回 **0** —— 兩者根本是不同的病，修法也不同
+ * （這個按 `修法向` 就好，非流形要自己刪面）。
+ * 🔴 **把它們報成同一則，等於叫使用者去找一個不存在的東西**（坑第 18 條）。
+ *
+ * ── 判準（⛔ 不比對訊息文字，自己數一次）──────────────
+ * 相鄰的兩個面走同一條邊時**方向一定相反**（你的 a→b 是我的 b→a）。
+ * **同方向 ＝ 其中一個貼反了。**
+ *
+ * @param {Mesh} mesh
+ * @returns {{edges:number, faces:number}} 幾條邊對不起來、涉及幾個面
+ */
+export function reversedFaceEdges(mesh) {
+  const out = { edges: 0, faces: 0 };
+  if (!mesh || !mesh.faces.length) return out;
+
+  /** 有向邊 → 用到它的面。⚠ `a→b` 與 `b→a` 是**兩個不同的 key** */
+  const dir = new Map();
+  for (const f of mesh.faces) {
+    const vs = mesh.faceVerts(f);
+    for (let i = 0; i < vs.length; i++) {
+      const k = `${vs[i].id}->${vs[(i + 1) % vs.length].id}`;
+      if (!dir.has(k)) dir.set(k, []);
+      dir.get(k).push(f);
+    }
+  }
+
+  /**
+   * ⚠ **真非流形的邊也會讓同方向出現兩次，⛔ 要先扣掉，不然會報兩遍。**
+   * 【實證】T 形接面：`0→1` 有兩個面、`1→0` 有一個 —— 那條邊的病是
+   * 「黏了 3 片」，⛔ 不是「貼反了」，而 `修法向` 明確修不了它
+   * （`recalcNormalsOutside()` 自己回報 `ambiguousEdges`）。
+   */
+  const nm = new Set(nonManifoldKeys(mesh));
+
+  const faces = new Set();
+  const seen = new Set();
+  for (const [k, fs] of dir) {
+    if (fs.length < 2) continue;
+    const [a, b] = k.split('->');
+    const uk = edgeKeyOf(Number(a), Number(b));
+    if (seen.has(uk) || nm.has(uk)) continue;
+    seen.add(uk);
+    out.edges++;
+    for (const f of fs) faces.add(f.id);
+  }
+  out.faces = faces.size;
+  return out;
+}
+
+/**
+ * 🔴 **非流形邊在哪裡：找出「被 3 個以上的面共用」的邊。**
+ *
+ * ── 它拿來做什麼（＝ 對照表的「依特徵全選」，標 ⭐⭐）────────
+ * **非流形正是 STL 送去列印失敗的頭號原因** —— 切片軟體算不出
+ * 「哪邊是實心」，會印出破爛的東西或直接拒絕。
+ * 而 `printCheck()` **早就在報這件事**，報的卻是
+ * 「網格結構有問題：邊 0→1 出現兩次」——
+ * 🔴 **`0` 跟 `1` 是頂點索引，畫面上沒有任何東西叫這個名字。**
+ * 〔坑第 20 條：把內部的數字放上介面之前先問「這個數字的單位是什麼」〕
+ *
+ * ── ⚠ 它跟破洞是兩種病，⛔ 不要混為一談 ─────────────────
+ * 破洞是「少了面」，補起來就好；非流形是「多了面」，**`補洞` 補不了**。
+ * 兩者在畫面上都是一條線，所以**用顏色分**（紅／紫，見 `scene.js`）。
+ *
+ * ── ⚠ 它 ⛔ 不走選取（跟 `boundaryEdges()` 同一條理由）──────
+ * 呼叫端拿去畫在畫面上。⛔ 不要改成把它們選起來 ——
+ * 那要為 `isMarkable()` 開例外，而那條規則開一次例外有四個出口全要改。
+ *
+ * @param {Mesh} mesh
+ * @returns {{hes:HalfEdge[], edges:number, faces:number, worst:number}}
+ *          `hes` 每條邊一條代表半邊（畫線用，⛔ 已去重）
+ *          `edges` 幾條邊　`faces` 涉及幾個面　`worst` 最多被幾個面共用
+ */
+export function nonManifoldEdges(mesh) {
+  const out = { hes: [], edges: 0, faces: 0, worst: 0 };
+  if (!mesh || !mesh.faces.length) return out;
+
+  const bad = new Map();
+  for (const [k, fs] of faceEdgeMap(mesh)) if (fs.length > 2) bad.set(k, fs);
+  if (!bad.size) return out;
+
+  const faces = new Set();
+  for (const fs of bad.values()) {
+    out.worst = Math.max(out.worst, fs.length);
+    for (const f of fs) faces.add(f.id);
+  }
+  out.edges = bad.size;
+  out.faces = faces.size;
+
+  /**
+   * ⚠ **同一條無向邊在半邊結構裡不只一條半邊**（配不到 twin 的那些會各自
+   * 被補成邊界半邊），所以**畫線之前一定要去重** ——
+   * 不去重的話同一條線會被畫好幾次，數量也會多報。
+   */
+  const taken = new Set();
+  for (const he of mesh.halfEdges) {
+    if (!he.v || !he.to) continue;
+    const k = edgeKeyOf(he.v.id, he.to.id);
+    if (!bad.has(k) || taken.has(k)) continue;
+    taken.add(k);
+    out.hes.push(he);
   }
   return out;
 }

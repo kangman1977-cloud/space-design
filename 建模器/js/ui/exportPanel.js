@@ -17,7 +17,7 @@ import { triangles, dropToBed, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
-import { boundaryEdges } from '../core/selectops.js';
+import { boundaryEdges, nonManifoldEdges } from '../core/selectops.js';
 
 const LS_KEY = 'modeler_export3d';
 
@@ -110,7 +110,7 @@ export class ExportPanel {
    * 舊的標記還留著只會分不清哪次是哪次。
    * 〔另一條清除路徑在 `scene.js` 的 `markGeomDirty()`：幾何一變就清〕
    */
-  open() { this.app.view.clearHolePreview(); this.el.hidden = false; this.run(); }
+  open() { this.app.view.clearIssuePreview(); this.el.hidden = false; this.run(); }
   close() { this.el.hidden = true; }
   get isOpen() { return !this.el.hidden; }
 
@@ -228,19 +228,73 @@ export class ExportPanel {
        *
        * → 加一顆「指出來」，按下去把破洞畫在 3D 畫面上（紅線）。
        */
-      if (!c.closed && /封閉/.test(i.text)) {
-        const btn = document.createElement('button');
-        /** ⚠ `mini` 是這一組面板既有的按鈕樣式（關閉鈕用的），⛔ 不要發明新的 */
-        btn.className = 'mini';
-        btn.textContent = '指出來';
-        btn.title = '把破掉的地方在畫面上標成紅線，並關掉這個視窗';
-        btn.onclick = () => this._showHoles(it.obj);
+      /**
+       * 🔴 **兩則都給得出出路，靠 `kind` 認，⛔ 不再比對訊息的文字。**
+       *
+       * ⚠ **原本這裡寫的是 `/封閉/.test(i.text)`** —— 那是把按鈕綁在
+       * 一句會被改寫的中文上，訊息文字一改按鈕就無聲消失
+       * （坑第 21 條：按下去畫面上什麼都不會變的近親，這個更糟：**按鈕自己不見**）。
+       * 現在 `printCheck()` 會標 `kind`，⛔ 新增訊息時記得一起標。
+       */
+      if (i.kind === 'open' && !c.closed) {
         b.appendChild(document.createTextNode(' '));
-        b.appendChild(btn);
+        b.appendChild(this._pointBtn(
+          '把破掉的地方在畫面上標成紅線，並關掉這個視窗',
+          () => this._showHoles(it.obj)));
+      }
+      if (i.kind === 'nonmanifold') {
+        b.appendChild(document.createTextNode(' '));
+        b.appendChild(this._pointBtn(
+          '把黏在一起的邊在畫面上標成紫線，並關掉這個視窗',
+          () => this._showNonManifold(it.obj)));
       }
       card.appendChild(b);
     }
     return card;
+  }
+
+  /** 兩顆「指出來」共用的按鈕。⚠ `mini` 是這組面板既有的樣式，⛔ 不要發明新的 */
+  _pointBtn(title, onclick) {
+    const btn = document.createElement('button');
+    btn.className = 'mini';
+    btn.textContent = '指出來';
+    btn.title = title;
+    btn.onclick = onclick;
+    return btn;
+  }
+
+  /**
+   * 🔴 **把這個物件的非流形邊畫在 3D 畫面上（紫線）。**
+   *
+   * ⚠ **⛔ 不要照抄 `_showHoles` 的 toast 講「用補洞可以補起來」** ——
+   * **`補洞` 補不了非流形**（它補的是缺面，這裡是多面）。
+   * 指一條不存在的退路正是坑第 34 條。
+   *
+   * ⚠ **一樣從 `obj.mesh()` 重算，⛔ 不用檢查表那份**（板件會被 `shell()`
+   * 換成另一個網格，那上面的邊在畫面上不存在）。
+   */
+  _showNonManifold(obj) {
+    const mesh = obj.mesh();
+    const r = nonManifoldEdges(mesh);
+    if (!r.hes.length) {
+      this.app.toast('這個物件本身沒有非流形的邊 —— '
+        + '報告裡那一則是加厚之後的網格才有的', true);
+      return;
+    }
+
+    const m4 = obj.matrix();
+    const pts = [];
+    for (const he of r.hes) {
+      pts.push(he.v.p.clone().applyMatrix4(m4), he.to.p.clone().applyMatrix4(m4));
+    }
+    /** ⚠ 順序不能反：先關視窗再畫線（關的路上有人會 `markGeomDirty()`） */
+    this.close();
+    this.app.view.setNonManifoldPreview(pts);
+
+    this.app.toast(
+      `已用紫線標出 ${r.edges} 條黏在一起的邊（涉及 ${r.faces} 個面，`
+      + `最嚴重那條被 ${r.worst} 個面共用）　`
+      + '這種要自己刪掉多餘的面，「補洞」補不了');
   }
 
   /**

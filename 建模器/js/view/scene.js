@@ -269,7 +269,7 @@ export class SceneView {
    * ⛔ 與其日後記得在每個編輯功能裡清一次，不如綁在
    * 「**幾何變了**」這個每次都會走到的訊號上（坑第 31 條）。
    */
-  markGeomDirty() { this._geomDirty = true; this.clearHolePreview(); }
+  markGeomDirty() { this._geomDirty = true; this.clearIssuePreview(); }
 
   /**
    * 板件要不要在畫面上加厚，以及加多少。
@@ -698,18 +698,53 @@ export class SceneView {
    * （`isMarkable()` 刻意擋掉它們），而使用者要的只是看得到。
    */
   setHolePreview(worldPts) {
-    this.clearHolePreview();
-    this._holePrev = this._buildLineOverlay('holePreview', worldPts, null, 0xff2d55);
+    this._setIssuePreview('holePreview', worldPts, 0xff2d55);
   }
 
-  clearHolePreview() {
-    if (!this._holePrev) return;
-    this.scene.remove(this._holePrev);
-    this._holePrev.traverse(o => {
+  /**
+   * 🔴 **非流形邊在哪裡：把「被 3 個以上的面共用」的邊標出來。**
+   *
+   * ⚠ **⛔ 它跟破洞不是同一種病，所以 ⛔ 不共用紅色。**
+   *
+   * | | 是什麼 | 怎麼修 |
+   * |---|---|---|
+   * | **紅色（破洞）** | 只有一邊有面 | 按 `補洞` |
+   * | **紫色（非流形）** | 一條邊被 3 個以上的面共用 | 🔴 **`補洞` 補不了它** —— 要自己刪掉多餘的面或分開 |
+   *
+   * ⚠ **兩者長得一模一樣（都是模型上的一條線）**，所以顏色是使用者
+   * 唯一分得出來的線索 —— ⛔ 不要為了省一個顏色把它們畫成一樣。
+   * 〔顏色的第四種意思：橘＝你指定的、青＝程式算出來的、
+   * 　紅＝這裡破了、**紫＝這裡黏在一起了**〕
+   */
+  setNonManifoldPreview(worldPts) {
+    this._setIssuePreview('nonManifoldPreview', worldPts, 0xb44cff);
+  }
+
+  /**
+   * 🔴 **兩種「這裡有問題」的標示共用同一個槽，⛔ 不是各存各的。**
+   *
+   * ⚠ **理由是清除路徑**：這個 overlay 有**兩條**清除路徑
+   * （`markGeomDirty()` 與 `exportPanel.open()`），
+   * 而每多一個欄位就要在那兩條路上各補一行 —— **兩份一定會漂**，
+   * 漏掉的症狀是「舊的標示賴著不走」，而畫面上看起來像新標的。
+   * 〔坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義〕
+   *
+   * ⭐ **同一時間只顯示一種是對的**：使用者一次修一種病，
+   * 兩種疊在一起反而分不出哪條線是哪種。
+   */
+  _setIssuePreview(name, worldPts, color) {
+    this.clearIssuePreview();
+    this._issuePrev = this._buildLineOverlay(name, worldPts, null, color);
+  }
+
+  clearIssuePreview() {
+    if (!this._issuePrev) return;
+    this.scene.remove(this._issuePrev);
+    this._issuePrev.traverse(o => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) o.material.dispose();
     });
-    this._holePrev = null;
+    this._issuePrev = null;
   }
 
   /**
