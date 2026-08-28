@@ -17,7 +17,7 @@ import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
 import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
-import { measureSelection, fmtCm } from '../core/measure.js';
+import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
@@ -1077,13 +1077,22 @@ export class Panel {
        * ⭐ 借 `align.js` 的 `worldBounds()` —— 對齊、貼合、切一刀的範圍提示
        * 用的都是它，**四個地方看到的是同一套數字**。
        *
-       * ⚠ **表面積與體積是網格自己的座標算的，沒有含物件的縮放。**
-       * 縮放不是 1 的時候那兩個數字會偏，所以下面會多印一行講出來 ——
-       * ⛔ 不可以讓它安靜地錯（坑第 18 條：誤報比漏報更糟，
-       * 但**沉默的錯報是最糟的**）。真的要修是另一件事，已開待辦。
+       * 🔴 **表面積與體積現在是世界座標的（2026-08-27 改）。**
+       *
+       * ⚠ 這裡原本用 `mesh.area()` / `mesh.volume()`，那是**網格自己的座標** ——
+       * 物件被縮放過就會偏，當時的做法是「**多印一行講出來**」。
+       * kang 2026-08-27：「**我們先處理好這問題**」→ 改成真的算對。
+       *
+       * ⭐ **體積是精確的**（× |sx·sy·sz|，＝ 矩陣的行列式）；
+       * **面積逐個三角形重算**（⛔ 非均勻縮放下沒有「乘一個數」這種公式）。
+       * ⚠ 兩者都在 `measure.js` 的 `meshMeasureWorld()`，
+       * ⛔ 這裡不自己算 —— 它是純函式而且測得到。
+       *
+       * ⚠ **那一行「沒有含縮放」的警告已經整則刪掉** ——
+       * ⛔ 留著就變成謊話（鐵律三：加新功能時順手檢查舊訊息有沒有過期）。
        */
-      const sc = obj.scale;
       const b = worldBounds(obj);
+      const w = meshMeasureWorld(mesh, obj.matrix());
       /**
        * ⚠ 這裡刻意**不用 `b.getSize(new THREE.Vector3())`** ——
        * `toolbar.js` 從頭到尾沒有 import three，而它是**測試載得進 Node 的**
@@ -1094,12 +1103,10 @@ export class Panel {
        */
       const data = {
         name: obj.name, v, s, ms,
-        area: mesh.area(),
-        volume: v.closed ? mesh.volume() : null,
+        area: w.area,
+        volume: v.closed ? mesh.volume() * w.volumeFactor : null,
         size: b.isEmpty() ? null
-          : { x: b.max.x - b.min.x, y: b.max.y - b.min.y, z: b.max.z - b.min.z },
-        scaled: Math.abs(sc.x - 1) > 1e-9 || Math.abs(sc.y - 1) > 1e-9
-             || Math.abs(sc.z - 1) > 1e-9
+          : { x: b.max.x - b.min.x, y: b.max.y - b.min.y, z: b.max.z - b.min.z }
       };
       this.analysisCache.set(obj.id, data);
       this._renderAnalysis(data);
@@ -1151,9 +1158,6 @@ export class Panel {
         <tr><td>表面積</td><td>${fmt(d.area)} cm²</td></tr>
         ${d.volume !== null
           ? `<tr><td>體積</td><td>${fmt(d.volume)} cm³</td></tr>` : ''}
-        ${d.scaled
-          ? `<tr><td colspan="2" class="dim2">⚠ 這個物件被縮放過，上面的表面積與體積
-                 <b>沒有含縮放</b>（外框有）。要正確的數字請先把縮放併進網格</td></tr>` : ''}
       </table>
       <div class="anaFoot">計算耗時 ${d.ms} ms</div>`;
   }

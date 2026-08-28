@@ -10244,6 +10244,94 @@ section('量測：選到的東西有多大');
     }
 
     /**
+     * ═══════════════════════════════════════════════
+     *  🔴 縮放：均勻算得對，非均勻老實說「沒有唯一答案」
+     *
+     *  ⚠ kang 2026-08-27：「我們先處理好這問題」——
+     *  在那之前半徑是【網格自己的座標】算的，物件一被縮放就偏，
+     *  ⛔ 而且一句警告都沒有。
+     * ═══════════════════════════════════════════════
+     */
+    {
+      const S2 = new THREE.Matrix4().makeScale(2, 2, 2);
+      const SX = new THREE.Matrix4().makeScale(3, 1, 1);
+      const R = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(0.4, -0.9, 0.2));
+      const T = new THREE.Matrix4().makeTranslation(70, -20, 5);
+
+      // ── scaleOf：均不均勻 ──
+      {
+        const a = measure.scaleOf(I2);
+        ok('★ 單位矩陣 → 均勻、倍數 1', a.uniform && Math.abs(a.factor - 1) < 1e-9);
+        ok('★★ 放大 2 倍 → 均勻、倍數 2', measure.scaleOf(S2).factor === 2);
+        eq('★★ 只放大 X → ⛔ 不均勻，factor 是 null（不硬湊平均值）',
+          measure.scaleOf(SX).factor, null);
+        /** 🔴 平移與旋轉⛔ 不改變任何長度 —— 它們不可以被當成縮放 */
+        ok('★★ 旋轉 → 還是均勻、倍數 1',
+          measure.scaleOf(R).uniform && Math.abs(measure.scaleOf(R).factor - 1) < 1e-9);
+        ok('★★ 平移 → 還是均勻、倍數 1',
+          measure.scaleOf(T).uniform && Math.abs(measure.scaleOf(T).factor - 1) < 1e-9);
+        /** ⚠ 鏡射（負縮放）不改變長度，只改變繞向 */
+        ok('★ 鏡射（−1）→ 取絕對值，倍數 1',
+          Math.abs(measure.scaleOf(new THREE.Matrix4().makeScale(-1, -1, -1)).factor - 1) < 1e-9);
+      }
+
+      // ── 量圓：均勻縮放要把半徑一起放大 ──
+      {
+        const t2 = measure.measureLabels(cyl, capRing, S2,
+          { mode: 'total', circle: true }).items[0].text;
+        ok('★★ 放大 2 倍 → 半徑 50.00（⛔ 不再是 25.00）',
+          t2.includes('半徑 50.00 cm'));
+        ok('★★ 　　而且理想圓也跟著（2πR ＝ 314.16）',
+          t2.includes('視為理想圓 314.16'));
+        /**
+         * ⭐ 網格真值本來就吃矩陣，兩邊現在是同一個尺度 —— 差額也該剛好 2 倍。
+         * ⚠ **驗顯示出來的字串，⛔ 不要拿它去比實際值**：實際是 0.5041，
+         * 而畫面上是兩位小數的 `0.50`。〔寫這節時實際踩到〕
+         */
+        const line = t2.split('\n').find(s => s.startsWith('網格真值'));
+        eq('★★ 差額也剛好 2 倍（0.25 → 0.50）', line.split('差 ')[1], '0.50 cm');
+      }
+
+      // ── 🔴 非均勻縮放：圓變橢圓，半徑沒有唯一答案 ──
+      {
+        const tx = measure.measureLabels(cyl, capRing, SX,
+          { mode: 'total', circle: true }).items[0].text;
+        ok('★★ 只放大 X → 講「被拉扁了」「沒有唯一答案」',
+          tx.includes('被拉扁了') && tx.includes('沒有唯一答案'));
+        ok('★★ 　　⛔ 而且一個半徑都不報（⛔ 不猜一個，坑第 24 條）',
+          !tx.includes('當成圓') && !tx.includes('視為理想'));
+      }
+
+      // ── 結構分析：世界座標的表面積與體積 ──
+      {
+        const w0 = measure.meshMeasureWorld(box, I);
+        rel('★★ 沒縮放時 面積 ＝ mesh.area() ＝ 13800', w0.area, 13800);
+        eq('★ 　　體積倍率 1', w0.volumeFactor, 1);
+
+        const w2 = measure.meshMeasureWorld(box, S2);
+        rel('★★ 放大 2 倍 → 面積 ×4', w2.area, 13800 * 4);
+        rel('★★ 　　體積倍率 ×8', w2.volumeFactor, 8);
+
+        /**
+         * 🔴 **非均勻縮放沒有「乘一個數」這種公式** ——
+         * 方塊 60×45×40，只把 X 拉 3 倍：
+         * 兩片 60×45 → 180×45（×3）、兩片 45×40 → 45×40（×1）、
+         * 兩片 60×40 → 180×40（×3）。⛔ 整體 ⛔ 不是 ×3 也不是 ×9。
+         */
+        const w3 = measure.meshMeasureWorld(box, SX);
+        const expect = 2 * (180 * 45) + 2 * (45 * 40) + 2 * (180 * 40);
+        rel('★★ 只放大 X 3 倍 → 面積要逐面算', w3.area, expect);
+        ok('★★ 　　⛔ 而且它既不是 ×3 也不是 ×9',
+          Math.abs(w3.area - 13800 * 3) > 1 && Math.abs(w3.area - 13800 * 9) > 1);
+        rel('★★ 　　但體積倍率精確 ＝ ×3（行列式）', w3.volumeFactor, 3);
+
+        /** 🔴 剛體運動⛔ 不改變面積與體積 */
+        rel('★★ 旋轉後 面積不變', measure.meshMeasureWorld(box, R).area, 13800);
+        rel('★★ 平移後 面積不變', measure.meshMeasureWorld(box, T).area, 13800);
+      }
+    }
+
+    /**
      * ⚠ **方塊的四條邊照樣報得出一個圓，而那是刻意的** ——
      * 🔴 那正是「⛔ 不判斷是不是圓」的意思：**使用者按了開關就表示他要問**。
      * ⛔ 反過來說，這也是它 ⛔ 不可以自動顯示的證據（那就變成誤報）。

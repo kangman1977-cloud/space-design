@@ -63,6 +63,68 @@ export function fmtCm(v) {
   return (Math.round(v * 100) / 100).toFixed(MEASURE_DP);
 }
 
+/**
+ * 🔴 **從矩陣裡把「縮放」挖出來，並回答「它均不均勻」。**
+ *
+ * ── 為什麼要分均勻／不均勻 ────────────────────────────
+ * **平移與旋轉⛔ 不改變任何長度**，所以「世界座標的尺寸」只跟縮放有關。
+ * 而縮放分兩種，⚠ **它們的性質完全不同**：
+ *
+ * | | 圓會變成 | 半徑 | 體積 | 面積 |
+ * |---|---|---|---|---|
+ * | **均勻**（X＝Y＝Z＝s）| 還是圓 | ✅ `R×s` | ✅ `×s³` | ✅ `×s²` |
+ * | **非均勻**（例如 3,1,1）| **橢圓** | ❌ **沒有唯一答案** | ✅ `×(sx·sy·sz)` | ⚠ **要逐面重算** |
+ *
+ * 🔴 **非均勻時「半徑」是真的不存在，⛔ 不是我們算不出來**
+ * （坑第 24 條：結果不唯一就明講，⛔ 不要猜一個）。
+ *
+ * ⚠ **容許值用相對值**，⛔ 不是絕對值 —— 縮放 0.001 倍的物件，
+ * 三個軸差 1e-9 是均勻；縮放 1000 倍的物件，差 1e-9 也是均勻。
+ *
+ * ⚠ **負的縮放（鏡射）取絕對值** —— 鏡射不改變長度，只改變繞向。
+ *
+ * @returns {{x,y,z,uniform:boolean,factor:number|null}}
+ *          `factor` ＝ 均勻時的倍數；**非均勻時是 `null`**（⛔ 不硬湊一個平均值）
+ */
+export function scaleOf(M) {
+  const s = new THREE.Vector3();
+  new THREE.Matrix4().copy(M).decompose(
+    new THREE.Vector3(), new THREE.Quaternion(), s);
+  const ax = Math.abs(s.x), ay = Math.abs(s.y), az = Math.abs(s.z);
+  const mx = Math.max(ax, ay, az);
+  const uniform = mx < 1e-12
+    || (Math.abs(ax - ay) / mx < 1e-6 && Math.abs(ay - az) / mx < 1e-6);
+  return { x: ax, y: ay, z: az, uniform, factor: uniform ? ax : null };
+}
+
+/**
+ * 🔴 **整個網格在世界座標下的表面積與體積。**
+ *
+ * ⚠ **`mesh.area()` 與 `mesh.volume()` 算的是網格自己的座標** ——
+ * 物件被縮放過就會偏，而**畫面上完全看不出來**。
+ * 〔這一支之前只是「多印一行講出來」，2026-08-27 kang 說「先處理好這問題」，
+ * 　所以改成真的算對〕
+ *
+ * **體積**：精確 ＝ 本地體積 × |sx·sy·sz|（＝ 矩陣的行列式，旋轉不影響）。
+ * **面積**：⛔ **沒有這種公式** —— 非均勻縮放下每一片的倍率都不同，
+ * 所以**逐個三角形乘上矩陣再算**，跟 `regionMeasure()` 同一套數學。
+ *
+ * ⚠ 三角化一律走 `mesh.faceTriangles()`（⛔ 不要自己寫扇形三角化）。
+ */
+export function meshMeasureWorld(mesh, M) {
+  let area = 0;
+  for (const f of mesh.faces) {
+    for (const [v0, v1, v2] of mesh.faceTriangles(f)) {
+      const a = v0.p.clone().applyMatrix4(M);
+      const ab = v1.p.clone().applyMatrix4(M).sub(a);
+      const ac = v2.p.clone().applyMatrix4(M).sub(a);
+      area += new THREE.Vector3().crossVectors(ab, ac).length() / 2;
+    }
+  }
+  const s = scaleOf(M);
+  return { area, volumeFactor: s.x * s.y * s.z, scale: s };
+}
+
 /** 一條邊在世界座標下的長度。@param {THREE.Matrix4} M `obj.matrix()` */
 export function edgeLength(he, M) {
   if (!he || !he.v || !he.to) return 0;
@@ -371,7 +433,32 @@ function circleRows(mesh, els, M, tolDeg) {
     return [`⚠ 這一圈是歪的（最遠差 ${fmtCm(r.flattened)} cm），圓算不出來`];
   }
 
-  const R = r.fitted;
+  /**
+   * 🔴 **第 3 關：非均勻縮放時「半徑」是真的不存在。**
+   *
+   * ⚠ **`toCircle()` 讀的是網格自己的座標**（它不吃矩陣，因為它的本業是
+   * **改點**，而改點一定要在本地座標做）—— 所以擬合出來的 `fitted`
+   * 是**縮放之前**的半徑。
+   *
+   * | 縮放 | 怎麼辦 |
+   * |---|---|
+   * | 均勻（X＝Y＝Z）| ✅ **乘上倍數就對了**，圓還是圓 |
+   * | 非均勻（例如 3,1,1）| ❌ **圓被拉成橢圓，半徑沒有唯一答案** → 講出來 |
+   *
+   * ⭐ **⛔ 這裡不重算一次擬合** —— `edit.js` 那一支的註解明文寫著
+   * 「⛔ 不要自己再算一次擬合」，而且第二份一定會漂（坑第 31 條）。
+   * 均勻縮放只要**乘一個數**，⛔ 不需要第二份。
+   *
+   * 🔴 **⛔ 不可以讓它安靜地錯** —— 這一項在 2026-08-27 之前
+   * 就是「半徑不含縮放，而且一句話都沒有」。
+   */
+  const sc = scaleOf(M);
+  if (!sc.uniform) {
+    return [`⚠ 這個物件被拉扁了（縮放 X ${fmtCm(sc.x)}　Y ${fmtCm(sc.y)}　Z ${fmtCm(sc.z)}），`
+          + '圓變成橢圓，半徑沒有唯一答案'];
+  }
+
+  const R = r.fitted * sc.factor;
   const seg = els.length;
   const chords = els.map(e => edgeLength(e.he, M));
   const mesh1 = chords.reduce((s, c) => s + c, 0);
@@ -394,11 +481,6 @@ function circleRows(mesh, els, M, tolDeg) {
     ? 2 * Math.PI * R
     : chords.reduce((s, c) => s + 2 * R * Math.asin(Math.min(1, c / (2 * R))), 0);
 
-  /**
-   * ⚠ **半徑是網格自己的座標算出來的**（`toCircle` 不吃矩陣），
-   * 而網格真值那一半是**世界座標**。物件被縮放過時兩者對不起來，
-   * ⛔ 這一項還沒解 —— 見日誌待辦。
-   */
   return [
     chain.closed
       ? `這一圈當成圓：半徑 ${fmtCm(R)} cm　${seg} 段`
