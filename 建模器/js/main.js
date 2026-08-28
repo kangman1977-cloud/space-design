@@ -37,7 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -421,6 +421,7 @@ $('selRingFaces').onclick = () => selectFaceRingFromEdge();
 $('selAllEdges').onclick = () => selectAllEdges();
 $('selSharp').onclick = () => selectSharpEdges();
 $('selSimilar').onclick = () => selectSimilar();
+$('selChecker').onclick = () => selectChecker();
 $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
@@ -2493,6 +2494,64 @@ function selectSimilar() {
 }
 
 /**
+ * 🔴 **隔一個選一個：把選到的那一圈，隔幾個留一個。**
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * **格柵鏤空**：`選一圈面` 32 片 → 這顆留 16 片 → `刪除面`。
+ *
+ * ── ⚠ 順序由 `checkerPick()` 自己排，⛔ 這裡不可以把陣列順序當幾何順序 ──
+ * 理由（圓柱會碰巧通過、別的形狀會錯）寫在 `selectops.js` 那一支，
+ * ⛔ 不在這裡抄第二份〔文件鐵律一：同一條規則只寫一次〕。
+ *
+ * ── 🔴 兩件一定要講出來的事 ──────────────────────────
+ * ① **排不出一圈**：擋下來講原因 ＋ 講下一步（`reason` 自己帶著出路）。
+ * ② **接縫處有兩個連在一起**（總數除不盡）：⛔ 不可以安靜地讓格柵少一格 ——
+ *    使用者會以為是程式漏掉一片。
+ */
+function selectChecker() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先在編輯模式下選好一圈面或一圈邊，再按「隔一個選一個」', true);
+    return;
+  }
+  const obj = els[0].obj;
+  const nth = +$('checkerNth').value;
+  const from = +$('checkerFrom').value;
+  if (!Number.isFinite(nth) || nth < 2) {
+    toast('「隔幾個」要打一個 2 以上的數字（2 ＝ 留一個跳一個）', true);
+    return;
+  }
+  if (!Number.isFinite(from) || from < 1) {
+    toast('「從第幾個開始」要打 1 以上的數字', true);
+    return;
+  }
+
+  const r = checkerPick(obj.mesh(), els, { nth, from });
+  if (r.reason) { toast(r.reason, true); return; }
+
+  const got = r.kind === 'face'
+    ? sel.selectFaces(obj, r.faces)
+    : sel.selectEdges(obj, r.hes);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const n = r.kind === 'face' ? '面' : '邊';
+  const parts = [`${r.total} 個${n} → 留下 ${got} 個（隔 ${nth} 個留一個`
+    + `${from > 1 ? `，從第 ${from} 個開始` : ''}）`];
+  /**
+   * 🔴 **接縫那一句 ⛔ 不可以省** —— 五角柱 5 個隔 2 留 3 個，
+   * 其中兩個一定是連在一起的，而**畫面上看起來就像少挑了一格**。
+   */
+  if (r.seamAdjacent) {
+    parts.push(`⚠ 繞回起點的地方有兩個連在一起 —— ${r.total} 個除不盡 ${nth}，`
+      + `這是躲不掉的，⛔ 不是漏掉一個`);
+  }
+  if (!r.closed) parts.push('（這是一條，沒有繞回來）');
+  toast(parts.join('　'));
+}
+
+/**
  * 內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。
  *
  * ── 它只加線，形狀一格都不變 ────────────────────────────
@@ -3308,6 +3367,23 @@ function updateBar() {
     ? `跟【最後選的那一個${sel.editSel.kind === 'edge' ? '邊' : sel.editSel.kind === 'face' ? '面' : '點'}】同一類的全部選起來`
     : (sel.editMode ? '先選一個面或一條邊當範本'
                     : '先按「拉點線面」進入編輯模式，再選一個面或一條邊');
+
+  /**
+   * 隔一個選一個：**至少要選到 3 個** ——
+   * ⚠ 它 ⛔ 不是「選到一個就能按」那一類：它挑的是**現在這一批**，
+   * 而 2 個以下沒有「隔一個」可言（`checkerPick()` 自己也擋，這裡只是先變灰）。
+   * ⭐ **⛔ 不在這裡預先算「排不排得出一圈」** —— 那要走一遍相鄰表，
+   * 而這一段每次選取變動都會跑。按下去再講原因就好。
+   */
+  const canChecker = sel.editMode && sel.editCount >= 3;
+  $('selChecker').disabled = !canChecker;
+  $('checkerNth').disabled = !canChecker;
+  $('checkerFrom').disabled = !canChecker;
+  $('selChecker').title = canChecker
+    ? `把現在這 ${sel.editCount} 個隔幾個留一個（做格柵鏤空）。`
+      + '⚠ 要連成一圈或一條才算得出來'
+    : (sel.editMode ? '先選好一圈面或一圈邊（至少 3 個），例如按「選一圈面」'
+                    : '先按「拉點線面」進入編輯模式，再選好一圈面或一圈邊');
 
   /**
    * 任意切線：**選到物件就給按，不必選任何元素** ——

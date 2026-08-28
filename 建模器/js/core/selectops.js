@@ -700,3 +700,218 @@ export function similarTo(mesh, seed, mode, opt = {}) {
   }
   return out;
 }
+
+// ── 隔一個選一個 ─────────────────────────────────────────
+
+/**
+ * 🔴 **隔一個選一個（工具列「隔一個選一個」）：把選到的一圈，隔幾個留一個。**
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * **做格柵、鏤空**（對照表 10.6 標 ⭐）：
+ * `選一圈面` 選起 32 片側面 → 這一支留下 16 片 → `刪除面` ＝ 一圈格柵。
+ * ⛔ 不必先選 32 片再手動取消 16 片。
+ *
+ * ── 🔴 順序是這一支唯一的難處，⛔ 不是「隔一個」那個算術 ────────
+ *
+ * > **它 ⛔ 不照選取的陣列順序走，先自己排成幾何順序。**
+ *
+ * ⚠ **⛔ 不要因為圓柱上「陣列順序剛好就是繞一圈的順序」就省掉排序** ——
+ * 【實證 2026-08-29 沙箱】圓柱 seg32，`選一圈面` 與 `選相似` 拿到的 32 個面
+ * 都是相鄰 32/32、0 個斷點。**而那是圓柱剛好如此**：
+ *
+ * | 選取怎麼來的 | 陣列順序是什麼 |
+ * |---|---|
+ * | `選一圈面`（閉環） | 幾何順序 ✅ —— `edgeRing()` 閉環時只走一個方向就 break |
+ * | **`選一圈面`（沒繞回來）** | **方向一 ＋ 方向二接起來，⛔ 不是幾何順序** |
+ * | `選相似` | `mesh.faces` 的順序 —— 圓柱剛好對，⛔ 別的形狀不保證 |
+ * | **手點／`選轉角`** | **點的先後、掃描的先後，跟形狀無關** |
+ *
+ * 🔴 **照陣列順序做，圓柱會通過而別的地方會錯，而且畫面上看不出是錯的** ——
+ * 那正是「碰巧通過比失敗危險」那一條（日誌檔頭）。
+ *
+ * ── ⚠ 排不出來就明講，⛔ 不硬湊一個順序（坑第 24 條）──────────
+ * 排得出來只有兩種形狀：**一圈**（每個都剛好接兩個）與**一條鏈**
+ * （兩端各接一個、中間接兩個）。其餘一律回 `reason` 讓呼叫端講出來。
+ * ⚠ **方塊按 `選轉角` 的 12 條就是排不出來的**（每條邊接到 4 條），
+ * 那是正確行為 —— 12 條邊圍成的是一個籠子，「隔一個」沒有唯一答案。
+ *
+ * ── 🔴 相鄰的定義：**邊要兩條規則都收** ────────────────────
+ *
+ * | 對象 | 相鄰 ＝ |
+ * |---|---|
+ * | 面 | **共用一條邊** |
+ * | 邊 | **共用一個點**（`選一條線` 那種）**或 同一個四邊形的對邊**（`選一圈` 那種）|
+ *
+ * ⚠ **⛔ 邊不可以只收「共用一個點」** —— 圓柱按 `選一圈` 拿到的 32 條
+ * **直立**邊**彼此不共用任何一個點**（每一條都是上圈某點連到下圈某點），
+ * 只靠「同一個四邊形的對邊」才串得起來。〔那正是 `edgeRing()` 的走法〕
+ *
+ * ── ⚠ 一圈沒有起點，所以「從第幾個開始」是相對的 ───────────
+ * 圈是圈，⛔ 沒有哪一個是第一個。「從第幾個開始」的用途是
+ * **把格柵整體挪一格**（1 換成 2 就是另外那一半），⛔ 不是指定某一個面。
+ *
+ * ── 🔴 除不盡時接縫會有兩個連在一起，**要講出來** ────────────
+ * 五角柱一圈 5 個面隔 2 → 留 3 個，而 5 除 2 除不盡，
+ * 所以**繞回起點的地方會有兩個相鄰的一起留下**。
+ * ⭐ **`seamAdjacent` ⛔ 不是用「總數除得盡嗎」推的，是真的去數一次**：
+ * 留下來的裡面有沒有哪兩個在圈上是連著的。
+ * 〔鐵律三：讓兩個數字互相對得起來，⛔ 不要用公式代替量測〕
+ *
+ * @param {Mesh} mesh
+ * @param {Array<{kind:string, face?:object, he?:object}>} els 現在選到的那些
+ * @param {{nth?:number, from?:number}} [opt]
+ *        `nth` 隔幾個（預設 2 ＝ 一個留一個跳）　`from` 從第幾個開始（1 起算）
+ * @returns {{kind:'face'|'edge'|null, faces:object[], hes:object[],
+ *            total:number, kept:number, closed:boolean,
+ *            seamAdjacent:boolean, reason:string}}
+ */
+export function checkerPick(mesh, els, opt = {}) {
+  const out = {
+    kind: null, faces: [], hes: [], total: 0, kept: 0,
+    closed: false, seamAdjacent: false, reason: ''
+  };
+  if (!mesh || !els || !els.length) { out.reason = '沒有選到任何元素'; return out; }
+
+  const kind = els[0].kind;
+  if (kind !== 'face' && kind !== 'edge') {
+    out.reason = '「隔一個選一個」只吃【面】或【邊】，⛔ 點還沒有做';
+    return out;
+  }
+  if (els.some(e => e.kind !== kind)) {
+    out.reason = '選到的東西有面也有邊 —— 一次只能挑一種';
+    return out;
+  }
+  out.kind = kind;
+
+  const nth = Math.max(2, Math.round(opt.nth ?? 2));
+  const from = Math.max(1, Math.round(opt.from ?? 1));
+
+  /**
+   * ⚠ **一定要先去重**：同一個面被收兩次，度數會變成 4，
+   * 本來排得出來的一圈會被判成「排不出來」。
+   */
+  const items = [];
+  const taken = new Set();
+  for (const e of els) {
+    const it = kind === 'face' ? e.face : e.he;
+    if (!it) continue;
+    const k = kind === 'face' ? `f${it.id}` : `e${edgeKeyOf(it.v.id, it.to.id)}`;
+    if (taken.has(k)) continue;
+    taken.add(k);
+    items.push({ it, k });
+  }
+  out.total = items.length;
+  if (items.length < 3) {
+    out.reason = `只選到 ${items.length} 個 —— 「隔一個選一個」至少要 3 個才有意義`;
+    return out;
+  }
+
+  const idxOf = new Map(items.map((x, i) => [x.k, i]));
+
+  /** 相鄰表。⚠ 兩邊都要記，⛔ 不可以只記單向 */
+  const adj = items.map(() => new Set());
+  const link = (a, b) => { if (a !== b) { adj[a].add(b); adj[b].add(a); } };
+
+  if (kind === 'face') {
+    items.forEach((x, i) => {
+      for (const he of mesh.faceLoop(x.it)) {
+        const nb = he.twin && he.twin.face;
+        if (!nb) continue;
+        const j = idxOf.get(`f${nb.id}`);
+        if (j !== undefined) link(i, j);
+      }
+    });
+  } else {
+    /** 規則一：共用一個點 */
+    const byVert = new Map();
+    items.forEach((x, i) => {
+      for (const v of [x.it.v, x.it.to]) {
+        if (!byVert.has(v.id)) byVert.set(v.id, []);
+        byVert.get(v.id).push(i);
+      }
+    });
+    for (const list of byVert.values()) {
+      for (let a = 0; a < list.length; a++) {
+        for (let b = a + 1; b < list.length; b++) link(list[a], list[b]);
+      }
+    }
+    /** 規則二：同一個四邊形的對邊（⛔ 少了這條，圓柱的一圈直立邊串不起來） */
+    items.forEach((x, i) => {
+      for (const h of [x.it, x.it.twin]) {
+        if (!h || !h.face) continue;
+        const loop = mesh.faceLoop(h.face);
+        if (loop.length !== 4) continue;
+        const at = loop.indexOf(h);
+        if (at < 0) continue;
+        const opp = loop[(at + 2) % 4];
+        const j = idxOf.get(`e${edgeKeyOf(opp.v.id, opp.to.id)}`);
+        if (j !== undefined) link(i, j);
+      }
+    });
+  }
+
+  /** 只有「每個接兩個」（圈）或「兩端各接一個」（鏈）排得出唯一順序 */
+  const deg = adj.map(s => s.size);
+  const ends = [];
+  for (let i = 0; i < deg.length; i++) {
+    if (deg[i] === 0) {
+      out.reason = notInLine(kind, '有的沒有跟其他選到的連在一起');
+      return out;
+    }
+    if (deg[i] > 2) {
+      out.reason = notInLine(kind, `有的同時接到 ${deg[i]} 個`);
+      return out;
+    }
+    if (deg[i] === 1) ends.push(i);
+  }
+  if (ends.length !== 0 && ends.length !== 2) {
+    out.reason = notInLine(kind, `有 ${ends.length} 個只接到一個`);
+    return out;
+  }
+
+  const closed = ends.length === 0;
+  const order = [];
+  const walked = new Set();
+  let cur = closed ? 0 : ends[0];
+  while (cur !== undefined && !walked.has(cur)) {
+    walked.add(cur);
+    order.push(cur);
+    cur = [...adj[cur]].find(n => !walked.has(n));
+  }
+  /** ⚠ 走不完 ＝ 選到的分成兩圈以上，⛔ 不可以只排前面那一圈就交出去 */
+  if (order.length !== items.length) {
+    out.reason = notInLine(kind, `排出來只有 ${order.length} 個，`
+      + `剩下的 ${items.length - order.length} 個是分開的另一段`);
+    return out;
+  }
+  out.closed = closed;
+
+  const off = (from - 1) % nth;
+  const keep = [];
+  order.forEach((_, pos) => { if (pos % nth === off) keep.push(pos); });
+  if (!keep.length) { out.reason = '這樣挑會一個都不剩'; return out; }
+
+  /**
+   * 🔴 **接縫：⛔ 不用「總數除得盡嗎」推，真的去數留下來的有沒有連在一起。**
+   * 開放的鏈不繞回來，所以只有圈才可能在接縫處撞上。
+   */
+  const kept = new Set(keep);
+  if (closed) {
+    for (const pos of keep) {
+      if (kept.has((pos + 1) % order.length)) { out.seamAdjacent = true; break; }
+    }
+  }
+
+  const picked = keep.map(pos => items[order[pos]].it);
+  if (kind === 'face') out.faces = picked; else out.hes = picked;
+  out.kept = picked.length;
+  return out;
+}
+
+/** 排不出一圈時的說法。⚠ 一定要**講出下一步怎麼辦**，⛔ 不只講失敗（坑第 11 條） */
+function notInLine(kind, why) {
+  const n = kind === 'face' ? '面' : '邊';
+  return `這批選取排不出「一圈」或「一條」（${why}），`
+    + `所以「隔一個」沒有唯一的答案。`
+    + `先用「選一圈${kind === 'face' ? '面' : ''}」或「選一條線」選出連成一串的${n}，再按一次`;
+}

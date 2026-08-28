@@ -10996,6 +10996,166 @@ section('量測：選到的東西有多大');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  隔一個選一個（Checker Deselect）
+// ═══════════════════════════════════════════════════════
+
+section('隔一個選一個：把一圈隔幾個留一個');
+
+/**
+ * 🔴 **這一節守的是「順序」，⛔ 不是「隔一個」那個算術。**
+ *
+ * 算術一行就寫完了；會出事的是**拿陣列順序當幾何順序** ——
+ * 而圓柱上那樣做**會通過**（陣列順序剛好就是繞一圈的順序），
+ * 別的地方才會錯，**且畫面上看不出來**。
+ * 〔日誌檔頭第 3 條：**「碰巧通過」比失敗危險**〕
+ *
+ * ⭐ 所以第 ⑤ 組**先斷言「那 32 條邊彼此不共用任何一個點」** ——
+ * ⛔ 沒有那一句，第 ⑤ 組就變成一個自己會通過的空測試。
+ */
+{
+  const soC = await import('../js/core/selectops.js');
+
+  /** 把一圈面／一圈邊包成 `editSels` 的形狀 */
+  const asFaces = fs => fs.map(face => ({ kind: 'face', face }));
+  const asEdges = hs => hs.map(he => ({ kind: 'edge', he }));
+  /** 找一條「直立」的側邊當種子（上下兩端 y 不同，而且兩側都有面） */
+  const upright = m => {
+    for (const he of seam.markableEdges(m)) {
+      if (Math.abs(he.v.p.y - he.to.p.y) > 1 && he.twin && he.face && he.twin.face) return he;
+    }
+    return null;
+  };
+  const ringFaces = m => soC.loopFaces(m, upright(m)).faces;
+
+  /** ① 圓柱 seg32：32 片側面 → 16 片。使用者自己數得出來 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const fs = ringFaces(m);
+    eq('① 選一圈面先拿到 32 片側面', fs.length, 32);
+    const r = soC.checkerPick(m, asFaces(fs), { nth: 2, from: 1 });
+    eq('　 隔 2 個留一個 → 16 片', r.kept, 16);
+    ok('　 而且它認得出這是繞回來的一圈', r.closed);
+    ok('★ 32 除得盡 2 → 接縫處 ⛔ 沒有兩個連在一起', r.seamAdjacent === false);
+
+    /**
+     * 🔴 **兩個數字互相對得起來（鐵律三）**：
+     * 從第 1 個開始與從第 2 個開始，是同一圈的**兩半** ——
+     * **聯集要等於全部、交集要是 0**。
+     * ⭐ 只驗「各 16 片」是不夠的：兩次都挑到同一半也會是 16。
+     */
+    const a = soC.checkerPick(m, asFaces(fs), { nth: 2, from: 1 });
+    const b = soC.checkerPick(m, asFaces(fs), { nth: 2, from: 2 });
+    const A = new Set(a.faces.map(f => f.id));
+    const B = new Set(b.faces.map(f => f.id));
+    eq('★★ 從第 2 個開始也是 16 片', b.kept, 16);
+    eq('★★ 　 兩批的聯集 ＝ 32（正好把整圈分成兩半）',
+       new Set([...A, ...B]).size, 32);
+    eq('★★ 　 兩批的交集 ＝ 0（⛔ 沒有挑到同一片）',
+       [...A].filter(x => B.has(x)).length, 0);
+
+    /** 隔 3 個：32 ÷ 3 ＝ 10 餘 2 → 留 11 片（位置 0,3,6…30） */
+    eq('　 隔 3 個留一個 → 11 片',
+       soC.checkerPick(m, asFaces(fs), { nth: 3, from: 1 }).kept, 11);
+  }
+
+  /** ② 方塊：4 片側面 → 2 片，而且那兩片一定是**對面**（法向剛好相反） */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const fs = ringFaces(m);
+    eq('② 方塊選一圈面 4 片', fs.length, 4);
+    const r = soC.checkerPick(m, asFaces(fs), { nth: 2, from: 1 });
+    eq('　 隔 2 個留一個 → 2 片', r.kept, 2);
+    /**
+     * ⭐ **⛔ 不要只驗「2 片」** —— 隨便挑兩片也是 2 片。
+     * 挑對了的話那兩片是對面，法向點積 ＝ −1。
+     */
+    const n0 = m.computeFaceNormal(r.faces[0]);
+    const n1 = m.computeFaceNormal(r.faces[1]);
+    ok('★★ 　 而且那兩片是【對面】（法向點積 ＝ −1，⛔ 不是隨便兩片）',
+       Math.abs(n0.dot(n1) + 1) < 1e-6, `dot=${n0.dot(n1).toFixed(6)}`);
+  }
+
+  /**
+   * ③ 五角柱：**5 是奇數，除不盡** ——
+   * 🔴 這一組守的是「接縫處會有兩個連在一起，而且要講出來」。
+   */
+  {
+    const m = baked('prism', { sides: 5, r: 30, h: 60 });
+    const fs = ringFaces(m);
+    eq('③ 五角柱選一圈面 5 片', fs.length, 5);
+    const r = soC.checkerPick(m, asFaces(fs), { nth: 2, from: 1 });
+    eq('　 隔 2 個留一個 → 3 片', r.kept, 3);
+    ok('★★ 　 5 除不盡 2 → 接縫處有兩片連在一起，而且它自己數得出來',
+       r.seamAdjacent === true);
+  }
+
+  /**
+   * ④ 圓柱一圈**邊**：32 條直立邊。
+   * 🔴 **這一組守的是「同一個四邊形的對邊」那條相鄰規則。**
+   */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const hs = edit.edgeRing(m, upright(m)).hes;
+    eq('④ 選一圈拿到 32 條直立邊', hs.length, 32);
+
+    /**
+     * 🔴🔴 **這一句是本組的地基，⛔ 不要刪。**
+     * 沒有它，「換成只認共用點也會通過」這件事就沒有人擋得住 ——
+     * 而那樣改，圓柱按下去會變成「排不出一圈」。
+     */
+    {
+      let shared = 0;
+      for (let i = 0; i < hs.length; i++) {
+        for (let j = i + 1; j < hs.length; j++) {
+          const A = new Set([hs[i].v.id, hs[i].to.id]);
+          if ([hs[j].v.id, hs[j].to.id].some(x => A.has(x))) shared++;
+        }
+      }
+      eq('★★ 　 這 32 條 ⛔ 彼此不共用任何一個點（所以只靠「共用點」串不起來）',
+         shared, 0);
+    }
+
+    const r = soC.checkerPick(m, asEdges(hs), { nth: 2, from: 1 });
+    eq('★ 　 隔 2 個留一個 → 16 條', r.kept, 16);
+    ok('　 而且認得出是繞回來的一圈', r.closed);
+  }
+
+  /**
+   * ⑤ 方塊按「選轉角」的 12 條：**排不出一圈，要擋下來**。
+   * ⚠ 12 條邊圍成的是一個籠子，每條接到 6 條 —— 「隔一個」沒有唯一答案。
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const hs = soC.sharpEdges(m, 30).hes;
+    eq('⑤ 方塊選轉角 12 條', hs.length, 12);
+    const r = soC.checkerPick(m, asEdges(hs), { nth: 2, from: 1 });
+    eq('★ 　 排不出一圈 → 一條都不挑', r.kept, 0);
+    ok('★ 　 而且講得出原因', r.reason.includes('排不出'));
+    ok('★★ 　 原因裡要帶著【下一步怎麼辦】，⛔ 不只講失敗',
+       r.reason.includes('選一圈'), r.reason);
+  }
+
+  /** ⑥ 邊界情形：太少、重複、混型別 */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const fs = ringFaces(m);
+    ok('⑥ 只選 2 個 → 擋下來講原因',
+       !!soC.checkerPick(m, asFaces(fs.slice(0, 2)), {}).reason);
+    /**
+     * ⚠ **同一片重複塞進來要先去重** ——
+     * ⛔ 不去重的話它的度數會變成 4，本來排得出來的一圈會被判成排不出來。
+     */
+    eq('★ 　 同一片重複塞進來會去重（4 片 ＋ 重複 4 片 → 仍是 2 片）',
+       soC.checkerPick(m, asFaces([...fs, ...fs]), { nth: 2, from: 1 }).kept, 2);
+    ok('　 面跟邊混在一起 → 擋下來講原因',
+       !!soC.checkerPick(m, [{ kind: 'face', face: fs[0] },
+                              { kind: 'edge', he: upright(m) },
+                              { kind: 'face', face: fs[1] }], {}).reason);
+    ok('　 沒給網格不會壞', !!soC.checkerPick(null, asFaces(fs), {}).reason);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
