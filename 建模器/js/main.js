@@ -33,8 +33,9 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
-         knifePath, planeCrossSegments, toCircle,
+         knifePath, planeCrossSegments, toCircle, faceFromVerts,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
+import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
@@ -418,6 +419,7 @@ $('measureHud').onclick = () => toggleMeasureHud();
 $('measureCircle').onclick = () => toggleMeasureCircle();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
+$('faceFromVerts').onclick = () => faceFromVertsSelected();
 $('splitFace').onclick = () => splitFaceSelected();
 /** 換軸要立刻換範圍提示 —— 不換的話那行字會變成謊話（鐵律三） */
 $('bisectAxis').onchange = () => updateBisectRange();
@@ -1928,6 +1930,57 @@ function connectVertsSelected() {
 }
 
 /**
+ * 🔴 **點連成面：選好幾個點，照選取順序圍出一個面**（＝ Blender 的 `F`）。
+ *
+ * ⭐ 它跟旁邊兩顆是一組，但各做各的：
+ * **`多點連接`** → 一串點變一串**線**；
+ * **`補洞`** → 不必選，把每個**完整的一圈**邊界補成面；
+ * **這一顆** → 一串點變**一個面**（補洞認不出的那種洞）。
+ *
+ * ⚠ **三種擋下來的情形，每一種都要講清楚原因**（少於 3 個點／
+ * 有邊兩側都已經有面／這幾個點已經有面了）—— 幾何全在 `edit.js`，
+ * ⛔ 這裡只負責流程與回報。
+ *
+ * ⚠ **不平的面照建，但要講出偏離多少**（kang 2026-08-27 同意）——
+ * ⛔ 不擋是刻意的：可以先建再按 `壓平` 修，兩顆按鈕各司其職。
+ */
+function faceFromVertsSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先按「拉點線面」進入編輯模式，把過濾器切到「點」，選 3 個以上的點再按', true);
+    return;
+  }
+  if (els.some(e => e.kind !== 'vertex')) {
+    toast('「點連成面」只吃點 —— 把上面的過濾器切到「點」，再選角', true);
+    return;
+  }
+
+  const obj = els[0].obj;
+  const r = faceFromVerts(obj.mesh(), els.map(e => e.vert));
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(`點連成面（${r.n} 個點）`);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * ⚠ **不平就講出來，⛔ 而且要給出路** —— 只說「不平」是講了問題沒給
+   * 解法（坑第 11 條）。⭐ 出路就在旁邊：`壓平`。
+   * 容許值用 0.01 cm（＝ 0.1mm，可切容許值），⛔ 不用 1e-6（那是浮點數的尺度）。
+   */
+  const bits = [`已建好一個 ${r.n} 邊的面`];
+  if (r.flatness > 0.01) {
+    bits.push(`⚠ 這個面不是平的（最大偏離 ${fmtCm(r.flatness)} cm）—— 想弄平就接著按「壓平」`);
+  }
+  toast(bits.join('　'));
+}
+
+/**
  * 🔴 **面上加線：選兩條邊，各長一個點再連起來。**
  *
  * ⚠ **它跟「連接兩點」是兩顆按鈕**（kang 2026-08-25 拍板：
@@ -3094,6 +3147,24 @@ function updateBar() {
         : sel.editSels.some(e => e.kind !== 'vertex')
           ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選角'
           : '至少要選兩個點';
+
+  /**
+   * 點連成面：**至少三個點**才圍得出面。
+   * ⚠ 它跟「多點連接」吃同一種東西（點），差別只在**做出線還是面** ——
+   * 所以灰掉的理由要把那件事講出來，⛔ 不然使用者會以為按錯顆。
+   */
+  const threeVerts = sel.editMode && sel.editCount >= 3
+    && sel.editSels.every(e => e.kind === 'vertex');
+  $('faceFromVerts').disabled = !threeVerts;
+  $('faceFromVerts').title = threeVerts
+    ? `照你選的順序，把這 ${sel.editCount} 個點圍成一個面`
+      + (sel.editCount > 3 ? '。⚠ 它們不在同一個平面上的話會講出偏離多少' : '')
+    : !sel.editMode
+      ? '先按「拉點線面」進入編輯模式'
+      : sel.editSels.some(e => e.kind !== 'vertex')
+        ? '這一顆只吃點 —— 把上面的過濾器切到「點」，再選角'
+        : `至少要選 3 個點才圍得出一個面（現在 ${sel.editCount} 個）。`
+          + '只想連成線的話用「多點連接」';
 
   /**
    * 面上加線：**正好選到兩條邊才給按。**

@@ -3258,6 +3258,117 @@ export function fillHoles(mesh) {
   };
 }
 
+/**
+ * 🔴 **點連成面：選好幾個點，照選取順序圍出一個面**（＝ Blender 的 `F`）。
+ *
+ * ── 它跟現有的兩顆按鈕分別差在哪 ──────────────────────
+ * | | 吃什麼 | 做出什麼 |
+ * |---|---|---|
+ * | `多點連接` | 一串點 | **一串線** |
+ * | `補洞` | 什麼都不用選 | 把**每個完整的邊界迴圈**補成一個面 |
+ * | **這一支** | 一串點 | **一個面** ← 補洞認不出的那種洞（⛔ 不是完整一圈）|
+ *
+ * ⭐ **⛔ 一行新的數學都沒有** —— 骨架就是 `fillHoles()` 那條：
+ * 頂點照舊、`faces` 多推一個、`preflightRebuild` → `cleanRebuild` →
+ * `fromFaceList` → `copyMarksThroughRemap`。
+ *
+ * ── ⛔ 不做 Blender 那個「2 個點就建一條邊」───────────────
+ * `F` 在 Blender 裡選 2 個點會建一條邊 —— **我們有 `多點連接` 了**，
+ * 兩顆按鈕做同一件事就是**功能之間的定位互相模糊**（kang 定的那條）。
+ * → 少於 3 個點就擋下來，並**指路過去**。
+ *
+ * ── ⚠ 三道擋下來的關卡，⛔ 每一道都要講清楚原因 ────────
+ * 1. **少於 3 個點**：圍不出面 → 指去 `多點連接`
+ * 2. **有邊兩側都已經有面**：再建一個就是**非流形**（一條邊三個面），
+ *    3D 列印會直接失敗。⭐ 判斷照 `recalcNormalsOutside()` 那招（無向邊計數），
+ *    ⛔ 不靠半邊結構 —— `fromFaceList()` 只配得出一組 twin，第三個面會落單
+ * 3. **這幾個點已經有一個面了**：⭐ **借 `preflightRebuild()` 的 `dupFaces`**，
+ *    ⛔ 不自己再寫一份「什麼算重複」（坑第 31 條）。
+ *    ⚠ **一定要自己擋** —— 那一項在 `preflight` 裡歸類成 `fixable`，
+ *    `cleanRebuild()` 會安靜地清掉它，結果就是**按了沒反應**（坑第 21 條）
+ *
+ * ── ⚠ 不平的面：照做，但要講出來（kang 2026-08-27 同意）──
+ * 4 個以上的點不一定共面。⛔ **不擋** —— 使用者可以先建再用 `壓平` 修，
+ * 兩顆按鈕各司其職。但**偏離多少一定要講**，跟導角那則
+ * 「幾片不平、最大偏離多少」同一個作風。
+ *
+ * @param {Mesh} mesh
+ * @param {Vert[]} verts **有順序**（＝ 使用者點選的順序）
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:number[],
+ *            n?:number, flatness?:number}}
+ *          `flatness` ＝ 最遠的點離最佳擬合平面多遠（cm），0 就是平的
+ */
+export function faceFromVerts(mesh, verts) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(verts) || verts.length < 3) {
+    return {
+      ok: false,
+      reason: '至少要選 3 個點才圍得出一個面。只想把點連成線的話用「多點連接」'
+    };
+  }
+
+  const vi = mesh._vertIndex();
+  const idx = verts.map(v => vi.get(v.id));
+  if (idx.some(i => i === undefined)) {
+    return { ok: false, reason: '有點不屬於這個物件' };
+  }
+  if (new Set(idx).size !== idx.length) {
+    return { ok: false, reason: '同一個點被選到兩次' };
+  }
+
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+
+  /**
+   * 🔴 **非流形檢查：新面的每一條邊，現在有幾個面用到它？**
+   *
+   * ⭐ 照 `recalcNormalsOutside()` 那招 —— **無向邊 → 面的計數**，
+   * ⛔ 刻意不靠半邊結構（`fromFaceList()` 只配得出一組 twin，
+   * 第三個面那條半邊會落單被補成邊界半邊，**問它就答不出來**）。
+   */
+  const key = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const byEdge = new Map();
+  for (const f of faces) {
+    for (let i = 0; i < f.length; i++) {
+      const k = key(f[i], f[(i + 1) % f.length]);
+      byEdge.set(k, (byEdge.get(k) || 0) + 1);
+    }
+  }
+  let full = 0;
+  for (let i = 0; i < idx.length; i++) {
+    if ((byEdge.get(key(idx[i], idx[(i + 1) % idx.length])) || 0) >= 2) full++;
+  }
+  if (full) {
+    return {
+      ok: false,
+      reason: `有 ${full} 條邊的兩側都已經有面了，再蓋一個面上去，`
+            + '那條邊會被三個面共用 —— 3D 列印會直接失敗'
+    };
+  }
+
+  faces.push(idx);
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `建出壞掉的網格：${pre.fatal[0]}` };
+  /**
+   * ⚠ **`dupFaces` 一定要自己擋** —— 它在 `preflight` 裡是 `fixable`，
+   * `cleanRebuild()` 會安靜地把新面清掉，使用者看到的是「按了沒反應」。
+   */
+  if (pre.dupFaces.includes(faces.length - 1)) {
+    return { ok: false, reason: '這幾個點之間已經有一個面了' };
+  }
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, clean.remap);
+
+  /** ⚠ 不平就講出來，⛔ 不擋（想弄平接著按 `壓平`）*/
+  const flatness = fitPlane(verts.map(v => v.p)).dev;
+
+  return { ok: true, mesh: out, remap: clean.remap, n: idx.length, flatness };
+}
+
 // ═══════════════════════════════════════════════════════
 //  導角（Bevel，單段斜切）
 // ═══════════════════════════════════════════════════════

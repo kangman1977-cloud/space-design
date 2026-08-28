@@ -9654,6 +9654,156 @@ section('多點連接：照選的順序一段一段連');
 //  🔴 凹的面：新拉的線不可以跑到面外面（kang 2026-08-25 實測抓到）
 // ═══════════════════════════════════════════════════════
 
+section('點連成面：選幾個點，照順序圍出一個面');
+
+/**
+ * ＝ Blender 的 `F`。kang 2026-08-27 挑的三項之一
+ * （「沿面滑動邊...由點建面...橋接邊迴圈..我都想要有功能」）。
+ *
+ * ⭐ **⛔ 一行新的數學都沒有** —— 骨架就是 `fillHoles()` 那條：
+ * 頂點照舊、`faces` 多推一個 → `preflightRebuild` → `cleanRebuild` →
+ * `fromFaceList` → `copyMarksThroughRemap`。
+ *
+ * 🔴 **三道關卡，⛔ 每一道都要講清楚原因** —— 沉默地做不出東西
+ * 跟「功能壞掉」分不出來（坑第 21 條）。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const F = edit.faceFromVerts;
+  const topY = box.verts.reduce((m, v) => Math.max(m, v.p.y), -1e9);
+  const top4 = box.verts.filter(v => Math.abs(v.p.y - topY) < 1e-9);
+  eq('方塊頂面有 4 個角', top4.length, 4);
+
+  // ── ① 少於 3 個點：擋，而且要指路去「多點連接」 ──
+  {
+    const r = F(box, [top4[0], top4[1]]);
+    eq('★★ 只選 2 個點 → 擋下來', r.ok, false);
+    ok('★★ 　　而且指路去「多點連接」（⛔ 不做 Blender 那個「2 點建一條邊」）',
+      r.reason.includes('多點連接'));
+    eq('★ 選 0 個 → 也擋', F(box, []).ok, false);
+  }
+
+  // ── ② 同一個點選兩次 ──
+  eq('★ 同一個點選兩次 → 擋', F(box, [top4[0], top4[1], top4[0]]).ok, false);
+
+  // ── 🔴 ③ 這幾個點已經有一個面了 ──
+  {
+    const r = F(box, top4);
+    eq('★★ 方塊頂面那 4 個角已經有面 → 擋下來', r.ok, false);
+    /**
+     * ⚠ **擋它的是【非流形】那一道，⛔ 不是「重複的面」那一道** ——
+     * 因為那四個角之間的邊**本來就被兩個面夾住了**，所以在檢查
+     * 「重複」之前就已經先撞到「邊要被三個面共用」。
+     * 🔴 **兩道都要有**：⭐ 這一題證明順序是對的（先擋更嚴重的），
+     * 而「重複的面」那一道守的是另一種情形 —— 見下面那則。
+     * 〔寫這節時實際踩到：原本預期它會說「已經有一個面」〕
+     */
+    ok('★★ 　　⛔ 理由要講出來（⛔ 不是沉默地沒作用）',
+      r.reason.includes('三個面') || r.reason.includes('已經有一個面'));
+  }
+
+  // ── 🔴 ④ 非流形：有邊兩側都已經有面 ──
+  {
+    /** 頂面的三個角：那三個點之間的邊都已經被兩個面夾住了 */
+    const r = F(box, [top4[0], top4[1], top4[2]]);
+    eq('★★ 三個角（邊已經滿了）→ 擋下來', r.ok, false);
+    ok('★★ 　　理由要講「三個面共用」與「3D 列印會失敗」',
+      r.reason.includes('三個面') && r.reason.includes('3D 列印'));
+  }
+
+  // ── ✅ 真的建得起來：先刪一個面，再用那一圈的點補回去 ──
+  {
+    const b2 = baked('box', { w: 60, d: 45, h: 40 });
+    const ty = b2.verts.reduce((m, v) => Math.max(m, v.p.y), -1e9);
+    const topFace = b2.faces.find(f =>
+      b2.faceVerts(f).every(v => Math.abs(v.p.y - ty) < 1e-9));
+    const del = edit.deleteFaces(b2, [{ kind: 'face', face: topFace }]);
+    ok('先刪掉頂面', del.ok);
+    const m2 = del.mesh;
+    const ring = m2.verts.filter(v => Math.abs(v.p.y - ty) < 1e-9);
+    eq('剩下 4 個角在頂面高度', ring.length, 4);
+
+    /**
+     * ⚠ **順序要照那一圈的繞向**，⛔ 不能隨便給 ——
+     * 隨便給會圍成一個 8 字形（自交）。這裡照邊界迴圈的順序取。
+     */
+    const naked = m2.halfEdges.filter(he => !he.face);
+    const loop = [];
+    let c = naked[0], guard = 0;
+    do { loop.push(c.v); c = c.next; } while (c && c !== naked[0] && guard++ < 100);
+    eq('邊界迴圈是 4 個點', loop.length, 4);
+
+    const before = { V: m2.verts.length, F: m2.faces.length };
+    const r = F(m2, loop);
+    ok('★★ 洞的那一圈 → 建得起來', r.ok);
+    eq('★★ 　　是一個 4 邊的面', r.n, 4);
+    eq('★★ 　　面數 ＋1', r.mesh.faces.length, before.F + 1);
+    eq('★ 　　⛔ 頂點數不變（⛔ 沒有偷加點）', r.mesh.verts.length, before.V);
+    ok('★★ 　　補回去之後又封閉了', r.mesh.isClosed());
+    rel('★★ 　　體積回到 108000（60×45×40）', r.mesh.volume(), 108000);
+    ok('★ 　　它是平的（偏離 0）', r.flatness < 1e-9);
+  }
+
+  // ── ⚠ 不平的面：照建，但要講出偏離多少（kang 2026-08-27 同意）──
+  {
+    const b3 = baked('box', { w: 60, d: 45, h: 40 });
+    const ty = b3.verts.reduce((m, v) => Math.max(m, v.p.y), -1e9);
+    const topFace = b3.faces.find(f =>
+      b3.faceVerts(f).every(v => Math.abs(v.p.y - ty) < 1e-9));
+    const m3 = edit.deleteFaces(b3, [{ kind: 'face', face: topFace }]).mesh;
+    const naked = m3.halfEdges.filter(he => !he.face);
+    const loop = [];
+    let c = naked[0], guard = 0;
+    do { loop.push(c.v); c = c.next; } while (c && c !== naked[0] && guard++ < 100);
+
+    /** 把其中一個角往上推 5 —— 四個點就不共面了 */
+    loop[0].p.y += 5;
+    const r = F(m3, loop);
+    ok('★★ 四個點不共面 → ⛔ 照樣建得起來（⛔ 不擋）', r.ok);
+    /**
+     * 🔴 **但一定要講出偏離多少** —— ⛔ 不講的話那是「安靜地做出一個
+     * 不平的面」，而展開會從精確變成近似（坑第 11 條的近親）。
+     * ⭐ 出路就在旁邊：`壓平`。
+     */
+    ok(`★★ 　　而且講得出偏離多少（${r.flatness.toFixed(3)} cm）`, r.flatness > 0.5);
+  }
+
+  /**
+   * 🔴🔴 **「重複的面」那一道，要用【單面的平板】才撞得到。**
+   *
+   * ⚠ **上面方塊那一題撞到的是非流形那道**（頂面四個角的邊本來就滿了），
+   * 所以「重複」那一道**當時沒有被任何測試守著** —— ⛔ 那就是
+   * 「寫好了但沒有測試」。〔寫這節時發現的〕
+   *
+   * ⭐ **平板剛好卡在中間**：它只有一個面，四條邊各只有 **1** 個面 ——
+   * 非流形那道放行（1 < 2），於是**輪到「重複的面」擋**。
+   *
+   * 🔴 **這一道非有不可**：`preflightRebuild()` 把它歸類成 `fixable`，
+   * `cleanRebuild()` 會**安靜地清掉**新面 —— 使用者看到的是「按了沒反應」
+   * （坑第 21 條）。⛔ 不自己擋就等於沒擋。
+   */
+  {
+    const pts = [
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(60, 0, 0),
+      new THREE.Vector3(60, 0, 45), new THREE.Vector3(0, 0, 45)
+    ];
+    const flat = Mesh.fromFaceList(pts, [[0, 1, 2, 3]]);
+    flat.computeNormals();
+    eq('平板是 1 個面 4 個點', `${flat.faces.length},${flat.verts.length}`, '1,4');
+    /** ⭐ 四條邊各只有 1 個面 —— 非流形那道會放行 */
+    const r = F(flat, flat.verts);
+    eq('★★ 平板的四個角再建一次 → 擋下來', r.ok, false);
+    ok('★★ 　　⛔ 而且理由是「已經有一個面」（⛔ 不是非流形那道）',
+      r.reason.includes('已經有一個面'));
+  }
+
+  // ── 邊界情形 ──
+  {
+    eq('沒有網格 → 擋', F(null, top4).ok, false);
+    eq('verts 不是陣列 → 擋', F(box, null).ok, false);
+  }
+}
+
 section('凹的面：連接兩點／面上加線都不可以穿出邊界');
 
 /**
