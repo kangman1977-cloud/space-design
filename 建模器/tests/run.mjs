@@ -5863,6 +5863,126 @@ section('沿面滑動邊（Edge Slide）：環切的搭檔');
   }
 }
 
+section('平行複製一圈邊（Offset Edge Slide）');
+
+/**
+ * 🔴 **這一組守兩件事**：
+ * **① 它只加線** —— 體積、面積**精確不變**（跟環切同一個斷言，可以對答案）；
+ * **② 抽出來的共用函式沒有壞掉** —— `cutFacesAlongInserts()` 2026-08-28
+ * 從 `loopCut()` 抽出來，**環切自己的測試全部保留就是抽對了的證明**。
+ *
+ * ⭐ **一行新數學都沒有**：軌道借 `slideEdges()` 那一套（輸入條件一模一樣），
+ * 加線借共用函式。⚠ 而它剛好落進共用函式的守備範圍是**幾何必然**：
+ * 選到的邊 `e=(v1,v2)` 上側那個四邊形是 `(v1, v2, v2', v1')`，
+ * 而 `v1`／`v2` 的上軌道**正好是它的對面兩條邊**。
+ */
+{
+  const cutRing = (type, params) => {
+    const m = baked(type, params);
+    const he0 = [...m.edges()].find(h => h.face && h.twin && h.twin.face
+      && Math.abs(h.v.p.y - h.to.p.y) > 1e-6);
+    const r = edit.loopCut(m, he0, { cuts: 1 });
+    const out = r.mesh; out.computeNormals();
+    const vi = out._vertIndex();
+    const k = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+    const want = new Set(r.newEdges.map(([a, b]) => k(a, b)));
+    return { mesh: out, hes: [...out.edges()].filter(h => want.has(k(vi.get(h.v.id), vi.get(h.to.id)))) };
+  };
+
+  {
+    /** ① 方塊：⭐ **體積面積精確不變**才是這顆按鈕的保證 */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const F0 = mesh.faces.length, vol0 = mesh.volume(), area0 = mesh.area();
+    const y0 = hes[0].v.p.y;
+    const r = edit.offsetEdgeLoop(mesh, hes, 5, { mode: 'cm' });
+    ok('平行複製成功', r.ok, r.reason || '');
+    eq('★ 選到的一圈 4 條 → 兩側共 4×2 條新線', r.newEdges.length, hes.length * 2);
+    eq('★★ 面數 ＝ 原本 ＋ 一圈的條數×2', r.mesh.faces.length, F0 + hes.length * 2);
+    eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+    ok('　 仍然封閉、結構沒問題', r.mesh.isClosed() && r.mesh.validate().ok);
+    rel('★★ 🔴 體積精確不變（它只加線）', r.mesh.volume(), vol0);
+    rel('★★ 🔴 面積精確不變', r.mesh.area(), area0);
+    eq('★ 孤點 0 個（只加不減）', r.orphans, 0);
+
+    /** ★★ 新的那兩圈，位置要精確 ＝ 原本 ± 偏移量 */
+    const ys = [...new Set(r.newEdges
+      .flatMap(([a, b]) => [r.mesh.verts[a].p.y, r.mesh.verts[b].p.y])
+      .map(v => +v.toFixed(9)))].sort((p, q) => p - q);
+    eq('★★ 🔴 兩圈的位置精確 ＝ 原本 ± 5', `${ys.length}/${ys[0]}/${ys[1]}`,
+       `2/${y0 - 5}/${y0 + 5}`);
+  }
+
+  {
+    /**
+     * ② 圓柱 seg32 —— ⚠ **面數用公式寫，⛔ 不寫死一個數字**
+     * 〔這一輪的教訓，同一個毛病犯了三次：實測清單寫死 223963.70、
+     * 　寫死「往上」、測試名稱寫死「34→98」而實際是 66→130〕
+     */
+    const { mesh, hes } = cutRing('cylinder', { r: 25, h: 70, seg: 32 });
+    const F0 = mesh.faces.length, vol0 = mesh.volume();
+    const r = edit.offsetEdgeLoop(mesh, hes, 3, { mode: 'cm' });
+    ok('② 圓柱 seg32 也做得出來', r.ok, r.reason || '');
+    eq('★ 一圈 32 條 → 新線 64 條', r.newEdges.length, hes.length * 2);
+    eq('★★ 面數 ＝ 原本 ＋ 64', r.mesh.faces.length, F0 + hes.length * 2);
+    eq('★★ χ 仍然是 2', chi(r.mesh), 2);
+    rel('★★ 🔴 體積精確不變', r.mesh.volume(), vol0);
+  }
+
+  {
+    /** ③ ％ 模式：軌道 20 的 25% ＝ 5（⭐ 跟公分那一項算出同一個答案）*/
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const y0 = hes[0].v.p.y;
+    const r = edit.offsetEdgeLoop(mesh, hes, 25, { mode: 'pct' });
+    const ys = [...new Set(r.newEdges
+      .flatMap(([a, b]) => [r.mesh.verts[a].p.y, r.mesh.verts[b].p.y])
+      .map(v => +v.toFixed(9)))].sort((p, q) => p - q);
+    eq('★★ ％：軌道 20 的 25% ＝ 5，跟打 5 公分同一個答案',
+       `${ys[0]}/${ys[1]}`, `${y0 - 5}/${y0 + 5}`);
+  }
+
+  {
+    /**
+     * ④ 頂到底：夾住，⛔ 不整個擋掉。
+     * ⚠ **而且 ⛔ 不可以長出零長度的邊** —— 上限刻意用 0.999 不是 1，
+     * 因為剛好貼在端點上是退化幾何，會一路帶到布林與 STL **而且不報錯**
+     * 〔`ON_PLANE_CM` 那一段燒過同一件事〕。
+     */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const r = edit.offsetEdgeLoop(mesh, hes, 500, { mode: 'cm' });
+    ok('★ 偏移超過那一段 → 夾住，⛔ 不是擋下來', r.ok);
+    eq('★ 　 而且講得出幾個地方頂到底', r.clamped, hes.length * 2);
+    eq('★★ 🔴 ⛔ 沒有長出零長度的邊（χ 仍然是 2）', chi(r.mesh), 2);
+    ok('　 結構仍然沒問題', r.mesh.validate().ok);
+  }
+
+  {
+    /** ⑤ ％ 打 100 → 擋下來（那會疊在原本那一圈上）*/
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const r = edit.offsetEdgeLoop(mesh, hes, 100, { mode: 'pct' });
+    ok('★ ％ 打 100 → 擋下來並說原因', !r.ok, r.reason);
+  }
+
+  {
+    /**
+     * ⑥ 🔴 **判準跟 `slideEdges()` 一字不差：端點的價數。**
+     * ⭐ 兩支共用同一段軌道邏輯，所以行為必須一致 ——
+     * 這兩項就是「一致」的證明。
+     */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const top = Math.max(...mesh.verts.map(v => v.p.y));
+    const e = [...mesh.edges()].find(h => h.face && h.twin && h.twin.face
+      && Math.abs(h.v.p.y - top) < 1e-6 && Math.abs(h.to.p.y - top) < 1e-6);
+    const a = edit.offsetEdgeLoop(mesh, [e], 4, { mode: 'cm' });
+    ok('★★ 只選一條【原本的】邊（端點 3 價）→ ✅ 做得出來', a.ok, a.reason || '');
+    eq('★ 　 兩側各一條 ＝ 2 條新線', a.ok ? a.newEdges.length : -1, 2);
+
+    const b = edit.offsetEdgeLoop(mesh, [hes[0]], 4, { mode: 'cm' });
+    ok('★★ 【環切線上】的一條邊（端點 4 價）→ 擋下來', !b.ok);
+    ok('★★ 　 訊息講「旁邊有 3 條邊」，⛔ 不是「要選一整圈」',
+       !b.ok && /3 條邊/.test(b.reason || '') && !/要選一整圈/.test(b.reason || ''), b.reason);
+  }
+}
+
 section('內縮（Inset）：加線 × 面的內縮輪廓');
 
 /**

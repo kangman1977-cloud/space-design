@@ -29,7 +29,7 @@ import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
-         flattenElements, mergeCoplanarFaces, loopCut, slideEdges, edgeRing,
+         flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
@@ -400,6 +400,7 @@ $('flatten').onclick = () => flattenSelected();
 $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('slide').onclick = () => slideSelected();
+$('offsetLoop').onclick = () => offsetLoopSelected();
 /** 單顆切換：按鈕上的字就是目前的單位（⛔ 不用 class="on"，見 index.html 那則） */
 $('slideUnit').onclick = () => {
   const b = $('slideUnit');
@@ -1530,6 +1531,71 @@ function slideSelected() {
   if (r.clamped) {
     bits.push(`⚠ 有 ${r.clamped} 個點滑到底了（最多只能滑 ${r.maxCm.toFixed(2)} cm）`);
   }
+  toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **平行複製：在選到的那一圈邊，兩側各加一圈平行的線。**
+ * （＝ Blender 的 Offset Edge Slide）做加強筋、邊框、溝槽。
+ *
+ * ── ⚠ 它跟 `沿面滑動` 吃同一種選取，但做的事相反 ────────
+ * **滑動** ＝ 把那一圈**挪走**（形狀會變、只動座標）；
+ * **這一顆** ＝ 在那一圈**兩側各加一圈**（形狀不變、只加線）。
+ * 🔴 所以它**換掉整個網格**（要 `setMesh()`），而滑動不用。
+ *
+ * ⭐ 加完之後把**新的那兩圈選起來** —— 跟環切同一個作風，
+ * 使用者接著多半要拉它們或再滑動。
+ */
+function offsetLoopSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一圈邊，再按「平行複製」（可以用「選一圈」或先按「環切」）', true);
+    return;
+  }
+  const mode = $('slideUnit').dataset.u === 'pct' ? 'pct' : 'cm';
+  const w = +$('offsetW').value;
+  if (!Number.isFinite(w) || w <= 0) { toast('偏移量要大於 0', true); return; }
+
+  const obj = el.obj;
+  const oldMesh = obj.mesh();
+  const hes = sel.editSels.filter(e => e.kind === 'edge' && e.he).map(e => e.he);
+
+  const r = offsetEdgeLoop(oldMesh, hes, w, { mode });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 被切成兩半的邊如果標過 CUT，線段變兩截了
+  commit(mode === 'pct' ? `平行複製 ${w}%` : `平行複製 ${w} cm`);
+
+  /**
+   * ⚠ 一定要在 `commit()` 之後才選 —— 跟環切、擠出同一條理由：
+   * `commit()` 會走 `revalidate()`，而這裡換掉了整個網格物件，
+   * 那裡會把子元素選取清掉。先選後 commit 等於白做。
+   */
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const picked = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) picked.push(he);
+  }
+  sel.selectEdges(obj, picked);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 🔴 **講出「加了幾條」** —— 那個數字使用者自己驗得出來
+   * （方塊一圈 4 條 → 兩側共 8 條、32 段圓柱 → 64 條）。
+   * ⭐ 而**體積面積精確不變**才是這顆按鈕的保證，所以一起講。
+   */
+  const bits = [`已在兩側各加一圈，共 ${r.newEdges.length} 條新的線`];
+  if (r.clamped) {
+    bits.push(`⚠ 有 ${r.clamped} 個地方頂到底了（偏移量比那一段還長，已經停在端點）`);
+  }
+  bits.push(`體積 ${r.mesh.volume().toFixed(2)} cm³（⛔ 沒變，它只加線）`);
   toast(bits.join('　'));
 }
 
@@ -3146,6 +3212,17 @@ function updateBar() {
   $('slide').disabled = !slideOk;
   $('slideAmt').disabled = !slideOk;
   $('slideUnit').disabled = !slideOk;
+  /**
+   * 平行複製：**條件跟沿面滑動完全一樣**（吃同一種選取）——
+   * ⭐ 所以借同一個 `slideOk`，⛔ 不重寫一份判斷式（坑第 31 條）。
+   */
+  $('offsetLoop').disabled = !slideOk;
+  $('offsetW').disabled = !slideOk;
+  $('offsetLoop').title = slideOk
+    ? `在選到的 ${sel.editCount} 條邊兩側各加一圈平行的線。`
+      + '只加線、形狀完全不變（體積面積精確不變）。做加強筋、邊框、溝槽'
+    : (sel.editMode ? '先選邊（整圈用「選一圈」，或先按「環切」）'
+                    : '先按「拉點線面」進入編輯模式，再選邊');
   /**
    * ⚠ **⛔ 這裡 ⛔ 不可以說「只選 1 條邊不行」** —— 【實證 2026-08-28】
    * **選一條邊照樣滑得動**（端點是 3 價時），做出楔形／斜面，

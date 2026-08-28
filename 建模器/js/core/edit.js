@@ -1359,6 +1359,42 @@ export function loopCut(mesh, he0, opt = {}) {
     }
     mids.set(k, arr);
   }
+
+  return cutFacesAlongInserts(mesh, points, cutKeys, mids, {
+    label: '環切',
+    ringLen: ring.hes.length, closed: ring.closed, cuts
+  });
+}
+
+/**
+ * 🔴 **把「插在邊上的點」連成線，把面切開。**（`環切` 與 `平行複製` 的共用後半段）
+ *
+ * ── 為什麼抽出來（2026-08-28）────────────────────────
+ * `環切` 與 `平行複製一圈邊` **輸入不同，但後半段一模一樣**：
+ *
+ * | | 要切哪些邊 | 切點位置 |
+ * |---|---|---|
+ * | **環切** | `edgeRing()` 走出來的一圈（**橫著跨過**四邊形）| 均分 `i/(cuts+1)` |
+ * | **平行複製** | 選到那圈邊上每個點的**兩條軌道** | 距離 `w`（或 `w%`）|
+ *
+ * ⭐ **⛔ 各寫一份就是兩條路算同一件事**（坑第 31 條）——
+ * 而漏掉的那一半會是「**標記安靜消失**」，畫面上完全看不出來。
+ * 〔跟 `rebuildWithInserts()` 當初抽出來的理由一字不差。
+ * 　差別：那一支**只插點不切面**（`邊上加點` 用），這一支**會切開**〕
+ *
+ * ── 呼叫端的契約（⛔ 兩條都要守）────────────────────
+ * **① `mids` 的順序一律「小索引 → 大索引」** —— 邊沒有方向而面有，
+ * 不定標準的話同一條邊在兩個面裡會插出相反的順序，
+ * 切出來的四邊形**會自交**（畫面上看不出來，體積才會露餡）。
+ * **② `points` 要已經含新點**，`mids` 存的是它們在 `points` 裡的索引。
+ *
+ * @param {Map<string,number[]>} mids 邊 key → 那條邊上的新點索引
+ * @param {{label?:string}} extra `label` 用在錯誤訊息裡；其餘欄位併進回傳值
+ */
+function cutFacesAlongInserts(mesh, points, cutKeys, mids, extra = {}) {
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const label = extra.label || '這個動作';
   /** 從 u 走向 w 時，這條邊上的插點由近到遠 */
   const midsAlong = (u, w) => {
     const arr = mids.get(kOf(u, w));
@@ -1416,7 +1452,13 @@ export function loopCut(mesh, he0, opt = {}) {
       const v = k => idx[(i0 + k) % 4];
       const A = midsAlong(v(0), v(1));        // v0 → v1 上的點，由近到遠
       const B = midsAlong(v(2), v(3));        // v2 → v3 上的點，由近到遠
-      const n = cuts;
+      /**
+       * ⚠ **`n` 從 `A` 現算，⛔ 不從呼叫端傳 `cuts` 進來** ——
+       * 抽成共用函式之後，「一條邊上插幾個點」是**呼叫端各自決定的**
+       * （環切均分 `cuts` 個、平行複製只插 1 個）。
+       * 🔴 兩側插點數不一樣就是呼叫端違約，底下 `B[n-k]` 會抓到 undefined。
+       */
+      const n = A.length;
       for (let k = 0; k <= n; k++) {
         const left  = k === 0 ? v(0) : A[k - 1];
         const right = k === 0 ? v(3) : B[n - k];
@@ -1448,7 +1490,7 @@ export function loopCut(mesh, he0, opt = {}) {
   }
 
   const pre = preflightRebuild(points, faces);
-  if (!pre.ok) return { ok: false, reason: `環切做出壞掉的網格：${pre.fatal[0]}` };
+  if (!pre.ok) return { ok: false, reason: `${label}做出壞掉的網格：${pre.fatal[0]}` };
 
   const clean = cleanRebuild(points, faces);
   const out = Mesh.fromFaceList(clean.points, clean.faces);
@@ -1468,14 +1510,16 @@ export function loopCut(mesh, he0, opt = {}) {
     out.applyMarks(he, want.get(kOf(di.get(he.v.id), di.get(he.to.id))));
   }
 
+  /** ⚠ `label` 只是給錯誤訊息用的，⛔ 不要漏進回傳值 */
+  const { label: _drop, ...rest } = extra;
   return {
     ok: true, mesh: out, remap: clean.remap,
-    ringLen: ring.hes.length, closed: ring.closed, cuts,
     split, pierced,
     newEdges: newEdgePairs
       .map(([a, b]) => [to(a), to(b)])
       .filter(([a, b]) => a !== undefined && b !== undefined),
-    orphans: clean.dropped.orphans
+    orphans: clean.dropped.orphans,
+    ...rest
   };
 }
 
@@ -1524,7 +1568,14 @@ const ON_PLANE_CM = PLANAR_TOL_CM;
  * 【實證 2026-08-28】方塊／圓柱 seg32／圓錐台 seg16 環切一圈，
  * **每個點的軌道條數一律是 2**（往上一段、往下一段）——
  * ⭐ 所以「往哪滑」沒有猜的空間，⛔ 不撞坑第 24 條。
- * ⚠ **不是 2 條就擋下來**（選到的不是一整圈、或形狀特殊），⛔ 不硬挑一條。
+ * ⚠ **不是 2 條就擋下來**，⛔ 不硬挑一條。
+ *
+ * 🔴🔴 **⛔ 判準是端點的價數，⛔ 不是「選了幾條邊」**
+ * 〔kang 2026-08-28 實測第 8 項照出來的。⚠ **這句註解原本寫「選到的不是
+ * 一整圈」，那是錯的** —— 同一句錯話當時寫在三個地方（訊息／tooltip／這裡），
+ * **前兩處改了、這裡漏了**。🔴 又一次「只改一處等於沒改」〕：
+ * **方塊原本的一條邊**（端點 3 價）→ 剩 2 條 → ✅ **滑得動，做出斜面**；
+ * 環切線上的一條邊（端點 4 價）→ 剩 3 條 → 擋下來。
  *
  * ── 🔴 兩種「滑多少」，⛔ 而它們真的會分岔（kang 2026-08-28 拍板兩個都給）──
  *
@@ -1681,6 +1732,116 @@ export function slideEdges(mesh, hes, amount, opt = {}) {
     dir: amount >= 0 ? dir : `反方向（${dir} 的另一邊）`,
     appliedCm: applied, mode
   };
+}
+
+/**
+ * 🔴 **平行複製一圈邊：在選到的那一圈邊，兩側各加一圈平行的邊。**
+ * （＝ Blender 的 Offset Edge Slide）做**加強筋、邊框**。
+ *
+ * ── ⭐ 一行新數學都沒有，兩個零件都是現成的 ──────────────
+ *
+ * | 需要什麼 | 現成的在哪 |
+ * |---|---|
+ * | **軌道**（往哪個方向偏移）| `slideEdges()` 那一套 —— **輸入條件一模一樣**（每個點恰好 2 條軌道）|
+ * | **加線**（把插點連成線、切開面）| `cutFacesAlongInserts()` —— 2026-08-28 從 `loopCut()` 抽出來的共用後半段 |
+ *
+ * ── 🔴 為什麼它剛好落進 `cutFacesAlongInserts()` 的守備範圍 ──
+ * 選到的邊 `e=(v1,v2)`，它上側那個面是四邊形 `(v1, v2, v2', v1')`，
+ * 而 **`v1` 的上軌道與 `v2` 的上軌道，正好是那個四邊形的「對面兩條邊」** ——
+ * 那正是共用函式切得開的唯一情形。⭐ **幾何上必然，⛔ 不是巧合。**
+ *
+ * ── 單位沿用 `沿面滑動`（kang 2026-08-28 拍板兩種都給）────────
+ * `'cm'` 每側都走一樣的距離／`'pct'` 各走自己那條軌道的同一個比例。
+ * ⚠ **⛔ 這裡不重問一次** —— 同一個決定只拍一次板。
+ *
+ * ── ⚠ 它跟 `環切` 的定位差在哪（⛔ 不可以互相模糊）────────
+ * **環切** ＝ 從一條邊出發、繞 `edgeRing` 一圈、切在**中間**；
+ * **這一支** ＝ 吃**選到的一整圈**、在它**兩側**各加一圈、距離自己指定。
+ * 🔴 兩者走的路不同（`edgeRing` 橫著跨 vs 沿著選取的軌道），
+ * 做出來的東西也不同（1 圈 vs 2 圈）。
+ *
+ * @param {HalfEdge[]} hes 選到的那一圈邊
+ * @param {number} w 偏移量（`mode` 決定單位），⛔ 一律取絕對值 —— 兩側都要加
+ * @param {{mode?:'cm'|'pct'}} opt
+ * @returns 同 `cutFacesAlongInserts()`，另有 `rings`（加了幾圈）、`clamped`
+ */
+export function offsetEdgeLoop(mesh, hes, w, opt = {}) {
+  const mode = opt.mode === 'pct' ? 'pct' : 'cm';
+  const list = (Array.isArray(hes) ? hes : [hes]).filter(Boolean);
+  if (!mesh || !list.length) return { ok: false, reason: '沒有選到邊' };
+  const amt = Math.abs(w);
+  if (!Number.isFinite(amt) || amt < 1e-12) return { ok: false, reason: '偏移量要大於 0' };
+  if (mode === 'pct' && amt >= 100) {
+    return { ok: false, reason: '偏移 100% 會疊在原本那一圈上（那等於沒加）——請打小一點' };
+  }
+
+  mesh.computeNormals();
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const sel = new Set(list.map(h => kOf(vi.get(h.v.id), vi.get(h.to.id))));
+
+  /**
+   * 🔴 **軌道的找法與擋關 ⛔ 跟 `slideEdges()` 一字不差** ——
+   * 判準是**端點的價數**（旁邊剛好 2 條），⛔ 不是「選了幾條邊」。
+   */
+  const verts = [];
+  const seen = new Set();
+  for (const he of list) {
+    for (const v of [he.v, he.to]) {
+      if (seen.has(v.id)) continue;
+      seen.add(v.id);
+      const rails = mesh.vertOutgoing(v)
+        .filter(h => !sel.has(kOf(vi.get(v.id), vi.get(h.to.id))));
+      verts.push({ v, rails });
+    }
+  }
+  const bad = verts.filter(x => x.rails.length !== 2);
+  if (bad.length) {
+    return {
+      ok: false,
+      reason: `有 ${bad.length} 個點的旁邊有 ${bad[0].rails.length} 條邊`
+            + '（要剛好 2 條才知道往哪兩側加）——'
+            + '請把整圈一起選（「選一圈」，或先按「環切」，切完那一圈會自動選中）'
+    };
+  }
+
+  /**
+   * 每條軌道上插一個點。
+   * ⚠ **⛔ 一條軌道只插 1 個** —— 共用函式的 `n` 是從插點數現算的，
+   * 兩側數量不一樣它會抓到 undefined（見那一支的說明）。
+   */
+  const points = mesh.verts.map(v => v.p.clone());
+  const mids = new Map();
+  let clamped = 0;
+  for (const { v, rails } of verts) {
+    const a = vi.get(v.id);
+    for (const h of rails) {
+      const b = vi.get(h.to.id);
+      const k = kOf(a, b);
+      if (mids.has(k)) continue;              // 兩個點共用同一條軌道（不該發生，防一手）
+      const len = v.p.distanceTo(h.to.p);
+      let t = mode === 'pct' ? amt / 100 : amt / len;
+      /**
+       * 夾住：⛔ 不整個擋掉（照 `導角`／`沿面滑動` 那個 `clamped` 的先例）。
+       * ⚠ 上限用 0.999 而不是 1 —— 剛好貼在端點上會長出**零長度的邊**，
+       * 那是退化幾何，會一路帶到布林與 STL 而且**不會報錯**
+       * 〔`ON_PLANE_CM` 那一段燒過同一件事〕。
+       */
+      if (t >= 0.999) { t = 0.999; clamped++; }
+      const idx = points.length;
+      points.push(points[a].clone().lerp(points[b], t));
+      /**
+       * 🔴 契約：`mids` 一律存「小索引 → 大索引」的順序。
+       * ⭐ **這裡只有一個點，所以順序天生成立**（環切插好幾個才需要小心）。
+       */
+      mids.set(k, [idx]);
+    }
+  }
+  if (!mids.size) return { ok: false, reason: '找不到可以偏移的方向' };
+
+  return cutFacesAlongInserts(mesh, points, new Set(mids.keys()), mids, {
+    label: '平行複製', rings: 2, clamped, mode
+  });
 }
 
 /**
