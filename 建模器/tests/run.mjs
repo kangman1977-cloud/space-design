@@ -5799,7 +5799,44 @@ section('沿面滑動邊（Edge Slide）：環切的搭檔');
   }
 
   {
-    /** ⑦ 沒選一整圈 → 擋下來，而且**指得出出路** */
+    /**
+     * ⑦ 🔴🔴 **判準是「端點的價數」，⛔ 不是「選了幾條邊」。**
+     *
+     * ⚠ **這一組是 kang 2026-08-28 實測第 8 項照出來的** ——
+     * 我開清單時寫「只選一條邊 → 會擋下來」，**那個預期是錯的**：
+     *
+     * | 選什麼 | 端點價數 | 排除選到的之後 | |
+     * |---|---|---|---|
+     * | **方塊原本的一條邊** | 3 價 | 剩 **2** 條 | ✅ **滑得動**（楔形／斜面）|
+     * | 環切線上的一條邊 | 4 價 | 剩 **3** 條 | 擋下來 |
+     *
+     * ⭐ 單條邊滑得動是 **Blender Edge Slide 本來就有的用法**，
+     * kang 的原話：「**效果我覺得不錯**」——⛔ 它是功能，不是漏洞。
+     */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const vd = {};
+    for (const v of mesh.verts) { const d = mesh.vertOutgoing(v).length; vd[d] = (vd[d] || 0) + 1; }
+    eq('★ （前置）環切後的價數：原本的角 8 個 3 價、新點 4 個 4 價',
+       JSON.stringify(vd), '{"3":8,"4":4}');
+
+    /** ⑦-甲 環切線上的 1 條邊（端點 4 價）→ 擋，因為剩 3 條不知道走哪條 */
+    const a = edit.slideEdges(mesh, [hes[0]], 5, { mode: 'cm' });
+    ok('★ 【環切線上】的 1 條邊 → 擋下來（端點 4 價，剩 3 條）', !a.ok);
+    ok('★★ 　 訊息講的是「旁邊有 3 條邊」，⛔ 不是「要選一整圈」',
+       !a.ok && /3 條邊/.test(a.reason || '') && !/要選一整圈/.test(a.reason || ''), a.reason);
+    ok('　 而且指得出出路（選一圈／環切）', !a.ok && /選一圈|環切/.test(a.reason || ''));
+
+    /** ⑦-乙 🔴 方塊原本的 1 條邊（端點 3 價）→ **滑得動**，那是楔形 */
+    const top = Math.max(...mesh.verts.map(v => v.p.y));
+    const e = [...mesh.edges()].find(h => h.face && h.twin && h.twin.face
+      && Math.abs(h.v.p.y - top) < 1e-6 && Math.abs(h.to.p.y - top) < 1e-6);
+    const b = edit.slideEdges(mesh, [e], 12, { mode: 'cm' });
+    ok('★★ 🔴 【方塊原本】的 1 條邊 → ✅ 滑得動（⛔ 不擋）', b.ok, b.reason || '');
+    eq('★★ 　 動的是那條邊的 2 個點 ＝ kang 看到的楔形', b.moved, 2);
+  }
+
+  {
+    /** ⑧ 半圈（中間斷掉）→ 擋，⭐ 這一項才是「選取不連續」真正的樣子 */
     const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
     const r = edit.slideEdges(mesh, hes.slice(0, 2), 5, { mode: 'cm' });
     ok('★ 只選半圈 → 擋下來', !r.ok);
