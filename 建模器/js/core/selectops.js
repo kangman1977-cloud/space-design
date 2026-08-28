@@ -195,13 +195,33 @@ export function edgeLoop(mesh, he0, opt = {}) {
  * （日誌待辦記著這個限制，刪除面已經因此被擋掉一種情形）。
  * → 這裡改用**沿共用頂點的連通分量**分組，不依賴那個串接。
  *
+ * ── ⭐ `loops`：同一趟順便把每個洞**串成有序的環**（2026-08-28 加）───
+ * **⛔ 這不是第二支走訪，是同一組結果的第二種讀法** ——
+ * 分組本來就走過一遍，串環只是把那一組排出順序。
+ * 〔坑第 31 條：與其讓兩條路對齊，不如只留一條〕
+ *
+ * **⛔ 不用 `mesh._buildBoundaryLoops()` 串好的 `next`**，理由跟上面那則
+ * 分組同一條：那一支用 `Map<頂點id, 邊界半邊>`，**一個頂點只放得下一條**。
+ *
+ * 🔴 **`hes` 裡存的是「有面的那一條」半邊，⛔ 不是 face 為 null 的那條**
+ * （`mesh.edges()` 回 id 較小的，而邊界半邊是後補的、id 比較大）。
+ * 【實證 2026-08-28】方塊刪掉頂面 → 4 條全部 `he.face` 有值，
+ * 而且 `v→to` 首尾相接（57→58→64→63→57），**串得出一個 4 條的環**。
+ * ⭐ 所以繞向是「繞著那幾個面走」的方向，⛔ 不必另外決定要走哪一邊。
+ *
+ * ⚠ **串不出來的那一組回 `null`，⛔ 不硬湊** ——
+ * 一個頂點上接了三條以上邊界邊（洞在那裡捏成一點）時，
+ * 隨便挑一條會串出扭曲的環。呼叫端看到 `null` 就擋下來說明原因。
+ *
  * @param {Mesh} mesh
- * @returns {{hes:HalfEdge[], holes:number, biggest:number}}
+ * @returns {{hes:HalfEdge[], holes:number, biggest:number,
+ *            loops:Array<HalfEdge[]|null>}}
  *          `hes` 每條邊只出現一次　`holes` 幾個洞
  *          `biggest` 最大那個洞有幾條邊
+ *          `loops` 每個洞一個**有序**的環（`hes` 的子集，⛔ 串不出來的是 `null`）
  */
 export function boundaryEdges(mesh) {
-  const out = { hes: [], holes: 0, biggest: 0, nonManifold: 0 };
+  const out = { hes: [], holes: 0, biggest: 0, nonManifold: 0, loops: [] };
   if (!mesh) return out;
 
   /**
@@ -241,12 +261,14 @@ export function boundaryEdges(mesh) {
     if (seen.has(i)) continue;
     out.holes++;
     let size = 0;
+    const group = [];
     const stack = [i];
     seen.add(i);
     while (stack.length) {
       const cur = stack.pop();
       size++;
       const he = out.hes[cur];
+      group.push(he);
       for (const v of [he.v, he.to]) {
         for (const nb of byVert.get(v.id) || []) {
           if (!seen.has(nb)) { seen.add(nb); stack.push(nb); }
@@ -254,8 +276,37 @@ export function boundaryEdges(mesh) {
       }
     }
     out.biggest = Math.max(out.biggest, size);
+    out.loops.push(orderLoop(group));
   }
   return out;
+}
+
+/**
+ * 把一組邊界半邊排成有序的環：沿 `v → to` 一直走，回到起點為止。
+ *
+ * ⚠ **⛔ 走不完就回 `null`，不回一段殘缺的鏈** ——
+ * 呼叫端拿到半條環會以為它是完整的，而**畫面上看不出來**。
+ *
+ * 兩種走不完的情形，兩種都回 `null`：
+ * **① 岔路**（一個起點有兩條以上）＝ 洞在那個頂點捏成一點；
+ * **② 沒走回起點**（斷開）。
+ */
+function orderLoop(group) {
+  if (group.length < 3) return null;
+  const byStart = new Map();
+  for (const he of group) {
+    if (byStart.has(he.v.id)) return null;          // ① 岔路
+    byStart.set(he.v.id, he);
+  }
+  const loop = [group[0]];
+  let cur = group[0];
+  while (loop.length < group.length) {
+    const nx = byStart.get(cur.to.id);
+    if (!nx || loop.includes(nx)) return null;      // ② 斷開／提早繞回來
+    loop.push(nx);
+    cur = nx;
+  }
+  return loop[loop.length - 1].to.id === loop[0].v.id ? loop : null;
 }
 
 /**

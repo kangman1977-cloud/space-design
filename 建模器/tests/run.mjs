@@ -6146,6 +6146,142 @@ section('刪除面 ＋ 補洞（一對）');
   }
 }
 
+section('橋接邊迴圈：兩個洞 → 一段管');
+
+/**
+ * 🔴 **這一組守的是繞向，⛔ 不是數學。**
+ *
+ * 橋接沒有任何新數學（一個頂點都不新增、一個座標都不動），
+ * **唯一會錯的地方就是那 32 片側牆的點該照什麼順序排** ——
+ * 而排錯了**形狀在畫面上看起來還是一根管**，只有 χ 跟「封不封閉」抓得到。
+ *
+ * ⚠ **第一版真的排錯了**（2026-08-28，照抄 `extrudeFace()` 的 `(a,b,b',a')`）：
+ * χ **−62**、不封閉。病因是 `boundaryEdges()` 回的是**有面的那一條**半邊，
+ * 新面跟它同方向就是「兩個面在同一條邊上走同方向」＝ 面貼反了。
+ * 〔鐵律一「同一個檔案裡的寫法不一定能照抄」的又一例〕
+ *
+ * ⭐ **邊數是這一組最好用的斷言**：接 n 片牆，每片只該長出 1 條新的
+ * 垂直邊 → **邊數正好 +n**。排錯的話是 +3n（每片的三條邊都沒接上）。
+ */
+{
+  const selectops = await import('../js/core/selectops.js');
+  const baked = (type, params) => {
+    const r = edit.mergeCoplanarFaces(buildPrim(type, params));
+    const m = r.ok ? r.mesh : buildPrim(type, params);
+    m.computeNormals();
+    return m;
+  };
+  const eCount = m => [...m.edges()].length;
+  const chiOf = m => m.validate().euler;
+
+  /** 把兩個網格併成一個 ＝ 使用者按「∪ 聯集」兩個沒碰到的東西 */
+  const combine = (a, b, dy) => {
+    const ia = a._vertIndex(), ib = b._vertIndex();
+    const pa = a.verts.map(v => v.p.clone());
+    const pb = b.verts.map(v => { const p = v.p.clone(); p.y += dy; return p; });
+    const fa = a.faces.map(f => a.faceVerts(f).map(v => ia.get(v.id)));
+    const fb = b.faces.map(f => b.faceVerts(f).map(v => ib.get(v.id) + pa.length));
+    const m = Mesh.fromFaceList([...pa, ...pb], [...fa, ...fb]);
+    m.computeNormals();
+    return m;
+  };
+  /** 刪掉 y 在某個高度的那個蓋子（蓋子 ＝ 點數超過 4 的面）*/
+  const openAt = (m, y) => {
+    const f = m.faces.find(ff => m.faceVerts(ff).length > 4
+      && Math.abs(m.faceVerts(ff)[0].p.y - y) < 1e-6);
+    const r = edit.deleteFaces(m, [{ kind: 'face', face: f }]);
+    r.mesh.computeNormals();
+    return r.mesh;
+  };
+  /** 兩根圓柱、相距 30，各開一個相對的口 */
+  const pipe = (r1, r2, seg1 = 32, seg2 = 32) => {
+    let m = combine(baked('cylinder', { r: r1, h: 70, seg: seg1 }),
+                    baked('cylinder', { r: r2, h: 70, seg: seg2 }), 100);
+    return openAt(openAt(m, 35), 65);
+  };
+  /** 32 邊形的面積（外接半徑 r）*/
+  const polyArea = r => 0.5 * 32 * r * r * Math.sin(2 * Math.PI / 32);
+
+  {
+    /** ① 🔴 **變徑管：主線案例，體積可以手算對答案。** */
+    const m = pipe(25, 15);
+    const b = selectops.boundaryEdges(m);
+    eq('★ 開了兩個口 → 剛好 2 個洞', b.holes, 2);
+    eq('★ 兩圈都串得成環，各 32 條', b.loops.map(l => l && l.length).join(','), '32,32');
+
+    const eBefore = eCount(m);
+    const r = edit.bridgeLoops(m, b.loops[0], b.loops[1], { turn: 0 });
+    ok('橋接成功', r.ok, r.reason || '');
+    eq('★ 接了 32 片側牆', r.walls, 32);
+    eq('★★ 一個頂點都沒新增（＝「既有頂點保持原索引」天生滿足）',
+       r.mesh.verts.length, m.verts.length);
+    eq('★★ 🔴 邊數正好 +32（排錯的話是 +96）', eCount(r.mesh) - eBefore, 32);
+    eq('★★ χ 回到 2', chiOf(r.mesh), 2);
+    ok('★★ 表面變成封閉的（兩塊接成一塊）', r.nowClosed);
+    ok('　　結構沒問題', r.mesh.validate().ok);
+
+    /**
+     * ★★ **體積對答案：32 邊柱 ＋ 32 邊柱 ＋ 錐台。**
+     * ⚠ **容許值放到 1e-7 是有理由的，⛔ 不是隨便放寬** ——
+     * 【實證】**單獨一根還沒被動過的圓柱本身就差 3.8e-3**
+     * （`buildPrim` 的頂點半徑是 24.999999994 ～ 25.000000622）。
+     * 🔴 **橋接一格誤差都沒有引入**，那個差是它繼承來的。
+     */
+    const A1 = polyArea(25), A2 = polyArea(15);
+    rel('★★ 體積對得上手算（32邊柱 + 32邊柱 + 錐台）',
+        r.mesh.volume(), A1 * 70 + A2 * 70 + 10 * (A1 + A2 + Math.sqrt(A1 * A2)));
+  }
+
+  {
+    /** ② `轉幾格`：kang 2026-08-28 拍板的那個欄位，⛔ 不猜、把選擇權給他 */
+    const mk = turn => {
+      const m = pipe(25, 15);
+      const b = selectops.boundaryEdges(m);
+      return edit.bridgeLoops(m, b.loops[0], b.loops[1], { turn });
+    };
+    const r0 = mk(0), r1 = mk(1), r32 = mk(32);
+    ok('轉一格也接得起來，χ 仍然是 2', r1.ok && chiOf(r1.mesh) === 2);
+    ok('★ 轉一格形狀真的不一樣（＝ 那個欄位有作用）',
+       Math.abs(r0.mesh.volume() - r1.mesh.volume()) > 1,
+       `${r0.mesh.volume().toFixed(1)} vs ${r1.mesh.volume().toFixed(1)}`);
+    rel('★★ 轉一整圈（32 格）＝ 沒轉', r32.mesh.volume(), r0.mesh.volume(), 1e-12);
+  }
+
+  {
+    /**
+     * ③ 🔴 **三道擋關，每一道都要「講得出原因 ＋ 指得出出路」**
+     * 〔坑第 34 條：⛔ 不要指一條不存在的退路 —— 這三條出路都是真的按鈕〕
+     */
+    const m1 = pipe(25, 15, 32, 16);
+    const b1 = selectops.boundaryEdges(m1);
+    const bad1 = edit.bridgeLoops(m1, b1.loops[0], b1.loops[1], {});
+    ok('★ 兩圈點數不同 → 擋下來', !bad1.ok);
+    ok('★★ 　而且指出路「邊上加點」', !bad1.ok && /邊上加點/.test(bad1.reason || ''),
+       bad1.reason);
+    ok('　　訊息裡有實際的數字（32 對 16）', /32/.test(bad1.reason || '') && /16/.test(bad1.reason || ''));
+
+    /**
+     * ★★ 🔴 **兩圈之間本來就有面** —— 這一道是實測掉出來的，⛔ 前三道漏了它。
+     * 拿「刪掉上下蓋的圓柱」接自己的兩端：中間隔著的正是那 32 片側牆，
+     * 新接上去的跟它們一模一樣 → **`cleanRebuild()` 會安靜地清光**，
+     * 使用者看到的是「**按了沒反應**」（坑第 21 條）。
+     */
+    let cyl = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    cyl = openAt(openAt(cyl, 35), -35);
+    const b2 = selectops.boundaryEdges(cyl);
+    const bad2 = edit.bridgeLoops(cyl, b2.loops[0], b2.loops[1], {});
+    ok('★★ 兩圈之間已經有面 → 擋下來（⛔ 不可以安靜地沒反應）', !bad2.ok, bad2.reason);
+    ok('　　而且講得出中間隔著幾片', !bad2.ok && /32/.test(bad2.reason || ''));
+  }
+
+  {
+    /** ④ `boundaryEdges().loops`：串不出環就回 `null`，⛔ 不回半條 */
+    const m = baked('box', { w: 60, d: 45, h: 40 });
+    const b = selectops.boundaryEdges(m);
+    eq('★ 沒有洞的物件：0 個洞、0 個環', `${b.holes}/${b.loops.length}`, '0/0');
+  }
+}
+
 section('導角（Bevel，單段）：內縮 ＋ 加面');
 
 /**

@@ -3259,6 +3259,166 @@ export function fillHoles(mesh) {
 }
 
 /**
+ * 🔴 **橋接邊迴圈：兩個洞 → 中間長出一段管**（過渡段、接頭、變徑管）。
+ *
+ * ── 🔴🔴 它 ⛔ 不從「選兩圈邊」進來，⛔ 而日誌原本是那樣寫的 ────
+ * 【實證 2026-08-28】那條路走不通，兩道牆：
+ *
+ * | 障礙 | 出處 |
+ * |---|---|
+ * | **洞的邊緣一條都選不到** | `seam.js` `isMarkable()` 第一行擋掉邊界邊。沙箱：方塊刪頂面 → 邊界邊 **4 條**、`markableEdges()` 給 **0 條** |
+ * | **跨物件不能一起選** | `select.js` 那段「跨物件也不行」（變換寫回的是某一個網格的頂點） |
+ *
+ * ⭐ **正解是⛔ 不進選取，直接問網格「你有幾個洞」** ——
+ * `selectops.js` 的 `boundaryEdges()` **早就把洞分好組了**，
+ * 2026-08-28 讓它順便把每組**串成有序的環**（`loops`）。
+ * 〔跟「破洞在哪裡」那顆 `指出來` **同一個骨架**：不進選取，只問網格〕
+ *
+ * ⭐ 跨物件那道牆也跟著繞掉了：兩根管子先按 **`∪ 聯集`** 合成一個物件
+ * （結構分析會說「分開的實體」，那是正常的），再按 `橋接`。
+ *
+ * ── ⭐ 側牆的繞向 ⛔ 不必重想 ──────────────────────────
+ * 直接套 `extrudeFace()` 那個 **`(a, b, b', a')`**（它踩過「體積 −500000」
+ * 那個坑，已經驗過）—— 只是 `b'` `a'` ⛔ 不是新頂點，是**另一圈的既有點**。
+ * 🔴 **橋接一個頂點都不新增**，所以「既有頂點保持原索引」這個契約天生滿足。
+ *
+ * 🔴🔴 **⛔ 但 `(a, b, …)` 那個順序 ⛔ 不可以照抄，要整個反過來** ——
+ * 【實證 2026-08-28，第一版就死在這裡】
+ *
+ * > **`boundaryEdges()` 回的是「有面的那一條」半邊**，方向繞著它旁邊
+ * > 那個面走 —— 所以新面用同一個方向的話，**兩個面在同一條邊上走同方向**
+ * > ＝ 面貼反了，`fromFaceList()` 配不出 twin。
+ *
+ * ⚠ **擠出那一支不會遇到這件事**：它的蓋子被移到新位置了，
+ * 原本那條邊的另一側換成新頂點，所以同方向反而是對的。
+ * 🔴 **「同一個檔案裡的寫法不一定能照抄」的又一例。**
+ *
+ * | | 第一版（照抄擠出） | 現在 |
+ * |---|---|---|
+ * | 面 | `[A[i], A[i+1], g(i+1), g(i)]` | **`[A[i+1], A[i], g(i), g(i+1)]`** |
+ * | χ | **−62** ❌ | **2** ✅ |
+ * | 封閉 | ❌ | ✅ |
+ * | 邊 | 192 → **288**（每片牆 3 條新邊 ＝ 沒接上） | 192 → **224**（每片牆 1 條）|
+ *
+ * ⭐ **⛔ 不必相信我，那個邊數自己把答案驗出來了**（鐵律三）：
+ * 接 32 片牆，每片只該長出 1 條新的垂直邊 → **正好 +32**。
+ *
+ * ── ⭐ 對答案：兩根圓柱接成變徑管 ────────────────────
+ * r25 h70 ＋ r15 h70（相距 30）→ 網格體積 **223963.695**，
+ * 手算「32 邊柱 ＋ 32 邊柱 ＋ 錐台」**223963.690**。
+ * ⚠ **那個 0.005 的差 ⛔ 不是橋接造成的，也 ⛔ 不是誤差要補回去**（坑第 25、26 條）——
+ * 【實證】**單獨一根還沒被動過的圓柱就差 3.80e-3 了**，
+ * 病因是 `buildPrim` 的頂點半徑是 24.999999994 ～ 25.000000622。
+ * 🔴 **橋接一格誤差都沒有引入：頂點一個都沒新增，座標一個都沒動。**
+ *
+ * ── ⚠ 兩題 kang 2026-08-28 拍板，⛔ 不要自己改 ──────────
+ * **① 配對**：預設**最近的點對最近的點**（直筒／變徑管），
+ * 旁邊給一個 **`轉幾格`** 數字欄（預設 0）想扭轉再打
+ * —— 跟 `環切 ＋ 刀數`、`導角 ＋ 段數` 同一個作風，**⛔ 不猜**。
+ * **② 兩圈點數不同**：**擋下來**，並指出路「先用 `邊上加點` 把少的那圈補齊」。
+ * ⛔ 不做自動分配 —— 那要自己猜分配方式（坑第 24 條）。
+ * **③ 洞不是剛好 2 個**：**擋下來**，指去 `補洞`（kang 2026-08-28 選的甲案）。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} loopA 有序的邊界環（`boundaryEdges().loops` 的一項）
+ * @param {HalfEdge[]} loopB 另一個
+ * @param {{turn?:number}} opt `turn` ＝ 轉幾格，預設 0
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:number[],
+ *            walls?:number, n?:number, turn?:number, nowClosed?:boolean,
+ *            fakeSeams?:number}}
+ */
+export function bridgeLoops(mesh, loopA, loopB, opt = {}) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(loopA) || !Array.isArray(loopB) || !loopA.length || !loopB.length) {
+    return { ok: false, reason: '找不到兩圈完整的洞的邊緣' };
+  }
+  const n = loopA.length;
+  if (loopB.length !== n) {
+    return {
+      ok: false,
+      reason: `兩圈的點數要一樣（現在是 ${n} 對 ${loopB.length}）——`
+            + '請先用「邊上加點」把少的那一圈補到一樣多'
+    };
+  }
+  if (n < 3) return { ok: false, reason: '一圈至少要 3 個點才接得成管' };
+
+  const A = loopA.map(he => he.v);
+  const B = loopB.map(he => he.v);
+  if (A.some(v => B.includes(v))) {
+    return { ok: false, reason: '這兩圈共用了頂點，接起來會產生壞掉的網格' };
+  }
+
+  /**
+   * 配對：找 `B` 裡離 `A[0]` 最近的那個點。
+   * ⚠ 只比一個點就夠了 —— 兩圈各自的順序是固定的，
+   * 對齊一個點等於對齊整圈（剩下的自由度只有 `turn`）。
+   */
+  let j0 = 0, best = Infinity;
+  for (let j = 0; j < n; j++) {
+    const d = A[0].p.distanceToSquared(B[j].p);
+    if (d < best) { best = d; j0 = j; }
+  }
+  const turn = Math.round(opt.turn || 0);
+  const k = ((j0 + turn) % n + n) % n;
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+
+  /** 🔴 反向對應：`A[i]` 配 `B[(k − i) mod n]`（見上方那則繞向的實證）*/
+  const g = i => B[((k - i) % n + n) % n];
+  let walls = 0;
+  for (let i = 0; i < n; i++) {
+    faces.push([
+      vi.get(A[(i + 1) % n].id),
+      vi.get(A[i].id),
+      vi.get(g(i).id),
+      vi.get(g(i + 1).id)
+    ]);
+    walls++;
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `接出壞掉的網格：${pre.fatal[0]}` };
+  /**
+   * 🔴🔴 **第四道擋關：兩圈之間本來就有面。**
+   *
+   * ⚠ **這一道是實測掉出來的，⛔ 三道擋關漏了它**（2026-08-28）：
+   * 拿一根「刪掉上下蓋的圓柱」去接自己的兩端 —— 兩圈中間隔著的正是
+   * 那 32 片側牆，**新接上去的 32 片跟它們一模一樣**。
+   * 【實證】`preflightRebuild` 說 **32 個新面全部是重複面**，
+   * 而重複面在 `preflight` 裡歸類成 `fixable` → `cleanRebuild()` 會
+   * **安靜地把它們清光** → 使用者看到的是「**按了沒反應**」（坑第 21 條）。
+   *
+   * ⭐ **借 `dupFaces`，⛔ 不自己再寫一份「什麼算重複」**
+   * （跟 `faceFromVerts()` 同一招，坑第 31 條）。
+   */
+  const dupNew = pre.dupFaces.filter(i => i >= faces.length - walls).length;
+  if (dupNew) {
+    return {
+      ok: false,
+      reason: `這兩個洞已經接在一起了（中間隔著 ${dupNew} 片面）——`
+            + '橋接是拿來接兩段還沒相連的管，例如兩根圓柱先按「∪ 聯集」合成一個物件之後'
+    };
+  }
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, clean.remap);
+  /**
+   * 🔴 兩圈原本是邊界，身上有自動標的 CUT；現在它們變成內部邊了。
+   * ⛔ 不清的話**畫面上會憑空多出兩圈分片線**（跟 `fillHoles()` 同一件事）。
+   */
+  const fakeSeams = clearBoundaryOnlySeams(mesh, out, clean.remap);
+
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    walls, n, turn, nowClosed: out.isClosed(), fakeSeams
+  };
+}
+
+/**
  * 🔴 **點連成面：選好幾個點，照選取順序圍出一個面**（＝ Blender 的 `F`）。
  *
  * ── 它跟現有的兩顆按鈕分別差在哪 ──────────────────────

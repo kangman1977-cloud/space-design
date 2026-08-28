@@ -31,13 +31,13 @@ import { faceFrame, edgeFrame, vertexPoint,
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
-         deleteFaces, fillHoles, bisect, worldAxisPlane, connectVertsPath,
+         deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo, loopFaces } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -409,6 +409,7 @@ $('inset').onclick = () => insetSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
+$('bridge').onclick = () => bridgeOnSelected();
 $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
 $('knifeCancel').onclick = () => cancelKnifeMode();
@@ -2589,6 +2590,60 @@ function fillHolesOnSelected() {
 }
 
 /**
+ * 🔴 **橋接：物件上剛好兩個洞 → 中間長出一段管。**
+ *
+ * ── ⚠ 它 ⛔ 不從選取進來，跟 `補洞` 同一條理由 ────────────
+ * **洞的邊緣點不到**（`nearestMarkableEdge()` 明文排除邊界邊）——
+ * 而那正好就是要接的東西。所以做成「**問整個物件**」。
+ * ⚠ **不需要進編輯模式。**
+ *
+ * ── 🔴 洞不是剛好兩個就擋下來（kang 2026-08-28 選的甲案）──────
+ * ⛔ 不做「自動挑最近的兩個」——「**結果不唯一就不要猜**」（坑第 24 條），
+ * 而 `補洞` 這條出路是**真的存在的**，所以講得出來要他怎麼辦。
+ */
+function bridgeOnSelected() {
+  const obj = sel.active;
+  if (!obj) { toast('先選一個物件', true); return; }
+  if (obj.isParametric) {
+    toast('參數物件接了也留不住（開檔會照參數重新生成）。請先按「轉成可編輯網格」', true);
+    return;
+  }
+  const mesh = obj.mesh();
+  const b = boundaryEdges(mesh);
+  if (b.holes !== 2) {
+    toast(b.holes === 0
+      ? '這個物件沒有洞 —— 橋接是把兩個洞接成一段管。先用「刪除面」各開一個口'
+      : `橋接一次只接兩個洞，這個物件有 ${b.holes} 個 —— 請先用「補洞」把不要的補掉`);
+    return;
+  }
+  if (!b.loops[0] || !b.loops[1]) {
+    toast('有一個洞的邊緣繞不回來（它在某個頂點上捏成一點），接不了');
+    return;
+  }
+
+  const before = mesh.volume();
+  const turn = Math.round(+$('bridgeTurn').value || 0);
+  const r = bridgeLoops(mesh, b.loops[0], b.loops[1], { turn });
+  if (!r.ok) { toast(r.reason); return; }        // 藍色：這是說明，不是錯誤
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(turn ? `橋接（轉 ${turn} 格）` : '橋接');
+  panel.refresh();
+  updateBar();
+
+  const bits = [`已接上 ${r.walls} 片側牆（兩圈各 ${r.n} 個點）`];
+  if (turn) bits.push(`轉了 ${turn} 格`);
+  if (r.nowClosed) bits.push('表面現在是封閉的');
+  if (r.fakeSeams) bits.push(`順手清掉 ${r.fakeSeams} 條假的分片線（那是洞的邊界自動標的）`);
+  /** 🔴 體積講出來 —— 兩個數字對得起來，接錯了會自己現形（鐵律三）*/
+  bits.push(`體積 ${before.toFixed(2)} → ${r.mesh.volume().toFixed(2)} cm³`);
+  toast(bits.join('　'));
+}
+
+/**
  * 🔴 修法向：把整個物件的面朝向重算成「一致而且朝外」。
  *
  * ── 為什麼這顆按鈕該存在 ────────────────────────────────
@@ -2943,6 +2998,20 @@ function updateBar() {
     : (sel.active.isParametric
         ? '參數物件補了也留不住（開檔會照參數重新生成）。要補請先按「轉成可編輯網格」'
         : '把這個物件上所有的洞補起來。⚠ 板件（一張沒有厚度的面）按了會被封起來，那時體積會是 0');
+
+  /**
+   * 橋接：跟 `補洞` 同一條規則（不必進編輯模式、非參數物件就給按）。
+   * 🔴 **⛔ 不在這裡先數洞** —— 亮不亮只看「按不按得動」，
+   * 「有幾個洞」是按下去之後才講的話。⚠ 每次 `updateBar()` 都去掃一遍
+   * 邊界邊，那是**寫進每幀迴圈、而且會隨模型大小成長**的東西（坑第 22 條）。
+   */
+  $('bridge').disabled = !canFill;
+  $('bridgeTurn').disabled = !canFill;
+  $('bridge').title = !sel.active
+    ? '先選一個物件'
+    : (sel.active.isParametric
+        ? '參數物件接了也留不住（開檔會照參數重新生成）。要接請先按「轉成可編輯網格」'
+        : '把這個物件上剛好兩個洞接成一段管。⚠ 兩根管子請先按「∪ 聯集」合成一個物件，再各刪掉一個蓋子');
 
   $('flatten').disabled = !face;
   $('flatten').title = face
