@@ -5685,6 +5685,147 @@ section('環切：切下去之後的網格');
   eq('　　警告數也一樣', after.warnings.length, before.warnings.length);
 }
 
+section('沿面滑動邊（Edge Slide）：環切的搭檔');
+
+/**
+ * 🔴 **這一組守的是「方向」，⛔ 不是位移量。**
+ *
+ * 位移量是一行減法，⛔ 不會錯；**會錯的是「往哪一側」** ——
+ * 而那個錯**在方塊上看不出來**（兩側對稱），只有回報文字會露餡。
+ *
+ * ⚠ **第一版真的錯了，而且測試差點放它過關**（2026-08-28）：
+ * 我拿「所有軌道向量的和」當共同方向，而每個點**一條往上、一條往下**，
+ * Y 分量**互相抵消** → 那個和永遠 ≈ 0 → 退化鏈一路掉到 Z。
+ * 🔴 **然後方塊照樣通過**（軌道在 Z 上的投影都是 0，`>=` 於是永遠挑
+ * `rails[0]`，**而它剛好是往上那條**）—— **「碰巧通過」比失敗危險。**
+ * ⭐ 正解是用**兩條軌道的差**（`d0 − d1`），⛔ 不是和 —— 差不會抵消。
+ */
+{
+  /** 環切一圈，回「那一圈的半邊」——⭐ 跟 `main.js` 選起來的是同一組 */
+  const cutRing = (type, params, tweak) => {
+    let m = baked(type, params);
+    if (tweak) { tweak(m); m.computeNormals(); }
+    const he0 = [...m.edges()].find(h => h.face && h.twin && h.twin.face
+      && Math.abs(h.v.p.y - h.to.p.y) > 1e-6);
+    const r = edit.loopCut(m, he0, { cuts: 1 });
+    const out = r.mesh; out.computeNormals();
+    const vi = out._vertIndex();
+    const k = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+    const want = new Set(r.newEdges.map(([a, b]) => k(a, b)));
+    const hes = [...out.edges()]
+      .filter(h => want.has(k(vi.get(h.v.id), vi.get(h.to.id))));
+    return { mesh: out, hes };
+  };
+  const ysOf = hes => hes.flatMap(h => [h.v.p.y, h.to.p.y]);
+
+  {
+    /** ① 滑 5 公分：Y 精確 +5，而且**拓撲一格都沒動** */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const before = `${mesh.verts.length}/${edgeCount(mesh)}/${mesh.faces.length}`;
+    const y0 = ysOf(hes)[0];
+    const r = edit.slideEdges(mesh, hes, 5, { mode: 'cm' });
+    ok('滑動成功', r.ok, r.reason || '');
+    eq('★ 動了 4 個點', r.moved, 4);
+    ok('★★ 那一圈的 Y 精確 +5',
+       ysOf(hes).every(y => Math.abs(y - (y0 + 5)) < 1e-9), `${y0} → ${ysOf(hes)[0]}`);
+    eq('★★ 🔴 拓撲完全沒變（它只動座標，⛔ 不改拓撲）',
+       `${mesh.verts.length}/${edgeCount(mesh)}/${mesh.faces.length}`, before);
+    eq('★★ 🔴 方向回報「上」（⛔ 第一版這裡是「＋Z」）', r.dir, '上');
+  }
+
+  {
+    /** ② 100% 精確落在端點 —— 那是「％」這個模式的定義 */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const top = Math.max(...mesh.verts.map(v => v.p.y));
+    edit.slideEdges(mesh, hes, 100, { mode: 'pct' });
+    ok('★★ 滑 100% → 精確落在軌道端點上',
+       ysOf(hes).every(y => Math.abs(y - top) < 1e-9), `${ysOf(hes)[0]} vs ${top}`);
+  }
+
+  {
+    /**
+     * ③ ⭐ **對稱的形狀上，兩種模式算出同一個答案** ——
+     * 那是「它們只在被拉歪的形狀上才分岔」這句話的前半。
+     */
+    const A = cutRing('box', { w: 60, d: 45, h: 40 });
+    edit.slideEdges(A.mesh, A.hes, 50, { mode: 'pct' });
+    const B = cutRing('box', { w: 60, d: 45, h: 40 });
+    edit.slideEdges(B.mesh, B.hes, 10, { mode: 'cm' });      // 軌道 20 的一半
+    rel('★★ 等長軌道：50% 與 10 公分是同一個答案', A.hes[0].v.p.y, B.hes[0].v.p.y, 1e-12);
+  }
+
+  {
+    /**
+     * ④ 🔴🔴 **拉歪之後兩種模式分岔 —— 這一項就是「兩個都要給」的證據。**
+     * 〔kang 2026-08-28 拍板兩種單位都做，理由就是這個〕
+     * 把方塊一個角拉高 40 → 同一圈的軌道長度變成 40 / 20 / 20 / 20。
+     */
+    const bend = m => {
+      const top = Math.max(...m.verts.map(v => v.p.y));
+      m.verts.filter(v => Math.abs(v.p.y - top) < 1e-6)[0].p.y += 40;
+    };
+    const A = cutRing('box', { w: 60, d: 45, h: 40 }, bend);
+    edit.slideEdges(A.mesh, A.hes, 50, { mode: 'pct' });
+    const B = cutRing('box', { w: 60, d: 45, h: 40 }, bend);
+    edit.slideEdges(B.mesh, B.hes, 10, { mode: 'cm' });
+    const ya = ysOf(A.hes).map(y => y.toFixed(2)).sort().join(',');
+    const yb = ysOf(B.hes).map(y => y.toFixed(2)).sort().join(',');
+    ok('★★ 🔴 拉歪的形狀上，兩種模式算出不同的答案', ya !== yb);
+    ok('★★ 　 ％ 維持等比例（軌道 40 的那個點走 20）',
+       ysOf(A.hes).some(y => Math.abs(y - 40) < 1e-9), ya);
+    ok('★★ 　 公分維持等距離（每個點都走 10）',
+       ysOf(B.hes).some(y => Math.abs(y - 30) < 1e-9), yb);
+  }
+
+  {
+    /** ⑤ 來回：+5 再 −5 精確還原 —— ⭐ 順便驗「負值走的是另一條軌道」 */
+    const { mesh, hes } = cutRing('cylinder', { r: 25, h: 70, seg: 32 });
+    const snap = mesh.verts.map(v => v.p.clone());
+    edit.slideEdges(mesh, hes, 5, { mode: 'cm' });
+    edit.slideEdges(mesh, hes, -5, { mode: 'cm' });
+    const worst = Math.max(...mesh.verts.map((v, i) => v.p.distanceTo(snap[i])));
+    ok('★★ 滑 +5 再滑 −5 → 座標精確還原', worst < 1e-9, `最大偏差 ${worst.toExponential(2)}`);
+  }
+
+  {
+    /** ⑥ 滑過頭：**夾住並回報**，⛔ 不整個擋掉（照導角 `clamped` 的先例）*/
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const top = Math.max(...mesh.verts.map(v => v.p.y));
+    const r = edit.slideEdges(mesh, hes, 500, { mode: 'cm' });
+    ok('★ 滑過頭 → 夾住，⛔ 不是擋下來', r.ok);
+    eq('★ 　 而且講得出幾個點滑到底', r.clamped, 4);
+    rel('★ 　 也講得出最多能滑多少', r.maxCm, 20);
+    ok('★★ 　 真的夾在端點上', hes.every(h => Math.abs(h.v.p.y - top) < 1e-9));
+  }
+
+  {
+    /** ⑦ 沒選一整圈 → 擋下來，而且**指得出出路** */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    const r = edit.slideEdges(mesh, hes.slice(0, 2), 5, { mode: 'cm' });
+    ok('★ 只選半圈 → 擋下來', !r.ok);
+    ok('★★ 　 而且指出路（選一圈／環切）',
+       !r.ok && /選一圈|環切/.test(r.reason || ''), r.reason);
+  }
+
+  {
+    /**
+     * ⑧ 🔴 **退化鏈真的要被走到過** ——
+     * 把方塊繞 X 轉 90 度，軌道就沿 Z 了，Y 分不出來。
+     * ⚠ **⛔ 這一項不是湊數**：第一版的 bug 就藏在「Y 分不出來」那條路上，
+     * 而所有站著的形狀都走不到它。
+     */
+    const { mesh, hes } = cutRing('box', { w: 60, d: 45, h: 40 });
+    for (const v of mesh.verts) { const y = v.p.y, z = v.p.z; v.p.y = z; v.p.z = -y; }
+    mesh.computeNormals();
+    const z0 = hes[0].v.p.z;
+    const r = edit.slideEdges(mesh, hes, 5, { mode: 'cm' });
+    eq('★★ Y 分不出來時，退化鏈走到 ＋Z', r.dir, '＋Z');
+    ok('★★ 　 而且整圈一致（⛔ 沒有扭掉）',
+       new Set(hes.flatMap(h => [h.v.p.z.toFixed(9), h.to.p.z.toFixed(9)])).size === 1);
+    rel('　 位移仍然精確', hes[0].v.p.z - z0, 5);
+  }
+}
+
 section('內縮（Inset）：加線 × 面的內縮輪廓');
 
 /**

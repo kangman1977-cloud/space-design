@@ -29,7 +29,7 @@ import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
-         flattenElements, mergeCoplanarFaces, loopCut, edgeRing,
+         flattenElements, mergeCoplanarFaces, loopCut, slideEdges, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
@@ -399,6 +399,21 @@ $('extrude').onclick = () => extrudeSelected();
 $('flatten').onclick = () => flattenSelected();
 $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
+$('slide').onclick = () => slideSelected();
+/** 單顆切換：按鈕上的字就是目前的單位（⛔ 不用 class="on"，見 index.html 那則） */
+$('slideUnit').onclick = () => {
+  const b = $('slideUnit');
+  const toPct = b.dataset.u === 'cm';
+  b.dataset.u = toPct ? 'pct' : 'cm';
+  b.textContent = toPct ? '％' : '公分';
+  /**
+   * ⚠ 換單位時把數字也換成該單位的合理預設，⛔ 不要留著上一個單位的值 ——
+   * 「1」在公分是 1 公分、在 ％ 是 1%（幾乎看不出動靜），
+   * 使用者會以為按鈕壞了（坑第 21 條）。
+   */
+  $('slideAmt').value = toPct ? 25 : 1;
+  $('slideAmt').step = toPct ? 5 : 0.5;
+};
 $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
 $('selRingFaces').onclick = () => selectFaceRingFromEdge();
@@ -1465,6 +1480,59 @@ function toCircleSelected() {
  * 而且**半塊面點得到、拉得動**（`planarRegions()` 在 hard 邊斷開）——
  * 這三件事任何一件沒做，環切就是一顆按了什麼都不會發生的按鈕（坑第 21 條）。
  */
+/**
+ * 🔴 **沿面滑動：把選到的那一圈邊沿著表面挪位置**（＝ Blender 的 Edge Slide）。
+ *
+ * ── 它跟「拉點線面」差在哪（＝ 這顆按鈕存在的唯一理由）──────
+ * 拉邊是往一個方向硬拉，**會離開表面**；
+ * 滑動是沿著兩側原本就有的那條邊走，**永遠貼著表面**。
+ *
+ * ⚠ **它 ⛔ 不改拓撲**，所以 ⛔ 不必 `setMesh()` 換網格 ——
+ * `slideEdges()` 就地改座標。但**形狀變了**，所以照樣要重算與 commit。
+ *
+ * 🔴 **選取刻意不動** —— 滑完那一圈還選著，使用者可以接著再滑一次
+ * （打 5 再打 5 ＝ 走 10）。⭐ 這也是 `轉幾格`／`刀數` 那種「調到滿意」的作風。
+ */
+function slideSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選一圈邊，再按「沿面滑動」（可以用「選一圈」或先按「環切」）', true);
+    return;
+  }
+  const mode = $('slideUnit').dataset.u === 'pct' ? 'pct' : 'cm';
+  const amt = +$('slideAmt').value;
+  if (!Number.isFinite(amt) || amt === 0) {
+    toast('滑動距離不能是 0', true);
+    return;
+  }
+
+  const obj = el.obj;
+  const mesh = obj.mesh();
+  const hes = sel.editSels.filter(e => e.kind === 'edge' && e.he).map(e => e.he);
+
+  const r = slideEdges(mesh, hes, amt, { mode });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  refreshAfterEdit(mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(mode === 'pct' ? `沿面滑動 ${amt}%` : `沿面滑動 ${amt} cm`);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /**
+   * 🔴 **一定要講「實際往哪邊」** —— 打數字沒有滑鼠可以指方向，
+   * 使用者事先猜不到正值是哪一側。⭐ 看到不對就打負數，⛔ 不必重猜。
+   */
+  const bits = [`${r.moved} 個點沿著表面往「${r.dir}」滑了 ${r.appliedCm.toFixed(2)} cm`];
+  if (mode === 'pct') bits.push(`（${amt}%）`);
+  if (r.clamped) {
+    bits.push(`⚠ 有 ${r.clamped} 個點滑到底了（最多只能滑 ${r.maxCm.toFixed(2)} cm）`);
+  }
+  toast(bits.join('　'));
+}
+
 function loopCutSelected() {
   const el = sel.editSel;
   if (!el || el.kind !== 'edge') {
@@ -3060,6 +3128,30 @@ function updateBar() {
              && sel.editCount === 1;
   $('loopCut').disabled = !edge1;
   $('loopCutN').disabled = !edge1;
+  /**
+   * 沿面滑動：**選到邊就給按**（⚠ 跟環切「一次只能一條」相反）——
+   * 它吃的是**一整圈**，一條邊根本滑不動。
+   * 🔴 **⛔ 不在這裡先檢查「是不是一整圈」** —— 那要走訪每個點的鄰邊，
+   * 是 O(選取×價數)，而 `updateBar()` 每次選取變動都會跑（坑第 22 條）。
+   * ⭐ 按下去才檢查，擋下來的訊息本來就講得出原因。
+   */
+  /**
+   * ⚠ **⛔ 這個變數 ⛔ 不可以叫 `edgeAny`** —— 底下導角那一段已經用了那個名字，
+   * 而它們在**同一個函式作用域**裡。
+   * 🔴 【實證 2026-08-28】重複宣告 `const` 是 **SyntaxError**，
+   * 而 ES 模組遇到它會**整組拒絕執行** —— 畫面上的症狀是
+   * 「工具列在、CSS 也對，但一行 JS 都沒跑」，**⛔ 完全看不出是哪裡的錯**。
+   */
+  const slideOk = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
+  $('slide').disabled = !slideOk;
+  $('slideAmt').disabled = !slideOk;
+  $('slideUnit').disabled = !slideOk;
+  $('slide').title = slideOk
+    ? (sel.editCount === 1
+        ? '⚠ 只選了 1 條邊 —— 沿面滑動吃的是一整圈，先用「選一圈」把整圈選起來'
+        : `把選到的 ${sel.editCount} 條邊沿著表面挪位置，不會離開表面。正值往上，打負數往反方向`)
+    : (sel.editMode ? '先選一圈邊（用「選一圈」，或先按「環切」——切完那一圈會自動選中）'
+                    : '先按「拉點線面」進入編輯模式，再選一圈邊');
   /**
    * 導角：**選到邊就給按**（一條或好幾條都行）。
    * 跟環切「一次只能一條」不同 —— 相鄰的邊一起導才有角落，

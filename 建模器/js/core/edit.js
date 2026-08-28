@@ -1509,6 +1509,163 @@ export function loopCut(mesh, he0, opt = {}) {
 const ON_PLANE_CM = PLANAR_TOL_CM;
 
 /**
+ * 🔴 **沿面滑動邊：把選到的那一圈邊，沿著表面挪位置。**
+ *
+ * ── 它是 `環切` 的搭檔 ──────────────────────────────
+ * `外部參考-Blender編輯.md` 第 10.2 節寫著：
+ * > **「環切之後要挪切線的位置就是它。現在只能用『拉邊』硬拉，
+ * > 　會離開表面。」**
+ *
+ * ⭐ 流程天生接得上：`loopCut()` 回的 `newEdges` 已經被呼叫端選起來了，
+ * **環切完直接按這顆就能滑**。
+ *
+ * ── 🔴 軌道是唯一的，⛔ 這件事是實測的不是推的 ──────────
+ * 每個點的「軌道」＝ **不在選取那一圈上的鄰邊**。
+ * 【實證 2026-08-28】方塊／圓柱 seg32／圓錐台 seg16 環切一圈，
+ * **每個點的軌道條數一律是 2**（往上一段、往下一段）——
+ * ⭐ 所以「往哪滑」沒有猜的空間，⛔ 不撞坑第 24 條。
+ * ⚠ **不是 2 條就擋下來**（選到的不是一整圈、或形狀特殊），⛔ 不硬挑一條。
+ *
+ * ── 🔴 兩種「滑多少」，⛔ 而它們真的會分岔（kang 2026-08-28 拍板兩個都給）──
+ *
+ * | 模式 | 意思 |
+ * |---|---|
+ * | **`'cm'`** | 沿軌道走幾公分。⭐ 跟 `切一刀`／`導角寬度`／`內縮寬度` 同一個單位 |
+ * | **`'pct'`** | 走軌道長度的百分之幾，**100% ＝ 剛好到端點** |
+ *
+ * ⚠ **在方塊、圓柱那種對稱的東西上兩者完全一樣**（軌道長度都相同）——
+ * 【實證】把方塊一個角拉高 40，同一圈的軌道長度變成 **40 / 20 / 20 / 20**，
+ * 那時「滑 50%」那一圈**維持等比例**，「滑 5 公分」則**維持等距離**。
+ * 🔴 **⛔ 所以不可以只做一種然後說另一種是它的近似。**
+ *
+ * ── 正值往哪（打數字就一定要定義，⛔ Blender 是滑鼠決定的，我們沒有）──
+ * **正值 ＝ 往兩條軌道中「比較高」的那一端**（世界 Y 大的），
+ * Y 分不出來時退回 X、再退回 Z〔照 `elementBasis()` 那條退化鏈的作風〕。
+ * ⭐ **呼叫端要把實際往哪邊、滑了多少講出來** —— ⛔ 不要求使用者事先猜。
+ *
+ * ── 滑過頭：夾住，⛔ 不整個擋掉 ──────────────────────
+ * 打 50 公分而軌道只有 20 → 夾在端點並回報 `clamped`
+ * 〔照 `bevelEdges()` 那個 `clamped` 的先例：**滑到底本身是合法的結果**〕。
+ *
+ * ── ⚠ 它 ⛔ 不改拓撲 ────────────────────────────────
+ * **只動座標** —— 面數、頂點數、χ、標記全部原封不動，
+ * 所以 ⛔ 不必走 `cleanRebuild()` 那一套（那是給「拆掉重建」用的）。
+ * 🔴 **但形狀會變**，所以體積面積會變 —— 那是它的目的，不是 bug。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} hes 選到的那一圈邊
+ * @param {number} amount 正值往「比較高」那一端；`mode` 決定單位
+ * @param {{mode?:'cm'|'pct'}} opt
+ * @returns {{ok:boolean, reason?:string, moved?:number, clamped?:number,
+ *            maxCm?:number, dir?:string, appliedCm?:number}}
+ *          ⚠ **⛔ 不回新網格** —— 它就地改 `mesh` 的頂點座標。
+ */
+export function slideEdges(mesh, hes, amount, opt = {}) {
+  const mode = opt.mode === 'pct' ? 'pct' : 'cm';
+  const list = (Array.isArray(hes) ? hes : [hes]).filter(Boolean);
+  if (!mesh || !list.length) return { ok: false, reason: '沒有選到邊' };
+  if (!Number.isFinite(amount) || Math.abs(amount) < 1e-12) {
+    return { ok: false, reason: '滑動距離不能是 0' };
+  }
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const sel = new Set(list.map(h => kOf(vi.get(h.v.id), vi.get(h.to.id))));
+
+  /** 每個點找它的兩條軌道 */
+  const verts = [];
+  const seen = new Set();
+  for (const he of list) {
+    for (const v of [he.v, he.to]) {
+      if (seen.has(v.id)) continue;
+      seen.add(v.id);
+      const rails = mesh.vertOutgoing(v)
+        .filter(h => !sel.has(kOf(vi.get(v.id), vi.get(h.to.id))));
+      verts.push({ v, rails });
+    }
+  }
+  const bad = verts.filter(x => x.rails.length !== 2);
+  if (bad.length) {
+    return {
+      ok: false,
+      reason: `有 ${bad.length} 個點的兩側不是各一條邊（${bad[0].rails.length} 條）——`
+            + '沿面滑動要選一整圈邊，⛔ 中間不能斷。可以用「選一圈」或先按「環切」'
+    };
+  }
+
+  /**
+   * 🔴 **方向要「整圈一致」，⛔ 不可以每個點各挑各的。**
+   * ⚠ 每個點自己比高低的話，在傾斜的形狀上會有幾個點往反方向跑，
+   * **而畫面上那一圈就扭掉了**。
+   *
+   * 🔴🔴 **⛔ 而且 ⛔ 不可以拿「所有軌道向量的和」當共同方向。**
+   * 【實證 2026-08-28，第一版就死在這裡】每個點有**一條往上、一條往下**，
+   * 兩邊的 Y 分量**互相抵消** → 那個和永遠 ≈ 0 → 退化鏈一路掉到 Z。
+   * ⚠ **而方塊照樣通過了測試** —— 軌道在 Z 上的投影都是 0，
+   * `>=` 於是永遠挑 `rails[0]`，**而它剛好是往上那條**。
+   * 🔴 **「碰巧通過」比失敗危險** —— 露出馬腳的只有回報文字寫著「＋Z」。
+   *
+   * ⭐ **正解：用「兩條軌道的差」，⛔ 不是「和」。**
+   * `d0 − d1` 指向 `rails[0]` 那一側，**它不會抵消**。
+   * 拿第一個點的當基準 `ref`，其餘每個點跟它比同向反向 —— 整圈就一致了。
+   */
+  const sideVec = ({ v, rails }) =>
+    rails[0].to.p.clone().sub(v.p).sub(rails[1].to.p.clone().sub(v.p));
+
+  const ref = sideVec(verts[0]).normalize();
+  /**
+   * 讓 `ref` 一律指向「比較高」的那一側，正值才等於往上。
+   * 退化鏈：Y 分不出來就看 X，再看 Z〔照 `elementBasis()` 的作風〕。
+   */
+  let dir = '上';
+  const flip = () => ref.multiplyScalar(-1);
+  if (Math.abs(ref.y) >= 1e-6) { if (ref.y < 0) flip(); }
+  else if (Math.abs(ref.x) >= 1e-6) { dir = '＋X'; if (ref.x < 0) flip(); }
+  else { dir = '＋Z'; if (ref.z < 0) flip(); }
+
+  const picks = verts.map(x => {
+    const { v, rails } = x;
+    const pos = sideVec(x).dot(ref) >= 0 ? rails[0] : rails[1];
+    const d = pos.to.p.clone().sub(v.p);
+    return { v, d, len: d.length() };
+  });
+
+  /**
+   * 🔴 **負值走的是另一條軌道，而它的長度不一定跟正的那條一樣** ——
+   * 所以上下限要**各自算**，⛔ 不可以拿同一條的長度當兩邊的極限。
+   * 〔方塊拉高一個角之後，同一個點往上 40、往下 20〕
+   */
+  const negs = verts.map(x => {
+    const { v, rails } = x;
+    const neg = sideVec(x).dot(ref) >= 0 ? rails[1] : rails[0];
+    const d = neg.to.p.clone().sub(v.p);
+    return { d, len: d.length() };
+  });
+
+  /** 夾住：⛔ 不整個擋掉（照導角那個 `clamped` 的先例）*/
+  const maxCm = Math.min(...(amount >= 0 ? picks : negs).map(p => p.len));
+  let clamped = 0;
+  let applied = 0;
+  for (let i = 0; i < picks.length; i++) {
+    const p = picks[i], n = negs[i];
+    const useLen = amount >= 0 ? p.len : n.len;
+    const unit = (amount >= 0 ? p.d : n.d).clone().normalize();
+    const want = mode === 'pct' ? useLen * (Math.abs(amount) / 100) : Math.abs(amount);
+    const go = Math.min(want, useLen);
+    if (want > useLen + 1e-9) clamped++;
+    applied = Math.max(applied, go);
+    p.v.p.addScaledVector(unit, go);
+  }
+
+  mesh.computeNormals();
+  return {
+    ok: true, moved: picks.length, clamped, maxCm,
+    dir: amount >= 0 ? dir : `反方向（${dir} 的另一邊）`,
+    appliedCm: applied, mode
+  };
+}
+
+/**
  * 導角段數的上限（kang 2026-08-25 選的，跟環切的刀數對齊）。
  * ⚠ 段數 16 的方塊全導已經是 2000 多個點，32 只會更多 ——
  * 對實際加工沒有差別（誤差 0.016% 已遠低於任何切得出來的東西），
