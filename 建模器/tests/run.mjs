@@ -6280,6 +6280,44 @@ section('橋接邊迴圈：兩個洞 → 一段管');
     const b = selectops.boundaryEdges(m);
     eq('★ 沒有洞的物件：0 個洞、0 個環', `${b.holes}/${b.loops.length}`, '0/0');
   }
+
+  {
+    /**
+     * ⑤ 🔴🔴 **開放的網格沒有體積 —— ⛔ 不可以印給使用者看。**
+     *
+     * 〔kang 2026-08-28 實測第 3 項照出來的：提示訊息原本寫
+     * 　「體積 211998.16 → 208668.62」，而**前面那個是垃圾**〕
+     *
+     * `volume()` 走散度定理，**前提是封閉**。開放網格算出來的值
+     * **依賴物件擺在哪裡** —— 而真正的體積不會因為搬動而改變。
+     *
+     * ⭐ **這一項守的是「不要再把它印出來」**，⛔ 不是要修 `volume()`
+     * （封閉時它是對的，而「開放時回什麼」本來就沒有定義）。
+     */
+    let open = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    open = openAt(open, 35);
+    ok('（前置）缺一個蓋 ＝ 開放的', !open.isClosed());
+
+    const at = dy => {
+      const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+      const o = openAt(m, 35);
+      for (const v of o.verts) v.p.y += dy;
+      return o.volume();
+    };
+    const v0 = at(0), v124 = at(124), v500 = at(500);
+    ok('★★ 🔴 同一個開放形狀，搬個高度那個數字就變（⛔ 所以它不是體積）',
+       Math.abs(v0 - v124) > 1, `y+0 ${v0.toFixed(2)} ／ y+124 ${v124.toFixed(2)}`);
+    ok('★★ 　　搬得夠遠還會變負的', v500 < 0, `y+500 ${v500.toFixed(2)}`);
+
+    /** ⭐ 對照組：封閉的搬到哪都一樣 —— 那才是散度定理的前提 */
+    const closedAt = dy => {
+      const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+      for (const v of m.verts) v.p.y += dy;
+      return m.volume();
+    };
+    rel('★★ ⭐ 對照組：封閉的網格搬到哪，體積都一樣',
+        closedAt(500), closedAt(0), 1e-9);
+  }
 }
 
 section('導角（Bevel，單段）：內縮 ＋ 加面');

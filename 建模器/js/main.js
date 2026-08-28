@@ -2565,7 +2565,6 @@ function fillHolesOnSelected() {
     toast('參數物件補了也留不住（開檔會照參數重新生成）。請先按「轉成可編輯網格」', true);
     return;
   }
-  const before = obj.mesh().volume();
   const r = fillHoles(obj.mesh());
   if (!r.ok) { toast(r.reason); return; }      // 藍色：這是說明，不是錯誤
 
@@ -2584,8 +2583,15 @@ function fillHolesOnSelected() {
    * 🔴 **把體積講出來** —— 板件（本來就是一張沒有厚度的面）按了會被封起來，
    * 那時體積是 0，而**畫面上看起來跟原本一模一樣**。
    * 讓他看到那個 0，他自己就知道要 Undo（鐵律三）。
+   *
+   * 🔴 **⛔ 但只印「補完的」，⛔ 不印「補之前 → 補完」**
+   * （2026-08-28 改；完整理由與實證見 `bridgeOnSelected()` 那則）：
+   * **補之前必定是開的**（不然沒洞可補），而開放網格的 `volume()`
+   * ⛔ 不是體積 —— 同一個形狀搬個高度那個數字就變，還會變負的。
+   * ⚠ **這個假數字在補洞裡從一開始就存在，只是從來沒有人去對過它。**
+   * ⭐ **而「零體積殼」那個警報完全不受影響** —— 它看的是補完那個數字。
    */
-  bits.push(`體積 ${before.toFixed(2)} → ${r.mesh.volume().toFixed(2)} cm³`);
+  bits.push(`體積 ${r.mesh.volume().toFixed(2)} cm³`);
   toast(bits.join('　'));
 }
 
@@ -2621,7 +2627,6 @@ function bridgeOnSelected() {
     return;
   }
 
-  const before = mesh.volume();
   const turn = Math.round(+$('bridgeTurn').value || 0);
   const r = bridgeLoops(mesh, b.loops[0], b.loops[1], { turn });
   if (!r.ok) { toast(r.reason); return; }        // 藍色：這是說明，不是錯誤
@@ -2638,8 +2643,30 @@ function bridgeOnSelected() {
   if (turn) bits.push(`轉了 ${turn} 格`);
   if (r.nowClosed) bits.push('表面現在是封閉的');
   if (r.fakeSeams) bits.push(`順手清掉 ${r.fakeSeams} 條假的分片線（那是洞的邊界自動標的）`);
-  /** 🔴 體積講出來 —— 兩個數字對得起來，接錯了會自己現形（鐵律三）*/
-  bits.push(`體積 ${before.toFixed(2)} → ${r.mesh.volume().toFixed(2)} cm³`);
+  /**
+   * 🔴 **體積只印「接完的」，⛔ 不印「接之前 → 接完」。**
+   *
+   * ⚠ **這一版是改過的，⛔ 不要照直覺加回那個箭頭**
+   * 〔kang 2026-08-28 實測第 3 項照出來的〕：
+   *
+   * > **接之前那個網格必定是開的**（兩個洞才接得起來），
+   * > 而 `volume()` 走散度定理，**前提就是封閉** ——
+   * > 開放網格算出來的值 ⛔ 不是體積。
+   *
+   * 【實證】同一個「缺一個蓋的圓柱」，只是擺在不同高度：
+   * y+0 → 113802.69　y+50 → 81287.64　y+124 → 33165.36　**y+500 → −211347.85**。
+   * 🔴 **形狀一模一樣、數字一直變，還會變負的。**
+   * 〔封閉的網格搬到哪體積都一樣 —— 那正是散度定理的前提〕
+   *
+   * ⚠ **它比「少印一個數字」嚴重**：kang 畫面上原本寫
+   * 「211998.16 → 208668.62」，看起來**體積少了 3329**，
+   * 而真正的變化是 185725.99 → 208668.61 ＝ **多了**一段錐台。**方向是反的。**
+   * 〔坑第 20 條的變體：這次不是單位錯，是**那個數字根本不是體積**〕
+   *
+   * ⭐ **接完的那個是真的**（`nowClosed` 保證了），所以它照樣對得起來：
+   * 32邊柱 ＋ 32邊柱 ＋ 中間的錐台。
+   */
+  bits.push(`體積 ${r.mesh.volume().toFixed(2)} cm³`);
   toast(bits.join('　'));
 }
 
