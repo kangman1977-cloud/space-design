@@ -21,7 +21,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
-import { mergeCoplanarFaces } from './edit.js';
+import { mergeCoplanarFaces, recenterMesh } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape }
   from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
@@ -444,6 +444,63 @@ export function explodeShapes(obj) {
       lockScale: obj.lockScale
     });
   });
+}
+
+/**
+ * 🔴 **原點置中：把物件的原點搬到它自己的包圍盒中心，⛔ 而東西一格都不動。**
+ *
+ * ── 🔴 「原點置中」跟「幾何跳開」⛔ 不是同一件事 ────────────
+ * 【這一則是 2026-08-29 翻掉一個既有誤解才寫的】
+ * `separateSelected()` 的註解原本寫「位置刻意不動…跳開反而難對回去」，
+ * **把兩件事綁在一起了**。⭐ 而**證明就在它自己拿來對照的 `explodeShapes()`**：
+ * 那一支 `shiftShape(s, -b.cx, -b.cy)` 旁邊白紙黑字寫著
+ * 「**幾何置中，⛔ 不靠搬物件抵銷**」——
+ * **幾何往回移 −中心、`pos` 往前移 ＋中心，淨結果世界位置一格都沒變。**
+ *
+ * ── 🔴 為什麼一定要走矩陣，⛔ 不可以寫 `pos.add(center)` ────────
+ * `center` 是**本地座標**，而 `pos` 是**世界座標**。
+ * **物件只要有旋轉或縮放，兩者就對不起來** ——
+ * 例如轉了 90 度，本地的 +Y 在世界是 +Z，直接相加會把東西搬到別的地方去。
+ * ⭐ 所以照 `explodeShapes()` 那一招：
+ * **`matrix() × translate(center)` 再 `decompose()`** —— 讓矩陣自己算。
+ * 🔴 **測試釘著「rot ≠ 0 時世界包圍盒精確不變」，就是在守這一行。**
+ *
+ * ── ⚠ 它只對「網格物件」有意義 ──────────────────────────
+ * 參數物件（還沒 `轉成可編輯網格`）的形狀是**照參數重新生成**的，
+ * 改了頂點留不住。⛔ 所以參數物件擋下來，讓呼叫端講原因。
+ *
+ * @param {ModelObject} obj **就地修改**（網格與 pos／rot／scale 都會變）
+ * @returns {{ok:boolean, reason?:string, moved?:boolean,
+ *            offset?:THREE.Vector3}}
+ */
+export function recenterOrigin(obj) {
+  if (!obj) return { ok: false, reason: '沒有選到物件' };
+  if (obj.src && obj.src.type !== 'mesh') {
+    return { ok: false, reason: '這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」' };
+  }
+  const mesh = obj.mesh();
+  if (!mesh || !mesh.verts.length) return { ok: false, reason: '這個物件沒有幾何' };
+
+  const r = recenterMesh(mesh);
+  if (!r.moved) return { ok: true, moved: false, offset: r.offset };
+
+  /**
+   * 🔴 **⛔ 不可以寫成 `obj.pos.add(r.offset)`** —— 理由見上面那一則。
+   * 讓矩陣自己算：原本的變換 × 往「本地的 offset」平移。
+   */
+  const full = new THREE.Matrix4().multiplyMatrices(
+    obj.matrix(),
+    new THREE.Matrix4().makeTranslation(r.offset.x, r.offset.y, r.offset.z));
+
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  full.decompose(p, q, s);
+
+  obj.pos.copy(p);
+  obj.rot.setFromQuaternion(q);
+  obj.scale.copy(s);
+  return { ok: true, moved: true, offset: r.offset };
 }
 
 export function explodeArray(obj) {

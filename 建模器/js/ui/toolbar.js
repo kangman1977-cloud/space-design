@@ -9,7 +9,7 @@
 
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius } from '../build/prim.js';
-import { KIND, canExplodeShapes } from '../core/io.js';
+import { KIND, canExplodeShapes, recenterOrigin } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -203,6 +203,42 @@ export class Panel {
     // ── 位置 ──
     this.form.appendChild(head('位置 cm'));
     this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'));
+
+    /**
+     * 🔴 **原點置中：把箭頭的那個點搬到物件正中間，⛔ 而東西一格都不動。**
+     *
+     * ── 為什麼放在這裡，⛔ 不放工具列 ────────────────────
+     * 它是**物件屬性**的操作（就在「位置」底下最合理），而且
+     * 【實測 2026-08-29】工具列在 **1024×768 平板橫向已經吃掉 51% 畫面高度**。
+     *
+     * ── ⚠ 只對網格物件給按 ────────────────────────────
+     * 參數物件的形狀是照參數重新生成的，改了頂點留不住 ——
+     * `recenterOrigin()` 自己也會擋，這裡只是先不畫出來。
+     */
+    if (obj.src && obj.src.type === 'mesh') {
+      this._rowBtn('原點置中',
+        '把箭頭（旋轉與縮放的中心）搬到這個物件的正中間。'
+        + '⚠ 東西不會動一格，只有那個點會換位置。'
+        + '「分離」出來的塊常常原點在邊上，轉起來會繞著邊轉',
+        () => {
+          const r = recenterOrigin(obj);
+          if (!r.ok) { this.app.toast(r.reason, true); return; }
+          /**
+           * ⚠ **已經在中心也要講一句** —— 一顆按下去畫面上什麼都不變的
+           * 按鈕，⛔ 跟「壞了」分不出來（坑第 21 條）。
+           */
+          if (!r.moved) { this.app.toast('原點本來就在正中間，沒有東西要搬'); return; }
+          /**
+           * ⚠ **講出「搬了多遠」** —— 那是使用者對得起來的量：
+           * 圓柱從中間分離，下面那塊會是 Y 半個高度。
+           */
+          const f = n => (Math.round(n * 100) / 100);
+          this.app.toast('原點已經搬到正中間　'
+            + `（那個點移了 X ${f(r.offset.x)}、Y ${f(r.offset.y)}、`
+            + `Z ${f(r.offset.z)} cm）　⚠ 東西本身一格都沒動`);
+          this._edit('原點置中');
+        });
+    }
 
     this.form.appendChild(head('旋轉 度'));
     this._rowVec3(obj.rot, ['X', 'Y', 'Z'], () => this._edit('改旋轉'), true);

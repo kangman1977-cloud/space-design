@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
-         explodeShapes, download, openFile, autosave, loadAutosave }
+         explodeShapes, recenterOrigin, download, openFile, autosave, loadAutosave }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
@@ -1789,10 +1789,24 @@ function separateSelected() {
   if (!r.ok) { toast(r.reason, true); return; }
 
   /**
-   * ⚠ **位置刻意不動**：每一塊都沿用原物件的變換，網格座標一格都不改 ——
-   * 分離之後畫面上什麼都不會跳，只是變成兩個物件。
-   * 〔對照 `explodeShapes()`：那一支會置中，因為它拆的是本來就各自獨立
-   * 　的形狀；這裡拆的是同一個東西的兩半，跳開反而難對回去〕
+   * 🔴 **畫面上什麼都不跳，但每一塊的原點會落在自己的中心。**
+   *
+   * ⚠ **⛔ 這裡原本只寫「位置刻意不動」，而那句藏著一個誤解**
+   * 〔2026-08-29 kang 回報翻掉的〕：舊註解寫
+   * 「`explodeShapes()` 會置中…這裡拆的是同一個東西的兩半，跳開反而難對回去」
+   * —— **它把「原點置中」跟「幾何跳開」當成同一件事，而它們不是。**
+   *
+   * ⭐ **證明就在它自己拿來對照的那一支**：`explodeShapes()` 的
+   * `shiftShape(s, -b.cx, -b.cy)` 旁邊寫著「幾何置中，⛔ 不靠搬物件抵銷」——
+   * **幾何往回移、`pos` 往前移，淨結果世界位置一格都沒變。**
+   *
+   * 🔴 **代價 ⛔ 不是難看**：原點就是**旋轉與縮放的中心**。
+   * 舊行為下，圓柱從中間分離，**下面那塊的原點在它的頂面** ——
+   * 按旋轉會繞著頂面轉。〔kang 2026-08-29 實際踩到〕
+   *
+   * ⚠ **先建物件再置中，⛔ 不可以先算好再塞** ——
+   * `recenterOrigin()` 要讀 `obj.matrix()`（含 rot／scale），
+   * 物件還沒建起來就沒有那個矩陣。
    */
   const made = r.meshes.map((m, i) => new ModelObject({
     name: `${obj.name}－${i + 1}`,
@@ -1802,6 +1816,7 @@ function separateSelected() {
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
     color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
   }));
+  for (const o of made) recenterOrigin(o);
 
   sel.clearEditSel();
   doc.remove(obj);

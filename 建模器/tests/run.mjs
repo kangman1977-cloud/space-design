@@ -11156,6 +11156,160 @@ section('隔一個選一個：把一圈隔幾個留一個');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  原點置中（分離自動置中 ＋ 面板那顆按鈕）
+// ═══════════════════════════════════════════════════════
+
+section('原點置中：搬那個點，⛔ 不搬東西');
+
+/**
+ * 🔴 **這一節守的是一句話：「東西一格都不能動」。**
+ *
+ * ⚠ **⛔ 不要只驗「本地中心變成 0」** —— 那太容易通過了，
+ * 光是把頂點減掉中心就會過，而**那樣做東西會整個跳走**。
+ * ⭐ 真正的斷言是【世界包圍盒精確不變】。
+ *
+ * 🔴🔴 **而且一定要在「有旋轉 ＋ 有縮放」的物件上驗** ——
+ * ⛔ 沒有旋轉的話，錯的寫法（`pos.add(offset)`）也會通過。
+ * 【實證 2026-08-29】那個錐體轉過之後，正確的新 `pos` 是
+ * `(−4.66, 21.80, 0.02)` —— **X 與 Z 都變了**，
+ * 而 `pos.add(offset)` 只會動 Y。**這一組就是在守那件事。**
+ */
+{
+  const ioM = await import('../js/core/io.js');
+  const THREEr = await import('three');
+
+  /** 一個物件在世界裡的包圍盒（頂點各自乘上矩陣，⛔ 不靠任何現成的） */
+  const worldBox = obj => {
+    const m = obj.matrix();
+    const b = new THREEr.Box3();
+    for (const v of obj.mesh().verts) b.expandByPoint(v.p.clone().applyMatrix4(m));
+    return b;
+  };
+  const boxDev = (a, b) =>
+    Math.max(a.min.distanceTo(b.min), a.max.distanceTo(b.max));
+
+  /** 圓柱從中間切開再分離 —— ＝ kang 2026-08-29 實際踩到的那個情形 */
+  const splitCylinder = () => {
+    let m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const cut = edit.bisect(m, { n: new THREEr.Vector3(0, 1, 0), d: 0 });
+    m = cut.mesh;
+    const vi = m._vertIndex();
+    const want = new Set((cut.newEdges || [])
+      .map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+    const hes = [...m.edges()].filter(he => {
+      const a = vi.get(he.v.id), b = vi.get(he.to.id);
+      return want.has(a < b ? `${a}-${b}` : `${b}-${a}`);
+    });
+    return edit.separateAlongEdges(m, hes);
+  };
+
+  /** ① 分離出來的兩塊，原點本來就 ⛔ 不在自己的中心 —— 這是病的證據 */
+  {
+    const sep = splitCylinder();
+    ok('① 圓柱從中間切開分離成 2 塊', sep.ok && sep.meshes.length === 2, sep.reason);
+    const cs = sep.meshes.map(m =>
+      +m.bounds().getCenter(new THREEr.Vector3()).y.toFixed(6));
+    /**
+     * 🔴 **這兩個數字就是 kang 看到的那件事**：兩塊都沿用原物件的原點，
+     * 而那個點對下面那塊在**頂**、對上面那塊在**底**。
+     */
+    eq('★ 　 下面那塊的中心在本地 Y −17.5（＝ 原點在它的頂面）',
+       Math.min(...cs), -17.5);
+    eq('★ 　 上面那塊的中心在本地 Y ＋17.5（＝ 原點在它的底面）',
+       Math.max(...cs), 17.5);
+  }
+
+  /** ② 置中之後：本地中心歸零，而【世界位置精確不變】 */
+  {
+    const sep = splitCylinder();
+    for (const [i, m] of sep.meshes.entries()) {
+      const o = new ioM.ModelObject({
+        name: 'p' + i, src: { type: 'mesh' }, mesh: m,
+        pos: new THREEr.Vector3(0, 35, 0)
+      });
+      const before = worldBox(o);
+      const area0 = m.area(), nv0 = m.verts.length, nf0 = m.faces.length;
+      const r = ioM.recenterOrigin(o);
+      ok(`② 第 ${i + 1} 塊：有搬`, r.ok && r.moved);
+      near(`　 　 本地中心歸零`,
+           m.bounds().getCenter(new THREEr.Vector3()).length(), 0, 1e-9);
+      near(`★★ 　 世界包圍盒精確不變`, boxDev(before, worldBox(o)), 0, 1e-9);
+      near(`　 　 面積不變`, m.area(), area0, 1e-9);
+      eq(`　 　 頂點數不變`, m.verts.length, nv0);
+      eq(`　 　 面數不變`, m.faces.length, nf0);
+    }
+  }
+
+  /**
+   * 🔴🔴 ③ **有旋轉 ＋ 有縮放 —— 這一組是整節的重點。**
+   * ⛔ 沒有它，`pos.add(offset)` 那種寫法會一路通過。
+   */
+  {
+    const sep = splitCylinder();
+    const o = new ioM.ModelObject({
+      name: 'r', src: { type: 'mesh' }, mesh: sep.meshes[0],
+      pos: new THREEr.Vector3(12, 35, -7),
+      rot: new THREEr.Euler(0.3, 0.7, -0.45),
+      scale: new THREEr.Vector3(1.4, 0.8, 2.1)
+    });
+    const before = worldBox(o);
+    const posBefore = o.pos.clone();
+    const r = ioM.recenterOrigin(o);
+    near('③ 轉過又縮過：世界包圍盒【精確不變】',
+         boxDev(before, worldBox(o)), 0, 1e-9);
+    /**
+     * ⭐ **這一句是「⛔ 不可以寫 pos.add(offset)」的機械證據**：
+     * offset 只有 Y（本地），而正確的新 pos **X 與 Z 都必須跟著變**。
+     */
+    ok('★★ 　 offset 只有 Y，⛔ 而新 pos 的 X 與 Z 都變了（＝ 走了矩陣）',
+       Math.abs(r.offset.x) < 1e-9 && Math.abs(r.offset.z) < 1e-9
+       && Math.abs(o.pos.x - posBefore.x) > 1e-6
+       && Math.abs(o.pos.z - posBefore.z) > 1e-6,
+       `pos ${posBefore.toArray().map(v => v.toFixed(2))} → `
+       + `${o.pos.toArray().map(v => v.toFixed(2))}`);
+    near('★ 　 旋轉沒有被改掉（decompose 回得來）',
+         Math.abs(o.rot.y - 0.7), 0, 1e-9);
+    near('★ 　 縮放沒有被改掉', Math.abs(o.scale.z - 2.1), 0, 1e-9);
+  }
+
+  /** ④ 本來就在中心的東西：⛔ 不動，而且要回報「沒搬」 */
+  {
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const o = new ioM.ModelObject({
+      name: 'c', src: { type: 'mesh' }, mesh: m,
+      pos: new THREEr.Vector3(0, 35, 0)
+    });
+    const r = ioM.recenterOrigin(o);
+    ok('④ 基本體本來就置中 → moved ＝ false（⛔ 不製造一個什麼都沒做的動作）',
+       r.ok && r.moved === false);
+    eq('　 pos 一格都沒動', o.pos.y, 35);
+  }
+
+  /** ⑤ 參數物件要擋下來並講原因 */
+  {
+    const o = new ioM.ModelObject({
+      name: 'prm', src: { type: 'prim', prim: 'box', params: { w: 60, h: 45, d: 40 } }
+    });
+    const r = ioM.recenterOrigin(o);
+    ok('⑤ 參數物件擋下來', r.ok === false);
+    ok('　 而且講得出出路（轉成可編輯網格）',
+       (r.reason || '').includes('轉成可編輯網格'), r.reason);
+  }
+
+  /**
+   * ⑥ **取的是包圍盒中心，⛔ 不是重心**（kang 2026-08-29 拍板）。
+   * 錐體是唯一分得出來的形狀：包圍盒中心在高度一半，重心在 1/4 處。
+   */
+  {
+    const m = baked('cone', { rTop: 0, rBottom: 30, h: 70, seg: 32 });
+    const c = m.bounds().getCenter(new THREEr.Vector3());
+    const b = m.bounds();
+    near('⑥ 錐體：包圍盒中心 ＝ 高度正中間，⛔ 不是重心的 1/4 處',
+         c.y - b.min.y, 35, 1e-6);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -5389,3 +5389,49 @@ export function refreshAfterEdit(mesh, opts = {}) {
   const degenerate = degenerateFaces(mesh).length;
   return { folds, smoothOff, nonPlanar, degenerate };
 }
+
+/**
+ * 🔴 **把網格搬到「自己的包圍盒中心在原點」。⛔ 它只搬幾何，不碰物件。**
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * `分離` 出來的每一塊、或任何被編輯到「歪掉」的物件，
+ * **原點常常落在幾何外面或邊緣上**，而**原點就是旋轉與縮放的中心** ——
+ * 〔kang 2026-08-29 回報：圓柱分離之後，下面那塊的世界軸在**它的頂面**〕
+ *
+ * ── 🔴 它 ⛔ 不是「把物件搬到世界原點」——那是完全不同的一件事 ──
+ * 這一支**只回報要搬多少**，呼叫端**必須同時把物件的 `pos` 往反方向補回去**，
+ * 否則畫面上東西會跳。那一半在 `io.js` 的 `recenterOrigin()`。
+ *
+ * ⚠ **⛔ 不要在這裡順手改 `pos`** —— 這支是純函式，`ModelObject` 是 `io.js`
+ * 的事，混進來就測不動了。
+ *
+ * ── ⭐ 為什麼取包圍盒中心，⛔ 不取重心（kang 2026-08-29 拍板）────
+ * **方塊與圓柱兩種一樣，錐體才分得出來**（包圍盒中心在高度一半，
+ * 重心在 1/4 處）。包圍盒中心**看得見、預測得到**，而且跟
+ * `全部入鏡`、`切一刀` 的範圍提示是**同一個範圍**。
+ * ⚠ 而重心對**開放的網格算不出來**（`volume()` 走散度定理，前提是封閉）——
+ * 而 `分離` 切出來的兩塊**一定是開放的**（斷面是空的）。
+ * 〔「開放的網格也算得出體積」那條坑的近親〕
+ *
+ * ── ⚠ 這支 ⛔ 不改拓撲，所以什麼都不會壞 ──────────────────
+ * 只把每個頂點減掉同一個向量：**體積、面積、頂點數、邊數、面數、
+ * 所有標記（`hard`／`smooth`／CUT）全部精確不變。**
+ *
+ * @param {Mesh} mesh **就地修改**
+ * @returns {{offset:THREE.Vector3, moved:boolean}}
+ *          `offset` ＝ 幾何被往回搬了多少（＝ 原本的包圍盒中心）。
+ *          呼叫端要把物件往 **＋offset**（本地）方向補回去。
+ */
+export function recenterMesh(mesh) {
+  const out = { offset: new THREE.Vector3(), moved: false };
+  if (!mesh || !mesh.verts.length) return out;
+
+  const c = mesh.bounds().getCenter(new THREE.Vector3());
+  out.offset.copy(c);
+  /** 已經在中心就什麼都不做 —— ⛔ 不要製造一個「按了什麼都沒變」的動作 */
+  if (c.lengthSq() < 1e-20) return out;
+
+  for (const v of mesh.verts) v.p.sub(c);
+  out.moved = true;
+  return out;
+}
