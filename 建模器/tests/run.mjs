@@ -11455,6 +11455,66 @@ section('內建鋼筆：錨點與把手 → 輪廓');
     near('★ 　 讀回來生得出網格，體積 ≈ πr² × 高',
          back.objects[0].mesh().volume(), Math.PI * r * r * 7, 60);
   }
+
+  /**
+   * 🔴 ⑦ **鋼筆物件的原點置中 —— 搬的是錨點，⛔ 不是頂點。**
+   *
+   * 〔kang 2026-08-29 回報：「鋼筆建立好的物件..XYZ 方向軸並沒有在物件中心」〕
+   * 🔴 **病因是 `recenterOrigin()` 第一行就把 `pen` 當成「參數物件」擋掉了** ——
+   * 而那個擋本來是對的（參數物件改頂點留不住）。
+   * ⭐ **錯的是把所有參數物件一視同仁**：鋼筆的形狀就是那串錨點，
+   * **搬錨點 ＝ 搬參數 ＝ 留得住**。
+   */
+  {
+    const ioM = await import('../js/core/io.js');
+    const THREEr = await import('three');
+    /** 一個 20×10 的方形，故意畫在遠處（中心在 (110, 55)） */
+    const src = {
+      type: 'pen', h: 5,
+      paths: [{ closed: true, a: [100, 50, 120, 50, 120, 60, 100, 60], hi: [], ho: [] }]
+    };
+    const obj = new ioM.ModelObject({ name: '鋼筆', src });
+    const worldBox = o => {
+      const m = o.matrix();
+      const b = new THREEr.Box3();
+      for (const v of o.mesh().verts) b.expandByPoint(v.p.clone().applyMatrix4(m));
+      return b;
+    };
+    const before = worldBox(obj);
+    const r = ioM.recenterOrigin(obj);
+    ok('⑦ 鋼筆物件置得了中（⛔ 不再被當成「參數物件」擋掉）', r.ok && r.moved,
+       r.reason || '');
+    const after = worldBox(obj);
+    near('★★ 　 東西一格都沒動（世界包圍盒精確不變）',
+         Math.max(before.min.distanceTo(after.min), before.max.distanceTo(after.max)),
+         0, 1e-6);
+    /** ⭐ 錨點被搬到以自己的中心為原點 */
+    const b2 = prim.penBounds(obj.src.paths);
+    near('★★ 　 錨點的中心歸零', Math.hypot(b2.cx, b2.cy), 0, 1e-6);
+    near('　 新 pos.x ＝ 原本的中心 X（110）', obj.pos.x, 110, 1e-6);
+    near('　 新 pos.z ＝ 原本的中心 Y（55）', obj.pos.z, 55, 1e-6);
+    /**
+     * 🔴 **搬完存讀檔還要對** —— 這一項守「搬的是參數，⛔ 不是頂點」：
+     * 如果搬的是頂點，重新生成就會跳回原處，而**存讀檔正是重新生成**。
+     */
+    const back2 = ioM.Doc.fromJSON(JSON.parse(JSON.stringify(
+      (() => { const d = new ioM.Doc(); d.add(obj); return d.toJSON(); })())));
+    const b3 = prim.penBounds(back2.objects[0].src.paths);
+    near('★★ 　 存讀檔之後【還是】置中的（＝ 搬的真的是參數）',
+         Math.hypot(b3.cx, b3.cy), 0, 1e-6);
+  }
+
+  /** ⑧ 把手⛔ 不跟著搬（它存的是相對位移） */
+  {
+    const k = 10;
+    const paths = [{ closed: true, a: [0, 0, 20, 0, 20, 20], hi: [0, -k, 0, 0, 0, 0],
+                     ho: [0, k, 0, 0, 0, 0] }];
+    prim.shiftPenPaths(paths, 7, -3);
+    eq('⑧ 搬錨點：第一個錨點跟著動', JSON.stringify(paths[0].a.slice(0, 2)),
+       JSON.stringify([7, -3]));
+    eq('★ 　 把手一個數字都沒動（它是相對位移，錨點搬了它自己就跟著走）',
+       JSON.stringify(paths[0].ho), JSON.stringify([0, k, 0, 0, 0, 0]));
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

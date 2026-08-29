@@ -71,6 +71,14 @@ const sel = new Selection(view, {
   onKnifePick: (hit, info) => knifePick(hit, info),
   onPenAdd: n => { $('pen').textContent = `鋼筆 ${n}`; updateBar(); },
   onPenFinish: () => finishPen(),
+  /**
+   * 🔴 **指到第一個錨點時要講一句** —— Adobe 是用「游標旁出現小圓圈」，
+   * 我們沒有自訂游標，⭐ 用提示訊息 ＋ 那個點變大來取代。
+   * ⚠ ⛔ 不要每次移動都跳（會洗版）：只在「剛指到」那一下講。
+   */
+  onPenHover: (i, n) => {
+    if (i === 0 && n >= 3) toast('按下去就接回起點、完成這個形狀');
+  },
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -846,8 +854,9 @@ function togglePenMode() {
    * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
    */
   toast('鋼筆：在地板上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。'
-      + '在最後一點【快點兩下】就完成。'
-      + '轉視角改成：桌機按右鍵拖、平板兩指');
+      + '畫完【回到第一個點按下去】就接起來 —— 指到它會變大。'
+      + '（也可以在最後一點快點兩下）'
+      + '　轉視角改成：桌機按右鍵拖、平板兩指');
 }
 
 /**

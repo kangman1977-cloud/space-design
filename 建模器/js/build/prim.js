@@ -206,11 +206,44 @@ export function flatPts(pts) {
 }
 
 /**
- * 真轉角的索引清單。
- * **這個一定要跟著座標一起存。** 少了它，檔案重開之後展開圖就會從
- * 「9 道折線、10 段」變回「196 道折彎」——而且座標完全正確，
- * 看不出哪裡不對，只覺得圖突然變得讀不懂了。
+ * 🔴 **鋼筆所有錨點的外框中心。**（原點置中用）
+ *
+ * ⚠ **只看錨點，⛔ 不看把手** —— 把手是控制點，**它不在形狀上**，
+ * 拉得再長也不代表形狀長到那裡。
+ * ⭐ 而錨點就是**參數**，搬它們才留得住（參數物件改頂點是留不住的）。
+ *
+ * @returns {{cx:number, cy:number, ok:boolean}} 形狀座標系（對到世界的 X 與 Z）
  */
+export function penBounds(paths) {
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (const path of paths || []) {
+    const a = (path && path.a) || [];
+    for (let i = 0; i + 1 < a.length; i += 2) {
+      lo[0] = Math.min(lo[0], +a[i]);   hi[0] = Math.max(hi[0], +a[i]);
+      lo[1] = Math.min(lo[1], +a[i + 1]); hi[1] = Math.max(hi[1], +a[i + 1]);
+    }
+  }
+  if (!Number.isFinite(lo[0])) return { cx: 0, cy: 0, ok: false };
+  return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2, ok: true };
+}
+
+/**
+ * 把所有錨點平移。**⛔ 不動把手** —— 把手存的是「相對錨點的位移」，
+ * 錨點搬了它自己就跟著走。〔那正是當初選相對座標的理由〕
+ *
+ * ⚠ **就地修改**，回傳同一份（跟 `shiftShape` 不同，鋼筆的路徑本來就是自己的）。
+ */
+export function shiftPenPaths(paths, dx, dy) {
+  for (const path of paths || []) {
+    const a = (path && path.a) || [];
+    for (let i = 0; i + 1 < a.length; i += 2) {
+      a[i] = r4(+a[i] + dx);
+      a[i + 1] = r4(+a[i + 1] + dy);
+    }
+  }
+  return paths;
+}
+
 /**
  * 🔴 **一條鋼筆路徑 → 拉直之後的點串**（給 `BUILDERS.pen` 用）。
  *
@@ -279,6 +312,12 @@ function isPenCorner(hi, ho, i) {
   return !(cross < 0.0087 && dot < 0);
 }
 
+/**
+ * 真轉角的索引清單。
+ * **這個一定要跟著座標一起存。** 少了它，檔案重開之後展開圖就會從
+ * 「9 道折線、10 段」變回「196 道折彎」——而且座標完全正確，
+ * 看不出哪裡不對，只覺得圖突然變得讀不懂了。
+ */
 export function cornerIdx(pts) {
   const out = [];
   pts.forEach((p, i) => { if (p.corner) out.push(i); });

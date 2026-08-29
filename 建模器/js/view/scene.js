@@ -1082,9 +1082,29 @@ export class SceneView {
    * 鋼筆的預覽線。⚠ 跟刀具是**兩個獨立的疊層**，⛔ 不共用同一個物件 ——
    * 兩個模式不會同時開，但共用的話關掉一個會把另一個也清掉。
    */
-  setPenPreview(worldPts, dots) {
+  setPenPreview(worldPts, dots, hot) {
     this.clearPenPreview();
     this._penPrev = this._buildLineOverlay('penPreview', worldPts, dots, 0x59d97b);
+    /**
+     * 🔴 **游標底下那個點要變大。**〔kang 2026-08-29 要的：
+     * 「當滑鼠遇到點要能夠有略變大的呈現..不然很難判斷」〕
+     *
+     * ⭐ **只變大，⛔ 不換顏色** —— 跟編輯模式的「指到哪就亮哪」同一條規則
+     * （換顏色的話就沒辦法跟「已經選到」疊加）。
+     * ⚠ 另外開一個 `Points`，⛔ 不去改原本那一組的 `size`：
+     * 一個 `PointsMaterial` 只有一個尺寸，混在一起就全部一起變大。
+     */
+    if (this._penPrev && hot) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position',
+        new THREE.BufferAttribute(new Float32Array([hot.x, hot.y, hot.z]), 3));
+      const pt = new THREE.Points(g, new THREE.PointsMaterial({
+        color: 0x59d97b, size: 20, sizeAttenuation: false, depthTest: false
+      }));
+      pt.renderOrder = 9;
+      pt.raycast = () => {};
+      this._penPrev.add(pt);
+    }
   }
 
   clearPenPreview() {

@@ -191,6 +191,10 @@ export class Selection {
     this._penDown = null;
     /** 上一次鋼筆輕點的時間與位置，用來認「快點兩下」＝ 收尾 */
     this._lastPenTap = null;
+    /** 游標底下那個錨點的索引（⛔ 沒有就是 −1）。⭐ 指到會變大 */
+    this._penHover = -1;
+    /** 這一次按下去是不是壓在第一個錨點上（＝ 要閉合） */
+    this._penClosing = false;
 
     /**
      * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
@@ -628,7 +632,21 @@ export class Selection {
          *
          * ⭐ 先當尖角放下去；拖的話 `pointermove` 再把把手補上。
          */
-        if (g) {
+        /**
+         * 🔴 **壓在第一個錨點上 ＝ 要閉合，⛔ 這一下不放新點。**
+         *
+         * ⭐ **這是 Adobe 官方文件寫的收尾方式**（2026-08-29 讀原文）：
+         * > 「Position the Pen tool over the first anchor point, which appears
+         * > hollow. A small circle appears next to the Pen tool pointer…
+         * > Select or drag to close the path.」
+         *
+         * ⚠ **⛔ 不是先放點再退掉** —— 那樣中間會閃一下多出來的點。
+         */
+        if (g && this._penHitAnchor(e.clientX, e.clientY) === 0
+            && this.penCount >= 3) {
+          this._penClosing = true;
+        } else if (g) {
+          this._penClosing = false;
           this._penAddAnchor(g.x, g.z, 0, 0);
           if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
         }
@@ -659,6 +677,11 @@ export class Selection {
           this._penSetLastHandle(g.x - this._penDown.g.x, g.z - this._penDown.g.z);
           this._drawPenPreview(null, g.world);
         } else {
+          const h = this._penHitAnchor(e.clientX, e.clientY);
+          if (h !== this._penHover) {
+            this._penHover = h;
+            if (this.hooks.onPenHover) this.hooks.onPenHover(h, this.penCount);
+          }
           this._drawPenPreview(g.world);
         }
       }
@@ -782,6 +805,12 @@ export class Selection {
         this._penDown = null;
         if (!d0 || d.button !== DRAW_BUTTON) return;
 
+        /** 壓在第一個錨點上 → 閉合並收尾（Adobe 的做法） */
+        if (this._penClosing) {
+          this._penClosing = false;
+          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
+          return;
+        }
         const now = performance.now();
         const lt = this._lastPenTap;
         const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
@@ -2487,6 +2516,8 @@ export class Selection {
     this._pen = null;
     this._penDown = null;
     this._lastPenTap = null;
+    this._penHover = -1;
+    this._penClosing = false;
     return this.penMode;
   }
 
@@ -2502,6 +2533,8 @@ export class Selection {
     this._pen = null;
     this._penDown = null;
     this._lastPenTap = null;
+    this._penHover = -1;
+    this._penClosing = false;
     if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
     if (!p || p.a.length < 6) return null;
     return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
@@ -2580,7 +2613,13 @@ export class Selection {
       pts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
       dots.push(handleAt);
     }
-    this.view.setPenPreview(pts, dots);
+    /**
+     * 🔴 **游標底下那個錨點要變大**〔kang 2026-08-29 要的〕。
+     * ⭐ 尺寸與「只變大⛔ 不換色」的規則在 `scene.js` 的 `setPenPreview()`。
+     */
+    const hot = (this._penHover >= 0 && this._penHover < n)
+      ? this._penWorld(this._penHover) : null;
+    this.view.setPenPreview(pts, dots, hot);
   }
 
   /**
@@ -2592,6 +2631,27 @@ export class Selection {
     if (!this.view || !this.view.groundPoint) return null;
     const r = this._toCanvasPx(clientX, clientY);
     return this.view.groundPoint((r.x / r.w) * 2 - 1, -(r.y / r.h) * 2 + 1);
+  }
+
+  /**
+   * 🔴 **游標下面有沒有錨點**（回索引，沒有回 −1）。
+   *
+   * ⚠ **判準用螢幕距離，⛔ 不用世界距離** —— 世界距離會隨縮放變，
+   * 拉遠之後「靠得夠近」就變成不可能達成的條件。
+   * ⭐ 12 px 跟畫出來的點（11 px）差不多大，指得準也點得到。
+   */
+  _penHitAnchor(clientX, clientY) {
+    if (!this._pen || !this._pen.a.length) return -1;
+    const r = this._toCanvasPx(clientX, clientY);
+    const n = Math.floor(this._pen.a.length / 2);
+    let best = -1, bestD = 12;
+    for (let i = 0; i < n; i++) {
+      const v = this._penWorld(i).project(this.view.camera);
+      const px = (v.x + 1) / 2 * r.w, py = (-v.y + 1) / 2 * r.h;
+      const d = Math.hypot(px - r.x, py - r.y);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
   }
 
   _penWorld(i) {

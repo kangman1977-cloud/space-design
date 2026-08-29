@@ -22,7 +22,7 @@
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
 import { mergeCoplanarFaces, recenterMesh } from './edit.js';
-import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape }
+import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths }
   from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
   from '../build/bool.js';
@@ -475,6 +475,37 @@ export function explodeShapes(obj) {
  */
 export function recenterOrigin(obj) {
   if (!obj) return { ok: false, reason: '沒有選到物件' };
+  /**
+   * 🔴 **鋼筆是參數物件，但它置得了中 —— 因為要搬的東西就是參數本身。**
+   *
+   * ⚠ **⛔ 這一段原本不存在，而那是一個 bug**〔kang 2026-08-29 回報：
+   * 「鋼筆建立好的物件..XYZ 方向軸並沒有在物件中心」〕：
+   * `finishPen()` 確實呼叫了這一支，**但它第一行就把 `pen` 當成
+   * 「參數物件」擋掉了，什麼都沒做**，而且⛔ 沒有任何人看到那句 reason。
+   *
+   * ⭐ **擋參數物件本來是對的**（改頂點留不住，會被下次生成蓋掉）——
+   * **錯的是把「所有參數物件」一視同仁**。鋼筆的形狀就是那串錨點，
+   * **搬錨點 ＝ 搬參數 ＝ 留得住**。
+   * 〔跟 `explodeShapes()` 搬輪廓是同一招：**幾何置中，⛔ 不靠搬物件抵銷**〕
+   *
+   * ⚠ **形狀座標的 (x, y) 對到世界的 (x, z)** —— 跟擠出件同一套對應。
+   */
+  if (obj.src && obj.src.type === 'pen') {
+    const b = penBounds(obj.src.paths);
+    if (!b.ok) return { ok: false, reason: '這支鋼筆還沒有畫出任何點' };
+    if (Math.abs(b.cx) < 1e-9 && Math.abs(b.cy) < 1e-9) {
+      return { ok: true, moved: false, offset: new THREE.Vector3() };
+    }
+    shiftPenPaths(obj.src.paths, -b.cx, -b.cy);
+    obj.invalidate();
+    const off = new THREE.Vector3(b.cx, 0, b.cy);
+    const full = new THREE.Matrix4().multiplyMatrices(
+      obj.matrix(), new THREE.Matrix4().makeTranslation(off.x, off.y, off.z));
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    full.decompose(p, q, sc);
+    obj.pos.copy(p); obj.rot.setFromQuaternion(q); obj.scale.copy(sc);
+    return { ok: true, moved: true, offset: off };
+  }
   if (obj.src && obj.src.type !== 'mesh') {
     return { ok: false, reason: '這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」' };
   }
