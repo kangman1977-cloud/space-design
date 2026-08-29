@@ -21,6 +21,13 @@
 import * as THREE from 'three';
 import { Mesh } from '../core/mesh.js';
 import { extrudeMany } from './extrude.js';
+/**
+ * ⚠ **單向相依，⛔ 不會繞回來**：`svgPath.js` 一個 `import` 都沒有
+ * （2026-08-29 查過）。⭐ 借 `flattenCubic()` 是刻意的 ——
+ * 鋼筆畫的貝茲曲線跟 SVG 匯進來的**是同一種東西**，
+ * ⛔ 不要為了避免跨檔就在這裡重寫一支細分。
+ */
+import { flattenCubic, DEFAULT_TOL } from '../sketch/svgPath.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -204,6 +211,74 @@ export function flatPts(pts) {
  * 「9 道折線、10 段」變回「196 道折彎」——而且座標完全正確，
  * 看不出哪裡不對，只覺得圖突然變得讀不懂了。
  */
+/**
+ * 🔴 **一條鋼筆路徑 → 拉直之後的點串**（給 `BUILDERS.pen` 用）。
+ *
+ * 每一段是一條三次貝茲：
+ * **起點 ＝ 錨點 i，控制點 ＝ 錨點 i ＋ 出把手、錨點 i+1 ＋ 進把手，終點 ＝ 錨點 i+1。**
+ *
+ * ⭐ **兩邊把手都是 0 的那一段直接放終點，⛔ 不跑細分** ——
+ * 直線細分出來還是同一個點，白花時間而已。
+ *
+ * @param {{closed?:boolean, a?:number[], hi?:number[], ho?:number[]}} path
+ * @param {number} tol 拉直的容許值（cm）
+ * @returns {Array<{x:number,y:number,corner:boolean}>}
+ */
+export function flattenPenPath(path, tol = DEFAULT_TOL) {
+  const a = (path && path.a) || [];
+  const n = Math.floor(a.length / 2);
+  if (n < 2) return [];
+  const hi = (path && path.hi) || [];
+  const ho = (path && path.ho) || [];
+  const ax = i => +a[i * 2], ay = i => +a[i * 2 + 1];
+  const g = (arr, i, k) => +(arr[i * 2 + k] || 0);
+
+  const out = [];
+  const last = path && path.closed === false ? n - 1 : n;
+  for (let i = 0; i < last; i++) {
+    const j = (i + 1) % n;
+    /** 這個錨點是不是轉角 ＝ 它兩側的把手共不共線 */
+    out.push({ x: ax(i), y: ay(i), corner: isPenCorner(hi, ho, i) });
+
+    const c1x = ax(i) + g(ho, i, 0), c1y = ay(i) + g(ho, i, 1);
+    const c2x = ax(j) + g(hi, j, 0), c2y = ay(j) + g(hi, j, 1);
+    /** 兩邊都沒有把手 ＝ 直線，⛔ 不必細分 */
+    if (c1x === ax(i) && c1y === ay(i) && c2x === ax(j) && c2y === ay(j)) continue;
+
+    const seg = flattenCubic(ax(i), ay(i), c1x, c1y, c2x, c2y, ax(j), ay(j), tol);
+    /**
+     * ⚠ `flattenCubic()` **會把終點也放進來**，而終點是下一個錨點 ——
+     * ⛔ 不去掉的話每個錨點都會出現兩次。
+     */
+    for (let k = 0; k < seg.length - 1; k++) {
+      out.push({ x: seg[k].x, y: seg[k].y, corner: false });
+    }
+  }
+  /** 開放路徑要補最後一個錨點（封閉的那一個由 `i` 繞回去時放） */
+  if (path && path.closed === false) {
+    out.push({ x: ax(n - 1), y: ay(n - 1), corner: isPenCorner(hi, ho, n - 1) });
+  }
+  return out;
+}
+
+/**
+ * 這個錨點是不是**尖角**：兩側的把手⛔ 不共線就是。
+ *
+ * ⚠ **判準⛔ 不是「有沒有把手」** —— 一邊有一邊沒有也是尖角
+ * （那正是 Illustrator 從曲線接直線時的樣子）。
+ * ⭐ 平滑的定義：兩根把手**同一條線、方向相反**（叉積 ≈ 0 且內積 < 0）。
+ */
+function isPenCorner(hi, ho, i) {
+  const ix = +(hi[i * 2] || 0), iy = +(hi[i * 2 + 1] || 0);
+  const ox = +(ho[i * 2] || 0), oy = +(ho[i * 2 + 1] || 0);
+  const li = Math.hypot(ix, iy), lo = Math.hypot(ox, oy);
+  if (li < 1e-9 || lo < 1e-9) return true;          // 有一邊沒有把手
+  const cross = Math.abs(ix * oy - iy * ox) / (li * lo);
+  const dot = (ix * ox + iy * oy) / (li * lo);
+  /** 0.5 度換算成 sin ≈ 0.0087。跟 `SIMILAR_NORMAL_TOL_DEG` 同一個尺度 */
+  return !(cross < 0.0087 && dot < 0);
+}
+
 export function cornerIdx(pts) {
   const out = [];
   pts.forEach((p, i) => { if (p.corner) out.push(i); });
@@ -295,6 +370,62 @@ const BUILDERS = {
    * 而且照樣看得懂。這仍然是「存參數，不存三角形」——
    * 改高度不必重新匯入，改完重新生成就好。
    */
+  /**
+   * 🔴 **內建鋼筆畫出來的東西。**（kang 2026-08-27 決定要做，⛔ 畫在地板上）
+   *
+   * ── ⭐ 擠出那一半 **一行新的數學都沒有** ────────────────
+   * 這一支只做一件事：**把錨點與把手拉直成點串**，
+   * 之後原封不動走 `extrude` 已經在用的 `pairs()` → `extrudeMany()`。
+   * 〔kang 2026-08-25 批准的框架的又一例：**新功能 ＝ 既有零件換個組合**〕
+   *
+   * ── 🔴 為什麼是新的來源型別，⛔ 不是塞進 `extrude` ──────────
+   * **`extrude` 存的是拉直之後的折線** —— SVG 匯進來時
+   * `flattenCubic()` 就把曲線拉掉了，**曲線的資訊已經沒了，回不去**。
+   * 而 kang 2026-08-29 拍板「**要能回頭拉點、拉把手**」，
+   * 所以一定要**存錨點與把手本身**，生成時才拉直。
+   *
+   * ⚠ **⛔ 不可以「兩份都存」**（在 `extrude` 上多掛一份曲線）——
+   * 那會變成兩條要對齊的路（坑第 31 條）。
+   * ⭐ 而分成兩個型別完全符合「**存參數，不存三角形**」：
+   * 改一個錨點就重新生成，跟改方塊的寬度是同一條路。
+   *
+   * ── 資料長怎樣 ────────────────────────────────────────
+   * ```
+   * { type:'pen', h:3, tol:0.2, paths:[
+   *     { closed:true,
+   *       a:  [x,y, x,y, …],    錨點
+   *       hi: [dx,dy, dx,dy, …], 進來的把手（相對錨點）
+   *       ho: [dx,dy, dx,dy, …]  出去的把手（相對錨點）
+   *     } ] }
+   * ```
+   *
+   * ⭐ **把手存「相對錨點的位移」，⛔ 不存絕對座標** ——
+   * 這樣**拖錨點時把手自動跟著走**（第 2 階段會需要）。
+   * ⭐ **扁平陣列**：理由跟 `extrude` 那一則一樣（檔案小一半，照樣看得懂）。
+   * ⭐ **兩邊把手都是 (0,0) ＝ 尖角** —— ⛔ 不必另外存一個旗標。
+   *
+   * ── 🔴 哪些錨點算「真轉角」 ────────────────────────────
+   * **兩側把手⛔ 不共線就是轉角**（含「兩邊都沒有把手」）——
+   * 那正好就是使用者按「尖角」折斷把手的意思。
+   * ⚠ **拉直過程中間長出來的點⛔ 全部不是轉角** —— 它們在曲線上。
+   * 〔`oc` 這一欄是展開圖判折線用的，⛔ 不是裝飾〕
+   *
+   * ── ⚠ 第 1 階段⛔ 不做「洞」 ───────────────────────────
+   * 一條路徑 ＝ 一個形狀。`extrude` 的 `holes` 欄位留著沒用，
+   * 日後要做洞時**⛔ 不必改資料格式**，只要決定哪一條包住哪一條。
+   *
+   * ⚠ **⛔ 不放進 `PRIM_DEFAULTS`** —— 理由跟 `extrude` 完全一樣：
+   * 它沒辦法從零生成（要有人先畫），放進選單就是一個按了會壞的項目。
+   */
+  pen(p) {
+    const tol = num(p.tol, DEFAULT_TOL);
+    const shapes = (p.paths || [])
+      .map(path => ({ pts: flattenPenPath(path, tol) }))
+      .filter(s => s.pts.length >= 3);
+    if (!shapes.length) throw new Error('這支鋼筆還沒有畫出任何封閉的形狀');
+    return extrudeMany(shapes, num(p.h, 3));
+  },
+
   extrude(p) {
     const shapes = (p.shapes || []).map(s => ({
       pts: pairs(s.out, s.oc),

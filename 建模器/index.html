@@ -703,6 +703,20 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）">吸中點</button>
       <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>
       <!--
+        內建鋼筆（kang 2026-08-27 決定要做）：在地板上畫輪廓，畫完直接擠出。
+
+        ⭐ 跟「匯入線稿」走同一條路 —— 形狀平躺在地板，畫完往上拉厚度。
+        ⚠ 它跟刀具一樣是一個「模式」：手勢整組換掉（左鍵／單指畫、
+          右鍵／兩指轉視角），而那一層跟刀具是同一支 setDrawInput()。
+        🔴 「尖角」那顆是 Alt 的替代品 —— 平板上沒有 Alt（kang 2026-08-29 選的）。
+      -->
+      <button id="pen" title="鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件。【點一下】＝ 尖角、【按住拖】＝ 圓滑（拖出來的就是把手）。在最後一點【快點兩下】就完成。⚠ 鋼筆模式下轉視角改成：桌機按右鍵拖、平板用兩指">鋼筆</button>
+      <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品">尖角</button>
+      <input id="penH" type="number" min="0.05" step="0.5" value="3" hidden
+             title="畫完之後往上拉多高（公分）。跟「匯入線稿」的高度是同一個意思">
+      <button id="penUndo" hidden title="退掉剛才放的最後一個點">退一點</button>
+      <button id="penCancel" hidden title="離開鋼筆，剛才畫的全部不算">取消</button>
+      <!--
         連接兩點：在一個面上選兩個角，中間長出一條線，那個面被切成兩塊。
 
         ⚠ 跟「切一刀」的分工要分清楚，⛔ 兩顆的定位不可以糊在一起

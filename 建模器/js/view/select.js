@@ -16,6 +16,11 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams, markableEdges }
   from '../unfold/seam.js';
 import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
+/**
+ * ⭐ **預覽用的拉直走的是生成時同一支函式** —— 預覽跟結果因此不可能不一樣。
+ * ⚠ **單向相依**：`prim.js` ⛔ 沒有 import 這一支（它不認識畫面）。
+ */
+import { flattenPenPath } from '../build/prim.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -44,7 +49,7 @@ const DOUBLE_TAP_MOVE = 16;   // px
  * ⛔ 不必為 `pointerType` 各寫一段（坑第 31 條）。
  *
  * ⚠ 刀具模式下右鍵是**轉視角**、中鍵是**縮放**（見 `scene.js` 的
- * `setKnifeInput()`），那兩顆按下去刀具要當作沒看到。
+ * `setDrawInput()`），那兩顆按下去刀具要當作沒看到。
  */
 const DRAW_BUTTON = 0;
 
@@ -172,6 +177,20 @@ export class Selection {
      * 〔跟「框選做成模式不做成 Shift＋拖曳」同一個理由〕
      */
     this.knifeSnapMid = false;
+
+    /**
+     * 🔴 **鋼筆模式**（2026-08-29 加）。開著的時候，點畫面⛔ 不是選物件，
+     * 而是**在地板上放錨點**。
+     */
+    this.penMode = false;
+    /** 下一個錨點強制是尖角（工具列那顆「尖角」切換鈕） */
+    this.penCorner = false;
+    /** 正在畫的那一條：{ a:[], hi:[], ho:[] }，⛔ 還沒變成物件 */
+    this._pen = null;
+    /** 按下去的當下記起來的東西（⛔ 不可以事後從 e 補算，鍵與位置都是初始狀態） */
+    this._penDown = null;
+    /** 上一次鋼筆輕點的時間與位置，用來認「快點兩下」＝ 收尾 */
+    this._lastPenTap = null;
 
     /**
      * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
@@ -586,6 +605,17 @@ export class Selection {
         const h = this._surfaceHit(e.clientX, e.clientY);
         this._stroke = h ? { obj: h.obj, node: h.node, pts: [h.pLocal], world: [h.world] } : null;
       }
+      /**
+       * 🔴 **鋼筆：按下去先記起來，⛔ 這時候還不決定是「點」還是「拖」。**
+       * ⚠ 判準跟刀具同一條（`TAP_MOVE`／`TAP_TIME`），
+       * ⛔ 不要在這裡就決定 —— 那等於逼使用者先宣告他要做哪一種。
+       */
+      if (this.penMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
+        const g = this._groundAt(e.clientX, e.clientY);
+        this._penDown = g
+          ? { x: e.clientX, y: e.clientY, t: performance.now(), g }
+          : null;
+      }
       if (this.marqueeMode && !this.tc.dragging) {
         const r = this._toCanvasPx(e.clientX, e.clientY);
         this._marq = { ax: r.x, ay: r.y, bx: r.x, by: r.y };
@@ -596,6 +626,16 @@ export class Selection {
     });
 
     cv.addEventListener('pointermove', e => {
+      /**
+       * 🔴 **鋼筆也要看得見自己畫到哪** —— 游標那一段要跟著跑，
+       * 而**按住拖的時候要看得到把手把線拉彎**，
+       * ⛔ 否則「拖出圓滑」這件事使用者完全感覺不到（坑第 21 條）。
+       */
+      if (this.penMode && this._pen && this._pen.a.length) {
+        const g = this._groundAt(e.clientX, e.clientY);
+        if (g) this._drawPenPreview(g.world);
+      }
+
       /**
        * 🔴 **一筆畫要看得見自己畫到哪** —— 沒有預覽就是「放開手才知道
        * 切到哪」（坑第 21 條：有時候看起來沒作用的操作要持續顯示它有沒有作用）。
@@ -699,6 +739,43 @@ export class Selection {
        * ⚠ 要放在 `seamMode`／`mateMode` 前面沒關係（互斥），
        * 但**一定要在 `pick()` 前面** —— 否則會變成選物件。
        */
+      /**
+       * 🔴 **鋼筆：放開手才分「點一下」與「按住拖」。**
+       *
+       * | 手勢 | 意思 |
+       * |---|---|
+       * | 點一下 | **尖角**錨點（沒有把手）|
+       * | 按住拖 | **圓滑**錨點，拖出來的位移就是**出把手** |
+       *
+       * ⭐ 那正是 Illustrator 鋼筆的行為（kang 2026-08-29 拍板）。
+       * 🔴 **快點兩下 ＝ 收尾**（照刀具，⛔ 不另發明）。
+       */
+      if (this.penMode) {
+        const d0 = this._penDown;
+        this._penDown = null;
+        if (!d0 || d.button !== DRAW_BUTTON) return;
+
+        const now = performance.now();
+        const lt = this._lastPenTap;
+        const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
+                      && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
+        this._lastPenTap = { x: e.clientX, y: e.clientY, t: now };
+        if (isDouble) {
+          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
+          return;
+        }
+
+        const moved = Math.hypot(e.clientX - d0.x, e.clientY - d0.y);
+        const isDrag = moved > TAP_MOVE && (now - d0.t) <= 4000;
+        let hx = 0, hy = 0;
+        if (isDrag) {
+          const g1 = this._groundAt(e.clientX, e.clientY);
+          if (g1) { hx = g1.x - d0.g.x; hy = g1.z - d0.g.z; }
+        }
+        this._penAddAnchor(d0.g.x, d0.g.z, hx, hy);
+        if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
+        return;
+      }
       if (this.knifeMode) {
         /**
          * 🔴 **右鍵／中鍵在刀具模式下是轉視角與縮放，⛔ 不可以順便加一個切點。**
@@ -2311,7 +2388,13 @@ export class Selection {
    * 三支箭頭會擋在物件前面，而這裡要點的是物件表面上的點／邊／面。
    */
   /** 見建構子 `knifeMode` 上方那段：這個判斷原本散在五個地方 */
-  get inPickMode() { return this.seamMode || this.mateMode || this.knifeMode; }
+  /**
+   * ⚠ **鋼筆一定要算進來**（2026-08-29 加）—— 否則畫的時候 gizmo 還掛著，
+   * 而 gizmo 會把按下去的事件吃掉，第一筆就畫不出來。
+   */
+  get inPickMode() {
+    return this.seamMode || this.mateMode || this.knifeMode || this.penMode;
+  }
 
   setMateMode(on) {
     this.mateMode = !!on;
@@ -2343,11 +2426,129 @@ export class Selection {
      * **離開刀具之後左鍵再也轉不動視角**，而且沒有任何錯誤。
      * 〔坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義〕
      */
-    if (this.view && this.view.setKnifeInput) this.view.setKnifeInput(this.knifeMode);
+    if (this.view && this.view.setDrawInput) this.view.setDrawInput(this.knifeMode);
     /** 換模式就把上一次輕點的時間忘掉，⛔ 不要讓它跨模式湊成一次「雙擊」 */
     this._lastKnifeTap = null;
     this._stroke = null;
     return this.knifeMode;
+  }
+
+  /**
+   * 🔴 **鋼筆模式**（kang 2026-08-27 決定要做，⛔ 畫在地板上）。
+   *
+   * ⭐ **手勢那一層跟刀具完全一樣，而且是同一支函式**
+   * （`setDrawInput()`）：左鍵／單指空出來給畫，轉視角換到右鍵／兩指。
+   * ⛔ 不要在這裡另寫一份 —— 那就是兩條要對齊的路（坑第 31 條）。
+   *
+   * ⚠ **離開時一定要把畫到一半的東西丟掉** —— 留著的話下次進來會接續
+   * 畫上一次的半條線，而畫面上什麼都看不到（坑第 21 條）。
+   */
+  setPenMode(on) {
+    this.penMode = !!on;
+    this.tc.enabled = !this.inPickMode;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.view && this.view.setDrawInput) this.view.setDrawInput(this.penMode);
+    if (!this.penMode && this.view && this.view.clearPenPreview) {
+      this.view.clearPenPreview();
+    }
+    this._pen = null;
+    this._penDown = null;
+    this._lastPenTap = null;
+    return this.penMode;
+  }
+
+  /** 現在畫到幾個錨點（呼叫端拿去決定按鈕給不給按、提示怎麼講） */
+  get penCount() { return this._pen ? Math.floor(this._pen.a.length / 2) : 0; }
+
+  /**
+   * 🔴 **把畫好的東西交出去，並清空。** 呼叫端負責建物件。
+   * ⚠ **少於 3 個錨點回 `null`** —— 兩個點圍不出面積，擠出會失敗。
+   */
+  takePen() {
+    const p = this._pen;
+    this._pen = null;
+    this._penDown = null;
+    this._lastPenTap = null;
+    if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
+    if (!p || p.a.length < 6) return null;
+    return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
+  }
+
+  /** 退掉最後一個錨點（畫錯時往回一步）。回傳還剩幾個 */
+  penUndo() {
+    if (!this._pen) return 0;
+    this._pen.a.splice(-2); this._pen.hi.splice(-2); this._pen.ho.splice(-2);
+    if (!this._pen.a.length) this._pen = null;
+    this._drawPenPreview();
+    return this.penCount;
+  }
+
+  /**
+   * 🔴 **放一個錨點。** `hx/hy` 是**出把手**（相對錨點）。
+   *
+   * ⭐ **進把手 ＝ 出把手的反向** —— 那就是「平滑」的定義，
+   * 而使用者拖出來的那一根本來就只有一個方向。
+   * ⚠ **尖角就是兩邊都 0** —— ⛔ 不必另外存旗標（`isPenCorner()` 認得）。
+   */
+  _penAddAnchor(x, z, hx, hy) {
+    if (!this._pen) this._pen = { a: [], hi: [], ho: [] };
+    const smooth = Math.hypot(hx, hy) > 1e-9 && !this.penCorner;
+    this._pen.a.push(x, z);
+    this._pen.hi.push(smooth ? -hx : 0, smooth ? -hy : 0);
+    this._pen.ho.push(smooth ? hx : 0, smooth ? hy : 0);
+    this._drawPenPreview();
+  }
+
+  /**
+   * 預覽線。⚠ `_buildLineOverlay()` 吃的是**兩兩一組的線段**，
+   * ⛔ 不是連續折線 —— 串錯的話會多畫一堆不存在的線。
+   */
+  _drawPenPreview(extra) {
+    if (!this.view || !this.view.setPenPreview) return;
+    if (!this._pen || !this._pen.a.length) {
+      if (this.view.clearPenPreview) this.view.clearPenPreview();
+      return;
+    }
+    const pts = [];
+    const dots = [];
+    const n = Math.floor(this._pen.a.length / 2);
+    for (let i = 0; i < n; i++) {
+      dots.push(this._penWorld(i));
+    }
+    /** 已經放好的那幾段（照拉直之後的樣子畫，⛔ 不要畫成直線騙人） */
+    const flat = this._penFlatWorld(false);
+    for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
+    /** 游標那一段（還沒放下去的） */
+    if (extra) { pts.push(this._penWorld(n - 1), extra); }
+    this.view.setPenPreview(pts, dots);
+  }
+
+  /**
+   * 螢幕座標 → 地板上的一點。
+   * ⚠ NDC 的換算跟 `pickElement()` **完全一樣**，⛔ 不要自己另寫一套
+   * —— 那一套已經處理過畫布不佔滿視窗的情形（`_toCanvasPx()`）。
+   */
+  _groundAt(clientX, clientY) {
+    if (!this.view || !this.view.groundPoint) return null;
+    const r = this._toCanvasPx(clientX, clientY);
+    return this.view.groundPoint((r.x / r.w) * 2 - 1, -(r.y / r.h) * 2 + 1);
+  }
+
+  _penWorld(i) {
+    return new THREE.Vector3(this._pen.a[i * 2], 0, this._pen.a[i * 2 + 1]);
+  }
+
+  /** 把目前這一條拉直成世界座標的點串（預覽用；⛔ 不影響存下來的資料） */
+  _penFlatWorld(closed) {
+    /**
+     * ⭐ **拉直走的是 `flattenPenPath()` 本人，⛔ 不是另寫一份近似的** ——
+     * 預覽看到的形狀因此**跟按下去做出來的完全一樣**。
+     * 〔坑第 31 條：預覽跟結果各算一次，就是兩條要對齊的路〕
+     */
+    return flattenPenPath(
+      { closed: !!closed, a: this._pen.a, hi: this._pen.hi, ho: this._pen.ho }
+    ).map(p => new THREE.Vector3(p.x, 0, p.y));
   }
 
   setSeamMode(on) {

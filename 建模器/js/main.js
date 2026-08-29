@@ -69,6 +69,8 @@ const sel = new Selection(view, {
   onMeasure: r => updateMeasureBox(r),
   /** 刀具：點下去吸到最近的邊，`hit` 帶著那條邊與邊上的落點 */
   onKnifePick: (hit, info) => knifePick(hit, info),
+  onPenAdd: n => { $('pen').textContent = `鋼筆 ${n}`; updateBar(); },
+  onPenFinish: () => finishPen(),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -429,6 +431,14 @@ $('fillHoles').onclick = () => fillHolesOnSelected();
 $('bridge').onclick = () => bridgeOnSelected();
 $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
+$('pen').onclick = () => togglePenMode();
+$('penCorner').onclick = () => togglePenCorner();
+$('penUndo').onclick = () => {
+  const n = sel.penUndo();
+  toast(n ? `退掉一個點，還剩 ${n} 個` : '已經沒有點了');
+  updateBar();
+};
+$('penCancel').onclick = () => cancelPenMode();
 $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
@@ -634,6 +644,10 @@ function exitOtherModes(keep) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
   }
+  if (keep !== 'pen' && sel.penMode) {
+    sel.takePen(); sel.setPenMode(false);
+    $('pen').classList.remove('on'); $('pen').textContent = '鋼筆';
+  }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
     knifePicks = []; hideKnifeLine();
@@ -808,6 +822,96 @@ function toggleKnifeSnapMid() {
   toast(sel.knifeSnapMid
     ? '吸中點：開。切點會落在邊的正中間'
     : '吸中點：關。切點落在你指的位置');
+}
+
+// ── 內建鋼筆 ───────────────────────────────────────────
+
+/**
+ * 🔴 **鋼筆：在地板上畫一個形狀，畫完直接變成可以拉厚度的物件。**
+ * 〔kang 2026-08-27 決定要做；**畫在地板上**是他拍板的〕
+ *
+ * ⭐ **跟 `匯入線稿` 走同一條路** —— 形狀平躺在地板、往上拉厚度。
+ * ⛔ 不另外發明一套，那是他現在已經在用的路。
+ */
+function togglePenMode() {
+  if (sel.penMode) { finishPen(); return; }
+  exitOtherModes('pen');
+  sel.setPenMode(true);
+  sel.penCorner = false;
+  $('pen').classList.add('on');
+  panel.refresh();
+  updateBar();
+  /**
+   * ⚠ **一定要把「轉視角換手勢了」講出來** —— 跟刀具同一條理由：
+   * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
+   */
+  toast('鋼筆：在地板上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。'
+      + '在最後一點【快點兩下】就完成。'
+      + '轉視角改成：桌機按右鍵拖、平板兩指');
+}
+
+/**
+ * 收尾：把畫好的錨點變成一個 `pen` 物件。
+ *
+ * 🔴 **少於 3 個錨點圍不出面積** —— 擋下來並講原因，
+ * ⛔ 不可以安靜地什麼都不做（坑第 21 條）。
+ */
+function finishPen() {
+  const path = sel.takePen();
+  $('pen').classList.remove('on');
+  sel.setPenMode(false);
+  if (!path) {
+    panel.refresh(); updateBar();
+    toast('至少要放 3 個點才圍得出一個形狀 —— 這次畫的不算', true);
+    return;
+  }
+  const h = +$('penH').value;
+  if (!Number.isFinite(h) || h <= 0) {
+    toast('厚度要打一個大於 0 的數字', true);
+    return;
+  }
+  const obj = new ModelObject({
+    name: `鋼筆 ${doc.objects.length + 1}`,
+    kind: KIND.SOLID,
+    src: { type: 'pen', h, paths: [path] }
+  });
+  /**
+   * ⚠ **原點置中，⛔ 不要讓它留在世界原點** —— 畫在遠處的形狀，
+   * 原點留在 (0,0) 的話按旋轉會繞著老遠的地方轉。
+   * 〔2026-08-29 剛立的那一則：原點就是旋轉與縮放的中心〕
+   */
+  doc.add(obj);
+  recenterOrigin(obj);
+  view.sync(doc);
+  sel.set([obj.id]);
+  commit('鋼筆');
+  panel.refresh();
+  updateBar();
+  const n = Math.floor(path.a.length / 2);
+  toast(`已建立「${obj.name}」：${n} 個點、高 ${h} cm　`
+      + '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）');
+}
+
+function cancelPenMode() {
+  sel.takePen();
+  sel.setPenMode(false);
+  $('pen').classList.remove('on');
+  panel.refresh();
+  updateBar();
+  toast('已離開鋼筆，剛才畫的不算');
+}
+
+/**
+ * 尖角的開關。
+ * ⚠ **它是 Alt 的替代品** —— Illustrator 按 Alt 折斷把手，⛔ 而平板上沒有 Alt。
+ * 〔kang 2026-08-29 在三個選項裡挑的：一顆看得見的切換鈕，桌機平板同一套〕
+ */
+function togglePenCorner() {
+  sel.penCorner = !sel.penCorner;
+  updateBar();
+  toast(sel.penCorner
+    ? '尖角：開。接下來放的點一律是尖角（就算你用拖的）'
+    : '尖角：關。按住拖就會放出圓滑的點');
 }
 
 function cancelKnifeMode() {
@@ -3441,6 +3545,21 @@ function updateBar() {
   $('knife').textContent = sel.knifeMode
     ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : '刀具（點兩個以上）')
     : '刀具';
+  /**
+   * 🔴 **鋼筆那一組只在鋼筆模式裡出現** —— 跟刀具同一套做法。
+   * ⚠ **`退一點` 要在還沒放點時變灰**，⛔ 不可以按下去什麼都不發生。
+   */
+  $('penCorner').hidden = !sel.penMode;
+  $('penCorner').classList.toggle('on', !!sel.penCorner);
+  $('penH').hidden = !sel.penMode;
+  $('penUndo').hidden = !sel.penMode;
+  $('penUndo').disabled = sel.penCount === 0;
+  $('penCancel').hidden = !sel.penMode;
+  $('pen').title = sel.penMode
+    ? `畫到 ${sel.penCount} 個點了。【點一下】＝ 尖角、【按住拖】＝ 圓滑，`
+      + '最後一點【快點兩下】完成（或再按一次這顆）'
+    : '鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件';
+
   $('knifeCancel').hidden = !sel.knifeMode;
   /**
    * 🔴 **吸中點只在刀具模式裡出現，而且開著的時候要看得出來。**

@@ -11310,6 +11310,153 @@ section('原點置中：搬那個點，⛔ 不搬東西');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  內建鋼筆：pen 來源型別（第 1 階段的純的那一半）
+// ═══════════════════════════════════════════════════════
+
+section('內建鋼筆：錨點與把手 → 輪廓');
+
+/**
+ * 🔴 **這一節的每一個數字都是「使用者自己算得出來」的。**
+ * 正方形的體積、圓的面積 —— ⛔ 不是「跑出來多少就寫多少」。
+ */
+{
+  const prim = await import('../js/build/prim.js');
+
+  /** 多邊形面積（鞋帶公式）。⛔ 不借網格的，這裡要獨立對答案 */
+  const polyArea = pts => {
+    let s = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      s += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return Math.abs(s) / 2;
+  };
+
+  /** ① 四個尖角 → 正方形。體積要精確 */
+  {
+    const sq = { closed: true, a: [0, 0, 40, 0, 40, 40, 0, 40], hi: [], ho: [] };
+    const pts = prim.flattenPenPath(sq, 0.2);
+    eq('① 四個尖角 → 點數就是 4（直線段⛔ 不細分）', pts.length, 4);
+    eq('　 四個都是轉角', pts.filter(p => p.corner).length, 4);
+    const m = prim.buildPrim('pen', { h: 10, paths: [sq] });
+    near('★★ 　 體積 ＝ 40 × 40 × 10', m.volume(), 16000, 1e-6);
+  }
+
+  /**
+   * ② **用四段貝茲畫一個圓** —— 把手長 ＝ r × 0.5522847
+   * （那是四段三次貝茲逼近圓的標準常數）。
+   *
+   * ⭐ **這一組是整節的重點**：容許值越小，點數越多、面積越靠近 πr²。
+   * **兩個數字互相對得起來，⛔ 不是「看起來像圓」**（鐵律三）。
+   */
+  {
+    const r = 20, k = r * 0.5522847498;
+    const cir = {
+      closed: true,
+      a: [r, 0, 0, r, -r, 0, 0, -r],
+      hi: [0, -k, k, 0, 0, k, -k, 0],
+      ho: [0, k, -k, 0, 0, -k, k, 0]
+    };
+    const exact = Math.PI * r * r;
+    const rows = [1, 0.2, 0.02].map(tol => {
+      const p = prim.flattenPenPath(cir, tol);
+      return { tol, n: p.length, a: polyArea(p) };
+    });
+    ok('② 容許值越小，點數越多',
+       rows[0].n < rows[1].n && rows[1].n < rows[2].n,
+       rows.map(x => `${x.tol}→${x.n}`).join(' '));
+    ok('★★ 　 而且面積一路逼近 πr²（⛔ 內接多邊形永遠略小）',
+       rows[0].a < rows[1].a && rows[1].a < rows[2].a && rows[2].a < exact,
+       rows.map(x => x.a.toFixed(3)).join(' → ') + ` 　πr²=${exact.toFixed(3)}`);
+    near('★★ 　 容許值 0.02 時，面積跟 πr² 差不到 0.2 cm²',
+         exact - rows[2].a, 0, 0.2);
+    eq('　 四個錨點都平滑 → 一個轉角都沒有',
+       prim.flattenPenPath(cir, 0.02).filter(p => p.corner).length, 0);
+
+    /**
+     * 🔴🔴 **這一句守一個真的陷阱，⛔ 不要刪。**
+     * `flattenCubic()` **會把終點也放進來**，而終點就是下一個錨點 ——
+     * ⛔ 沒有去掉的話**每個錨點都會出現兩次**，
+     * ⚠ 而面積、形狀**完全看不出異狀**（重複點不影響鞋帶公式）。
+     */
+    {
+      const p = prim.flattenPenPath(cir, 0.02);
+      const hit = p.filter(q =>
+        [[r, 0], [0, r], [-r, 0], [0, -r]].some(
+          ([x, y]) => Math.hypot(q.x - x, q.y - y) < 1e-9)).length;
+      eq('★★ 　 四個錨點各只出現一次（⛔ 沒有把細分的終點重複收進來）', hit, 4);
+    }
+  }
+
+  /**
+   * ③ **一邊有把手、一邊沒有 ＝ 尖角** ——
+   * ⚠ 判準⛔ 不是「有沒有把手」，是「兩側共不共線」。
+   * 那正是 Illustrator 從曲線接直線時的樣子。
+   */
+  {
+    const mix = {
+      closed: true, a: [0, 0, 40, 0, 40, 40],
+      hi: [0, 0, 0, 0, 0, 0], ho: [10, 0, 0, 0, 0, 0]
+    };
+    eq('③ 一邊有把手一邊沒有 → 三個錨點都是尖角',
+       prim.flattenPenPath(mix, 0.2).filter(p => p.corner).length, 3);
+  }
+
+  /** ④ 邊界情形：點太少、沒有路徑 */
+  {
+    eq('④ 只有一個錨點 → 回空的',
+       prim.flattenPenPath({ closed: true, a: [0, 0] }, 0.2).length, 0);
+    eq('　 沒給東西不會壞', prim.flattenPenPath(null, 0.2).length, 0);
+    let msg = '';
+    try { prim.buildPrim('pen', { h: 3, paths: [] }); }
+    catch (e) { msg = e.message; }
+    ok('　 沒有形狀時擋下來並講原因', msg.includes('還沒有畫'), msg);
+  }
+
+  /** ⑤ ⛔ 不出現在「新增」下拉（跟 extrude 同一條理由）*/
+  {
+    ok('⑤ pen ⛔ 不在新增下拉裡（它要有人先畫，⛔ 不能從零生成）',
+       !prim.PRIM_TYPES.includes('pen'), prim.PRIM_TYPES.join(','));
+  }
+
+  /**
+   * 🔴 ⑥ **存檔 → 讀檔往返：錨點與把手要一個數字都不差。**
+   *
+   * ⚠ **⛔ 這一組不是形式** —— 鋼筆存的是「參數」，
+   * 而 kang 要的是「**回頭拉點、拉把手**」（第 2 階段）。
+   * **把手在存檔往返時掉了的話，第 2 階段就從一開始就是壞的**，
+   * 而**形狀完全看不出異狀**（曲線照樣畫得出來，只是再也調不動）。
+   */
+  {
+    const ioM = await import('../js/core/io.js');
+    const r = 20, k = r * 0.5522847498;
+    const src = {
+      type: 'pen', h: 7,
+      paths: [{
+        closed: true,
+        a: [r, 0, 0, r, -r, 0, 0, -r],
+        hi: [0, -k, k, 0, 0, k, -k, 0],
+        ho: [0, k, -k, 0, 0, -k, k, 0]
+      }]
+    };
+    const doc = new ioM.Doc();
+    doc.add(new ioM.ModelObject({ name: '鋼筆 1', src }));
+    const back = ioM.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+    const p2 = back.objects[0].src.paths[0];
+    eq('⑥ 存讀檔往返：來源型別還是 pen', back.objects[0].src.type, 'pen');
+    eq('★★ 　 錨點一個數字都不差',
+       JSON.stringify(p2.a), JSON.stringify(src.paths[0].a));
+    eq('★★ 　 進把手一個數字都不差',
+       JSON.stringify(p2.hi), JSON.stringify(src.paths[0].hi));
+    eq('★★ 　 出把手一個數字都不差',
+       JSON.stringify(p2.ho), JSON.stringify(src.paths[0].ho));
+    /** ⭐ 讀回來還生得出網格（⛔ 不是只有資料對，要真的建得起來）*/
+    near('★ 　 讀回來生得出網格，體積 ≈ πr² × 高',
+         back.objects[0].mesh().volume(), Math.PI * r * r * 7, 60);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

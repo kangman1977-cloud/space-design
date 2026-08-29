@@ -1051,7 +1051,63 @@ export class SceneView {
    * （`select.js` 的 `setKnifeMode()`）—— ⛔ 不要在進出刀具的每一處各寫一次還原
    * （坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義）。
    */
-  setKnifeInput(on) {
+  /**
+   * 🔴 **地板上的一點：把螢幕座標打到 y ＝ 0 那個平面。**
+   *
+   * ── 為什麼鋼筆要它 ──────────────────────────────────
+   * 鋼筆是**畫在地板上**的（kang 2026-08-27 拍板，跟 `匯入線稿` 同一條路）。
+   * ⚠ 而 `pickElement()` 那條路是**打到模型上** —— 地板上什麼都沒有，
+   * 打不到任何 `pickables`。**⛔ 兩者不能混用。**
+   *
+   * ⭐ 回傳 **(x, z)**，⛔ 不是 (x, y) —— 地板上的兩個軸在世界裡是 X 與 Z，
+   * 而擠出件的輪廓也正是用 (x, z) 對應到 SVG 的 (x, y)
+   * （`importPanel._makeObj()` 那一行註解寫著同一件事）。
+   *
+   * ⚠ **相機轉到地板底下時打不到**（射線跟平面同向）→ 回 `null`，
+   * ⛔ 不硬給一個點。〔2026-08-29 起相機轉得到底下了，這件事會真的發生〕
+   *
+   * @returns {{x:number, z:number, world:THREE.Vector3}|null}
+   */
+  groundPoint(ndcX, ndcY) {
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+    const p = new THREE.Vector3();
+    const hit = ray.ray.intersectPlane(
+      new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p);
+    if (!hit) return null;
+    return { x: p.x, z: p.z, world: p.clone() };
+  }
+
+  /**
+   * 鋼筆的預覽線。⚠ 跟刀具是**兩個獨立的疊層**，⛔ 不共用同一個物件 ——
+   * 兩個模式不會同時開，但共用的話關掉一個會把另一個也清掉。
+   */
+  setPenPreview(worldPts, dots) {
+    this.clearPenPreview();
+    this._penPrev = this._buildLineOverlay('penPreview', worldPts, dots, 0x59d97b);
+  }
+
+  clearPenPreview() {
+    if (!this._penPrev) return;
+    this.scene.remove(this._penPrev);
+    this._penPrev.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._penPrev = null;
+  }
+
+  /**
+   * 🔴 **把「畫」的手勢整組換掉：左鍵／單指空出來給畫，轉視角換到右鍵／兩指。**
+   *
+   * ⚠ **⛔ 這一支原本叫 `setKnifeInput()`**（2026-08-29 改名）——
+   * 鋼筆要的是**一模一樣的東西**，而**兩個模式各留一份就是兩條要對齊的路**
+   * （坑第 31 條）。⭐ 名字改成講「它做什麼」，⛔ 不是「誰在用」。
+   *
+   * ⭐ **平板那兩列才是重點**：`touches` 跟 `mouseButtons` 是分開的兩個設定，
+   * 少改一個的話平板上單指會變成轉視角，畫不出東西。
+   */
+  setDrawInput(on) {
     /** 一個無效值 ＝ 那個手勢什麼都不做（兩個 switch 的 default 都是 NONE） */
     const NONE = -1;
     if (on) {
