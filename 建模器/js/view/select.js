@@ -195,6 +195,20 @@ export class Selection {
     this._penHover = -1;
     /** 這一次按下去是不是壓在第一個錨點上（＝ 要閉合） */
     this._penClosing = false;
+    /**
+     * 🔴 **這一段曲線已經「確定」了嗎**（kang 2026-08-29 第四次退回定的）。
+     *
+     * > **他的原話：「左鍵重疊了曲線與第三點的確認..
+     * > 　因此要變成滑鼠右鍵來確定曲線..左鍵是第三點的位置確定」**
+     *
+     * ⚠ **⛔ 這 ⛔ 不是「還沒存下來」** —— 錨點與把手放開手就定案了。
+     * 它管的是**畫面**：確定之前，那條線會一直跟著游標跑
+     * （看起來「還在開放狀態」）；**確定之後就停住**，
+     * 使用者才能安心去找下一個點的位置。
+     *
+     * 🔴 **放下一個點時自動解除** —— 新的一段本來就又是開放的。
+     */
+    this._penParked = false;
 
     /**
      * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
@@ -647,6 +661,8 @@ export class Selection {
           this._penClosing = true;
         } else if (g) {
           this._penClosing = false;
+          /** ⭐ 新的一段本來就又是開放的 */
+          this._penParked = false;
           this._penAddAnchor(g.x, g.z, 0, 0);
           if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
         }
@@ -682,7 +698,8 @@ export class Selection {
             this._penHover = h;
             if (this.hooks.onPenHover) this.hooks.onPenHover(h, this.penCount);
           }
-          this._drawPenPreview(g.world);
+          /** 🔴 已經確定過就⛔ 不再跟著游標跑 —— 那正是「開放狀態」的樣子 */
+          this._drawPenPreview(this._penParked ? null : g.world);
         }
       }
 
@@ -775,6 +792,70 @@ export class Selection {
         if (dist > TAP_MOVE) return;
       }
 
+      /**
+       * 🔴🔴 **鋼筆一定要放在「拖曳過就不算點選」那道之前。**
+       *
+       * 〔kang 2026-08-29 第四次退回，⛔ 我前三次都沒抓到 —— 這是根本原因〕
+       * 下面那一行是給「點選」用的：
+       *     if (dist > TAP_MOVE || dt > TAP_TIME) return;
+       * 而**鋼筆的「按住拖」必定超過 `TAP_MOVE`** ——
+       * 所以放在它後面的話，**放開手的清理永遠走不到**。
+       *
+       * 🔴 **後果**：`_penDown` 一直留著 → 之後每一次移動游標都還被當成
+       * 「正在拖」→ **上一個錨點的把手被改寫成「指向游標」**，
+       * 直到使用者按下左鍵才停。
+       *
+       * ⚠ **而那正是 kang 描述的一切**：
+       * 「不點左鍵，曲線會一直處於開放狀態」（**曲線真的還在變**）、
+       * 「左鍵重疊了曲線與第三點的確認」（**那一按同時停住曲線又放下一點**）。
+       *
+       * ⚠ **⛔ 我前一輪的「實測」量錯了東西**：我量錨點數（1→2→2，看起來正常），
+       * **而病在把手的數值**。【實證】存下來的把手 ＝ 整條弦（長 47.5，
+       * 比半徑 32 還大、方向也不是切線），⛔ 不是我拖出來的那一段。
+       * 🔴 **量錯量，就會得到「邏輯是對的」這個錯誤結論。**
+       *
+       * ── 手勢的分工（kang 2026-08-29 指定）──────────────────
+       * **左鍵 ＝ 放點**（位置定案）　**右鍵按一下 ＝ 確定這一段曲線**
+       * ⚠ **右鍵「拖」仍然是轉視角** —— 用移動距離分。
+       */
+      if (this.penMode) {
+        /** 右鍵按一下 ＝ 確定曲線；右鍵拖 ＝ 轉視角，⛔ 不可以一起吃掉 */
+        if (d.button === 2) {
+          if (dist <= TAP_MOVE && this._pen && this._pen.a.length) this.parkPen();
+          return;
+        }
+        const d0 = this._penDown;
+        this._penDown = null;
+        if (!d0 || d.button !== DRAW_BUTTON) return;
+
+        /** 壓在第一個錨點上 → 閉合並收尾（Adobe 的做法） */
+        if (this._penClosing) {
+          this._penClosing = false;
+          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
+          return;
+        }
+
+        const now = performance.now();
+        const lt = this._lastPenTap;
+        const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
+                      && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
+        this._lastPenTap = { x: e.clientX, y: e.clientY, t: now };
+        if (isDouble) {
+          /** ⚠ 第二下的 `pointerdown` 也放了一個錨點，⛔ 一定要退掉 */
+          this.penUndo();
+          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
+          return;
+        }
+
+        /**
+         * ⚠ 錨點在 `pointerdown` 就放好了，這裡⛔ 不再放一次。
+         * 移動距離小於 `TAP_MOVE` ＝ 只是點了一下 → 把手歸零（尖角）。
+         */
+        if (dist <= TAP_MOVE) this._penSetLastHandle(0, 0);
+        this._drawPenPreview();
+        return;
+      }
+
       // 拖曳過、按太久、或正在操作 gizmo → 不算點選
       if (dist > TAP_MOVE || dt > TAP_TIME) return;
       if (this.tc.dragging) return;
@@ -789,54 +870,6 @@ export class Selection {
        * ⚠ 要放在 `seamMode`／`mateMode` 前面沒關係（互斥），
        * 但**一定要在 `pick()` 前面** —— 否則會變成選物件。
        */
-      /**
-       * 🔴 **鋼筆：放開手才分「點一下」與「按住拖」。**
-       *
-       * | 手勢 | 意思 |
-       * |---|---|
-       * | 點一下 | **尖角**錨點（沒有把手）|
-       * | 按住拖 | **圓滑**錨點，拖出來的位移就是**出把手** |
-       *
-       * ⭐ 那正是 Illustrator 鋼筆的行為（kang 2026-08-29 拍板）。
-       * 🔴 **快點兩下 ＝ 收尾**（照刀具，⛔ 不另發明）。
-       */
-      if (this.penMode) {
-        const d0 = this._penDown;
-        this._penDown = null;
-        if (!d0 || d.button !== DRAW_BUTTON) return;
-
-        /** 壓在第一個錨點上 → 閉合並收尾（Adobe 的做法） */
-        if (this._penClosing) {
-          this._penClosing = false;
-          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
-          return;
-        }
-        const now = performance.now();
-        const lt = this._lastPenTap;
-        const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
-                      && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
-        this._lastPenTap = { x: e.clientX, y: e.clientY, t: now };
-        if (isDouble) {
-          /**
-           * ⚠ **第二下的 `pointerdown` 也放了一個錨點，⛔ 一定要退掉** ——
-           * 否則收尾時會多出一個跟前一個重疊的點。
-           * 〔改成「按下就放點」之後才出現的副作用，2026-08-29〕
-           */
-          this.penUndo();
-          if (this.hooks.onPenFinish) this.hooks.onPenFinish();
-          return;
-        }
-
-        /**
-         * ⚠ **錨點在 `pointerdown` 就放好了，這裡⛔ 不再放一次。**
-         * 移動距離小於 `TAP_MOVE` ＝ 使用者只是點了一下 → 把手歸零（尖角）。
-         * ⭐ 判準跟刀具同一條，⛔ 不另訂一個。
-         */
-        const moved = Math.hypot(e.clientX - d0.x, e.clientY - d0.y);
-        if (moved <= TAP_MOVE) this._penSetLastHandle(0, 0);
-        this._drawPenPreview();
-        return;
-      }
       if (this.knifeMode) {
         /**
          * 🔴 **右鍵／中鍵在刀具模式下是轉視角與縮放，⛔ 不可以順便加一個切點。**
@@ -2518,7 +2551,21 @@ export class Selection {
     this._lastPenTap = null;
     this._penHover = -1;
     this._penClosing = false;
+    this._penParked = false;
     return this.penMode;
+  }
+
+  /**
+   * 🔴 **確定這一段曲線。** 右鍵按一下與工具列那顆按鈕**共用這一支**。
+   * ⚠ 兩條路指向同一個狀態，⛔ 不要各記一份（坑第 31 條）——
+   * `吸中點` 那顆就是同一個做法。
+   */
+  parkPen() {
+    if (!this._pen || !this._pen.a.length) return false;
+    this._penParked = true;
+    this._drawPenPreview();
+    if (this.hooks.onPenPark) this.hooks.onPenPark(this.penCount);
+    return true;
   }
 
   /** 現在畫到幾個錨點（呼叫端拿去決定按鈕給不給按、提示怎麼講） */
@@ -2535,6 +2582,7 @@ export class Selection {
     this._lastPenTap = null;
     this._penHover = -1;
     this._penClosing = false;
+    this._penParked = false;
     if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
     if (!p || p.a.length < 6) return null;
     return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
@@ -2606,12 +2654,20 @@ export class Selection {
      * 🔴 **正在拖的那一根把手要畫出來** —— 兩端各畫一段，
      * 使用者才看得到「我拉出了多長、往哪邊」。
      * ⚠ ⛔ 少了它，「拖」在畫面上跟「沒動」分不出來（坑第 21 條）。
+     *
+     * 🔴🔴 **⛔ 但它一定要放在自己的那一組，不可以跟路徑混在一起。**
+     * 【kang 2026-08-29 第三次退回，附截圖】混在一起的話，
+     * 把手的端點會畫成**跟錨點一模一樣的方塊**，
+     * 而使用者看到就會以為「下一個點已經產生了」→ 按下去 →
+     * 真的多一個點 → 只能按「退一點」。
+     * ⭐ 樣式的差別與完整理由在 `scene.js` 的 `setPenPreview()`。
      */
+    const hpts = [], hdots = [];
     if (handleAt) {
       const a = this._penWorld(n - 1);
-      pts.push(a, handleAt);
-      pts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
-      dots.push(handleAt);
+      hpts.push(a, handleAt);
+      hpts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
+      hdots.push(handleAt);
     }
     /**
      * 🔴 **游標底下那個錨點要變大**〔kang 2026-08-29 要的〕。
@@ -2619,7 +2675,7 @@ export class Selection {
      */
     const hot = (this._penHover >= 0 && this._penHover < n)
       ? this._penWorld(this._penHover) : null;
-    this.view.setPenPreview(pts, dots, hot);
+    this.view.setPenPreview(pts, dots, hot, hpts, hdots);
   }
 
   /**

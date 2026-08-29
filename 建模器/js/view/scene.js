@@ -1082,9 +1082,70 @@ export class SceneView {
    * 鋼筆的預覽線。⚠ 跟刀具是**兩個獨立的疊層**，⛔ 不共用同一個物件 ——
    * 兩個模式不會同時開，但共用的話關掉一個會把另一個也清掉。
    */
-  setPenPreview(worldPts, dots, hot) {
+  /**
+   * @param {THREE.Vector3[]} worldPts **路徑**的線段（兩兩一組）
+   * @param {THREE.Vector3[]} dots     **錨點**
+   * @param {THREE.Vector3}   hot      游標底下那個錨點（會畫大一號）
+   * @param {THREE.Vector3[]} handlePts **把手**的線段（兩兩一組）
+   * @param {THREE.Vector3[]} handleDots 把手的端點
+   */
+  setPenPreview(worldPts, dots, hot, handlePts, handleDots) {
     this.clearPenPreview();
     this._penPrev = this._buildLineOverlay('penPreview', worldPts, dots, 0x59d97b);
+
+    /**
+     * 🔴🔴 **把手一定要跟「路徑＋錨點」長得不一樣。**
+     *
+     * 〔kang 2026-08-29 第三次退回，附截圖 —— 而**截圖就是證據**〕
+     * 舊版把把手的線塞進路徑那一組、把手的端點塞進錨點那一組，
+     * 用**同樣的顏色、同樣的粗細、同樣大小的方塊**畫。
+     * → **畫面上看起來就是「下一個點已經在那裡了，路徑也已經連過去了」。**
+     *
+     * 🔴 **而使用者會按下去，正是因為畫面告訴他那裡有一個點** ——
+     * 那一按才真的產生下一個錨點，落在他只是想「確定」的位置。
+     * ⚠ **他必須按「退一點」才能繼續** —— 那是這個誤導的實際代價。
+     *
+     * ⭐ **⛔ 邏輯本來就是對的**（2026-08-29 線上版逐步實測：
+     * 按下→拖→放開，錨點數 1→2→2，**放開⛔ 不會多一個點**）——
+     * **說謊的是畫面，⛔ 不是狀態機。**
+     *
+     * ── ⚠ 這裡刻意違反「只變大，⛔ 不換顏色」那一條 ──────────
+     * 那條規則管的是**同一種東西的 hover**（指到的邊 vs 沒指到的邊）。
+     * 而這裡要分的是**兩種不同的東西**：路徑 vs 控制桿。
+     * ⭐ Illustrator 自己就是這樣分的：方向線**細**、方向點**小**，
+     * 一眼就看得出「這是控制桿，⛔ 不是路徑」。
+     */
+    if (this._penPrev && handlePts && handlePts.length >= 2) {
+      const pos = new Float32Array(handlePts.length * 3);
+      handlePts.forEach((p, i) => {
+        pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+      });
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const ln = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+        color: 0x2f7f52,          // 比路徑暗一階
+        transparent: true, opacity: 0.75,
+        depthTest: false
+      }));
+      ln.renderOrder = 6;         // ⚠ 壓在路徑底下，⛔ 不要蓋住形狀
+      ln.raycast = () => {};
+      this._penPrev.add(ln);
+    }
+    if (this._penPrev && handleDots && handleDots.length) {
+      const dp = new Float32Array(handleDots.length * 3);
+      handleDots.forEach((p, i) => {
+        dp[i * 3] = p.x; dp[i * 3 + 1] = p.y; dp[i * 3 + 2] = p.z;
+      });
+      const dg = new THREE.BufferGeometry();
+      dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+      /** ⭐ **5 px ＝ 錨點（11 px）的一半以下** —— 大小就分得出來 */
+      const pt = new THREE.Points(dg, new THREE.PointsMaterial({
+        color: 0x2f7f52, size: 5, sizeAttenuation: false, depthTest: false
+      }));
+      pt.renderOrder = 6;
+      pt.raycast = () => {};
+      this._penPrev.add(pt);
+    }
     /**
      * 🔴 **游標底下那個點要變大。**〔kang 2026-08-29 要的：
      * 「當滑鼠遇到點要能夠有略變大的呈現..不然很難判斷」〕

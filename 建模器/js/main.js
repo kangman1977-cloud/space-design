@@ -79,6 +79,12 @@ const sel = new Selection(view, {
   onPenHover: (i, n) => {
     if (i === 0 && n >= 3) toast('按下去就接回起點、完成這個形狀');
   },
+  /**
+   * ⚠ **確定曲線要講一句** —— 畫面上的變化是「那條線不再跟著游標跑」，
+   * ⛔ 不講的話跟「當掉了」分不出來（坑第 21 條）。
+   */
+  onPenPark: n => toast(`這一段曲線固定了（${n} 個點）　`
+    + '接下來按左鍵就是放下一個點'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -441,6 +447,9 @@ $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
 $('pen').onclick = () => togglePenMode();
 $('penCorner').onclick = () => togglePenCorner();
+$('penPark').onclick = () => {
+  if (!sel.parkPen()) toast('還沒有畫任何點', true);
+};
 $('penUndo').onclick = () => {
   const n = sel.penUndo();
   toast(n ? `退掉一個點，還剩 ${n} 個` : '已經沒有點了');
@@ -854,6 +863,7 @@ function togglePenMode() {
    * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
    */
   toast('鋼筆：在地板上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。'
+      + '【右鍵按一下】＝ 確定這一段曲線（平板按「確定曲線」）。'
       + '畫完【回到第一個點按下去】就接起來 —— 指到它會變大。'
       + '（也可以在最後一點快點兩下）'
       + '　轉視角改成：桌機按右鍵拖、平板兩指');
@@ -3561,6 +3571,8 @@ function updateBar() {
   $('penCorner').hidden = !sel.penMode;
   $('penCorner').classList.toggle('on', !!sel.penCorner);
   $('penH').hidden = !sel.penMode;
+  $('penPark').hidden = !sel.penMode;
+  $('penPark').disabled = sel.penCount === 0;
   $('penUndo').hidden = !sel.penMode;
   $('penUndo').disabled = sel.penCount === 0;
   $('penCancel').hidden = !sel.penMode;
