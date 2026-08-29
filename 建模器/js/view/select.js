@@ -615,6 +615,23 @@ export class Selection {
         this._penDown = g
           ? { x: e.clientX, y: e.clientY, t: performance.now(), g }
           : null;
+        /**
+         * 🔴🔴 **點在「按下去的當下」就出現，⛔ 不是等到放開手。**
+         *
+         * 【kang 2026-08-29 回報】舊版在 `pointerup` 才建錨點，
+         * 結果**按下去畫面上什麼都沒有** —— 他的原話：
+         * 「**我不先點一次滑鼠怎麼產生點..怎麼拉線**」。
+         *
+         * ⚠ **那 ⛔ 不是他不懂手勢** —— Illustrator 也是按下就放點，
+         * 但**它按下的那一刻點就畫出來了，所以「拖」有東西可拉**。
+         * **漏的是回饋，⛔ 不是手勢。**
+         *
+         * ⭐ 先當尖角放下去；拖的話 `pointermove` 再把把手補上。
+         */
+        if (g) {
+          this._penAddAnchor(g.x, g.z, 0, 0);
+          if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
+        }
       }
       if (this.marqueeMode && !this.tc.dragging) {
         const r = this._toCanvasPx(e.clientX, e.clientY);
@@ -633,7 +650,17 @@ export class Selection {
        */
       if (this.penMode && this._pen && this._pen.a.length) {
         const g = this._groundAt(e.clientX, e.clientY);
-        if (g) this._drawPenPreview(g.world);
+        if (!g) { /* 相機在地板底下，打不到 */ }
+        else if (this._penDown) {
+          /**
+           * 🔴 **正在拖：把手就是「按下去的位置 → 現在的位置」。**
+           * ⭐ 曲線因此**拖的當下就彎**，⛔ 不是放開才知道。
+           */
+          this._penSetLastHandle(g.x - this._penDown.g.x, g.z - this._penDown.g.z);
+          this._drawPenPreview(null, g.world);
+        } else {
+          this._drawPenPreview(g.world);
+        }
       }
 
       /**
@@ -761,19 +788,24 @@ export class Selection {
                       && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
         this._lastPenTap = { x: e.clientX, y: e.clientY, t: now };
         if (isDouble) {
+          /**
+           * ⚠ **第二下的 `pointerdown` 也放了一個錨點，⛔ 一定要退掉** ——
+           * 否則收尾時會多出一個跟前一個重疊的點。
+           * 〔改成「按下就放點」之後才出現的副作用，2026-08-29〕
+           */
+          this.penUndo();
           if (this.hooks.onPenFinish) this.hooks.onPenFinish();
           return;
         }
 
+        /**
+         * ⚠ **錨點在 `pointerdown` 就放好了，這裡⛔ 不再放一次。**
+         * 移動距離小於 `TAP_MOVE` ＝ 使用者只是點了一下 → 把手歸零（尖角）。
+         * ⭐ 判準跟刀具同一條，⛔ 不另訂一個。
+         */
         const moved = Math.hypot(e.clientX - d0.x, e.clientY - d0.y);
-        const isDrag = moved > TAP_MOVE && (now - d0.t) <= 4000;
-        let hx = 0, hy = 0;
-        if (isDrag) {
-          const g1 = this._groundAt(e.clientX, e.clientY);
-          if (g1) { hx = g1.x - d0.g.x; hy = g1.z - d0.g.z; }
-        }
-        this._penAddAnchor(d0.g.x, d0.g.z, hx, hy);
-        if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
+        if (moved <= TAP_MOVE) this._penSetLastHandle(0, 0);
+        this._drawPenPreview();
         return;
       }
       if (this.knifeMode) {
@@ -2501,10 +2533,26 @@ export class Selection {
   }
 
   /**
+   * 🔴 **把最後一個錨點的把手設成這個值**（拖曳中一直被呼叫）。
+   *
+   * ⭐ **進把手 ＝ 出把手的反向** —— 那就是「平滑」的定義。
+   * ⚠ **`尖角` 開著就一律 0** —— 那顆是 Alt 的替代品（kang 2026-08-29 選的）。
+   */
+  _penSetLastHandle(hx, hy) {
+    if (!this._pen || !this._pen.a.length) return;
+    const i = Math.floor(this._pen.a.length / 2) - 1;
+    const smooth = Math.hypot(hx, hy) > 1e-9 && !this.penCorner;
+    this._pen.hi[i * 2] = smooth ? -hx : 0;
+    this._pen.hi[i * 2 + 1] = smooth ? -hy : 0;
+    this._pen.ho[i * 2] = smooth ? hx : 0;
+    this._pen.ho[i * 2 + 1] = smooth ? hy : 0;
+  }
+
+  /**
    * 預覽線。⚠ `_buildLineOverlay()` 吃的是**兩兩一組的線段**，
    * ⛔ 不是連續折線 —— 串錯的話會多畫一堆不存在的線。
    */
-  _drawPenPreview(extra) {
+  _drawPenPreview(extra, handleAt) {
     if (!this.view || !this.view.setPenPreview) return;
     if (!this._pen || !this._pen.a.length) {
       if (this.view.clearPenPreview) this.view.clearPenPreview();
@@ -2521,6 +2569,17 @@ export class Selection {
     for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
     /** 游標那一段（還沒放下去的） */
     if (extra) { pts.push(this._penWorld(n - 1), extra); }
+    /**
+     * 🔴 **正在拖的那一根把手要畫出來** —— 兩端各畫一段，
+     * 使用者才看得到「我拉出了多長、往哪邊」。
+     * ⚠ ⛔ 少了它，「拖」在畫面上跟「沒動」分不出來（坑第 21 條）。
+     */
+    if (handleAt) {
+      const a = this._penWorld(n - 1);
+      pts.push(a, handleAt);
+      pts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
+      dots.push(handleAt);
+    }
     this.view.setPenPreview(pts, dots);
   }
 
