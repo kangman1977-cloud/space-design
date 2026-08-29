@@ -3615,9 +3615,17 @@ function updateBar() {
    */
   $('penCorner').hidden = !sel.penMode;
   $('penCorner').classList.toggle('on', !!sel.penCorner);
+  /**
+   * ⚠ **兩個數字欄位一定要帶標籤** —— kang 2026-08-29 問
+   * 「『尖角』旁的 3 是代表甚麼?」：`3` 是**厚度**、`45` 是**鎖角度的度數**，
+   * 但它們都緊貼著按鈕，**看起來像是那顆按鈕的參數**。
+   * 🔴 **他會問，就表示版面在誤導** —— 那是回饋，⛔ 不是他沒看清楚。
+   */
+  $('penHLbl').hidden = !sel.penMode;
   $('penH').hidden = !sel.penMode;
   $('penSnap').hidden = !sel.penMode;
   $('penSnap').classList.toggle('on', !!sel.penSnapAngle);
+  $('penSnapDegLbl').hidden = !sel.penMode;
   $('penSnapDeg').hidden = !sel.penMode;
   $('penPark').hidden = !sel.penMode;
   $('penPark').disabled = sel.penCount === 0;
