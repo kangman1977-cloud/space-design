@@ -11598,6 +11598,50 @@ section('內建鋼筆：錨點與把手 → 輪廓');
        prim.flattenPenPath(mk([0, 0]), 0.02).filter(p => p.corner).length >= 1, true);
   }
 
+  /**
+   * 🔴 ⑪ **直線接曲線：長出「出把手」就會變彎，而且⛔ 不會動到上一段。**
+   *
+   * 〔kang 2026-08-29 拍板要補完：「既然控制的更細..就要做完善」〕
+   * ⭐ 它是第 ⑩ 組的**反向**：⑩ 是「收掉出把手 → 下一段變直」，
+   * 這一組是「長出出把手 → 下一段變彎」。
+   * ⚠ **兩組共用同一個不變量**：不管收還是長，**上一段一格都不能變**。
+   */
+  {
+    const k = 12;
+    /** 三個點：0→1 是直線（兩端都沒有把手），1→2 想要變彎 */
+    const mk = ho1 => ({
+      closed: false,
+      a: [0, 0, 40, 0, 80, 40],
+      hi: [0, 0, 0, 0, 0, 0],
+      ho: [0, 0, ho1[0], ho1[1], 0, 0]
+    });
+    const flat = prim.flattenPenPath(mk([0, 0]), 0.02);
+    const bent = prim.flattenPenPath(mk([0, k]), 0.02);
+    ok('⑪ 長出出把手 → 第二段變彎（細分出一堆點）',
+       bent.length > flat.length,
+       `直 ${flat.length} 個點 → 彎 ${bent.length} 個點`);
+    {
+      const upto = (pts, x, y) => {
+        const i = pts.findIndex(p =>
+          Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9);
+        return pts.slice(0, i + 1);
+      };
+      const a1 = upto(flat, 40, 0), b1 = upto(bent, 40, 0);
+      ok('★★ 　 而且【第一段（直線）一格都沒變】—— 逐點完全一樣',
+         a1.length === b1.length
+         && a1.every((p, i) => Math.abs(p.x - b1[i].x) < 1e-12
+                            && Math.abs(p.y - b1[i].y) < 1e-12),
+         `${a1.length} vs ${b1.length} 個點`);
+    }
+    /**
+     * ⚠ **只長出把手的那個點仍然是【尖角】** —— 它的進把手是 0，
+     * 兩側⛔ 不共線。那是對的：直線轉曲線本來就該在那裡折一下。
+     */
+    ok('★ 　 那個點仍然是尖角（進把手是 0，兩側⛔ 不共線）',
+       prim.flattenPenPath(mk([0, k]), 0.02)
+         .find(p => Math.abs(p.x - 40) < 1e-9 && Math.abs(p.y) < 1e-9).corner === true);
+  }
+
   /** ⑧ 把手⛔ 不跟著搬（它存的是相對位移） */
   {
     const k = 10;

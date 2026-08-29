@@ -694,7 +694,7 @@ export class Selection {
            * 🔴 **壓在「剛畫好的那個點」上 ＝ 要把它轉成尖角**（曲線接直線）。
            * ⚠ **⛔ 這一下不放新點** —— 跟閉合同一個道理。
            */
-          this._penConvert = true;
+          this._penConvert = { x: e.clientX, y: e.clientY, g };
         } else if (g) {
           this._penClosing = false;
           /** ⭐ 新的一段本來就又是開放的 */
@@ -724,6 +724,22 @@ export class Selection {
       if (this.penMode && this._pen && this._pen.a.length) {
         const g = this._groundAt(e.clientX, e.clientY);
         if (!g) { /* 相機在地板底下，打不到 */ }
+        else if (this._penConvert) {
+          /**
+           * 🔴 **在剛畫好的那個點上拖出把手時，要看得見那根把手在長。**
+           * ⚠ ⛔ 少了這一段又是「調一條看不見的線」——
+           * 那個病 2026-08-29 已經踩過一次（閉合那一輪），⛔ 不要再犯。
+           * ⭐ **只改出把手，⛔ 不動進把手** —— 上一段一格都不能變。
+           */
+          const cvi = this.penCount - 1;
+          const hh = this._snapIf(e,
+            g.x - this._penConvert.g.x, g.z - this._penConvert.g.z);
+          this._pen.ho[cvi * 2] = hh.dx;
+          this._pen.ho[cvi * 2 + 1] = hh.dz;
+          const av = this._penWorld(cvi);
+          this._drawPenPreview(null,
+            new THREE.Vector3(av.x + hh.dx, 0, av.z + hh.dz), { handleAt: cvi });
+        }
         else if (this._penClosing) {
           /**
            * 🔴🔴 **拖著閉合時，改的是【第一個錨點的進把手】，
@@ -944,13 +960,38 @@ export class Selection {
          * 那顆管的是「**接下來要放的點**」，這裡管的是「**已經放好的那個點**」。
          */
         if (this._penConvert) {
+          const cv0 = this._penConvert;
           this._penConvert = false;
           const ci = this.penCount - 1;
           const had = Math.hypot(this._pen.ho[ci * 2], this._pen.ho[ci * 2 + 1]) > 1e-9;
+          if (dist > TAP_MOVE) {
+            /**
+             * 🔴 **按住拖 ＝ 幫這個點長出出把手 → 下一段是曲線**（直線接曲線）。
+             *
+             * ⭐ **Adobe 原文，⛔ 不是我發明的**：
+             * > 「Select the anchor point **and drag the direction line**
+             * > 　that appears to set the slope of the curved segment
+             * > 　you want to create.」
+             *
+             * ⚠ **⛔ 只設出把手** —— 上一段一格都不能變。
+             * 〔鐵律二：性質由兩端決定 —— 這裡刻意**只碰該碰的那一端**〕
+             * ⚠ 拖曳中 `pointermove` 已經一路在設了，這裡只補最後一次
+             * （放開的位置才是最終值）。
+             */
+            const g2 = this._groundAt(e.clientX, e.clientY);
+            if (g2) {
+              const hh = this._snapIf(e, g2.x - cv0.g.x, g2.z - cv0.g.z);
+              this._pen.ho[ci * 2] = hh.dx;
+              this._pen.ho[ci * 2 + 1] = hh.dz;
+            }
+            this._drawPenPreview();
+            if (this.hooks.onPenConvert) this.hooks.onPenConvert(had, true);
+            return;
+          }
           this._pen.ho[ci * 2] = 0;
           this._pen.ho[ci * 2 + 1] = 0;
           this._drawPenPreview();
-          if (this.hooks.onPenConvert) this.hooks.onPenConvert(had);
+          if (this.hooks.onPenConvert) this.hooks.onPenConvert(had, false);
           return;
         }
 
