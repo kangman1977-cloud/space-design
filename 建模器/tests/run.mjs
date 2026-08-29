@@ -11504,6 +11504,100 @@ section('內建鋼筆：錨點與把手 → 輪廓');
          Math.hypot(b3.cx, b3.cy), 0, 1e-6);
   }
 
+  /**
+   * 🔴 ⑨ **閉合那一段的曲線，由「第一個錨點的進把手」決定。**
+   *
+   * 〔kang 2026-08-29 發現：閉合時做不出曲線。已重現＋量到〕
+   * **閉合段 ＝ 最後一點的出把手 ＋ 第一點的進把手**，
+   * 而 `hi[0]` 在**第一次放那個點**時就被決定了 ——
+   * 第一個點只是「點一下」的話它就是 0，**那一段只彎一半**。
+   * ⭐ 所以閉合時要能用拖的補上（Adobe：「Select **or drag** to close」）。
+   */
+  {
+    const r = 20, k = r * 0.5522847498;
+    const mk = hi0 => ({
+      closed: true,
+      a: [r, 0, 0, r, -r, 0, 0, -r],
+      hi: [hi0[0], hi0[1], k, 0, 0, k, -k, 0],
+      ho: [0, k, -k, 0, 0, -k, k, 0]
+    });
+    const noHandle = prim.flattenPenPath(mk([0, 0]), 0.02);
+    const withHandle = prim.flattenPenPath(mk([0, -k]), 0.02);
+    ok('⑨ 第一個錨點沒有進把手 → 它是【尖角】（閉合那段接上去會折一下）',
+       noHandle[0].corner === true);
+    ok('★★ 　 補上進把手之後 → 它變成【平滑】（閉合那段也彎了）',
+       withHandle[0].corner === false);
+    /**
+     * ⭐ **⛔ 不要只驗 corner 這個旗標** —— 真正看得出差別的是**點數**：
+     * 一端沒有把手的那一段比較「直」，細分出來的點少得多。
+     */
+    ok('★★ 　 而且閉合那一段真的變彎了（細分出來的點明顯變多）',
+       withHandle.length > noHandle.length,
+       `沒把手 ${noHandle.length} 個點 → 有把手 ${withHandle.length} 個點`);
+    /** 面積也對得起來：補好之後才接近整個圓 */
+    const area = pts => {
+      let s2 = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const j = (i + 1) % pts.length;
+        s2 += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+      }
+      return Math.abs(s2) / 2;
+    };
+    ok('★★ 　 面積也證實：補好之後才接近 πr²',
+       Math.PI * r * r - area(withHandle) < Math.PI * r * r - area(noHandle),
+       `沒把手 ${area(noHandle).toFixed(1)} → 有把手 ${area(withHandle).toFixed(1)}`
+       + ` 　πr²=${(Math.PI * r * r).toFixed(1)}`);
+  }
+
+  /**
+   * 🔴 ⑩ **曲線接直線：清掉「出把手」就會變直，而且⛔ 不會動到上一段。**
+   *
+   * 〔kang 2026-08-29 發現：「1 與 2 曲線..2 與 3 依樣會是曲線」〕
+   * 拖出一個圓滑點時**進把手與出把手是一起長出來的**，
+   * 所以下一段就算只點一下，**它那一端還是彎的**。
+   * ⭐ Adobe 的解法是「點一下那個點，把它轉成尖角」＝ **只清出把手**。
+   */
+  {
+    const k = 12;
+    /** 三個點：0→1 拖成曲線，1→2 想要直線 */
+    /**
+     * ⚠ **第三個點⛔ 不可以放在「把手的延長線上」** —— 那樣控制點三點共線，
+     * 「曲線」本來就是直的，這一組會變成一個自己會通過的空測試。
+     * 〔2026-08-29 第一版就是這樣寫的，當場失敗才發現〕
+     */
+    const mk = ho1 => ({
+      closed: false,
+      a: [0, 0, 40, 0, 80, 40],
+      hi: [0, 0, -k, 0, 0, 0],
+      ho: [0, k, ho1[0], ho1[1], 0, 0]
+    });
+    const curved = prim.flattenPenPath(mk([k, 0]), 0.02);
+    const straight = prim.flattenPenPath(mk([0, 0]), 0.02);
+    ok('⑩ 沒清出把手 → 第二段是【彎的】（細分出一堆點）',
+       curved.length > straight.length,
+       `彎 ${curved.length} 個點 → 直 ${straight.length} 個點`);
+    /**
+     * 🔴🔴 **這一句才是重點：清掉出把手之後，⛔ 上一段一格都不能變。**
+     * ⚠ 兩者的**前半段**（0→1）要**逐點完全一樣** ——
+     * 動到 `hi` 的話這一項會當場失敗。
+     */
+    {
+      const upto = (pts, x, y) => {
+        const i = pts.findIndex(p =>
+          Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9);
+        return pts.slice(0, i + 1);
+      };
+      const a1 = upto(curved, 40, 0), b1 = upto(straight, 40, 0);
+      ok('★★ 　 而且【上一段一格都沒變】—— 逐點完全一樣',
+         a1.length === b1.length
+         && a1.every((p, i) => Math.abs(p.x - b1[i].x) < 1e-12
+                            && Math.abs(p.y - b1[i].y) < 1e-12),
+         `${a1.length} vs ${b1.length} 個點`);
+    }
+    eq('★ 　 清掉之後那個錨點變成【尖角】',
+       prim.flattenPenPath(mk([0, 0]), 0.02).filter(p => p.corner).length >= 1, true);
+  }
+
   /** ⑧ 把手⛔ 不跟著搬（它存的是相對位移） */
   {
     const k = 10;

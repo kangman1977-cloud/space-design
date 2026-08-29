@@ -714,6 +714,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品">尖角</button>
       <input id="penH" type="number" min="0.05" step="0.5" value="3" hidden
              title="畫完之後往上拉多高（公分）。跟「匯入線稿」的高度是同一個意思">
+      <button id="penSnap" hidden title="鎖角度：線與把手只能走 45 度的倍數（水平、垂直、四條斜的）。做造型時要讓幾段互相平行就開它。⚠ 桌機也可以直接【按住 Shift】—— 這顆是平板唯一的路（平板沒有 Shift）">鎖角度</button>
+      <input id="penSnapDeg" type="number" min="1" max="180" step="1" value="45" hidden
+             title="鎖幾度的倍數：45 ＝ 水平垂直加四條斜的（Illustrator 的 Shift）、30 ＝ 做六角形、15 ＝ 做十二角形">
       <button id="penPark" hidden title="確定曲線：把這一段固定下來，線就不會再跟著游標跑。⚠ 桌機也可以直接【按一下右鍵】—— 這顆是平板唯一的路（平板沒有右鍵）">確定曲線</button>
       <button id="penUndo" hidden title="退掉剛才放的最後一個點">退一點</button>
       <button id="penCancel" hidden title="離開鋼筆，剛才畫的全部不算">取消</button>

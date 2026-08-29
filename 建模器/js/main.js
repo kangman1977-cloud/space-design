@@ -77,7 +77,11 @@ const sel = new Selection(view, {
    * ⚠ ⛔ 不要每次移動都跳（會洗版）：只在「剛指到」那一下講。
    */
   onPenHover: (i, n) => {
-    if (i === 0 && n >= 3) toast('按下去就接回起點、完成這個形狀');
+    if (i === 0 && n >= 3) {
+      toast('按下去就接回起點　⭐ 想讓最後那一段也是彎的，就【按住拖】');
+    } else if (i === n - 1 && n >= 1) {
+      toast('按一下就把這個點轉成【尖角】—— 接下來那一段就會是直線');
+    }
   },
   /**
    * ⚠ **確定曲線要講一句** —— 畫面上的變化是「那條線不再跟著游標跑」，
@@ -85,6 +89,13 @@ const sel = new Selection(view, {
    */
   onPenPark: n => toast(`這一段曲線固定了（${n} 個點）　`
     + '接下來按左鍵就是放下一個點'),
+  /**
+   * ⚠ **轉尖角一定要講一句** —— 畫面上只有一根把手消失，
+   * ⛔ 不講的話跟「按錯了」分不出來（坑第 21 條）。
+   */
+  onPenConvert: had => toast(had
+    ? '這個點轉成尖角了 —— 接下來那一段會是【直線】（已經畫好的那一段沒有變）'
+    : '這個點本來就是尖角，接下來那一段本來就是直線'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -447,6 +458,18 @@ $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
 $('pen').onclick = () => togglePenMode();
 $('penCorner').onclick = () => togglePenCorner();
+$('penSnapDeg').oninput = () => {
+  const d = +$('penSnapDeg').value;
+  if (Number.isFinite(d) && d > 0) sel.penSnapDeg = d;
+};
+$('penSnap').onclick = () => {
+  sel.penSnapAngle = !sel.penSnapAngle;
+  updateBar();
+  toast(sel.penSnapAngle
+    ? `鎖角度：開。線與把手只能走 ${sel.penSnapDeg} 度的倍數`
+      + '（桌機按住 Shift 也一樣）'
+    : '鎖角度：關。方向自由');
+};
 $('penPark').onclick = () => {
   if (!sel.parkPen()) toast('還沒有畫任何點', true);
 };
@@ -864,7 +887,9 @@ function togglePenMode() {
    */
   toast('鋼筆：在地板上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。'
       + '【右鍵按一下】＝ 確定這一段曲線（平板按「確定曲線」）。'
-      + '畫完【回到第一個點按下去】就接起來 —— 指到它會變大。'
+      + '【按住 Shift】＝ 鎖角度（度數在旁邊調，平板按「鎖角度」）。'
+      + '畫完【回到第一個點按下去】就接起來（想讓最後那段也彎就按住拖）。'
+      + '【曲線接直線】：點一下剛畫好的那個點，把它轉成尖角。'
       + '（也可以在最後一點快點兩下）'
       + '　轉視角改成：桌機按右鍵拖、平板兩指');
 }
@@ -927,10 +952,27 @@ function cancelPenMode() {
  */
 function togglePenCorner() {
   sel.penCorner = !sel.penCorner;
+  /**
+   * 🔴🔴 **開的時候要「連目前這一段也一起變直」，⛔ 不能只管下一個點。**
+   *
+   * 〔kang 2026-08-29 第八次提〕舊版只讓**接下來放的那個點**沒有把手，
+   * 而**那一段還吃著「目前最後一個錨點的出把手」** ——
+   * 所以按了尖角，**直線要再下一段才出現**。他的原話：
+   * 「就算我按『尖角』..做出來的還是曲線..必須要到 3 與 4 時..才會變成直線」。
+   *
+   * ⭐ **⛔ 只清出把手，不動進把手** —— 已經畫好的那一段一格都不變。
+   * ⚠ 清掉之後**還原得回來**：在那個點上再「按住拖」就長回來
+   * （Adobe 的「直線接曲線」那條路）。
+   */
+  const cut = sel.penCorner ? sel.penCutOutHandle() : false;
   updateBar();
-  toast(sel.penCorner
-    ? '尖角：開。接下來放的點一律是尖角（就算你用拖的）'
-    : '尖角：關。按住拖就會放出圓滑的點');
+  if (sel.penCorner) {
+    toast(cut
+      ? '尖角：開。【接下來那一段就是直線】—— 剛才那個點的把手已經收掉'
+      : '尖角：開。接下來放的點一律是尖角（就算你用拖的）');
+    return;
+  }
+  toast('尖角：關。按住拖就會放出圓滑的點');
 }
 
 function cancelKnifeMode() {
@@ -3571,6 +3613,9 @@ function updateBar() {
   $('penCorner').hidden = !sel.penMode;
   $('penCorner').classList.toggle('on', !!sel.penCorner);
   $('penH').hidden = !sel.penMode;
+  $('penSnap').hidden = !sel.penMode;
+  $('penSnap').classList.toggle('on', !!sel.penSnapAngle);
+  $('penSnapDeg').hidden = !sel.penMode;
   $('penPark').hidden = !sel.penMode;
   $('penPark').disabled = sel.penCount === 0;
   $('penUndo').hidden = !sel.penMode;

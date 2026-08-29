@@ -28,6 +28,16 @@ import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
   from '../core/edit.js';
 import { measureLabels } from '../core/measure.js';
 
+/**
+ * 🔴 **鋼筆鎖角度時，方向只能落在幾度的倍數。**
+ *
+ * ⭐ **45 度是 Illustrator 的 Shift**，⛔ 不是我挑的 ——
+ * 它給的是水平／垂直／四條斜的，共 8 個方向。
+ * ⚠ **這只是預設值** —— 工具列有欄位可以改（kang 2026-08-29 要的：
+ * 「我是希望角度可以輸入數值」）。做六角形打 30、做十二角打 15。
+ */
+const PEN_SNAP_DEG = 45;
+
 const TAP_MOVE = 8;      // px
 const TAP_TIME = 450;    // ms
 
@@ -185,6 +195,21 @@ export class Selection {
     this.penMode = false;
     /** 下一個錨點強制是尖角（工具列那顆「尖角」切換鈕） */
     this.penCorner = false;
+    /**
+     * 🔴 **鎖角度**（kang 2026-08-29 要的）。
+     *
+     * > **他的原話：「按 SHIFT..可以是限制角度的線..而不是自由角度的線..
+     * > 　這樣在作造型時..角度某些狀況下才能互相平行」**
+     *
+     * ⚠ **兩條路都算數**：這顆開關，或桌機按著 `Shift` ——
+     * 跟 `吸中點` 完全同一個做法（**平板沒有 Shift，開關是唯一的路**）。
+     */
+    this.penSnapAngle = false;
+    /**
+     * 鎖角度時，方向只能落在幾度的倍數。**工具列那個欄位寫進來。**
+     * ⭐ 預設 45（Illustrator 的 Shift）；做六角形要 30、做八角形要 45。
+     */
+    this.penSnapDeg = PEN_SNAP_DEG;
     /** 正在畫的那一條：{ a:[], hi:[], ho:[] }，⛔ 還沒變成物件 */
     this._pen = null;
     /** 按下去的當下記起來的東西（⛔ 不可以事後從 e 補算，鍵與位置都是初始狀態） */
@@ -658,12 +683,26 @@ export class Selection {
          */
         if (g && this._penHitAnchor(e.clientX, e.clientY) === 0
             && this.penCount >= 3) {
-          this._penClosing = true;
+          /**
+           * ⚠ **要記下按下的位置** —— 閉合也可以用拖的（見 `pointerup`），
+           * 而把手就是「按下的位置 → 放開的位置」。
+           */
+          this._penClosing = { x: e.clientX, y: e.clientY, g };
+        } else if (g && this.penCount >= 1
+                   && this._penHitAnchor(e.clientX, e.clientY) === this.penCount - 1) {
+          /**
+           * 🔴 **壓在「剛畫好的那個點」上 ＝ 要把它轉成尖角**（曲線接直線）。
+           * ⚠ **⛔ 這一下不放新點** —— 跟閉合同一個道理。
+           */
+          this._penConvert = true;
         } else if (g) {
           this._penClosing = false;
           /** ⭐ 新的一段本來就又是開放的 */
           this._penParked = false;
-          this._penAddAnchor(g.x, g.z, 0, 0);
+          /** 🔴 鎖角度：把「上一個錨點 → 這裡」的方向吸到 45 度的倍數 */
+          const sp = this._penSnapPoint(g.x, g.z, e);
+          this._penDown.g = { x: sp.x, z: sp.z, world: this._penDown.g.world };
+          this._penAddAnchor(sp.x, sp.z, 0, 0);
           if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
         }
       }
@@ -685,21 +724,75 @@ export class Selection {
       if (this.penMode && this._pen && this._pen.a.length) {
         const g = this._groundAt(e.clientX, e.clientY);
         if (!g) { /* 相機在地板底下，打不到 */ }
+        else if (this._penClosing) {
+          /**
+           * 🔴🔴 **拖著閉合時，改的是【第一個錨點的進把手】，
+           * ⛔ 絕對不是最後一個錨點的把手。**
+           *
+           * 〔kang 2026-08-29 第六次提，⛔ 又是我漏的〕
+           * ⚠ **`pointerdown` 不管有沒有壓在第一個錨點，都會設 `_penDown`** ——
+           * 所以舊版拖著閉合時會掉進下面那一支，去改**最後一個錨點**的把手。
+           * 🔴 **後果**：他拖著要調「最後一點 → 第一點」那一段，
+           * **結果被改的是「倒數第二點 → 最後一點」那一段**。
+           * 他的原話：「第 4 點與第 5 點的曲線應該不能被控制..但是..是會被控制到的」。
+           *
+           * ⭐ **這一支一定要排在 `_penDown` 前面** —— 閉合時兩個都是真的。
+           */
+          const hc = this._snapIf(e,
+            g.x - this._penClosing.g.x, g.z - this._penClosing.g.z);
+          this._penSetFirstInHandle(hc.dx, hc.dz);
+          /**
+           * 🔴 **而且預覽要「連起來」畫** —— 否則他在調一條看不見的線。
+           * 〔他的原話：「我看不到第 5 與第 1 點閉合的曲線」〕
+           */
+          /**
+           * ⚠ **把手的端點是「游標所在」，⛔ 不是錨點自己**（那長度會是 0）。
+           * 按下去的位置就在錨點上，所以「錨點 → 游標」正好就是這根把手。
+           */
+          const b0 = this._penWorld(0);
+          this._drawPenPreview(null,
+            new THREE.Vector3(b0.x + hc.dx, 0, b0.z + hc.dz),
+            { closed: true, handleAt: 0 });
+        }
         else if (this._penDown) {
           /**
            * 🔴 **正在拖：把手就是「按下去的位置 → 現在的位置」。**
            * ⭐ 曲線因此**拖的當下就彎**，⛔ 不是放開才知道。
            */
-          this._penSetLastHandle(g.x - this._penDown.g.x, g.z - this._penDown.g.z);
-          this._drawPenPreview(null, g.world);
+          const h = this._snapIf(e, g.x - this._penDown.g.x, g.z - this._penDown.g.z);
+          this._penSetLastHandle(h.dx, h.dz);
+          /**
+           * ⚠ **鎖住之後預覽的把手也要畫在鎖住的位置**，
+           * ⛔ 不可以還畫在游標上 —— 那會讓人以為沒鎖到。
+           */
+          const a0 = this._penWorld(Math.floor(this._pen.a.length / 2) - 1);
+          this._drawPenPreview(null,
+            new THREE.Vector3(a0.x + h.dx, 0, a0.z + h.dz));
         } else {
           const h = this._penHitAnchor(e.clientX, e.clientY);
           if (h !== this._penHover) {
             this._penHover = h;
             if (this.hooks.onPenHover) this.hooks.onPenHover(h, this.penCount);
           }
-          /** 🔴 已經確定過就⛔ 不再跟著游標跑 —— 那正是「開放狀態」的樣子 */
-          this._drawPenPreview(this._penParked ? null : g.world);
+          /**
+           * 🔴🔴 **鎖角度時，游標那一段的預覽也要畫在鎖住的位置。**
+           *
+           * 〔kang 2026-08-29 回報：「線段應該同步呈現被限制角度的方式..
+           * 　這樣才能較準確的直觀操作」〕
+           * ⚠ **舊版只在「按下去的那一刻」才鎖** —— 之前那條線還是直直指著
+           * 游標，所以**使用者根本看不到點會落在哪**，等於要他盲射。
+           * ⭐ 判準跟放點時**共用同一支 `_penSnapPoint()`**，
+           * ⛔ 不各算一次 —— 預覽跟結果因此不可能不一樣（坑第 31 條）。
+           *
+           * ⚠ **hover 的判定仍然用原始游標位置**（上面那幾行）——
+           * 「我指到哪個點」跟「線會落在哪」是兩件事。
+           */
+          let tip = g.world;
+          if (!this._penParked) {
+            const sp = this._penSnapPoint(g.x, g.z, e);
+            if (sp.x !== g.x || sp.z !== g.z) tip = new THREE.Vector3(sp.x, 0, sp.z);
+          }
+          this._drawPenPreview(this._penParked ? null : tip);
         }
       }
 
@@ -828,9 +921,67 @@ export class Selection {
         this._penDown = null;
         if (!d0 || d.button !== DRAW_BUTTON) return;
 
-        /** 壓在第一個錨點上 → 閉合並收尾（Adobe 的做法） */
+        /**
+         * 🔴 **曲線接直線：點一下剛畫好的那個點，把它轉成尖角。**
+         *
+         * ⭐ **Adobe 官方步驟，⛔ 不是我發明的**（2026-08-29 讀原文）：
+         * > 「Position the Pen tool over the selected endpoint…
+         * > 　**Select the anchor point to convert the smooth point to a
+         * > 　corner point.** Reposition… and click to complete the
+         * > 　**straight** segment.」
+         *
+         * ── 🔴 它補的是一個真的缺口（kang 2026-08-29 發現）─────────
+         * 拖出一個圓滑點時，**進把手與出把手是一起長出來的**（那就是平滑）。
+         * 所以「1→2 拖成曲線」之後 **`ho[1]` 也有值** ——
+         * 下一段 2→3 就算只點一下，**它那一端還是彎的**。
+         * ⚠ 他的原話：「1 與 2 曲線..2 與 3 依樣會是曲線」。
+         *
+         * ── ⚠ 只清「出把手」，⛔ 不動「進把手」──────────────────
+         * `hi` 管的是**已經畫好的那一段**。動它的話，
+         * **為了接下一段會把上一段改掉** —— 跟閉合那一條同一個道理。
+         *
+         * ⚠ **它跟 `尖角` 那顆按鈕⛔ 不是同一件事**：
+         * 那顆管的是「**接下來要放的點**」，這裡管的是「**已經放好的那個點**」。
+         */
+        if (this._penConvert) {
+          this._penConvert = false;
+          const ci = this.penCount - 1;
+          const had = Math.hypot(this._pen.ho[ci * 2], this._pen.ho[ci * 2 + 1]) > 1e-9;
+          this._pen.ho[ci * 2] = 0;
+          this._pen.ho[ci * 2 + 1] = 0;
+          this._drawPenPreview();
+          if (this.hooks.onPenConvert) this.hooks.onPenConvert(had);
+          return;
+        }
+
+        /**
+         * 🔴 **壓在第一個錨點上 → 閉合並收尾。而且⛔ 閉合也可以用拖的。**
+         *
+         * ⭐ **Adobe 官方原文就是這樣寫的**（2026-08-29 讀到）：
+         * > 「Position the Pen tool over the first anchor point…
+         * > 　**Select _or drag_ to close the path.**」
+         *
+         * ── 🔴 它補的是一個真的缺口（kang 2026-08-29 發現，我重現＋量到）──
+         * **閉合那一段 ＝ 最後一點的出把手 ＋ 第一點的進把手**。
+         * 而**第一點的進把手在「第一次放那個點」時就被決定了** ——
+         * 那時使用者根本還不知道最後要怎麼接回來。
+         * 【實證】第一個點只是點一下（最自然的畫法）→ `hi[0]` ＝ **0**
+         * → 閉合那一段一端有把手、一端沒有 → **只彎一半，接回起點時是直的**，
+         * 畫出來的圓**右上角被切掉一塊**。
+         *
+         * ── ⚠ 只設「進把手」，⛔ 不動「出把手」 ────────────────
+         * `ho[0]` 已經被用在**第一段**（0→1）上了。動它的話，
+         * **為了接尾巴會把頭改掉** —— 而使用者已經調好第一段了。
+         * ⭐ `hi[0]` **只影響閉合那一段**，所以動它是安全的。
+         * 〔比 Illustrator 保守：它閉合時兩根一起動，因為它的錨點永遠是平滑的〕
+         */
         if (this._penClosing) {
+          const c0 = this._penClosing;
           this._penClosing = false;
+          if (dist > TAP_MOVE) {
+            const g1 = this._groundAt(e.clientX, e.clientY);
+            if (g1) this._penSetFirstInHandle(g1.x - c0.g.x, g1.z - c0.g.z);
+          }
           if (this.hooks.onPenFinish) this.hooks.onPenFinish();
           return;
         }
@@ -1257,6 +1408,50 @@ export class Selection {
    */
   _wantSnapMid(e) {
     return this.knifeSnapMid || !!(e && e.shiftKey);
+  }
+
+  /**
+   * 這一下鋼筆要不要鎖角度。⚠ 跟 `_wantSnapMid()` 同一套：
+   * **開關或 `Shift`**，平板只有開關那條路。
+   */
+  _wantPenSnap(e) {
+    return this.penSnapAngle || !!(e && e.shiftKey);
+  }
+
+  /**
+   * 🔴 **把一個向量的方向吸到最近的 45 度倍數，⛔ 長度不變。**
+   *
+   * ⭐ **長度不變是刻意的** —— 使用者拖多遠就是多遠，
+   * ⛔ 只有方向被鎖住。改成「投影到那條射線」會讓拖曳時長度自己縮，
+   * 那看起來像沒跟上手。
+   */
+  /** 要鎖就鎖，不要就原樣回 —— 三個呼叫點共用，⛔ 不各寫一份 */
+  _snapIf(e, dx, dz) {
+    return this._wantPenSnap(e) ? this._snapAngle(dx, dz) : { dx, dz };
+  }
+
+  _snapAngle(dx, dz) {
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-9) return { dx, dz };
+    const deg = Number.isFinite(this.penSnapDeg) && this.penSnapDeg > 0
+      ? this.penSnapDeg : PEN_SNAP_DEG;
+    const step = Math.PI * deg / 180;
+    const a = Math.round(Math.atan2(dz, dx) / step) * step;
+    return { dx: Math.cos(a) * len, dz: Math.sin(a) * len };
+  }
+
+  /**
+   * 放點時要不要把「上一個錨點 → 這裡」的方向鎖住。
+   * ⚠ **第一個點沒有「上一個」**，所以⛔ 不鎖。
+   */
+  _penSnapPoint(x, z, e) {
+    if (!this._wantPenSnap(e) || !this._pen || this._pen.a.length < 2) {
+      return { x, z };
+    }
+    const n = Math.floor(this._pen.a.length / 2);
+    const px = this._pen.a[(n - 1) * 2], pz = this._pen.a[(n - 1) * 2 + 1];
+    const s2 = this._snapAngle(x - px, z - pz);
+    return { x: px + s2.dx, z: pz + s2.dz };
   }
 
   // ── 指到哪就亮哪（hover）────────────────────────────
@@ -2552,6 +2747,7 @@ export class Selection {
     this._penHover = -1;
     this._penClosing = false;
     this._penParked = false;
+    this._penConvert = false;
     return this.penMode;
   }
 
@@ -2583,6 +2779,7 @@ export class Selection {
     this._penHover = -1;
     this._penClosing = false;
     this._penParked = false;
+    this._penConvert = false;
     if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
     if (!p || p.a.length < 6) return null;
     return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
@@ -2630,10 +2827,53 @@ export class Selection {
   }
 
   /**
+   * 🔴 **把「目前最後一個錨點」的出把手清掉。**
+   *
+   * 〔kang 2026-08-29 第八次提，⛔ 又是我漏的一段〕
+   * ⚠ **`尖角` 那顆按鈕原本只管「接下來放的那個點」** ——
+   * 而那一段（最後一點 → 下一點）**還吃著最後一點的出把手**，
+   * 所以**直線要再下一段才出現**。他的原話：
+   * 「就算我按『尖角』..做出來的還是曲線..必須要到 3 與 4 時..才會變成直線」。
+   *
+   * ⭐ **⛔ 只清出把手，不動進把手** —— 上一段一格都不能變。
+   * @returns {boolean} 有沒有真的清掉東西
+   */
+  penCutOutHandle() {
+    if (!this._pen || !this._pen.a.length) return false;
+    const i = Math.floor(this._pen.a.length / 2) - 1;
+    if (Math.hypot(this._pen.ho[i * 2], this._pen.ho[i * 2 + 1]) < 1e-9) return false;
+    this._pen.ho[i * 2] = 0;
+    this._pen.ho[i * 2 + 1] = 0;
+    this._drawPenPreview();
+    return true;
+  }
+
+  /**
+   * 🔴 **只設第一個錨點的「進把手」**（閉合時拖出來的那一根）。
+   *
+   * ⚠ **⛔ 不碰它的出把手** —— 那一根管的是第一段（0→1），
+   * 而使用者早就調好了。理由的完整版在 `pointerup` 的閉合那一段。
+   * ⚠ `尖角` 開著就一律 0（跟 `_penSetLastHandle()` 同一條）。
+   */
+  _penSetFirstInHandle(hx, hy) {
+    if (!this._pen || !this._pen.a.length) return;
+    const on = Math.hypot(hx, hy) > 1e-9 && !this.penCorner;
+    this._pen.hi[0] = on ? hx : 0;
+    this._pen.hi[1] = on ? hy : 0;
+  }
+
+  /**
    * 預覽線。⚠ `_buildLineOverlay()` 吃的是**兩兩一組的線段**，
    * ⛔ 不是連續折線 —— 串錯的話會多畫一堆不存在的線。
    */
-  _drawPenPreview(extra, handleAt) {
+  /**
+   * @param {THREE.Vector3} extra 游標那一段的終點（⛔ 已確定時不給）
+   * @param {THREE.Vector3} handleAt 把手的端點
+   * @param {{closed?:boolean, handleAt?:number}} [opt]
+   *        `closed` ＝ 連著閉合那一段一起畫（拖著閉合時要）
+   *        `handleAt` ＝ 把手掛在第幾個錨點（預設最後一個）
+   */
+  _drawPenPreview(extra, handleAt, opt = {}) {
     if (!this.view || !this.view.setPenPreview) return;
     if (!this._pen || !this._pen.a.length) {
       if (this.view.clearPenPreview) this.view.clearPenPreview();
@@ -2646,7 +2886,7 @@ export class Selection {
       dots.push(this._penWorld(i));
     }
     /** 已經放好的那幾段（照拉直之後的樣子畫，⛔ 不要畫成直線騙人） */
-    const flat = this._penFlatWorld(false);
+    const flat = this._penFlatWorld(!!opt.closed);
     for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
     /** 游標那一段（還沒放下去的） */
     if (extra) { pts.push(this._penWorld(n - 1), extra); }
@@ -2664,7 +2904,7 @@ export class Selection {
      */
     const hpts = [], hdots = [];
     if (handleAt) {
-      const a = this._penWorld(n - 1);
+      const a = this._penWorld(opt.handleAt === undefined ? n - 1 : opt.handleAt);
       hpts.push(a, handleAt);
       hpts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
       hdots.push(handleAt);
