@@ -117,6 +117,14 @@ const sel = new Selection(view, {
    * ⚠ ⛔ 不可以每次移動都重建 —— 那是坑第 22 條（每幀迴圈裡的 O(點數)）。
    */
   onPenEditChange: () => applyPenEdit(),
+  /**
+   * 🔴 **點在線上 → 加了一個點。一定要講一句。**
+   * ⚠ 加點**形狀一格都不變**（de Casteljau），所以**畫面上只多一個小點** ——
+   * ⛔ 不講的話跟「按錯了、什麼都沒發生」分不出來（坑第 21 條）。
+   */
+  onPenEditAdd: (at, n) => toast(
+    `在線上加了一個點（第 ${at + 1} 個，共 ${n} 個）　`
+    + '⭐ 形狀【一格都沒變】—— 這個點是拿來調的，拖它就會變'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -482,6 +490,7 @@ $('knife').onclick = () => toggleKnifeMode();
 $('pen').onclick = () => togglePenMode();
 $('penCorner').onclick = () => togglePenCorner();
 $('penEdit').onclick = () => togglePenEdit();
+$('penDel').onclick = () => deletePenAnchor();
 $('penSnapDeg').oninput = () => {
   const d = +$('penSnapDeg').value;
   if (Number.isFinite(d) && d > 0) sel.penSnapDeg = d;
@@ -930,6 +939,26 @@ function togglePenEdit() {
     ? '改點：開。點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線。'
       + '⛔ 這時候【不會】放新的點　⭐ 選到的那個點才看得到把手'
     : '改點：關。回到畫的模式，按左鍵就是放下一個點');
+}
+
+/**
+ * 🔴 **刪掉選到的那個錨點**（工具列 `刪點`，第 3 階段）。
+ *
+ * ⚠ **擬合失敗要講出來** —— kang 選的是「擬合，盡量讓形狀不變」，
+ * 而擬合**有可能無解**（兩個切線方向幾乎平行時）。那時會退回「直接接」，
+ * ⛔ 安靜地退路的話，使用者會以為形狀本來就該變那麼多。
+ */
+function deletePenAnchor() {
+  const r = sel.penDeleteSel();
+  if (!r.ok) { toast(r.reason, true); return; }
+  applyPenEdit();
+  updateBar();
+  toast(r.fitted
+    ? `刪掉一個點，剩 ${sel.penCount} 個　`
+      + '⭐ 兩側那兩段已經【擬合】成一段 —— 形狀盡量保住了'
+    : `刪掉一個點，剩 ${sel.penCount} 個　`
+      + '⚠ 這一次【擬合無解】（兩邊的方向幾乎平行），'
+      + '所以是直接接起來的 —— 形狀會比較明顯地變一下');
 }
 
 /**
@@ -3818,6 +3847,14 @@ function updateBar() {
   $('penEdit').hidden = !sel.penMode;
   $('penEdit').disabled = sel.penCount < 3;
   $('penEdit').classList.toggle('on', !!sel.penEdit);
+  /**
+   * 🔴 **`刪點` 只在 `改點` 開著時出現**（第 3 階段）。
+   * ⚠ **兩個條件都要擋**：沒選到點、或只剩 3 個點 ——
+   * ⛔ 按下去什麼都不發生的按鈕就是坑第 21 條。
+   * ⭐ **加點⛔ 沒有按鈕**（點線上就是加），只有刪點需要一顆。
+   */
+  $('penDel').hidden = !(sel.penMode && sel.penEdit);
+  $('penDel').disabled = sel.penSel < 0 || sel.penCount <= 3;
   /**
    * 🔴 **`改點` 開著的時候，這幾顆是「畫」用的，⛔ 一個都不該出現。**
    * ⚠ 留著的話使用者會按 `確定曲線`／`退一點`，而那是在改另一件事 ——

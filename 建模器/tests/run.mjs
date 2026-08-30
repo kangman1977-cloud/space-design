@@ -11767,6 +11767,140 @@ section('內建鋼筆：錨點與把手 → 輪廓');
     eq('★★ 　 縮放 0 → 回 null（⛔ 不是 Infinity）',
        ioM.penPathToLocal(w, bad), null);
   }
+
+  // ═══════════════════════════════════════════════════
+  //  🔴 第 3 階段（一）：加點／刪點　2026-08-29
+  // ═══════════════════════════════════════════════════
+
+  const sp = await import('../js/sketch/svgPath.js');
+  /** 一個標準的圓：四個錨點，把手 ＝ r × 0.5522847498 */
+  const R0 = 20, K0 = R0 * 0.5522847498;
+  const mkCircle = () => ({ closed: true,
+    a:  [ R0, 0,  0, R0,  -R0, 0,  0, -R0 ],
+    hi: [ 0, -K0,  K0, 0,  0, K0,  -K0, 0 ],
+    ho: [ 0,  K0, -K0, 0,  0, -K0,  K0, 0 ] });
+  const penArea = p => Math.abs(sp.polyArea(prim.flattenPenPath(p, 0.01)));
+
+  /**
+   * 🔴🔴 ⑯ **加一個錨點 → 形狀【一格都不能變】。**
+   *
+   * ⚠ **這一組是「加點」的全部意義所在**。做起來只要一行的做法
+   * （插一個尖角點）**會把那一段拉直** —— 而使用者要的是
+   * 「多一個**可以調**的點」，⛔ 不是「改形狀」。
+   * ⭐ `splitCubic()` 是 de Casteljau，**數學上等價**，
+   * 所以這裡敢用「精確相等」去驗，⛔ 不是「差不多」。
+   */
+  {
+    const p = mkCircle();
+    const before = penArea(p);
+    const r = prim.penAddAnchor(p, 0, 0.5);
+    ok('⑯ 加點成功', r.ok && r.at === 1, JSON.stringify(r));
+    eq('★ 　 錨點多了一個', p.a.length / 2, 5);
+    eq('★ 　 把手也跟著多一組', [p.hi.length / 2, p.ho.length / 2].join(','), '5,5');
+    const after = penArea(p);
+    near('★★ 　 面積【精確】不變（de Casteljau 是等價變換）',
+         after, before, 1e-9);
+    /** ⭐ 再對答案：圓的面積 ≈ πr²（貝茲近似的圓略小一點點） */
+    near('★ 　 而且那個面積真的是一個圓（≈ πr²）',
+         after, Math.PI * R0 * R0, 10);
+    /** ⚠ 邊界：t 要在中間，⛔ 端點插不了（那裡本來就有錨點） */
+    ok('★ 　 t=0 擋下來並講原因', !prim.penAddAnchor(mkCircle(), 0, 0).ok);
+    ok('★ 　 t=1 擋下來並講原因', !prim.penAddAnchor(mkCircle(), 0, 1).ok);
+    ok('★ 　 沒有那一段就擋下來', !prim.penAddAnchor(mkCircle(), 9, 0.5).ok);
+  }
+
+  /**
+   * 🔴🔴 ⑰ **刪一個錨點 → 擬合的誤差要比「直接接」小一個數量級。**
+   * （kang 2026-08-29 在三個做法裡選的：「擬合，盡量讓形狀不變」）
+   *
+   * ⚠ **⛔ 光看擬合自己的誤差沒有人判斷得了好壞** ——
+   * 所以這一組**旁邊放一個「直接接」的對照組**，讓兩個數字互相對得起來。
+   * 〔鐵律三：一個孤零零的數字沒有人能驗〕
+   *
+   * ⭐ 【實測 2026-08-29】擬合 1.27 vs 直接接 114.12 —— **好將近 90 倍**。
+   * 這裡用 10 倍當門檻，留足餘裕。
+   */
+  {
+    /** 先加一個點，再把它刪掉 —— 理想上應該回到原本的圓 */
+    const base = mkCircle();
+    const A0 = penArea(base);
+    const p = mkCircle();
+    const add = prim.penAddAnchor(p, 0, 0.5);
+
+    const fit = { closed: true, a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() };
+    const rr = prim.penRemoveAnchor(fit, add.at);
+    ok('⑰ 刪點成功而且【擬合有解】', rr.ok && rr.fitted === true, JSON.stringify(rr));
+    eq('★ 　 錨點少了一個', fit.a.length / 2, 4);
+
+    /** ── 對照組：直接接（把手 ＝ 弦長的 1/3）────────────── */
+    const naive = { closed: true, a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() };
+    {
+      const i = add.at, n = naive.a.length / 2;
+      const pv = (i - 1 + n) % n, nx = (i + 1) % n;
+      const P0 = { x: naive.a[pv * 2], y: naive.a[pv * 2 + 1] };
+      const P3 = { x: naive.a[nx * 2], y: naive.a[nx * 2 + 1] };
+      naive.a.splice(i * 2, 2); naive.hi.splice(i * 2, 2); naive.ho.splice(i * 2, 2);
+      const p2 = pv < i ? pv : pv - 1, n2 = nx > i ? nx - 1 : nx;
+      const dx = P3.x - P0.x, dy = P3.y - P0.y, L = Math.hypot(dx, dy);
+      naive.ho[p2 * 2] = dx / 3; naive.ho[p2 * 2 + 1] = dy / 3;
+      naive.hi[n2 * 2] = -dx / 3; naive.hi[n2 * 2 + 1] = -dy / 3;
+      void L;
+    }
+    const eFit = Math.abs(penArea(fit) - A0);
+    const eNaive = Math.abs(penArea(naive) - A0);
+    ok('★★ 　 擬合的誤差比「直接接」小【至少 10 倍】',
+       eFit * 10 < eNaive,
+       `擬合 ${eFit.toFixed(3)} vs 直接接 ${eNaive.toFixed(3)}　`
+       + `＝ 好 ${(eNaive / eFit).toFixed(1)} 倍`);
+
+    /** ⚠ 邊界：只剩 3 個點就不給刪（再刪圍不出形狀），而且要講原因 */
+    const tiny = { closed: true, a: [0, 0, 10, 0, 5, 8],
+                   hi: [0, 0, 0, 0, 0, 0], ho: [0, 0, 0, 0, 0, 0] };
+    const rt = prim.penRemoveAnchor(tiny, 1);
+    ok('★★ 　 只剩 3 個點 → 擋下來', !rt.ok);
+    ok('★ 　 而且講得出原因（⛔ 不是安靜地什麼都不做）',
+       /圍不出/.test(rt.reason || ''), rt.reason);
+    eq('★ 　 擋下來時⛔ 一格都沒動', tiny.a.length / 2, 3);
+  }
+
+  /**
+   * 🔴 ⑱ **`splitCubic()` 本身：兩段合起來就是原本那一條。**
+   * ⚠ 上面兩組驗的是「用起來對不對」，這一組驗的是**那支數學本人**。
+   */
+  {
+    const C = [0, 0, 10, 30, 40, 30, 50, 0];
+    const s = sp.splitCubic(...C, 0.37);
+    /** 切點要落在原曲線上 */
+    const on = sp.cubicAt(...C, 0.37);
+    near('⑱ 切點就在原曲線上（x）', s.mid.x, on.x, 1e-12);
+    near('★ 　 切點就在原曲線上（y）', s.mid.y, on.y, 1e-12);
+    /** 兩段的端點要接得起來 */
+    eq('★ 　 前段的終點 ＝ 後段的起點',
+       `${s.a[6]},${s.a[7]}`, `${s.b[0]},${s.b[1]}`);
+    /** ⭐ 取十個點逐點比：分割之後的曲線跟原本的是同一條 */
+    let worst = 0;
+    for (let k = 1; k < 10; k++) {
+      const u = k / 10;
+      const o = sp.cubicAt(...C, u);
+      const q = u < 0.37 ? sp.cubicAt(...s.a, u / 0.37)
+                         : sp.cubicAt(...s.b, (u - 0.37) / (1 - 0.37));
+      worst = Math.max(worst, Math.hypot(o.x - q.x, o.y - q.y));
+    }
+    near('★★ 　 逐點比對：兩段合起來就是原本那一條', worst, 0, 1e-9);
+    /** ⚠ `nearestOnCubic()` 找得回自己 */
+    const probe = sp.cubicAt(...C, 0.62);
+    const nr = sp.nearestOnCubic(probe.x, probe.y, ...C);
+    near('★ 　 nearestOnCubic 找得回 t=0.62', nr.t, 0.62, 0.01);
+    /**
+     * 🔴 **門檻看【位置】，⛔ 不看 `t`。**
+     * 〔2026-08-29：原本寫 0.01 是隨手寫的，而 `t` 差 0.0017 在那條
+     * 　曲線上就是 0.1 cm —— **兩個數字並不矛盾，是門檻沒有物理意義**〕
+     * ⭐ **0.01 cm ＝ 0.1 mm**，遠小於任何看得出來的量，也遠小於
+     * 命中門檻（12 px）。細化改成六輪之後達得到。
+     */
+    near('★★ 　 而且距離 ≈ 0（門檻 0.1 mm，⛔ 這是【位置】不是 t）',
+         nr.dist, 0, 0.01);
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

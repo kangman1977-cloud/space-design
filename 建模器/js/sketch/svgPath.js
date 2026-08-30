@@ -355,6 +355,90 @@ export function flattenCubic(x0, y0, x1, y1, x2, y2, x3, y3, tol, depth = 0) {
   return [{ x: x3, y: y3 }];
 }
 
+/**
+ * 🔴🔴 **三次貝茲【分割】—— 在參數 t 處切成【數學上等價】的兩段。**
+ * （2026-08-29 加，鋼筆第 3 階段「加一個錨點」用）
+ *
+ * ⚠ **⛔ 這跟上面那支 `flattenCubic()` 的「細分」不是同一件事**：
+ * | | 做什麼 | 資訊 |
+ * |---|---|---|
+ * | **細分** `flattenCubic` | 一段曲線 → **一串折線** | **掉了**（回不去） |
+ * | **分割** 這一支 | 一段曲線 → **兩段曲線** | **一個點都不差** |
+ *
+ * ⭐ **那正是「加一個錨點」要的東西**：使用者的意思是
+ * 「我要在這裡多一個**可以調**的點」，⛔ 不是「我要改形狀」。
+ * 🔴 **判準因此驗得出來：加點前後【面積一格不變】。**
+ *
+ * 走的是 de Casteljau —— `flattenCubic()` 裡面那一段**寫死 `t=0.5`** 的版本，
+ * 這裡把 `t` 開放出來。⛔ 不是另寫一套數學。
+ *
+ * @returns {{a:number[], b:number[], mid:{x:number,y:number}}}
+ *          `a`／`b` 各 8 個數（x0,y0,x1,y1,x2,y2,x3,y3），`mid` ＝ 切點
+ */
+export function splitCubic(x0, y0, x1, y1, x2, y2, x3, y3, t) {
+  const L = (a, b) => a + (b - a) * t;
+  const x01 = L(x0, x1), y01 = L(y0, y1);
+  const x12 = L(x1, x2), y12 = L(y1, y2);
+  const x23 = L(x2, x3), y23 = L(y2, y3);
+  const xa = L(x01, x12), ya = L(y01, y12);
+  const xb = L(x12, x23), yb = L(y12, y23);
+  const xm = L(xa, xb), ym = L(ya, yb);
+  return {
+    a: [x0, y0, x01, y01, xa, ya, xm, ym],
+    b: [xm, ym, xb, yb, x23, y23, x3, y3],
+    mid: { x: xm, y: ym }
+  };
+}
+
+/** 三次貝茲在參數 t 處的點。⚠ 分割與擬合都要用，⛔ 不要各寫一份。 */
+export function cubicAt(x0, y0, x1, y1, x2, y2, x3, y3, t) {
+  const u = 1 - t;
+  const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return { x: a * x0 + b * x1 + c * x2 + d * x3,
+           y: a * y0 + b * y1 + c * y2 + d * y3 };
+}
+
+/**
+ * 🔴 **曲線上離某一點最近的地方**（「點在線上 ＝ 加一個點」要用）。
+ *
+ * ⚠ **⛔ 沒有閉式解** —— 那是一個五次方程式。所以先粗取樣、再局部細化，
+ * 這是標準做法。⭐ 24 段 ＋ 三輪細化，實際精度遠好過命中門檻（12 px）。
+ *
+ * @returns {{t:number, dist:number, p:{x:number,y:number}}}
+ */
+export function nearestOnCubic(px, py, x0, y0, x1, y1, x2, y2, x3, y3, samples = 24) {
+  const at = t => cubicAt(x0, y0, x1, y1, x2, y2, x3, y3, t);
+  const d2 = p => (p.x - px) * (p.x - px) + (p.y - py) * (p.y - py);
+  let bt = 0, bd = Infinity;
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples, dd = d2(at(t));
+    if (dd < bd) { bd = dd; bt = t; }
+  }
+  /**
+   * 🔴🔴 **細化走【三分搜尋】，⛔ 不是「每輪把步長除以 4 再試兩邊」。**
+   *
+   * 〔2026-08-29 實測踩到，而且第一次的診斷也是錯的〕
+   * ⚠ **那種寫法追不上初始誤差**：粗取樣的 `t` 最多差**半格**（≈ 0.021），
+   * 而「步長每輪 /4」能移動的**總距離**是
+   * 0.0104 ＋ 0.0026 ＋ … ≈ **0.0139 —— 比 0.021 小**。
+   * 🔴 **所以⛔ 不管加幾輪都追不上**（我一開始以為三輪改六輪就好，那是錯的）。
+   *
+   * ⭐ 三分搜尋是**縮區間**，⛔ 不是「往旁邊試一步」——
+   * 每輪區間 ×2/3，40 輪後 (2/3)⁴⁰ × (2/24) ≈ 1e-8，**跟初始誤差無關**。
+   *
+   * ⚠ 判準看**位置**⛔ 不看 `t`：`t` 差 0.0017 在那條測試曲線上
+   * （速度約 60 cm／單位）**就是 0.1 cm**（坑第 26 條）。
+   */
+  let lo = Math.max(0, bt - 1 / samples), hi = Math.min(1, bt + 1 / samples);
+  for (let k = 0; k < 40; k++) {
+    const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+    if (d2(at(m1)) < d2(at(m2))) hi = m2; else lo = m1;
+  }
+  bt = (lo + hi) / 2;
+  bd = d2(at(bt));
+  return { t: bt, dist: Math.sqrt(bd), p: at(bt) };
+}
+
 /** 二次貝茲。升階成三次再走同一條路，不必另外寫一份細分。 */
 export function flattenQuad(x0, y0, cx, cy, x1, y1, tol) {
   return flattenCubic(

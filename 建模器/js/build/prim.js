@@ -27,7 +27,8 @@ import { extrudeMany } from './extrude.js';
  * 鋼筆畫的貝茲曲線跟 SVG 匯進來的**是同一種東西**，
  * ⛔ 不要為了避免跨檔就在這裡重寫一支細分。
  */
-import { flattenCubic, DEFAULT_TOL } from '../sketch/svgPath.js';
+import { flattenCubic, splitCubic, cubicAt, nearestOnCubic, DEFAULT_TOL }
+  from '../sketch/svgPath.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -319,6 +320,176 @@ export function penSetHandle(path, i, side, dx, dz) {
   other[i * 2] = -dx / cur * len;
   other[i * 2 + 1] = -dz / cur * len;
   return true;
+}
+
+/** 一條鋼筆路徑的第 i 段（i → i+1）攤成貝茲的四個點。⛔ 不要各處自己拼。 */
+function penSeg(path, i) {
+  const n = Math.floor(path.a.length / 2);
+  const j = (i + 1) % n;
+  const g = (arr, k, c) => +((arr || [])[k * 2 + c] || 0);
+  return [
+    +path.a[i * 2], +path.a[i * 2 + 1],
+    +path.a[i * 2] + g(path.ho, i, 0), +path.a[i * 2 + 1] + g(path.ho, i, 1),
+    +path.a[j * 2] + g(path.hi, j, 0), +path.a[j * 2 + 1] + g(path.hi, j, 1),
+    +path.a[j * 2], +path.a[j * 2 + 1]
+  ];
+}
+
+/**
+ * 🔴 **整條路徑上離 (x, y) 最近的地方是哪一段、參數多少。**
+ * （「點在線上 ＝ 加一個點」要用）
+ *
+ * ⚠ **回的 `dist` 是【形狀座標系的距離】（cm），⛔ 不是螢幕距離** ——
+ * 呼叫端要自己把那個點投影回螢幕再比門檻，
+ * 因為**世界距離會隨縮放變，拉遠之後「靠得夠近」就變成不可能達成的條件**
+ * 〔`_penHitAnchor()` 那一則的同一條理由〕。
+ */
+export function penNearestOnPath(path, x, y) {
+  if (!path || !path.a) return null;
+  const n = Math.floor(path.a.length / 2);
+  if (n < 2) return null;
+  const last = path.closed === false ? n - 1 : n;
+  let best = null;
+  for (let i = 0; i < last; i++) {
+    const r = nearestOnCubic(x, y, ...penSeg(path, i));
+    if (!best || r.dist < best.dist) best = { seg: i, t: r.t, p: r.p, dist: r.dist };
+  }
+  return best;
+}
+
+/**
+ * 🔴🔴 **在第 `seg` 段的參數 `t` 處插一個錨點 —— 而形狀⛔ 一格都不變。**
+ * （2026-08-29，鋼筆第 3 階段）
+ *
+ * ⭐ **走 `splitCubic()`（de Casteljau），⛔ 不是「插一個尖角點」** ——
+ * 後者做起來只要一行，但**那一段會被拉直**。
+ * 而使用者的意思是「我要在這裡多一個**可以調**的點」，⛔ 不是「我要改形狀」。
+ *
+ * 🔴 **判準因此驗得出來：加點前後【面積一格不變】。**
+ * ⚠ ⛔ 這不是「差不多」—— de Casteljau 是**數學上等價**，
+ * 兩段合起來就是原本那一條曲線本人。
+ *
+ * @param {object} path 就地修改
+ * @returns {{ok:boolean, at?:number, reason?:string}} `at` ＝ 新錨點的索引
+ */
+export function penAddAnchor(path, seg, t) {
+  if (!path || !path.a) return { ok: false, reason: '沒有路徑' };
+  const n = Math.floor(path.a.length / 2);
+  if (!(seg >= 0 && seg < n)) return { ok: false, reason: '沒有這一段' };
+  if (!(t > 0 && t < 1)) return { ok: false, reason: '要插在這一段的中間' };
+  const j = (seg + 1) % n;
+  const s = splitCubic(...penSeg(path, seg), t);
+  const at = seg + 1;
+  /** 前一段的出把手、後一段的進把手都會變短 —— 那就是分割的結果 */
+  path.ho[seg * 2]     = s.a[2] - s.a[0];
+  path.ho[seg * 2 + 1] = s.a[3] - s.a[1];
+  path.hi[j * 2]       = s.b[4] - s.b[6];
+  path.hi[j * 2 + 1]   = s.b[5] - s.b[7];
+  path.a.splice(at * 2, 0, s.mid.x, s.mid.y);
+  path.hi.splice(at * 2, 0, s.a[4] - s.mid.x, s.a[5] - s.mid.y);
+  path.ho.splice(at * 2, 0, s.b[2] - s.mid.x, s.b[3] - s.mid.y);
+  return { ok: true, at };
+}
+
+/**
+ * 🔴🔴 **刪掉錨點 `i`，兩側那兩段【擬合】成一段。**
+ * （kang 2026-08-29 在三個做法裡選的：「擬合，盡量讓形狀不變」）
+ *
+ * ── 做法 ────────────────────────────────────────────────
+ * **端點與切線方向固定，只解兩根把手的【長度】** α、β —— 那是一個
+ * 2×2 的最小平方，有閉式解（Schneider 那一套的核心）。
+ * ⭐ **切線方向一定要沿用原本的**，⛔ 不然接點會折一下，
+ * 而那正是使用者最看得出來的地方。
+ *
+ * ── 🔴 退路，而且⛔ 一定要講出來 ──────────────────────────
+ * 行列式接近 0（兩個方向幾乎平行）或解出**非正的長度**時，
+ * **退回「直接接」**（把手長度 ＝ 弦長的 1/3，那是圓弧的標準近似），
+ * 並且**回報 `fitted: false`** —— 呼叫端要講給使用者聽。
+ * ⚠ **⛔ 不可以安靜地退路** —— 那樣使用者會以為擬合成功了。
+ *
+ * ── ⭐ 怎麼知道擬合有沒有用（鐵律三）────────────────────
+ * 光看擬合的誤差**沒有人判斷得了好壞**。
+ * 判準是**旁邊放一個「直接接」的誤差** —— 擬合那個應該**小一個數量級**。
+ * 〔測試釘的就是這個對比〕
+ *
+ * @param {object} path 就地修改
+ * @returns {{ok:boolean, fitted?:boolean, reason?:string}}
+ */
+export function penRemoveAnchor(path, i, samples = 24) {
+  if (!path || !path.a) return { ok: false, reason: '沒有路徑' };
+  const n = Math.floor(path.a.length / 2);
+  if (!(i >= 0 && i < n)) return { ok: false, reason: '沒有這一個點' };
+  if (n <= 3) return { ok: false, reason: '只剩 3 個點了 —— 再刪就圍不出一個形狀' };
+
+  const prev = (i - 1 + n) % n;
+  const segA = penSeg(path, prev);          // prev → i
+  const segB = penSeg(path, i);             // i → next
+  const P0 = { x: segA[0], y: segA[1] };
+  const P3 = { x: segB[6], y: segB[7] };
+
+  /** 取樣：兩段各取 `samples` 個點，⛔ 中間那個點只算一次 */
+  const pts = [];
+  for (let k = 0; k <= samples; k++) pts.push(cubicAt(...segA, k / samples));
+  for (let k = 1; k <= samples; k++) pts.push(cubicAt(...segB, k / samples));
+
+  /** 弦長參數化 —— ⛔ 不用均勻的 k/N，那會讓長短差很多的兩段被拉歪 */
+  const cum = [0];
+  for (let k = 1; k < pts.length; k++) {
+    cum.push(cum[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
+  }
+  const total = cum[cum.length - 1];
+  if (!(total > 1e-9)) return { ok: false, reason: '這兩段的長度是 0' };
+  const us = cum.map(c => c / total);
+
+  /** 切線方向：沿用原本的把手；沒有把手就用弦的方向 */
+  const dirOf = (dx, dz, fx, fz) => {
+    const L = Math.hypot(dx, dz);
+    if (L > 1e-9) return { x: dx / L, y: dz / L };
+    const F = Math.hypot(fx, fz);
+    return F > 1e-9 ? { x: fx / F, y: fz / F } : { x: 1, y: 0 };
+  };
+  const t1 = dirOf(+path.ho[prev * 2], +path.ho[prev * 2 + 1], P3.x - P0.x, P3.y - P0.y);
+  const next = (i + 1) % n;
+  const t2 = dirOf(+path.hi[next * 2], +path.hi[next * 2 + 1], P0.x - P3.x, P0.y - P3.y);
+
+  let c00 = 0, c01 = 0, c11 = 0, x0 = 0, x1 = 0;
+  for (let k = 0; k < pts.length; k++) {
+    const u = us[k], v = 1 - u;
+    const b0 = v * v * v, b1 = 3 * v * v * u, b2 = 3 * v * u * u, b3 = u * u * u;
+    const a1x = t1.x * b1, a1y = t1.y * b1;
+    const a2x = t2.x * b2, a2y = t2.y * b2;
+    c00 += a1x * a1x + a1y * a1y;
+    c01 += a1x * a2x + a1y * a2y;
+    c11 += a2x * a2x + a2y * a2y;
+    const tx = pts[k].x - (P0.x * (b0 + b1) + P3.x * (b2 + b3));
+    const ty = pts[k].y - (P0.y * (b0 + b1) + P3.y * (b2 + b3));
+    x0 += tx * a1x + ty * a1y;
+    x1 += tx * a2x + ty * a2y;
+  }
+  const det = c00 * c11 - c01 * c01;
+  let alpha = 0, beta = 0, fitted = false;
+  if (Math.abs(det) > 1e-12) {
+    alpha = (x0 * c11 - c01 * x1) / det;
+    beta  = (c00 * x1 - x0 * c01) / det;
+    fitted = alpha > 1e-9 && beta > 1e-9;
+  }
+  if (!fitted) {
+    /** 🔴 退路：弦長的 1/3（圓弧的標準近似）。⚠ 呼叫端一定要講出來 */
+    const chord = Math.hypot(P3.x - P0.x, P3.y - P0.y);
+    alpha = beta = chord / 3;
+  }
+
+  path.a.splice(i * 2, 2);
+  path.hi.splice(i * 2, 2);
+  path.ho.splice(i * 2, 2);
+  /** ⚠ 刪掉之後索引會前移 —— `next` 在新陣列裡就是原本的 `i` 那一格 */
+  const p2 = prev < i ? prev : prev - 1;
+  const n2 = next > i ? next - 1 : next;
+  path.ho[p2 * 2]     = t1.x * alpha;
+  path.ho[p2 * 2 + 1] = t1.y * alpha;
+  path.hi[n2 * 2]     = t2.x * beta;
+  path.hi[n2 * 2 + 1] = t2.y * beta;
+  return { ok: true, fitted };
 }
 
 /**

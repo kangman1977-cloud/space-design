@@ -20,7 +20,8 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
  * ⭐ **預覽用的拉直走的是生成時同一支函式** —— 預覽跟結果因此不可能不一樣。
  * ⚠ **單向相依**：`prim.js` ⛔ 沒有 import 這一支（它不認識畫面）。
  */
-import { flattenPenPath, penIsSmooth, penSetHandle } from '../build/prim.js';
+import { flattenPenPath, penIsSmooth, penSetHandle,
+         penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -3103,10 +3104,31 @@ export class Selection {
   }
 
   /**
-   * `改點` 的按下去：**先問把手，再問錨點，都沒有就取消選取**。
+   * 🔴 **游標下面有沒有壓在【線上】**（第 3 階段：點線上 ＝ 加一個點）。
    *
-   * ⚠ **順序⛔ 不可以倒過來** —— 把手的端點常常離錨點很近，
-   * 先問錨點的話**把手永遠碰不到**。
+   * ⚠ **門檻一定要用【螢幕距離】，⛔ 不是形狀座標的 cm** ——
+   * cm 會隨縮放變，拉遠之後「靠得夠近」就變成不可能達成的條件
+   * （跟 `_penHitAnchor()` 同一條，⛔ 不要各定一個）。
+   * ⭐ 做法：先在地板座標找到最近的那一點，**再把它投影回螢幕**量距離。
+   */
+  _penHitSegment(clientX, clientY, g) {
+    if (!this._pen || !g) return null;
+    const r = penNearestOnPath(this._pen, g.x, g.z);
+    if (!r) return null;
+    const w = new THREE.Vector3(r.p.x, 0, r.p.y).project(this.view.camera);
+    const c = this._toCanvasPx(clientX, clientY);
+    const px = (w.x + 1) / 2 * c.w, py = (-w.y + 1) / 2 * c.h;
+    return Math.hypot(px - c.x, py - c.y) <= 12 ? r : null;
+  }
+
+  /**
+   * `改點` 的按下去：**把手 → 錨點 → 線上 → 空白**，四層。
+   *
+   * ⚠ **順序⛔ 不可以動**：
+   * ① **把手**排最前 —— 它的端點常常離錨點很近，排後面就永遠碰不到；
+   * ② **錨點**排線上前面 —— 錨點本來就在線上，⛔ 不然點錨點會變成加一個點；
+   * ③ **線上** ＝ 加一個點（⛔ 不必按鈕）；
+   * ④ 都不是 ＝ 放掉選取。
    */
   _penDownEdit(e, g) {
     if (!g || !this._pen) return;
@@ -3120,12 +3142,58 @@ export class Selection {
         ax: this._pen.a[ia * 2], az: this._pen.a[ia * 2 + 1]
       };
       if (this.hooks.onPenEditPick) this.hooks.onPenEditPick(ia, this.penCount);
-    } else {
-      /** ⚠ 點空白處 ＝ 放掉選取。⛔ 不要「什麼都不做」——
-       *  那樣把手會一直掛在畫面上，使用者不知道怎麼收（坑第 21 條）*/
-      this._penSel = -1;
+      this._drawPenPreview();
+      return;
     }
+    /**
+     * 🔴 **壓在線上 ＝ 在那裡插一個錨點，而形狀⛔ 一格都不變。**
+     * ⭐ 走 `penAddAnchor()`（de Casteljau），⛔ 不是插一個尖角點 ——
+     * 使用者要的是「多一個**可以調**的點」，⛔ 不是改形狀。
+     */
+    const seg = this._penHitSegment(e.clientX, e.clientY, g);
+    if (seg) {
+      const r = penAddAnchor(this._pen, seg.seg, seg.t);
+      if (r.ok) {
+        this._penSel = r.at;
+        /** ⚠ 加完就**直接進入拖曳** —— 使用者多半是想把它拉到別的地方 */
+        this._penDragA = {
+          i: r.at, gx: g.x, gz: g.z,
+          ax: this._pen.a[r.at * 2], az: this._pen.a[r.at * 2 + 1]
+        };
+        if (this.hooks.onPenEditAdd) this.hooks.onPenEditAdd(r.at, this.penCount);
+        if (this.hooks.onPenEditChange) this.hooks.onPenEditChange();
+        this._drawPenPreview();
+        return;
+      }
+    }
+    /** ⚠ 點空白處 ＝ 放掉選取。⛔ 不要「什麼都不做」——
+     *  那樣把手會一直掛在畫面上，使用者不知道怎麼收（坑第 21 條）*/
+    this._penSel = -1;
     this._drawPenPreview();
+  }
+
+  /**
+   * 🔴 **刪掉選到的那個錨點**（工具列 `刪點` 走這一支）。
+   *
+   * ⭐ 兩側那兩段會**擬合**成一段（kang 2026-08-29 選的做法）——
+   * 規則的權威版在 `build/prim.js` 的 `penRemoveAnchor()`。
+   * ⚠ **擬合失敗會退回「直接接」，而那件事一定要講出來** ——
+   * 所以這裡把 `fitted` 原封不動交給呼叫端。
+   *
+   * @returns {{ok:boolean, fitted?:boolean, reason?:string}}
+   */
+  penDeleteSel() {
+    const i = this._penSel;
+    if (!this._pen || i < 0 || i >= this.penCount) {
+      return { ok: false, reason: '先點一個錨點，再按「刪點」' };
+    }
+    const r = penRemoveAnchor(this._pen, i);
+    if (!r.ok) return r;
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._drawPenPreview();
+    return r;
   }
 
   /** `改點` 的移動：拖錨點／拖把手／只是指著看 —— 三件事 */
