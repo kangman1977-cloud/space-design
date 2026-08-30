@@ -245,6 +245,83 @@ export function shiftPenPaths(paths, dx, dy) {
 }
 
 /**
+ * 🔴 **兩根把手的夾角差幾度以內算「圓滑」**（第 2 階段，2026-08-29）。
+ *
+ * ⭐ **判準是角度，⛔ 不是「存的時候是不是 `hi = −ho`」** ——
+ * 後者是**存法**，而使用者可以把把手折斷成任何角度
+ * 〔坑第 26 條：容許值要挑有物理意義的量〕。
+ *
+ * ⚠ **1 度的物理意義**：一根 100 cm 的把手，端點差 1.7 cm ——
+ * 畫面上剛好看得出來。而「拖出來的圓滑點」存的是精確反向（夾角精確 180），
+ * **存讀檔往返的浮點誤差遠小於 1 度**，所以⛔ 不會誤判。
+ */
+export const PEN_SMOOTH_TOL_DEG = 1;
+
+/**
+ * 🔴🔴 **這個錨點是「圓滑」的嗎 ＝ 兩根把手成不成一直線。**
+ *
+ * ⭐ **這一支是 kang 2026-08-29 拍板那個框架的核心**：
+ * > **連動與否是【錨點的屬性】，⛔ 不是一個拖曳規則。**
+ *
+ * 所以⛔ 不必問使用者「現在要不要連動」——
+ * **畫面上就看得出來**（圓滑點的兩根永遠成一直線）。
+ *
+ * ⚠ **兩根都要非零**：只有一根的點（第一段的起點、最後一段的終點、
+ * 或剛被 `尖角` 收掉一根的）**⛔ 不算圓滑** ——
+ * 那時另一根不存在，「連動」沒有對象。
+ *
+ * ⚠ **⛔ 放在這裡而不是 `select.js`，是因為 `select.js` 碰 DOM 就測不到**
+ * 〔鐵律二：判定邏輯抽成不碰 DOM 的純函式，才測得到〕。
+ */
+export function penIsSmooth(path, i, tolDeg = PEN_SMOOTH_TOL_DEG) {
+  if (!path || !path.hi || !path.ho) return false;
+  const ix = +path.hi[i * 2], iz = +path.hi[i * 2 + 1];
+  const ox = +path.ho[i * 2], oz = +path.ho[i * 2 + 1];
+  if (![ix, iz, ox, oz].every(Number.isFinite)) return false;
+  const li = Math.hypot(ix, iz), lo = Math.hypot(ox, oz);
+  if (li < 1e-9 || lo < 1e-9) return false;
+  /** cos(180° − tol) —— 夾角越接近 180 度，這個值越接近 −1 */
+  const lim = Math.cos((180 - tolDeg) * Math.PI / 180);
+  return (ix * ox + iz * oz) / (li * lo) <= lim;
+}
+
+/**
+ * 🔴🔴 **設一根把手，另一根照【這個錨點本來是什麼】決定跟不跟。**
+ *
+ * > **圓滑點** → 另一根**只跟著轉方向，長度各自保留**
+ * > **尖角點** → 另一根**一格都不動**
+ *
+ * ⚠ **長度⛔ 不連動**是刻意的：連動的話，
+ * **調這一段的彎度會強制改掉隔壁那一段的彎度** ——
+ * 而「只改該碰的那一端」是這個專案 2026-08-28 立的鐵律
+ * （側牆繞向、`marksOf()`、閉合把手都是同一條）。
+ *
+ * 🔴 **`smooth` 一定要在【改之前】問。**
+ * 改完再問的話，**剛拖的那一根方向已經變了 → 永遠算出「不圓滑」**
+ * → 連動永遠不會發生，而且**看起來像是功能沒做**。
+ *
+ * @param {object} path 就地修改
+ * @param {'in'|'out'} side 拖的是哪一根
+ * @returns {boolean} 另一根有沒有跟著動
+ */
+export function penSetHandle(path, i, side, dx, dz) {
+  if (!path || !path.hi || !path.ho) return false;
+  const smooth = penIsSmooth(path, i);
+  const self = side === 'in' ? path.hi : path.ho;
+  const other = side === 'in' ? path.ho : path.hi;
+  self[i * 2] = dx;
+  self[i * 2 + 1] = dz;
+  if (!smooth) return false;
+  const len = Math.hypot(other[i * 2], other[i * 2 + 1]);
+  const cur = Math.hypot(dx, dz);
+  /** ⚠ 拖到跟錨點重疊 → 方向沒有定義，⛔ 這一格不要動另一根 */
+  if (cur < 1e-9 || len < 1e-9) return false;
+  other[i * 2] = -dx / cur * len;
+  other[i * 2 + 1] = -dz / cur * len;
+  return true;
+}
+
+/**
  * 🔴 **一條鋼筆路徑 → 拉直之後的點串**（給 `BUILDERS.pen` 用）。
  *
  * 每一段是一條三次貝茲：

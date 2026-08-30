@@ -534,6 +534,51 @@ export function recenterOrigin(obj) {
   return { ok: true, moved: true, offset: r.offset };
 }
 
+/**
+ * 🔴 **鋼筆路徑：本地 → 世界**（`編輯路徑` 用，第 2 階段 2026-08-29）。
+ *
+ * ⚠ **形狀的 (x, y) 對到世界的 (x, z)** —— 跟擠出件、跟 `recenterOrigin()`
+ * 裡那一段同一套對應。
+ *
+ * ⚠ **⛔ 這一支不處理旋轉**：呼叫它的時候物件已經被**暫時攤平**
+ * （`rot` 歸零、`pos.y` 歸零）了，所以只剩 `pos` 與 `scale` 兩層。
+ * 〔kang 2026-08-29 拍板：編輯時暫時把物件攤平〕
+ *
+ * ⚠ **已知限制**：非等比縮放（`scale.x ≠ scale.z`）時角度會被拉歪，
+ * 所以「鎖角度」的度數跟畫面上量到的角度會差一點。
+ * ⛔ 這是座標系本身的事，⛔ 不要為了它去動 `scale`。
+ *
+ * ⚠ **⛔ 寫在這裡而不是 `main.js`，是因為 `main.js` 碰 DOM 就測不到** ——
+ * 而**往返要一個數字都不差**正是這一組最危險的地方。
+ */
+export function penPathToWorld(path, obj) {
+  const sx = obj.scale.x, sz = obj.scale.z;
+  const a = [], hi = [], ho = [];
+  for (let i = 0; i < path.a.length; i += 2) {
+    a.push(path.a[i] * sx + obj.pos.x, path.a[i + 1] * sz + obj.pos.z);
+    hi.push(path.hi[i] * sx, path.hi[i + 1] * sz);
+    ho.push(path.ho[i] * sx, path.ho[i + 1] * sz);
+  }
+  return { closed: true, a, hi, ho };
+}
+
+/**
+ * 世界 → 本地（`penPathToWorld()` 的反向）。
+ * ⚠ **縮放 0 除不得 → 回 `null`**，讓呼叫端擋下來講原因，
+ * ⛔ 不要回一堆 `Infinity` 進去（那會安靜地毀掉整條路徑）。
+ */
+export function penPathToLocal(p, obj) {
+  const sx = obj.scale.x, sz = obj.scale.z;
+  if (Math.abs(sx) < 1e-9 || Math.abs(sz) < 1e-9) return null;
+  const a = [], hi = [], ho = [];
+  for (let i = 0; i < p.a.length; i += 2) {
+    a.push((p.a[i] - obj.pos.x) / sx, (p.a[i + 1] - obj.pos.z) / sz);
+    hi.push(p.hi[i] / sx, p.hi[i + 1] / sz);
+    ho.push(p.ho[i] / sx, p.ho[i + 1] / sz);
+  }
+  return { closed: true, a, hi, ho };
+}
+
 export function explodeArray(obj) {
   if (!obj.isArray) throw new Error('這個物件不是陣列');
 

@@ -213,6 +213,42 @@ export class SceneView {
     this.pickables = [...this.byId.values()];
     this._seamsDirty = false;      // 這一輪已經全部重畫過了
     this._geomDirty = false;
+    /**
+     * ⚠ **一定要放在 `sync()` 的最後重套一次** —— 編輯路徑的時候
+     * 每拖一下都會 `sync()`，⛔ 不重套的話半透明會在第一次重建時掉回不透明，
+     * 而那正是「拖到一半東西突然擋住線」。
+     */
+    this._applyGhost();
+  }
+
+  /**
+   * 🔴 **把某一個物件變半透明**（`編輯路徑` 用，kang 2026-08-29 拍板）。
+   *
+   * > **⛔ 不隱藏** —— 隱藏了就看不到自己在改什麼，
+   * > 那跟「從頭畫一次」沒有兩樣。
+   *
+   * @param {string|null} id 要變透明的物件 id（`null` ＝ 全部還原）
+   */
+  setGhost(id) {
+    this._ghostId = id || null;
+    this._applyGhost();
+  }
+
+  _applyGhost() {
+    const gid = this._ghostId || null;
+    for (const [oid, node] of this.byId) {
+      const on = gid !== null && oid === gid;
+      const m = node.material;
+      if (!m || !!m.transparent === on) continue;
+      m.transparent = on;
+      m.opacity = on ? 0.28 : 1;
+      /**
+       * ⚠ **`depthWrite` 要跟著關** —— 不關的話半透明的面還是會把
+       * 它後面的線擋掉，看起來就像「沒有變透明」。
+       */
+      m.depthWrite = !on;
+      m.needsUpdate = true;
+    }
   }
 
   _createNode(obj) {

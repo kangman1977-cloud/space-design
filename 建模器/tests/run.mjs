@@ -11653,6 +11653,120 @@ section('內建鋼筆：錨點與把手 → 輪廓');
     eq('★ 　 把手一個數字都沒動（它是相對位移，錨點搬了它自己就跟著走）',
        JSON.stringify(paths[0].ho), JSON.stringify([0, k, 0, 0, 0, 0]));
   }
+
+  // ═══════════════════════════════════════════════════
+  //  🔴 第 2 階段：`改點`（回頭拉點、拉把手）2026-08-29
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 🔴 ⑫ **「圓滑」的判準是【兩根把手的夾角】，⛔ 不是存法。**
+   *
+   * ⚠ 這一組守的是 kang 拍板那個框架：
+   * **連動與否是【錨點的屬性】，⛔ 不是一個拖曳規則。**
+   * 判錯的話，圓滑點會變成各拖各的（看起來像「連動沒做」），
+   * 或尖角點被硬拉成一直線（**使用者刻意折斷的角自己接回去了**）。
+   */
+  {
+    const mk = (hi, ho) => ({ a: [0, 0], hi, ho });
+    ok('⑫ 精確反向 ＝ 圓滑', prim.penIsSmooth(mk([-3, -4], [3, 4]), 0));
+    ok('★ 　 長度不同但方向相反 → 還是圓滑（長度⛔ 不是判準）',
+       prim.penIsSmooth(mk([-30, -40], [3, 4]), 0));
+    ok('★ 　 折斷成 90 度 → ⛔ 不是圓滑', !prim.penIsSmooth(mk([-4, 3], [3, 4]), 0));
+    ok('★★ 　 只有一根（另一根是 0）→ ⛔ 不是圓滑（連動沒有對象）',
+       !prim.penIsSmooth(mk([0, 0], [3, 4]), 0));
+    /**
+     * ⭐ **容許值 1 度的物理意義**：一根 100 cm 的把手端點差 1.7 cm。
+     * ⚠ 存讀檔的浮點誤差遠小於這個，所以⛔ 不會誤判。
+     */
+    const deg = d => [Math.cos(d * Math.PI / 180) * 5, Math.sin(d * Math.PI / 180) * 5];
+    ok('★ 　 差 0.5 度 → 仍算圓滑（在 1 度容許值內）',
+       prim.penIsSmooth(mk(deg(180.5), [5, 0]), 0));
+    ok('★★ 　 差 2 度 → ⛔ 不算（容許值真的有在擋，⛔ 不是永遠回 true）',
+       !prim.penIsSmooth(mk(deg(182), [5, 0]), 0));
+  }
+
+  /**
+   * 🔴 ⑬ **圓滑點：拖一根，另一根【只轉方向，長度各自保留】。**
+   *
+   * ⚠ **長度⛔ 不可以跟著變** —— 跟著變的話，
+   * **調這一段的彎度會強制改掉隔壁那一段的彎度**，
+   * 而「只改該碰的那一端」是 2026-08-28 立的鐵律。
+   */
+  {
+    /** 進把手長 10 往 −X、出把手長 5 往 +X ＝ 一直線（圓滑），長度⛔ 不同 */
+    const p = { a: [0, 0], hi: [-10, 0], ho: [5, 0] };
+    const linked = prim.penSetHandle(p, 0, 'out', 0, 3);
+    ok('⑬ 圓滑點拖一根 → 另一根有跟著動', linked);
+    eq('★ 　 拖的那一根就是給的值', JSON.stringify(p.ho), JSON.stringify([0, 3]));
+    eq('★★ 　 另一根【只轉方向】：轉到正反向',
+       JSON.stringify(p.hi.map(v => +v.toFixed(9))), JSON.stringify([0, -10]));
+    near('★★ 　 另一根的【長度一格都沒變】（原本 10）',
+         Math.hypot(p.hi[0], p.hi[1]), 10, 1e-9);
+    /** ⭐ 兩根夾角仍是 180 度 —— 圓滑點改完還是圓滑點 */
+    ok('★ 　 改完仍然是圓滑（不變量）', prim.penIsSmooth(p, 0));
+  }
+
+  /**
+   * 🔴 ⑭ **尖角點：拖一根，另一根【一格都不動】。**
+   *
+   * ⚠ **這一組是 ⑬ 的反面，⛔ 兩組都要有** ——
+   * 只驗「有連動」的話，一個「永遠連動」的錯誤實作也會通過
+   * 〔2026-08-29 立的那條：⛔ 不要相信一組沒有失敗過的測試〕。
+   */
+  {
+    /** 折斷成 90 度 ＝ 尖角 */
+    const p = { a: [0, 0], hi: [-4, 3], ho: [3, 4] };
+    const before = JSON.stringify(p.hi);
+    const linked = prim.penSetHandle(p, 0, 'out', 0, 9);
+    ok('⑭ 尖角點拖一根 → 另一根⛔ 不跟動', !linked);
+    eq('★★ 　 另一根逐格完全一樣', JSON.stringify(p.hi), before);
+    eq('★ 　 拖的那一根有改到', JSON.stringify(p.ho), JSON.stringify([0, 9]));
+  }
+
+  /**
+   * 🔴🔴 ⑮ **`編輯路徑`：本地 ⇄ 世界往返，一個數字都不差。**
+   *
+   * ⚠ **⛔ 這一組不是形式**。kang 2026-08-29 選的是「**收尾後也能重新編輯**」，
+   * 而路徑存的是**本地座標**、物件另外帶著 `pos`／`scale` ——
+   * **換算錯掉的話形狀會整個漂走或縮放掉，而且是在他按「完成」之後才發生**。
+   * 🔴 所以刻意挑一個**搬過又非等比縮放過**的物件（⛔ 不是單位物件，
+   * 那種「碰巧通過」2026-08-28 才害過一次）。
+   */
+  {
+    const ioM = await import('../js/core/io.js');
+    const src = {
+      type: 'pen', h: 4,
+      paths: [{ closed: true,
+                a: [0, 0, 20, 0, 20, 10, 0, 10],
+                hi: [0, -3, 0, 0, 0, 0, 0, 0],
+                ho: [0, 3, 0, 0, 0, 0, 0, 0] }]
+    };
+    const obj = new ioM.ModelObject({ name: '鋼筆', src });
+    obj.pos.set(31, 0, -17);
+    obj.scale.set(2, 1, 0.5);          // ⚠ 故意非等比
+    const p0 = src.paths[0];
+    const w = ioM.penPathToWorld(p0, obj);
+    /** ⭐ 對得起來的量：第二個錨點的世界 X ＝ 20 × 2 ＋ 31 ＝ 71 */
+    near('⑮ 本地 → 世界：第 2 個錨點的 X ＝ 20×2 ＋ 31', w.a[2], 71, 1e-9);
+    near('★ 　 　 　 　 它的 Z ＝ 0×0.5 −17', w.a[3], -17, 1e-9);
+    near('★ 　 把手也吃了縮放：ho[1] ＝ 3 × 0.5', w.ho[1], 1.5, 1e-9);
+    const back = ioM.penPathToLocal(w, obj);
+    ok('★★ 　 換得回來（⛔ 不是 null）', !!back);
+    eq('★★ 　 錨點往返一個數字都不差',
+       JSON.stringify(back.a.map(v => +v.toFixed(9))), JSON.stringify(p0.a));
+    eq('★★ 　 進把手往返一個數字都不差',
+       JSON.stringify(back.hi.map(v => +v.toFixed(9))), JSON.stringify(p0.hi));
+    eq('★★ 　 出把手往返一個數字都不差',
+       JSON.stringify(back.ho.map(v => +v.toFixed(9))), JSON.stringify(p0.ho));
+    /**
+     * 🔴 **縮放 0 要回 `null`，⛔ 不可以回一堆 Infinity** ——
+     * 那會**安靜地**毀掉整條路徑（形狀直接消失，而且沒有任何訊息）。
+     */
+    const bad = new ioM.ModelObject({ name: '鋼筆', src });
+    bad.scale.set(0, 1, 1);
+    eq('★★ 　 縮放 0 → 回 null（⛔ 不是 Infinity）',
+       ioM.penPathToLocal(w, bad), null);
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

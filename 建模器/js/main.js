@@ -12,7 +12,8 @@
 
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
-         explodeShapes, recenterOrigin, download, openFile, autosave, loadAutosave }
+         explodeShapes, recenterOrigin, download, openFile, autosave, loadAutosave,
+         penPathToWorld, penPathToLocal }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
@@ -98,6 +99,24 @@ const sel = new Selection(view, {
     : (had
         ? '這個點轉成尖角了 —— 接下來那一段會是【直線】（已經畫好的那一段沒有變）'
         : '這個點本來就是尖角，接下來那一段本來就是直線')),
+  /**
+   * 🔴 **`改點`：選到一個錨點要講一句** —— 畫面上的變化只有「多了兩根把手」，
+   * ⛔ 不講的話使用者不知道那兩根是可以拖的（坑第 21 條）。
+   */
+  onPenEditPick: (i, n) => {
+    const sm = sel.penIsSmoothAt(i);
+    toast(`選到第 ${i + 1} 個點（共 ${n} 個）　`
+      + (sm
+          ? '⭐ 這是【圓滑】的點：拖一根把手，另一根會跟著轉方向'
+          : '⭐ 這是【尖角】的點：兩根把手各拖各的　'
+            + '（在它身上按住拖就長得出把手）')
+      + '　拖這個點本身＝搬位置');
+  },
+  /**
+   * 🔴 **`改點`：放開手才重建形狀。**
+   * ⚠ ⛔ 不可以每次移動都重建 —— 那是坑第 22 條（每幀迴圈裡的 O(點數)）。
+   */
+  onPenEditChange: () => applyPenEdit(),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
@@ -150,6 +169,8 @@ const app = {
   get head() { return doc.head; },
   onEdit: label => { view.sync(doc); commit(label); },
   onExplode: obj => explodeSelected(obj),
+  /** 🔴 右側面板的 `編輯路徑` —— 回頭改鋼筆物件那一串錨點（第 2 階段） */
+  onEditPenPath: obj => editPenPath(obj),
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
 };
@@ -460,6 +481,7 @@ $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
 $('pen').onclick = () => togglePenMode();
 $('penCorner').onclick = () => togglePenCorner();
+$('penEdit').onclick = () => togglePenEdit();
 $('penSnapDeg').oninput = () => {
   const d = +$('penSnapDeg').value;
   if (Number.isFinite(d) && d > 0) sel.penSnapDeg = d;
@@ -687,8 +709,19 @@ function exitOtherModes(keep) {
     matePick1 = null; view.clearPickMarks();
   }
   if (keep !== 'pen' && sel.penMode) {
-    sel.takePen(); sel.setPenMode(false);
-    $('pen').classList.remove('on'); $('pen').textContent = '鋼筆';
+    /**
+     * 🔴 **正在改既有物件的路徑 → 一定要走 `endPenEdit()`**，
+     * ⛔ 不可以直接 `setPenMode(false)` ——
+     * 那樣物件會**永遠停在攤平＋半透明的狀態**，而且看起來像是壞掉了。
+     */
+    if (penEditing) {
+      endPenEdit(true);
+    } else {
+      sel.takePen(); sel.setPenMode(false);
+      $('pen').classList.remove('on'); $('pen').textContent = '鋼筆';
+    }
+    /** ⚠ **⛔ 這裡不可以 `return`** —— 底下還有刀具要收，漏掉就是
+     *  「畫面說刀具關了，實際上沒有」（這一支開頭那則講的正是這件事）*/
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
@@ -869,6 +902,139 @@ function toggleKnifeSnapMid() {
 // ── 內建鋼筆 ───────────────────────────────────────────
 
 /**
+ * 🔴🔴 **正在「編輯路徑」的那個物件**（第 2 階段，2026-08-29）。
+ * `null` ＝ 現在畫的是**新的一條**，⛔ 不是在改既有物件。
+ *
+ * 存的四樣都是**進去時的原值，出來一定要還原**：
+ * | 欄 | 為什麼 |
+ * |---|---|
+ * | `rot` | 攤平（kang 拍板：編輯時暫時把物件攤平） |
+ * | `posY` | 形狀畫在**地板**上，物件浮空的話線跟形狀對不起來 |
+ * | `path` | 按**取消**要能整條還原 |
+ * | `id` | ⛔ 不存物件本身 —— 中途被刪掉的話會抓到一個不在文件裡的殼 |
+ */
+let penEditing = null;
+
+/**
+ * 🔴 **`改點` 的開關**（工具列那一顆）。
+ * ⚠ **少於 3 個點就擋下來講原因** —— 那時候沒有東西可以改。
+ */
+function togglePenEdit() {
+  if (sel.penCount < 3) {
+    toast('至少要有 3 個點才有東西可以改', true);
+    return;
+  }
+  sel.setPenEdit(!sel.penEdit);
+  updateBar();
+  toast(sel.penEdit
+    ? '改點：開。點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線。'
+      + '⛔ 這時候【不會】放新的點　⭐ 選到的那個點才看得到把手'
+    : '改點：關。回到畫的模式，按左鍵就是放下一個點');
+}
+
+/**
+ * 🔴 **從既有物件回來改它的路徑**（右側面板 `編輯路徑` 走這一支）。
+ *
+ * ⭐ **kang 2026-08-29 拍板的三件事都在這裡**：
+ * ① 編輯時**暫時把物件攤平**（`rot` 歸零、`pos.y` 歸零）
+ * ② ⛔ **完全不碰原點** —— 進來出去都不呼叫 `recenterOrigin()`
+ * ③ 物件**留著但半透明**，⛔ 不隱藏（隱藏了就看不到自己在改什麼）
+ */
+function editPenPath(obj) {
+  if (!obj || !obj.src || obj.src.type !== 'pen') {
+    toast('只有鋼筆畫出來的物件改得了路徑　'
+        + '⚠ 按過「轉成可編輯網格」的話，那串錨點就已經不在了', true);
+    return;
+  }
+  const p0 = obj.src.paths && obj.src.paths[0];
+  if (!p0 || !Array.isArray(p0.a) || p0.a.length < 6) {
+    toast('這支鋼筆的路徑讀不出來（少於 3 個點）', true);
+    return;
+  }
+  if (Math.abs(obj.scale.x) < 1e-9 || Math.abs(obj.scale.z) < 1e-9) {
+    toast('這個物件有一軸的縮放是 0，路徑攤不開 —— 先把縮放改回來', true);
+    return;
+  }
+  exitOtherModes('pen');
+  penEditing = {
+    id: obj.id,
+    rot: obj.rot.clone(),
+    posY: obj.pos.y,
+    path: { a: p0.a.slice(), hi: p0.hi.slice(), ho: p0.ho.slice() }
+  };
+  obj.rot.set(0, 0, 0);
+  obj.pos.y = 0;
+  view.sync(doc);
+  view.setGhost(obj.id);
+  /** ⚠ **順序不能換**：`setPenMode()` 會把 `_pen` 與 `penEdit` 都清掉 */
+  sel.setPenMode(true);
+  sel.loadPen(penPathToWorld(p0, obj));
+  sel.setPenEdit(true);
+  $('pen').classList.add('on');
+  panel.refresh();
+  updateBar();
+  toast(`編輯「${obj.name}」的路徑（${Math.floor(p0.a.length / 2)} 個點）　`
+      + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線。'
+      + '⚠ 這個物件暫時被【攤平】而且變半透明，按「完成」就轉回原本的角度');
+}
+
+/**
+ * 🔴 **拖完一下就把形狀跟上**（`onPenEditChange` 走這一支）。
+ * ⚠ ⛔ 這裡**不 commit** —— 一整趟編輯算 undo 的一步，
+ * 拖十下就存十步的話「還原」要按十次才回得去。
+ */
+function applyPenEdit() {
+  if (!penEditing) return;
+  const obj = doc.objects.find(o => o.id === penEditing.id);
+  if (!obj || !obj.src || !obj.src.paths) return;
+  const p = sel.peekPen();
+  if (!p) return;
+  const loc = penPathToLocal(p, obj);
+  if (!loc) return;
+  obj.src.paths[0] = loc;
+  obj.invalidate();
+  view.sync(doc);
+  updateBar();
+}
+
+/**
+ * 🔴 **收工：把物件轉回去。**
+ * @param {boolean} save `false` ＝ 取消，路徑整條還原成進來時的樣子
+ */
+function endPenEdit(save) {
+  if (!penEditing) return;
+  const st = penEditing;
+  /** ⚠ **先清掉** —— 免得底下的流程又繞回 `applyPenEdit()` 跑一次 */
+  penEditing = null;
+  const obj = doc.objects.find(o => o.id === st.id);
+  if (obj && obj.src && obj.src.paths) {
+    let next = st.path;
+    if (save) {
+      const p = sel.peekPen();
+      const loc = p ? penPathToLocal(p, obj) : null;
+      /** ⚠ 換不出本地座標就**保留原樣**，⛔ 不要寫一份壞掉的進去 */
+      if (loc) next = loc;
+    }
+    obj.src.paths[0] = next;
+    obj.rot.copy(st.rot);
+    obj.pos.y = st.posY;
+    obj.invalidate();
+  }
+  sel.takePen();
+  sel.setPenMode(false);
+  view.setGhost(null);
+  view.sync(doc);
+  $('pen').classList.remove('on');
+  $('pen').textContent = '鋼筆';
+  if (save) commit('編輯鋼筆路徑');
+  panel.refresh();
+  updateBar();
+  toast(save
+    ? '路徑改好了 —— 物件已經轉回原本的角度'
+    : '取消了 —— 路徑回到編輯前的樣子');
+}
+
+/**
  * 🔴 **鋼筆：在地板上畫一個形狀，畫完直接變成可以拉厚度的物件。**
  * 〔kang 2026-08-27 決定要做；**畫在地板上**是他拍板的〕
  *
@@ -876,6 +1042,11 @@ function toggleKnifeSnapMid() {
  * ⛔ 不另外發明一套，那是他現在已經在用的路。
  */
 function togglePenMode() {
+  /**
+   * 🔴 **正在改既有物件的路徑時，這一顆是「完成」，⛔ 不是收尾建新物件。**
+   * ⚠ ⛔ 少了這一行，按下去會用同一條路徑**再建一個新物件**。
+   */
+  if (penEditing) { endPenEdit(true); return; }
   if (sel.penMode) { finishPen(); return; }
   exitOtherModes('pen');
   sel.setPenMode(true);
@@ -904,6 +1075,8 @@ function togglePenMode() {
  * ⛔ 不可以安靜地什麼都不做（坑第 21 條）。
  */
 function finishPen() {
+  /** ⚠ **保險絲**：改既有物件的路徑⛔ 不可以走到「建新物件」這條路 */
+  if (penEditing) { endPenEdit(true); return; }
   const path = sel.takePen();
   $('pen').classList.remove('on');
   sel.setPenMode(false);
@@ -940,6 +1113,8 @@ function finishPen() {
 }
 
 function cancelPenMode() {
+  /** 🔴 改既有物件的路徑時，「取消」＝ 整條還原，⛔ 不是「剛才畫的不算」 */
+  if (penEditing) { endPenEdit(false); return; }
   sel.takePen();
   sel.setPenMode(false);
   $('pen').classList.remove('on');
@@ -954,6 +1129,26 @@ function cancelPenMode() {
  * 〔kang 2026-08-29 在三個選項裡挑的：一顆看得見的切換鈕，桌機平板同一套〕
  */
 function togglePenCorner() {
+  /**
+   * 🔴 **`改點` 模式下，這一顆管的是【選到的那個點】**，
+   * ⛔ 不是「接下來要放的點」。
+   *
+   * ⚠ **這⛔ 不是定位糊掉**（kang 為切一刀拍板的那條）：
+   * 它管的一直是「**把手要不要存在**」，只是對象換了 ——
+   * 而 `改點` 模式下**根本沒有「接下來要放的點」這種東西**。
+   */
+  if (sel.penEdit) {
+    const r = sel.penToggleCornerAt();
+    if (r === null) { toast('先點一個錨點，再按「尖角」', true); return; }
+    if (r === 'need-drag') {
+      toast('這個點本來就是尖角 —— 要讓它變圓滑，'
+          + '在它身上【按住拖】就長得出把手（憑空長的話方向不唯一）');
+      return;
+    }
+    applyPenEdit();
+    toast('這個點轉成尖角了：兩根把手都收掉，它兩側都變直線');
+    return;
+  }
   sel.penCorner = !sel.penCorner;
   /**
    * 🔴🔴 **開的時候要「連目前這一段也一起變直」，⛔ 不能只管下一個點。**
@@ -3616,6 +3811,20 @@ function updateBar() {
   $('penCorner').hidden = !sel.penMode;
   $('penCorner').classList.toggle('on', !!sel.penCorner);
   /**
+   * 🔴 **`改點` 那一顆**（第 2 階段）。
+   * ⚠ **還沒有 3 個點就不給按** —— 那時候沒有東西可以改，
+   * ⛔ 按下去什麼都不發生的按鈕就是坑第 21 條。
+   */
+  $('penEdit').hidden = !sel.penMode;
+  $('penEdit').disabled = sel.penCount < 3;
+  $('penEdit').classList.toggle('on', !!sel.penEdit);
+  /**
+   * 🔴 **`改點` 開著的時候，這幾顆是「畫」用的，⛔ 一個都不該出現。**
+   * ⚠ 留著的話使用者會按 `確定曲線`／`退一點`，而那是在改另一件事 ——
+   * **兩個模式的按鈕混在同一排，定位就糊了**（kang 為切一刀拍板的那條）。
+   */
+  const penDrawing = sel.penMode && !sel.penEdit;
+  /**
    * ⚠ **兩個數字欄位一定要帶標籤** —— kang 2026-08-29 問
    * 「『尖角』旁的 3 是代表甚麼?」：`3` 是**厚度**、`45` 是**鎖角度的度數**，
    * 但它們都緊貼著按鈕，**看起來像是那顆按鈕的參數**。
@@ -3627,14 +3836,23 @@ function updateBar() {
   $('penSnap').classList.toggle('on', !!sel.penSnapAngle);
   $('penSnapDegLbl').hidden = !sel.penMode;
   $('penSnapDeg').hidden = !sel.penMode;
-  $('penPark').hidden = !sel.penMode;
+  $('penPark').hidden = !penDrawing;
   $('penPark').disabled = sel.penCount === 0;
-  $('penUndo').hidden = !sel.penMode;
+  $('penUndo').hidden = !penDrawing;
   $('penUndo').disabled = sel.penCount === 0;
   $('penCancel').hidden = !sel.penMode;
+  /**
+   * 🔴 **改既有物件的路徑時，那一顆的意思是「完成」** ——
+   * ⛔ 一直寫「鋼筆 N」的話，使用者不知道按誰才收得了工（坑第 21 條，
+   * 跟 `刀具` 那一顆同一條）。
+   */
+  if (penEditing) $('pen').textContent = '完成';
   $('pen').title = sel.penMode
-    ? `畫到 ${sel.penCount} 個點了。【點一下】＝ 尖角、【按住拖】＝ 圓滑，`
-      + '最後一點【快點兩下】完成（或再按一次這顆）'
+    ? (sel.penEdit
+        ? `改點模式：${sel.penCount} 個點。點一個點就選它，拖它＝搬位置、`
+          + '拖把手＝調曲線。再按一次「改點」回到畫的模式'
+        : `畫到 ${sel.penCount} 個點了。【點一下】＝ 尖角、【按住拖】＝ 圓滑，`
+          + '最後一點【快點兩下】完成（或再按一次這顆）')
     : '鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件';
 
   $('knifeCancel').hidden = !sel.knifeMode;

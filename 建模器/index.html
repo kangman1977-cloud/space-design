@@ -711,7 +711,17 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         🔴 「尖角」那顆是 Alt 的替代品 —— 平板上沒有 Alt（kang 2026-08-29 選的）。
       -->
       <button id="pen" title="鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件。【點一下】＝ 尖角、【按住拖】＝ 圓滑（拖出來的就是把手）。在最後一點【快點兩下】就完成。⚠ 鋼筆模式下轉視角改成：桌機按右鍵拖、平板用兩指">鋼筆</button>
-      <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品">尖角</button>
+      <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品。⭐ 開著「改點」的時候，它管的是【選到的那個點】">尖角</button>
+      <!--
+        改點（第 2 階段，kang 2026-08-29 拍板）：回頭拉點、拉把手。
+
+        🔴 為什麼要一顆看得見的按鈕，⛔ 不用「點中間的錨點就自動切」：
+          放點那條路已經把【第 0 個】（閉合）與【最後一個】（轉尖角）吃掉了，
+          中間那些掉進 else 會在原地放一個新點 ——
+          中間那些也拿去當選取的話，路徑附近就再也放不了新點。
+        ⭐ 跟「尖角」同一條路：一顆看得見的切換鈕，桌機平板同一套。
+      -->
+      <button id="penEdit" hidden title="改點：按下去之後，點畫面上的錨點就是【選它、拖它】—— ⛔ 不再放新的點。選到的那個點會長出兩根把手，拖把手就是調曲線。⚠ 圓滑的點（兩根把手成一直線）拖一根、另一根會跟著轉方向；折斷過的尖角點兩根各拖各的">改點</button>
       <span class="lbl" id="penHLbl" hidden>厚度</span>
       <input id="penH" type="number" min="0.05" step="0.5" value="3" hidden
              title="畫完之後往上拉多高（公分）。跟「匯入線稿」的高度是同一個意思">

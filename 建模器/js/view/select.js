@@ -20,7 +20,7 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
  * ⭐ **預覽用的拉直走的是生成時同一支函式** —— 預覽跟結果因此不可能不一樣。
  * ⚠ **單向相依**：`prim.js` ⛔ 沒有 import 這一支（它不認識畫面）。
  */
-import { flattenPenPath } from '../build/prim.js';
+import { flattenPenPath, penIsSmooth, penSetHandle } from '../build/prim.js';
 import { worldBounds } from '../core/align.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -234,6 +234,25 @@ export class Selection {
      * 🔴 **放下一個點時自動解除** —— 新的一段本來就又是開放的。
      */
     this._penParked = false;
+
+    /**
+     * 🔴🔴 **`改點` 模式**（第 2 階段，kang 2026-08-29 拍板）。
+     *
+     * > **開著 ＝ 點錨點是「選它、拖它」；關著 ＝ 維持原本的畫法。**
+     *
+     * ⚠ **⛔ 為什麼要一顆看得見的按鈕，不用「點中間的錨點就自動切」**：
+     * 【實證】`pointerdown` 那三支已經把**第 0 個**（閉合）與**最後一個**
+     * （轉尖角）吃掉了，中間那些**掉進 `else` 會在原地放一個新點**。
+     * 中間那些也拿去當選取的話，**路徑附近就再也放不了新點**。
+     * ⭐ 跟 `尖角` 那顆同一條路：**一顆看得見的切換鈕，桌機平板同一套。**
+     */
+    this.penEdit = false;
+    /** `改點` 模式下選到的錨點索引（⛔ 沒有就是 −1）。把手只畫這一個的 */
+    this._penSel = -1;
+    /** 正在拖錨點：{ i, gx, gz, ax, az } —— 按下去當下的游標與錨點座標 */
+    this._penDragA = null;
+    /** 正在拖把手：{ i, side:'in'|'out' } */
+    this._penDragH = null;
 
     /**
      * 🔴 **「點畫面不是為了選物件」的模式** —— gizmo 與它的輔助線要收起來。
@@ -672,6 +691,18 @@ export class Selection {
          * ⭐ 先當尖角放下去；拖的話 `pointermove` 再把把手補上。
          */
         /**
+         * 🔴🔴 **`改點` 模式完全接管這一下，⛔ 之後一個新點都不放。**
+         *
+         * ⚠ **一定要先把 `_penDown` 清掉** —— 留著的話 `pointermove`
+         * 會掉進「正在拖最後一個錨點的把手」那一支，
+         * **把已經畫好的東西改掉，而畫面上看起來只是在拖**。
+         * 〔2026-08-29 第四次退回的病因就是 `_penDown` 沒被清掉〕
+         */
+        if (this.penEdit) {
+          this._penDown = null;
+          this._penDownEdit(e, g);
+        }
+        /**
          * 🔴 **壓在第一個錨點上 ＝ 要閉合，⛔ 這一下不放新點。**
          *
          * ⭐ **這是 Adobe 官方文件寫的收尾方式**（2026-08-29 讀原文）：
@@ -681,7 +712,7 @@ export class Selection {
          *
          * ⚠ **⛔ 不是先放點再退掉** —— 那樣中間會閃一下多出來的點。
          */
-        if (g && this._penHitAnchor(e.clientX, e.clientY) === 0
+        else if (g && this._penHitAnchor(e.clientX, e.clientY) === 0
             && this.penCount >= 3) {
           /**
            * ⚠ **要記下按下的位置** —— 閉合也可以用拖的（見 `pointerup`），
@@ -724,6 +755,8 @@ export class Selection {
       if (this.penMode && this._pen && this._pen.a.length) {
         const g = this._groundAt(e.clientX, e.clientY);
         if (!g) { /* 相機在地板底下，打不到 */ }
+        /** 🔴 `改點`：拖錨點／拖把手／只是指著看 —— 三件事都在那一支裡 */
+        else if (this.penEdit) { this._penMoveEdit(e, g); }
         else if (this._penConvert) {
           /**
            * 🔴 **在剛畫好的那個點上拖出把手時，要看得見那根把手在長。**
@@ -928,6 +961,12 @@ export class Selection {
        * ⚠ **右鍵「拖」仍然是轉視角** —— 用移動距離分。
        */
       if (this.penMode) {
+        /**
+         * 🔴 **`改點` 模式：這一支只負責結束拖曳**，
+         * ⛔ 完全不碰放點／閉合／收尾那一整套。
+         * ⚠ 右鍵在這個模式下什麼都不做 —— `確定曲線` 是**畫的時候**的事。
+         */
+        if (this.penEdit) { this._penUpEdit(e, d, dist); return; }
         /** 右鍵按一下 ＝ 確定曲線；右鍵拖 ＝ 轉視角，⛔ 不可以一起吃掉 */
         if (d.button === 2) {
           if (dist <= TAP_MOVE && this._pen && this._pen.a.length) this.parkPen();
@@ -2789,6 +2828,14 @@ export class Selection {
     this._penClosing = false;
     this._penParked = false;
     this._penConvert = false;
+    /**
+     * ⚠ **`改點` 也要一起關掉** —— 留著的話下次進鋼筆會直接是改點模式，
+     * 而**那時候一個錨點都還沒有，按下去什麼都不會發生**（坑第 21 條）。
+     */
+    this.penEdit = false;
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
     return this.penMode;
   }
 
@@ -2821,9 +2868,27 @@ export class Selection {
     this._penClosing = false;
     this._penParked = false;
     this._penConvert = false;
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
     if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
     if (!p || p.a.length < 6) return null;
     return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
+  }
+
+  /**
+   * 🔴 **讀出目前這一條，⛔ 但不清空**（`改點` 拖完要把形狀存回物件）。
+   *
+   * ⚠ **⛔ 不要為了省事改用 `takePen()` 再 `loadPen()` 回去** ——
+   * 那中間有一瞬間 `_pen` 是 null，而 `_penSel`／把手全會被清掉，
+   * 症狀是「**拖一下，選取就跳掉了**」。
+   */
+  peekPen() {
+    if (!this._pen || this._pen.a.length < 6) return null;
+    return {
+      closed: true,
+      a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice()
+    };
   }
 
   /** 退掉最後一個錨點（畫錯時往回一步）。回傳還剩幾個 */
@@ -2903,6 +2968,212 @@ export class Selection {
     this._pen.hi[1] = on ? hy : 0;
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  🔴 第 2 階段：`改點`（回頭拉點、拉把手）
+  //     kang 2026-08-29 拍板的三件事都在這一區：
+  //       ① 連動與否是【錨點的屬性】，⛔ 不是拖曳規則
+  //       ② ⛔ 完全不碰原點與 pos／rot／scale
+  //       ③ 物件留著（半透明），⛔ 不隱藏
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * 🔴 **開關 `改點`。⛔ 不要直接設 `penEdit`** ——
+   * 關掉的時候**選取與那兩根把手一定要跟著收掉並重畫**，
+   * 否則把手會留在畫面上，而它已經碰不到了（坑第 21 條的反面：
+   * 畫面上有的東西一定要是真的）。
+   */
+  setPenEdit(on) {
+    this.penEdit = !!on;
+    if (!this.penEdit) this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._drawPenPreview();
+    return this.penEdit;
+  }
+
+  /** `改點` 模式下選到第幾個錨點（⛔ 沒有就是 −1）。呼叫端拿去決定按鈕狀態 */
+  get penSel() { return this._penSel; }
+
+  /**
+   * 這個錨點是不是圓滑的（呼叫端拿去決定提示怎麼講）。
+   * ⚠ **對外只開這一支** —— `_penIsSmooth()` 不檢查範圍，⛔ 不要直接給外面用。
+   */
+  penIsSmoothAt(i) {
+    if (!this._pen || i < 0 || i >= this.penCount) return false;
+    return this._penIsSmooth(i);
+  }
+
+  /**
+   * 🔴 **把一條既有的路徑載回來改**（右側面板 `編輯路徑` 走這一支）。
+   *
+   * ⚠ **一定要 `slice()` 複製** —— 直接指過來的話，
+   * **使用者按取消也已經把物件的資料改掉了**，而畫面上看不出來。
+   *
+   * @param {{a:number[], hi:number[], ho:number[]}} path 世界座標的錨點與把手
+   * @returns {number} 載進來幾個錨點（⛔ 少於 3 個回 0 並且不載）
+   */
+  loadPen(path) {
+    if (!path || !Array.isArray(path.a) || path.a.length < 6) return 0;
+    this._pen = { a: path.a.slice(), hi: path.hi.slice(), ho: path.ho.slice() };
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
+    /** ⚠ 載進來的是**已經畫完**的東西，⛔ 不要有一條線黏著游標跑 */
+    this._penParked = true;
+    this._drawPenPreview();
+    return this.penCount;
+  }
+
+  /**
+   * 這個錨點是不是圓滑的。
+   * 🔴 **規則的權威版在 `build/prim.js` 的 `penIsSmooth()`**，
+   * ⛔ 這裡只是轉手 —— `select.js` 碰 DOM，寫在這裡就測不到
+   * 〔鐵律二：判定邏輯抽成不碰 DOM 的純函式〕。
+   */
+  _penIsSmooth(i) {
+    return this._pen ? penIsSmooth(this._pen, i) : false;
+  }
+
+  /** 把手端點的世界座標（長度 0 ＝ 那一根不存在，回 null） */
+  _penHandleWorld(i, side) {
+    if (!this._pen) return null;
+    const h = side === 'in' ? this._pen.hi : this._pen.ho;
+    const dx = h[i * 2], dz = h[i * 2 + 1];
+    if (Math.hypot(dx, dz) < 1e-9) return null;
+    return new THREE.Vector3(this._pen.a[i * 2] + dx, 0, this._pen.a[i * 2 + 1] + dz);
+  }
+
+  /**
+   * 🔴 **游標下面有沒有把手的端點**（⛔ 只測「選到的」那個錨點的兩根）。
+   *
+   * ⚠ **⛔ 不要測全部錨點的把手** —— 那樣畫面上會有一堆端點，
+   * 而且**指到哪一根完全不可預期**。選到誰就只有誰的把手可以碰。
+   *
+   * ⚠ 門檻跟 `_penHitAnchor()` 同一個（12 px），⛔ 不另定一個 ——
+   * 兩個門檻遲早會不一致（坑第 31 條）。
+   */
+  _penHitHandle(clientX, clientY) {
+    const i = this._penSel;
+    if (!this._pen || i < 0 || i >= this.penCount) return null;
+    const r = this._toCanvasPx(clientX, clientY);
+    let best = null, bestD = 12;
+    for (const side of ['in', 'out']) {
+      const w = this._penHandleWorld(i, side);
+      if (!w) continue;
+      const v = w.clone().project(this.view.camera);
+      const px = (v.x + 1) / 2 * r.w, py = (-v.y + 1) / 2 * r.h;
+      const dd = Math.hypot(px - r.x, py - r.y);
+      if (dd < bestD) { bestD = dd; best = { i, side }; }
+    }
+    return best;
+  }
+
+  /**
+   * 設一根把手，另一根照這個錨點本來是什麼決定跟不跟。
+   * 🔴 **規則的權威版在 `build/prim.js` 的 `penSetHandle()`**（含
+   * 「長度⛔ 不連動」與「`smooth` 要在改之前問」兩則），⛔ 這裡只是轉手。
+   */
+  _penSetHandleLinked(i, side, dx, dz) {
+    if (this._pen) penSetHandle(this._pen, i, side, dx, dz);
+  }
+
+  /**
+   * 🔴 **尖角⇄圓滑互換**（`改點` 模式下按 `尖角` 那一顆走這裡）。
+   *
+   * ⚠ **同一顆按鈕在兩個模式下管不同的東西，而⛔ 這不是定位糊掉**：
+   * 它管的一直是「**把手要不要存在**」。差別只在對象 ——
+   * 畫的時候是「接下來要放的點」，`改點` 的時候是「**選到的那個點**」。
+   * ⭐ 而 `改點` 模式下根本沒有「接下來要放的點」這種東西。
+   *
+   * 🔴 **⛔ 沒有把手的點，這一支長不出把手來** —— 方向不唯一
+   * （坑第 24 條：補不到唯一就明講，⛔ 不要猜）。要長就在它身上**按住拖**。
+   *
+   * @returns {'corner'|'need-drag'|null} 呼叫端照這個講話
+   */
+  penToggleCornerAt() {
+    const i = this._penSel;
+    if (!this._pen || i < 0 || i >= this.penCount) return null;
+    const has = Math.hypot(this._pen.hi[i * 2], this._pen.hi[i * 2 + 1]) > 1e-9
+             || Math.hypot(this._pen.ho[i * 2], this._pen.ho[i * 2 + 1]) > 1e-9;
+    if (!has) return 'need-drag';
+    this._pen.hi[i * 2] = 0; this._pen.hi[i * 2 + 1] = 0;
+    this._pen.ho[i * 2] = 0; this._pen.ho[i * 2 + 1] = 0;
+    this._drawPenPreview();
+    return 'corner';
+  }
+
+  /**
+   * `改點` 的按下去：**先問把手，再問錨點，都沒有就取消選取**。
+   *
+   * ⚠ **順序⛔ 不可以倒過來** —— 把手的端點常常離錨點很近，
+   * 先問錨點的話**把手永遠碰不到**。
+   */
+  _penDownEdit(e, g) {
+    if (!g || !this._pen) return;
+    const hh = this._penHitHandle(e.clientX, e.clientY);
+    if (hh) { this._penDragH = hh; return; }
+    const ia = this._penHitAnchor(e.clientX, e.clientY);
+    if (ia >= 0) {
+      this._penSel = ia;
+      this._penDragA = {
+        i: ia, gx: g.x, gz: g.z,
+        ax: this._pen.a[ia * 2], az: this._pen.a[ia * 2 + 1]
+      };
+      if (this.hooks.onPenEditPick) this.hooks.onPenEditPick(ia, this.penCount);
+    } else {
+      /** ⚠ 點空白處 ＝ 放掉選取。⛔ 不要「什麼都不做」——
+       *  那樣把手會一直掛在畫面上，使用者不知道怎麼收（坑第 21 條）*/
+      this._penSel = -1;
+    }
+    this._drawPenPreview();
+  }
+
+  /** `改點` 的移動：拖錨點／拖把手／只是指著看 —— 三件事 */
+  _penMoveEdit(e, g) {
+    if (this._penDragA) {
+      /**
+       * 🔴 **搬錨點。把手是【相對錨點】的量，所以⛔ 什麼都不必做**
+       * —— 兩根自動跟著走，形狀平移不變形。
+       * 〔測試釘著這一條：拖完 `hi`／`ho` 一格不變〕
+       */
+      const d = this._snapIf(e, g.x - this._penDragA.gx, g.z - this._penDragA.gz);
+      const i = this._penDragA.i;
+      this._pen.a[i * 2] = this._penDragA.ax + d.dx;
+      this._pen.a[i * 2 + 1] = this._penDragA.az + d.dz;
+      this._drawPenPreview();
+      return;
+    }
+    if (this._penDragH) {
+      const i = this._penDragH.i;
+      const d = this._snapIf(e,
+        g.x - this._pen.a[i * 2], g.z - this._pen.a[i * 2 + 1]);
+      this._penSetHandleLinked(i, this._penDragH.side, d.dx, d.dz);
+      this._drawPenPreview();
+      return;
+    }
+    const h = this._penHitAnchor(e.clientX, e.clientY);
+    if (h !== this._penHover) {
+      this._penHover = h;
+      if (this.hooks.onPenHover) this.hooks.onPenHover(h, this.penCount);
+    }
+    this._drawPenPreview();
+  }
+
+  /**
+   * `改點` 的放開手：**結束拖曳，真的動過才叫呼叫端重建形狀**。
+   *
+   * ⚠ **⛔ 不可以每次 `pointermove` 都重建** —— 擠出重建是 O(點數)，
+   * 放進每一幀就是坑第 22 條。拖的時候只更新那條線（便宜），
+   * **放開手才讓形狀跟上**。
+   */
+  _penUpEdit(e, d, dist) {
+    const moved = !!(this._penDragA || this._penDragH) && dist > TAP_MOVE;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._drawPenPreview();
+    if (moved && this.hooks.onPenEditChange) this.hooks.onPenEditChange();
+  }
+
   /**
    * 預覽線。⚠ `_buildLineOverlay()` 吃的是**兩兩一組的線段**，
    * ⛔ 不是連續折線 —— 串錯的話會多畫一堆不存在的線。
@@ -2926,8 +3197,12 @@ export class Selection {
     for (let i = 0; i < n; i++) {
       dots.push(this._penWorld(i));
     }
-    /** 已經放好的那幾段（照拉直之後的樣子畫，⛔ 不要畫成直線騙人） */
-    const flat = this._penFlatWorld(!!opt.closed);
+    /**
+     * 已經放好的那幾段（照拉直之後的樣子畫，⛔ 不要畫成直線騙人）。
+     * ⚠ **`改點` 模式一律畫閉合的** —— 那裡改的是**已經畫完**的形狀，
+     * 少畫最後那一段的話，看起來像是東西破了一個口。
+     */
+    const flat = this._penFlatWorld(!!opt.closed || this.penEdit);
     for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
     /** 游標那一段（還沒放下去的） */
     if (extra) { pts.push(this._penWorld(n - 1), extra); }
@@ -2949,6 +3224,22 @@ export class Selection {
       hpts.push(a, handleAt);
       hpts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
       hdots.push(handleAt);
+    }
+    /**
+     * 🔴 **`改點`：選到的那個錨點的兩根把手【一直畫著】**，
+     * ⛔ 不是只有拖的時候才畫 —— 看不到就碰不到。
+     *
+     * ⚠ **⛔ 只畫選到的那一個** —— 全部都畫的話畫面上一團端點，
+     * 而且**指到哪一根完全不可預期**（`_penHitHandle()` 同一條）。
+     * ⚠ 長度 0 的那一根⛔ 不畫（`_penHandleWorld()` 回 null）——
+     * 畫出來會是一個疊在錨點上的點，跟「這裡有兩個點」分不出來。
+     */
+    if (this.penEdit && this._penSel >= 0 && this._penSel < n) {
+      const av = this._penWorld(this._penSel);
+      for (const side of ['in', 'out']) {
+        const hw = this._penHandleWorld(this._penSel, side);
+        if (hw) { hpts.push(av, hw); hdots.push(hw); }
+      }
     }
     /**
      * 🔴 **游標底下那個錨點要變大**〔kang 2026-08-29 要的〕。
