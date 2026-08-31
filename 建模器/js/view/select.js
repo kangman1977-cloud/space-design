@@ -365,6 +365,8 @@ export class Selection {
     this._hover = null;
     this._hoverRaf = 0;
     this._hoverAt = null;
+    /** 刀具：游標靠近的那一個切點（索引；−1 ＝ 都不夠近）。見 `_knifeHotIndex()` */
+    this._knifeHotIdx = -1;
 
     /**
      * 🔴 **目前選到的子元素，有順序的陣列。順序即 active（最後一筆）。**
@@ -1137,6 +1139,16 @@ export class Selection {
         this._setHover(null);
       }
 
+      /**
+       * 🔴 **刀具：游標靠近哪一個切點，就把那一顆畫大一點**（2026-09-01）。
+       * ⚠ 畫線中（`_stroke`）⛔ 不算 —— 那時候使用者在拖，⛔ 不是在挑點。
+       */
+      if (this.knifeMode && !this._stroke) {
+        this._setKnifeHot(this._knifeHotIndex(e.clientX, e.clientY));
+      } else if (this._knifeHotIdx !== -1) {
+        this._setKnifeHot(-1);
+      }
+
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
@@ -1904,6 +1916,66 @@ export class Selection {
     if (this._sameHover(this._hover, el)) return;
     this._hover = el;
     this._drawEditMark();
+  }
+
+  /**
+   * 🔴 **刀具：游標離哪一個【已經點下的切點】最近**（2026-09-01，kang 提的）。
+   *
+   * ⭐ **真相在 `main.js` 的 `knifePicks`，這裡⛔ 不存第二份** ——
+   * 問 hooks 拿（跟參考線的 `guideAxis` 同一招）。
+   *
+   * ⚠ **⛔ 沒有節流，而那是刻意的**：切點通常只有幾個到十幾個，
+   * **⛔ 不隨模型大小成長**〔鐵律四問的正是這件事〕——
+   * 跟 `nearestMarkableEdge()`（跟邊數成正比）⛔ 不是同一類。
+   *
+   * ⚠ **比的是螢幕距離**：世界座標投影到畫面上再量 px，
+   * 沿用 `EDGE_GRAB_PX`／`EDGE_GRAB_PX_TOUCH` 那一對，⛔ 不新定一個值。
+   *
+   * @returns {number} 最近那一個的索引；⛔ 都不夠近回 `-1`
+   */
+  _knifeHotIndex(clientX, clientY) {
+    const pts = this.hooks.knifePickPoints ? this.hooks.knifePickPoints() : null;
+    if (!pts || !pts.length) return -1;
+
+    const r = this._toCanvasPx(clientX, clientY);
+    if (!r.w || !r.h) return -1;
+    const cam = this.view.camera;
+    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const v = pts[i].clone().project(cam);
+      /** ⚠ 在鏡頭後面的點⛔ 不算（投影出來的位置是假的） */
+      if (v.z > 1) continue;
+      const sx = (v.x + 1) / 2 * r.w;
+      const sy = (-v.y + 1) / 2 * r.h;
+      const d = Math.hypot(sx - r.x, sy - r.y);
+      if (d <= grab && d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+
+  /** ⚠ **⛔ 一樣就不要重送** —— 每一幀重建那顆點會閃，也是白花時間 */
+  _setKnifeHot(i) {
+    if (this._knifeHotIdx === i) return;
+    this._knifeHotIdx = i;
+    if (this.hooks.onKnifeHot) this.hooks.onKnifeHot(i);
+  }
+
+  /**
+   * 🔴🔴 **切點的數量一變，就要把「剛才亮的是第幾顆」忘掉。**
+   *
+   * ⚠ **⛔ 少了這一支就是一個看不見的 bug**（跟參考線高亮那次同一個形狀）：
+   * 重畫切點時畫面上那顆放大的會被清掉，**而這裡還記著同一個索引** ——
+   * 於是下一次移動游標算出同一個數字，`_setKnifeHot()` 判定「一樣」
+   * ⛔ 不重送，**那顆就再也不會亮回來**。
+   * ⭐ 而且**索引本身也可能已經指向不存在的點**（刪掉最後一點之後）。
+   *
+   * 🔴 呼叫的地方只有一個：`main.js` 的 `drawKnifePicks()` ——
+   * **切點一有變動一定經過那裡。**
+   */
+  resetKnifeHot() {
+    this._knifeHotIdx = -1;
   }
 
 

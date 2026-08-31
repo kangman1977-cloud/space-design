@@ -141,6 +141,21 @@ const sel = new Selection(view, {
     + '⚠ 體積會差千分之幾（那是拉直成折線的取樣不同，⛔ 不是形狀變了）'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
+  /**
+   * 🔴 **切點的位置**（給「游標靠近哪一顆」用）。
+   * ⭐ **真相只有 `knifePicks` 一份**，`select.js` ⛔ 不存第二份 ——
+   * 它問這裡〔跟參考線的 `guideAxis` 同一招〕。
+   */
+  knifePickPoints: () => knifePicks.map(k => k.world),
+  /**
+   * 🔴 **游標靠近的那一顆畫大一點**（2026-09-01，kang 提的）。
+   *
+   * ⚠ **索引可能已經失效**（切點被刪、切完了）—— 所以要問一次
+   * `knifePicks[i]` 還在不在，⛔ 不可以直接拿來用。
+   * ⭐ **⛔ 不 toast**：游標一動就跳訊息會吵死人，回饋走**畫面**。
+   */
+  onKnifeHot: i => view.setKnifeHotDot(
+    i >= 0 && knifePicks[i] ? knifePicks[i].world : null),
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
   onKnifeStroke: (obj, pts, snapMid) => knifeStroke(obj, pts, snapMid),
   onTransform: committing => {
@@ -964,6 +979,12 @@ function hideKnifeLine() {
  * 畫在 3D 裡才會跟著模型走，而**那正是第一版「一直亂跳」的病根**。
  */
 function drawKnifePicks() {
+  /**
+   * 🔴 **切點一變就把「剛才亮的是第幾顆」忘掉** ——
+   * ⛔ 少了這一行，重畫之後那顆放大的**再也不會亮回來**
+   * （`select.js` 的 `resetKnifeHot()` 上面寫了完整的病因）。
+   */
+  sel.resetKnifeHot();
   if (!knifePicks.length) { view.clearKnifePreview(); return; }
   const segs = [];
   for (let i = 0; i + 1 < knifePicks.length; i++) {

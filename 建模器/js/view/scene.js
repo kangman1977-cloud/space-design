@@ -1750,7 +1750,46 @@ export class SceneView {
     }
   }
 
+  /**
+   * 🔴 **游標靠近的那一個切點，畫得略大一點**（2026-09-01，kang 提的）。
+   *
+   * ── 他的原話 ──────────────────────────────────
+   * 「滑鼠靠近那一個點…會變得略大…讓我可以準確選到即可」
+   * ⭐ **跟點邊面、鋼筆的 hover 是同一種感覺** —— ⛔ 不換顏色，只變大。
+   *
+   * ── ⚠ 為什麼是【另外畫一顆】，⛔ 不是把原本那批改大 ─────────
+   * 切點是一批 `THREE.Points`，而 `PointsMaterial` 的 `size`
+   * **是整批共用的** —— 改它會**每一顆都變大**。
+   * ⇒ 疊一顆獨立的、更大的在同一個位置上，⛔ 不動原本那批。
+   *
+   * ⚠ **`sizeAttenuation: false`**（＝固定螢幕像素，⛔ 不隨遠近縮放）——
+   * 跟原本那批同一個設定，否則拉遠之後「變大」會看不出來。
+   *
+   * @param {THREE.Vector3|null} p 世界座標；`null` ＝ 收掉
+   */
+  setKnifeHotDot(p) {
+    if (this._knifeHot) {
+      this.scene.remove(this._knifeHot);
+      this._knifeHot.geometry.dispose();
+      this._knifeHot.material.dispose();
+      this._knifeHot = null;
+    }
+    if (!p) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position',
+      new THREE.BufferAttribute(new Float32Array([p.x, p.y, p.z]), 3));
+    this._knifeHot = new THREE.Points(g, new THREE.PointsMaterial({
+      color: 0xff8c1a, size: 19, sizeAttenuation: false, depthTest: false
+    }));
+    /** ⚠ 要比原本那批（8）高，否則會被蓋在底下看不出來 */
+    this._knifeHot.renderOrder = 9;
+    this._knifeHot.raycast = () => {};
+    this.scene.add(this._knifeHot);
+  }
+
   clearKnifePreview() {
+    /** ⚠ 切點都沒了，那顆放大的⛔ 不可以留著 */
+    this.setKnifeHotDot(null);
     if (!this._knifePrev) return;
     this.scene.remove(this._knifePrev);
     this._knifePrev.traverse(o => {
