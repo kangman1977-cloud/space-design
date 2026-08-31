@@ -365,14 +365,6 @@ export class Selection {
     this._hover = null;
     this._hoverRaf = 0;
     this._hoverAt = null;
-    /**
-     * 刀具「現在會吸到哪一個角」（2026-09-01）。
-     * ⚠ 跟上面那組 hover **⛔ 是兩套** —— 那一套走 `_drawEditMark()`，
-     * 而它是編輯模式的（吃 `editSel`）。
-     */
-    this._knifeHint = null;
-    this._knifeHintRaf = 0;
-    this._knifeHintAt = null;
 
     /**
      * 🔴 **目前選到的子元素，有順序的陣列。順序即 active（最後一筆）。**
@@ -1145,21 +1137,6 @@ export class Selection {
         this._setHover(null);
       }
 
-      /**
-       * 🔴 **刀具：游標靠近某個角時，先把那個角標出來**（2026-09-01）。
-       *
-       * ⚠ **⛔ 沒有這一段的話，「吸到點」是看不見的** —— 使用者
-       * ⛔ 不知道按下去會不會吸中，只能切完再看結果〔坑第 21 條那一類〕。
-       * ⭐ 這正是 kang 說的「跟鋼筆、點邊面同樣的展現效果」。
-       *
-       * ⚠ **⛔ 不走 `_setHover()` 那條路** —— 那一支最後會叫
-       * `_drawEditMark()`，而它是**編輯模式的**（吃 `editSel`，
-       * 刀具模式下 `editSel` 是 null，它會反過來把標記清掉）。
-       */
-      if (this.knifeMode && !this._stroke && !this._down) {
-        this._queueKnifeHint(e.clientX, e.clientY, e.shiftKey);
-      }
-
       if (!this._marq) return;
       const r = this._toCanvasPx(e.clientX, e.clientY);
       this._marq.bx = r.x; this._marq.by = r.y;
@@ -1167,11 +1144,7 @@ export class Selection {
     });
 
     /** 游標離開畫布 → 那個「指著」的狀態就不成立了，⛔ 不要留在畫面上 */
-    cv.addEventListener('pointerleave', () => {
-      this._setHover(null);
-      /** ⚠ 游標離開畫布，那個「會吸到這裡」的標記⛔ 不可以留著 */
-      this._setKnifeHint(null);
-    });
+    cv.addEventListener('pointerleave', () => this._setHover(null));
 
     cv.addEventListener('pointercancel', () => {
       this._endMarquee(null, false);
@@ -1933,46 +1906,6 @@ export class Selection {
     this._drawEditMark();
   }
 
-  /**
-   * 刀具：算「現在會吸到哪一個角」並回報，**一幀最多算一次**。
-   *
-   * 🔴 **⛔ 一定要節流**：`pointermove` 一秒可以來上百次，而這裡面的
-   * `nearestMarkableEdge()` 是**跟邊數成正比**的 ——
-   * ⛔ 不擋的話大模型會卡〔鐵律四：每幀迴圈裡的東西會不會隨模型大小成長〕。
-   * ⭐ 招式跟 `_queueHover()` 一模一樣（`requestAnimationFrame` 合併），
-   * ⛔ 不另發明一套。
-   */
-  _queueKnifeHint(clientX, clientY, shift) {
-    /**
-     * 🔴 **`shift` 一定要一起記起來。**
-     * ⚠ `Shift` 是 `吸中點` 的**另一條路**（`_wantSnapMid()`）——
-     * ⛔ 不看它的話，按著 Shift 移動時**預覽說會吸到角、按下去卻吸中點**，
-     * 而**預覽跟實際不一致比沒有預覽更糟**〔誤報比漏報更糟，鐵律三〕。
-     */
-    this._knifeHintAt = { x: clientX, y: clientY, shift: !!shift };
-    if (this._knifeHintRaf) return;
-    this._knifeHintRaf = requestAnimationFrame(() => {
-      this._knifeHintRaf = 0;
-      const at = this._knifeHintAt;
-      if (!at || !this.knifeMode) return;
-      const hit = this.pickEdgePoint(at.x, at.y,
-        this._wantSnapMid({ shiftKey: at.shift }));
-      this._setKnifeHint(hit && hit.snapped
-        ? { obj: hit.obj, vert: hit.snapped, world: hit.world } : null);
-    });
-  }
-
-  /**
-   * ⚠ **⛔ 一樣就不要重送** —— 每一幀都重建那個標記會閃，
-   * 而且是白花時間〔跟參考線高亮同一條〕。
-   */
-  _setKnifeHint(h) {
-    const a = this._knifeHint, b = h;
-    if (!a && !b) return;
-    if (a && b && a.vert === b.vert && a.obj === b.obj) return;
-    this._knifeHint = b;
-    if (this.hooks.onKnifeVertHint) this.hooks.onKnifeVertHint(b);
-  }
 
   /**
    * 兩次 hover 指的是不是同一個東西。
@@ -2007,50 +1940,31 @@ export class Selection {
     const L2 = ab.lengthSq();
     let s = L2 > 0 ? pLocal.clone().sub(a).dot(ab) / L2 : 0;
     s = Math.max(0, Math.min(1, s));
+    /** 🔴 吸中點：**只換這一個數字**，其餘一格都不動 */
+    if (snapMid) s = 0.5;
 
     /**
-     * 🔴🔴 **吸到模型原本的「點」**（kang 2026-09-01 提的）。
+     * 🔴🔴 **✘ ⛔ 這裡不可以加「吸到角（端點）」** —— 2026-09-01 做過又撤掉。
      *
-     * ── 他的原話 ──────────────────────────────────
-     * 「希望在點選時能夠更方便點選到原本模型的『點』…
-     * 　目前會因為點不到，切起來就會有位置的誤差」
+     * ⚠ **看起來非常合理**（跟 `吸中點` 同一個形狀，只是把 `s` 換成 0 或 1），
+     * 而且 kang 要的正是「切的時候準確點到物件的角」——
+     * 🔴 **但下游的 `knifePath()` 明文擋掉切點落在端點上**
+     * （`len*s < PLANAR_TOL_CM` 那道，理由是**會長出長度 0 的線**），
+     * 而且它的錯誤訊息**自己就寫著「想從角落切就用【多點連接】」**。
      *
-     * ⭐ **結構上跟 `吸中點` 是同一個形狀：只換 `s` 這一個數字。**
-     * 中點是 `0.5`，端點是 `0`（起點）或 `1`（終點）——
-     * ⛔ **一行新的數學都不用寫。**
+     * ⇒ 吸到角的結果⛔ 不是「更準」，是**每一次都切不下去** ——
+     * **原本只是不夠準，加上去之後變成不能用。**
      *
-     * ── 🔴 kang 2026-09-01 拍板的兩件 ─────────────────
-     * ① **一直開著，⛔ 不給開關** —— 「點不到角」本來就是問題，
-     * 　 ⛔ 不是一種可選的模式；而且工具列⛔ 不用再多一顆。
-     * ② **`吸中點` 開著時就只吸中點** —— 他按了那顆就是明確要中點，
-     * 　 ⛔ 不要被角搶走。⇒ 所以這一段在 `snapMid` 的 `else` 裡。
+     * ⭐ **正主是 `多點連接`**（先 `拉點線面` 選角 → 按它）：
+     * 它連的是**既有的角**，⛔ 不必插新點，所以⛔ 沒有長度 0 的問題。
+     * 〔判準是 kang 自己立的：**功能之間的定位不可以互相模糊**〕
      *
-     * ── ⚠ 容許距離用【螢幕像素】，⛔ 不用公分 ──────────────
-     * 用公分的話拉遠了就吸不到、拉近了整條邊都在吸。
-     * ⭐ **沿用 `EDGE_GRAB_PX`／`EDGE_GRAB_PX_TOUCH` 那一對**
-     * （「點多近才算點到那條邊」）—— 量級相同，⛔ 不新發明一個值。
+     * 🔴 **教訓（完整經過在 `規格\建模器-點線面編輯.md`）**：
+     * 動一支函式的**輸出**之前，要先讀**拿它的結果去做事的那一支**要什麼 ——
+     * ⚠ 那一輪的動手前檢查表填了 6 條事實，**⛔ 沒有一條問下游的規則**，
+     * 而四道機械檢查與 2560 項測試**全部放它過關**
+     * （`pickEdgePoint()` 自己算得完全正確，斷掉的是**兩支之間的契約**）。
      */
-    let snapped = null;
-    if (snapMid) {
-      s = 0.5;
-    } else {
-      /**
-       * ⚠ **一定要把「哪一點」傳給 `pxPerWorld()`** ——
-       * ⛔ 不傳的話透視相機會拿**鏡頭到中心點**的距離去算，
-       * 而**近的東西看起來大、遠的看起來小**：同樣的 14px 容許值，
-       * 在遠處的角上會變得很難吸、近處又太黏。
-       * 〔正交相機下傳不傳都一樣，但刀具常在等角／透視底下用〕
-       */
-      const px = this.view.pxPerWorld
-        ? this.view.pxPerWorld(node.localToWorld(pLocal.clone())) : 0;
-      if (px > 0) {
-        const grab = (isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX) / px;
-        /** ⚠ 量的是**游標打到的表面點**離角多遠，⛔ 不是投影之後的落點 */
-        const da = pLocal.distanceTo(a), db = pLocal.distanceTo(b);
-        if (da <= grab && da <= db) { s = 0; snapped = near.he.v; }
-        else if (db <= grab) { s = 1; snapped = near.he.to; }
-      }
-    }
 
     const p = a.clone().lerp(b, s);
 
@@ -2060,9 +1974,7 @@ export class Selection {
       a: vi.get(near.he.v.id),
       b: vi.get(near.he.to.id),
       p,
-      world: node.localToWorld(p.clone()),
-      /** ⭐ 有吸到角的話是那個頂點 —— 拿去畫「按下去會切在這裡」的標記 */
-      snapped
+      world: node.localToWorld(p.clone())
     };
   }
 
@@ -3299,13 +3211,6 @@ export class Selection {
     /** 換模式就把上一次輕點的時間忘掉，⛔ 不要讓它跨模式湊成一次「雙擊」 */
     this._lastKnifeTap = null;
     this._stroke = null;
-    /**
-     * ⚠ **進出都要把「會吸到哪個角」的標記收掉** ——
-     * ⛔ 留著的話離開刀具之後畫面上會有一個沒有意義的綠標，
-     * 而使用者⛔ 不會知道那是什麼。
-     * ⭐ 跟上面 `setDrawInput()` 同一個理由：**這裡是唯一的入口**。
-     */
-    this._setKnifeHint(null);
     return this.knifeMode;
   }
 

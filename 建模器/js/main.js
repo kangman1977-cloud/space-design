@@ -141,19 +141,6 @@ const sel = new Selection(view, {
     + '⚠ 體積會差千分之幾（那是拉直成折線的取樣不同，⛔ 不是形狀變了）'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
-  /**
-   * 🔴 **刀具：游標靠近某個角時先標出來**（2026-09-01，kang 提的）。
-   *
-   * ⚠ **⛔ 沒有這個標記，「吸到點」就是看不見的** ——
-   * 使用者⛔ 不知道按下去會不會吸中，只能切完再看結果。
-   * ⭐ 用綠色（`dst` ＝「目標」），跟貼合模式的目標同一個語意。
-   *
-   * ⚠ **⛔ 不 toast** —— 游標一動就跳訊息會吵死人。回饋走**畫面**。
-   */
-  onKnifeVertHint: h => {
-    if (!h) { view.clearPickMarks(); return; }
-    view.setPickMarks([{ kind: 'vertex', points: [h.world], role: 'dst' }]);
-  },
   /** 一筆畫：放開手 → 交點變成切點，**接到既有的那一串後面** */
   onKnifeStroke: (obj, pts, snapMid) => knifeStroke(obj, pts, snapMid),
   onTransform: committing => {
