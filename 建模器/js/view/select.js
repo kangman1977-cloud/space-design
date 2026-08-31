@@ -211,6 +211,19 @@ export class Selection {
      * ⭐ 預設 45（Illustrator 的 Shift）；做六角形要 30、做八角形要 45。
      */
     this.penSnapDeg = PEN_SNAP_DEG;
+    /**
+     * 🔴🔴 **不封口**（kang 2026-08-30 拍板的第 ③ 件，2026-08-31）。
+     *
+     * 開著的時候這支鋼筆畫的是**一條線**，⛔ 不是一個圍起來的形狀 ——
+     * 收尾之後拿去做**板**（沿線加厚）或**牆**（沿線立起來）。
+     *
+     * ⚠ **這裡只管兩件看得見的事**：**回到第一個點⛔ 不接起來**、
+     * **預覽⛔ 不畫閉合那一段**。
+     * 🔴 **幾何那一半⛔ 不在這裡** —— 權威版是 `prim.js` 的 `BUILDERS.pen`，
+     * 它照物件身上的 `src.open` 決定走哪條路。
+     * ⭐ 所以 `takePen()` 交出去的東西**一個字都沒變**。
+     */
+    this.penNoClose = false;
     /** 正在畫的那一條：{ a:[], hi:[], ho:[] }，⛔ 還沒變成物件 */
     this._pen = null;
     /**
@@ -729,10 +742,23 @@ export class Selection {
         else if (g && this._penHitAnchor(e.clientX, e.clientY) === 0
             && this.penCount >= 3) {
           /**
-           * ⚠ **要記下按下的位置** —— 閉合也可以用拖的（見 `pointerup`），
-           * 而把手就是「按下的位置 → 放開的位置」。
+           * 🔴🔴 **開著「不封口」時⛔ 不接起來，而且要講原因。**
+           *
+           * ⚠ **⛔ 不可以安靜地放一個新點上去** —— 那會在起點上疊一個
+           * 看不出來的重複點（坑第 21 條）。
+           * ⭐ **⛔ 也不做「接起來變成一圈框」** —— 閉合 ＋ 往兩側 ＝ 一圈框，
+           * 那是 kang 2026-08-30 標 ⏭ 刻意不做的東西，
+           * 而且它跟 `內縮` 做得出來的重疊〔功能之間的定位不可以互相模糊〕。
            */
-          this._penClosing = { x: e.clientX, y: e.clientY, g };
+          if (this.penNoClose) {
+            if (this.hooks.onPenNoClose) this.hooks.onPenNoClose();
+          } else {
+            /**
+             * ⚠ **要記下按下的位置** —— 閉合也可以用拖的（見 `pointerup`），
+             * 而把手就是「按下的位置 → 放開的位置」。
+             */
+            this._penClosing = { x: e.clientX, y: e.clientY, g };
+          }
         } else if (g && this.penCount >= 1
                    && this._penHitAnchor(e.clientX, e.clientY) === this.penCount - 1) {
           /**
@@ -3390,8 +3416,11 @@ export class Selection {
      * 已經放好的那幾段（照拉直之後的樣子畫，⛔ 不要畫成直線騙人）。
      * ⚠ **`改點` 模式一律畫閉合的** —— 那裡改的是**已經畫完**的形狀，
      * 少畫最後那一段的話，看起來像是東西破了一個口。
+     * 🔴 **除非這支鋼筆本來就不封口** —— 那它「破了一個口」正是實情，
+     * ⛔ 畫成接起來的才是騙人（2026-08-31）。
      */
-    const flat = this._penFlatWorld(!!opt.closed || this.penEdit);
+    const flat = this._penFlatWorld(
+      !this.penNoClose && (!!opt.closed || this.penEdit));
     for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
     /**
      * 🔴 **其他那幾條也要畫出來**（做洞之後可能有好幾條，2026-08-30）。
@@ -3404,7 +3433,7 @@ export class Selection {
       for (const other of this._penDone) {
         if (!other || other.a.length < 4) continue;
         this._pen = other;
-        const f = this._penFlatWorld(true);
+        const f = this._penFlatWorld(!this.penNoClose);
         for (let i = 0; i + 1 < f.length; i++) { pts.push(f[i], f[i + 1]); }
         const m = Math.floor(other.a.length / 2);
         for (let i = 0; i < m; i++) dots.push(this._penWorld(i));

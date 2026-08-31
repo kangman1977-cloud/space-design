@@ -97,6 +97,13 @@ const sel = new Selection(view, {
   onPenPark: n => toast(`這一段曲線固定了（${n} 個點）　`
     + '接下來按左鍵就是放下一個點'),
   /**
+   * 🔴 **開著「不封口」時按到起點：⛔ 什麼都不做，但一定要講原因。**
+   * ⚠ ⛔ 不講的話，使用者只會覺得「按了沒反應」（坑第 21 條）——
+   * 而他按的那一下在別的狀態下是有作用的，這種沉默最難查。
+   */
+  onPenNoClose: () => toast('開著「不封口」時⛔ 不接起來 —— '
+    + '這支鋼筆畫的是一條線。要圍成形狀請先關掉「不封口」', true),
+  /**
    * ⚠ **轉尖角一定要講一句** —— 畫面上只有一根把手消失，
    * ⛔ 不講的話跟「按錯了」分不出來（坑第 21 條）。
    */
@@ -510,6 +517,51 @@ $('penSnap').onclick = () => {
     ? `鎖角度：開。線與把手只能走 ${sel.penSnapDeg} 度的倍數`
       + '（桌機按住 Shift 也一樣）'
     : '鎖角度：關。方向自由');
+};
+/**
+ * 🔴🔴 **開放與封閉的兩顆開關**（kang 2026-08-30 拍板的第 ③ 件）。
+ *
+ * ⚠ **`penUp` 的狀態放在 main.js，⛔ 不放 `select.js`** ——
+ * 判準是「**畫的時候看不看得出差別**」：`不封口` 會改變畫的行為
+ * （回到起點⛔ 不接起來、預覽⛔ 不畫閉合那一段），所以它在 `select.js`；
+ * 而 `往上長` **對畫圖一點影響都沒有**，它只是收工時要帶走的一個參數。
+ * ⛔ 放進去就變成 view 層存了一個它永遠用不到的東西。
+ */
+let penUpFlag = false;
+/**
+ * 🔴 **改既有物件的路徑時，這兩顆要【寫進那個物件】**（2026-08-31）——
+ * ⛔ 只改預覽的話，畫面上的線變開了、東西卻還是實心塊
+ * 〔坑第 31 條：預覽跟結果各算一次，就是兩條要對齊的路〕。
+ */
+function penFlagsToObject() {
+  if (!penEditing) return;
+  const obj = doc.objects.find(o => o.id === penEditing.id);
+  if (!obj || !obj.src) return;
+  obj.src.open = !!sel.penNoClose;
+  obj.src.up = !!penUpFlag;
+  obj.kind = obj.src.open ? KIND.SHEET : KIND.SOLID;
+  obj.invalidate();
+  view.sync(doc);
+  panel.refresh();
+}
+$('penOpen').onclick = () => {
+  sel.penNoClose = !sel.penNoClose;
+  penFlagsToObject();
+  updateBar();
+  toast(sel.penNoClose
+    ? '不封口：開。這支鋼筆畫的是【一條線】，回到起點也⛔ 不會接起來　'
+      + `⭐ 收工後做成【${penUpFlag ? '牆（數字是高度）' : '板（數字是寬度）'}】，`
+      + '厚薄改走物件的「板厚」'
+    : '不封口：關。回到原本的行為 —— 頭尾接起來圍成形狀，往上擠成實心塊');
+};
+$('penUp').onclick = () => {
+  penUpFlag = !penUpFlag;
+  penFlagsToObject();
+  updateBar();
+  toast(penUpFlag
+    ? '往上長：開。沿著線【立成一道牆】—— 旁邊的數字是【高度】'
+    : '往上長：關。沿著線【加厚成一片板】平躺在地上 —— '
+      + '旁邊的數字是【寬度】，線在正中間、兩側各一半');
 };
 $('penPark').onclick = () => {
   if (!sel.parkPen()) toast('還沒有畫任何點', true);
@@ -1020,7 +1072,20 @@ function editPenPath(obj) {
     rot: obj.rot.clone(),
     posY: obj.pos.y,
     /** ⚠ **全部路徑都要留一份** —— 按取消時要整個還原（做洞之後不只一條） */
-    paths: list.map(p => ({ a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() }))
+    paths: list.map(p => ({ a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() })),
+    /**
+     * 🔴 **兩顆開關也要留一份**（2026-08-31）—— 編輯途中按得動它們，
+     * 而「取消 ＝ 進來時的樣子」⛔ 不可以只還原一半。
+     * ⚠ `kind` 也要留：`不封口` 會連動它。
+     *
+     * 🔴🔴 **工具列那兩顆的狀態也要留一份**（`barOpen`／`barUp`）——
+     * ⚠ 進來時我會**照這個物件**把它們擺好，那是**程式改的**，
+     * ⛔ 不是使用者按的。收工⛔ 不還原的話，他下一次畫新東西
+     * 會莫名其妙變成一道牆 —— **而他從頭到尾沒按過那顆**。
+     * ⭐ 這跟 `鎖角度` 不一樣：那顆一直是他自己按的，所以才可以黏著。
+     */
+    open: !!obj.src.open, up: !!obj.src.up, kind: obj.kind,
+    barOpen: !!sel.penNoClose, barUp: !!penUpFlag
   };
   obj.rot.set(0, 0, 0);
   obj.pos.y = 0;
@@ -1028,6 +1093,13 @@ function editPenPath(obj) {
   view.setGhost(obj.id);
   /** ⚠ **順序不能換**：`setPenMode()` 會把 `_pen` 與 `penEdit` 都清掉 */
   sel.setPenMode(true);
+  /**
+   * 🔴 **進來改的是【這個物件】，開關就要照它的狀態擺**（2026-08-31）——
+   * ⛔ 不照的話，一支不封口的鋼筆會被畫成接起來的，
+   * **而使用者以為自己的線變成一圈了**（預覽與結果不一致，坑第 31 條）。
+   */
+  sel.penNoClose = !!obj.src.open;
+  penUpFlag = !!obj.src.up;
   sel.loadPen(list.map(p => penPathToWorld(p, obj)));
   sel.setPenEdit(true);
   $('pen').classList.add('on');
@@ -1079,10 +1151,17 @@ function endPenEdit(save) {
       if (loc && !loc.some(l => !l)) next = loc;
     }
     obj.src.paths = next;
+    /** 🔴 取消 ＝ 兩顆開關與種類也回到進來時的樣子（⛔ 不可以只還原路徑） */
+    if (!save) {
+      obj.src.open = st.open; obj.src.up = st.up; obj.kind = st.kind;
+    }
     obj.rot.copy(st.rot);
     obj.pos.y = st.posY;
     obj.invalidate();
   }
+  /** 🔴 工具列那兩顆回到**進來之前**的樣子（見 `penEditing` 那則） */
+  sel.penNoClose = st.barOpen;
+  penUpFlag = st.barUp;
   sel.takePen();
   sel.setPenMode(false);
   view.setGhost(null);
@@ -1150,14 +1229,24 @@ function finishPen() {
     return;
   }
   const h = +$('penH').value;
+  const open = !!sel.penNoClose;
+  const up = open && penUpFlag;
   if (!Number.isFinite(h) || h <= 0) {
-    toast('厚度要打一個大於 0 的數字', true);
+    toast(`${open ? (up ? '高度' : '寬度') : '厚度'}要打一個大於 0 的數字`, true);
     return;
   }
+  /**
+   * 🔴🔴 **不封口的做出來是【板件】，⛔ 不是實體。**
+   * 它是一片**開放的單層面**，厚薄由物件的「板厚」在顯示時加上去
+   * （`mesh.shell()`，跟平板、折板走的是同一支）。
+   * ⚠ **種類⛔ 不跟著改的話**：板厚欄位根本看不到（那一格只在
+   * `kind === SHEET` 時出現）、而 3D 列印會報「這個物件不封閉」——
+   * **那是誤報**〔鐵律三：誤報比漏報更糟〕。
+   */
   const obj = new ModelObject({
     name: `鋼筆 ${doc.objects.length + 1}`,
-    kind: KIND.SOLID,
-    src: { type: 'pen', h, paths }
+    kind: open ? KIND.SHEET : KIND.SOLID,
+    src: open ? { type: 'pen', h, paths, open: true, up } : { type: 'pen', h, paths }
   });
   /**
    * ⚠ **原點置中，⛔ 不要讓它留在世界原點** —— 畫在遠處的形狀，
@@ -1172,10 +1261,27 @@ function finishPen() {
   panel.refresh();
   updateBar();
   const n = paths.reduce((s, p) => s + Math.floor(p.a.length / 2), 0);
-  toast(`已建立「${obj.name}」：${paths.length} 條路徑、${n} 個點、高 ${h} cm　`
-      + (paths.length > 1
-          ? '⭐ 包在裡面的那條已經變成【洞】'
-          : '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）'));
+  /**
+   * 🔴 **講出來的東西要跟做出來的一致** —— 開放的那條路
+   * ⛔ 沒有「高」也⛔ 沒有「洞」，照抄實心塊那句話就是騙人。
+   * ⭐ 而**面積是使用者對得了答案的量**（＝ 折線長 × 那個數字），
+   * 所以那句話裡放的是面積，⛔ 不是體積（開放的網格算不出體積 ——
+   * 那是 2026-08-28 那個假數字的教訓）。
+   */
+  if (open) {
+    /** ⚠ `mesh()` 是**函式**⛔ 不是屬性；剛建好縮放還是 1，所以這就是真值 */
+    const m = obj.mesh();
+    const area = m ? m.area() : 0;
+    toast(`已建立「${obj.name}」：${paths.length} 條線、${n} 個點、`
+        + `${up ? '牆高' : '板寬'} ${h} cm　`
+        + `⭐ 這是【板件】，面積 ${area.toFixed(2)} cm²（＝ 線長 × ${h}）—— `
+        + '厚薄請改右側的「板厚」');
+  } else {
+    toast(`已建立「${obj.name}」：${paths.length} 條路徑、${n} 個點、高 ${h} cm　`
+        + (paths.length > 1
+            ? '⭐ 包在裡面的那條已經變成【洞】'
+            : '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）'));
+  }
 }
 
 function cancelPenMode() {
@@ -3906,12 +4012,26 @@ function updateBar() {
    */
   const penDrawing = sel.penMode && !sel.penEdit;
   /**
+   * 🔴🔴 **兩顆開關**（第 ③ 件，2026-08-31）。
+   *
+   * ⚠ **`往上長` 只在 `不封口` 開著時才出現** —— 封起來的形狀沒有
+   * 「往不往上長」這回事，擺在那裡就是一顆按了什麼都不會變的鈕（坑第 21 條）。
+   */
+  $('penOpen').hidden = !sel.penMode;
+  $('penOpen').classList.toggle('on', !!sel.penNoClose);
+  $('penUp').hidden = !(sel.penMode && sel.penNoClose);
+  $('penUp').classList.toggle('on', !!penUpFlag);
+  /**
    * ⚠ **兩個數字欄位一定要帶標籤** —— kang 2026-08-29 問
    * 「『尖角』旁的 3 是代表甚麼?」：`3` 是**厚度**、`45` 是**鎖角度的度數**，
    * 但它們都緊貼著按鈕，**看起來像是那顆按鈕的參數**。
    * 🔴 **他會問，就表示版面在誤導** —— 那是回饋，⛔ 不是他沒看清楚。
+   *
+   * 🔴 **而 2026-08-31 起那個標籤還會跟著開關換**（厚度／高度／寬度）——
+   * 同一個欄位三種意思，⛔ 不換的話使用者會拿「厚度」去打牆高。
    */
   $('penHLbl').hidden = !sel.penMode;
+  $('penHLbl').textContent = !sel.penNoClose ? '厚度' : (penUpFlag ? '高度' : '寬度');
   $('penH').hidden = !sel.penMode;
   $('penSnap').hidden = !sel.penMode;
   $('penSnap').classList.toggle('on', !!sel.penSnapAngle);

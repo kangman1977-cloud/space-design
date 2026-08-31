@@ -12113,6 +12113,149 @@ section('內建鋼筆：錨點與把手 → 輪廓');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  開放與封閉：甲 加厚成板 ／ 乙 立成牆
+// ═══════════════════════════════════════════════════════
+
+section('鋼筆 不封口：甲 加厚成板 ／ 乙 立成牆');
+
+/**
+ * 🔴🔴 **這一節只靠一條斷言撐著，⛔ 而它是使用者自己算得出來的：**
+ *
+ * > **帶的面積 ＝ 折線總長 × 那個數字**（甲乙**同一條**）
+ *
+ * ⭐ 甲那一半之所以也精確成立，是因為 miter：轉角外側多出來的楔形
+ * 與內側少掉的**一模一樣**（都是 `(w/2)²·tan(θ/2)`）。
+ * ⚠ **⛔ 不要改成「跑出來多少就寫多少」** —— 那樣這一節就什麼都守不住了。
+ */
+{
+  const prim = await import('../js/build/prim.js');
+  const { polylineLength } = await import('../js/build/ribbon.js');
+
+  /** L 形：(0,0) → (100,0) → (100,60)。折線長 ＝ 100 ＋ 60 ＝ 160 */
+  const L = { a: [0, 0, 100, 0, 100, 60], hi: [], ho: [] };
+  const LEN = 160;
+
+  /** ① 乙 立成牆：面積 ＝ 160 × 12 */
+  {
+    const m = prim.buildPrim('pen', { h: 12, paths: [L], open: true, up: true });
+    near('★★ ① 牆的面積 ＝ 折線長 160 × 高 12', m.area(), LEN * 12, 1e-9);
+    eq('　 兩段線 → 2 片面', m.faces.length, 2);
+    eq('　 頂點 ＝ 3 個點 × 兩條軌道', m.verts.length, 6);
+    ok('　 是【開放的單層面】（板件），⛔ 不是實體', !m.isClosed());
+    const top = Math.max(...[...m.verts].map(v => v.p.y));
+    const bot = Math.min(...[...m.verts].map(v => v.p.y));
+    ok('★ 　 從地面往上長：最低 0、最高 12', Math.abs(bot) < 1e-9 && Math.abs(top - 12) < 1e-9,
+       `${bot} … ${top}`);
+  }
+
+  /**
+   * ② 甲 加厚成板：面積**也是** 160 × 12。
+   * 🔴 **這一項才是 miter 的證據** —— 每段各自偏移的話，
+   * 90 度轉角處會裂開一個 6×6 的缺口，面積就⛔ 不會剛好。
+   */
+  {
+    const m = prim.buildPrim('pen', { h: 12, paths: [L], open: true, up: false });
+    near('★★ ② 板的面積 ＝ 折線長 160 × 寬 12（miter 讓它精確守恆）',
+         m.area(), LEN * 12, 1e-9);
+    ok('★★ 　 整片平躺在地上（每個點的 Y 都是 0）',
+       [...m.verts].every(v => Math.abs(v.p.y) < 1e-9));
+    ok('★★ 　 法向朝【上】（⛔ 朝下的話畫面正常，只有列印前檢查抓得到）',
+       m.faces.every(f => f.normal.y > 0.999),
+       m.faces.map(f => f.normal.y.toFixed(3)).join(','));
+    /** ⭐ 線反過來畫也要一樣朝上：`d` 反向 → 側向跟著反，兩件事抵消 */
+    const rev = prim.buildPrim('pen',
+      { h: 12, paths: [{ a: [100, 60, 100, 0, 0, 0], hi: [], ho: [] }], open: true });
+    ok('★★ 　 反著畫也一樣朝上', rev.faces.every(f => f.normal.y > 0.999));
+  }
+
+  /**
+   * ③ **板厚走既有的機制**：`shell()` 之後體積 ＝ 面積 × 板厚。
+   * 🔴 這一項守的是「**⛔ 不可以自己把厚度做進網格**」——
+   * 做進去的話這裡會變成兩倍。
+   */
+  {
+    for (const up of [true, false]) {
+      const m = prim.buildPrim('pen', { h: 12, paths: [L], open: true, up });
+      near(`★★ ③ ${up ? '牆' : '板'} shell(0.5) 的體積 ＝ 面積 × 板厚`,
+           m.shell(0.5).volume(), LEN * 12 * 0.5, 1e-6);
+    }
+  }
+
+  /**
+   * ④ **曲線的那些點⛔ 不是折彎** —— 橫向邊要標 `smooth`。
+   * ⚠ 少了它，一段弧牆展開時會變成幾十道折彎，
+   * 而**形狀完全正確**，只是圖讀不懂了〔2026-08-23 那個坑的同一件事〕。
+   */
+  {
+    const r = 20, k = r * 0.5522847498;
+    const arc = { a: [r, 0, 0, r, -r, 0], hi: [0, -k, k, 0, 0, k], ho: [0, k, -k, 0, 0, -k] };
+    const m = prim.buildPrim('pen', { h: 10, tol: 0.02, paths: [arc], open: true, up: true });
+    const pts = prim.flattenPenPath({ ...arc, closed: false }, 0.02);
+    const smooth = [...m.edges()].filter(he => he.smooth).length;
+    eq('★★ ④ 半圓弧牆：橫向邊除了兩端全是 smooth', smooth, pts.length - 2);
+    eq('　 一個轉角都沒有（錨點都是平滑的）', pts.filter(p => p.corner).length, 0);
+    near('★ 　 面積 ≈ 半圓周長 πr × 高（內接折線略短）',
+         m.area(), Math.PI * r * 10, 1.2);
+  }
+
+  /**
+   * ⑤ 🔴🔴 **封閉那條路⛔ 一格都不可以變。**
+   * 〔kang 2026-08-30 拍板時明說的：「閉合路徑的行為一格不變」〕
+   */
+  {
+    const sq = { closed: true, a: [0, 0, 40, 0, 40, 40, 0, 40], hi: [], ho: [] };
+    near('★★ ⑤ 沒開不封口：還是實心塊，體積 ＝ 40×40×10',
+         prim.buildPrim('pen', { h: 10, paths: [sq] }).volume(), 16000, 1e-6);
+    ok('　 而且是封閉的', prim.buildPrim('pen', { h: 10, paths: [sq] }).isClosed());
+    /** ⭐ 同一份資料，開了不封口就變成一片帶 —— ⛔ 路徑本身沒有被改過 */
+    const open = prim.buildPrim('pen', { h: 10, paths: [sq], open: true, up: true });
+    near('★★ 　 同一份路徑開了不封口 → 牆，面積 ＝ 三段邊長 120 × 10',
+         open.area(), 120 * 10, 1e-9);
+    eq('★ 　 ⛔ 沒有繞回起點那一段（4 個點 → 3 片牆）', open.faces.length, 3);
+    eq('　 原始資料一個字都沒被動到',
+       JSON.stringify(sq.a), JSON.stringify([0, 0, 40, 0, 40, 40, 0, 40]));
+  }
+
+  /** ⑥ 兩條線 ＝ 兩片帶，互相不影響（⛔ 沒有「洞」這回事） */
+  {
+    const a = { a: [0, 0, 100, 0], hi: [], ho: [] };
+    const b = { a: [0, 20, 50, 20], hi: [], ho: [] };
+    const m = prim.buildPrim('pen', { h: 8, paths: [a, b], open: true, up: true });
+    near('★★ ⑥ 兩條線：面積 ＝ (100 ＋ 50) × 8', m.area(), 150 * 8, 1e-9);
+    eq('　 兩片，⛔ 沒有被當成「一個框加一個洞」', m.faces.length, 2);
+  }
+
+  /** ⑦ 邊界情形：兩個點就掃得出來、一個點要擋下來 */
+  {
+    const two = { a: [0, 0, 10, 0], hi: [], ho: [] };
+    eq('⑦ 兩個點 ＝ 一片', prim.buildPrim('pen',
+       { h: 5, paths: [two], open: true }).faces.length, 1);
+    let msg = '';
+    try { prim.buildPrim('pen', { h: 5, paths: [{ a: [0, 0], hi: [], ho: [] }], open: true }); }
+    catch (e) { msg = e.message; }
+    ok('　 只有一個點：擋下來並講原因', msg.includes('還沒有畫'), msg);
+    eq('　 折線長算得對（⛔ 不繞回起點）',
+       +polylineLength([{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 8 }]).toFixed(9), 9);
+  }
+
+  /** ⑧ 存讀檔要把兩顆開關帶回來（⛔ 掉了的話重開就變回實心塊） */
+  {
+    const ioM = await import('../js/core/io.js');
+    const doc = new ioM.Doc();
+    doc.add(new ioM.ModelObject({
+      name: '牆 1', kind: ioM.KIND.SHEET, thickness: 0.5,
+      src: { type: 'pen', h: 12, paths: [L], open: true, up: true }
+    }));
+    const back = ioM.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+    const s = back.objects[0].src;
+    ok('★★ ⑧ 存讀檔往返：不封口與往上長都還在', s.open === true && s.up === true,
+       JSON.stringify({ open: s.open, up: s.up }));
+    eq('　 種類還是板件', back.objects[0].kind, ioM.KIND.SHEET);
+    near('★ 　 讀回來面積一樣', back.objects[0].mesh().area(), LEN * 12, 1e-9);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

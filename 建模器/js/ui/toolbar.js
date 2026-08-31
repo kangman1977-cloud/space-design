@@ -182,13 +182,36 @@ export class Panel {
       const spec = PRIM_SPECS[obj.src.type];
       if (spec) {
         this.form.appendChild(head(spec.label + ' 參數'));
+        /**
+         * 🔴 **開關要畫在數字前面** —— 它決定下面那個數字**叫什麼名字**
+         * （鋼筆：厚度／高度／寬度）。⛔ 反過來的話使用者是先看到
+         * 一個標籤，改了上面的開關才發現它變了。
+         */
+        for (const t of spec.toggles || []) {
+          if (t.when && !t.when(obj.src)) continue;
+          this._rowCheck(t.label, obj.src[t.key], v => {
+            obj.src[t.key] = !!v;
+            /**
+             * 🔴🔴 **`不封口` 一開，這個物件就⛔ 不再是實體了。**
+             * 開放的單層面**種類要跟著變成板件**，否則：
+             * 板厚欄位看不到（厚薄改不了）、3D 列印會說它不封閉。
+             * ⚠ **⛔ 不要只改 `src`** —— 那正是「性質由兩端決定，
+             * 只改一端 ＝ 沒改」（鐵律二）。
+             */
+            if (t.key === 'open') obj.kind = v ? KIND.SHEET : KIND.SOLID;
+            obj.invalidate();
+            this.analysisCache.delete(obj.id);
+            this._edit('改' + t.label);
+          }, t.hint);
+        }
         for (const f of spec.fields) {
-          this._rowNum(f.label, obj.src[f.key], f, v => {
+          const lab = f.labelOf ? f.labelOf(obj.src) : f.label;
+          this._rowNum(lab, obj.src[f.key], f, v => {
             obj.src[f.key] = f.int ? Math.round(v) : v;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
-            this._edit('改' + f.label);
-          }, f.hint);
+            this._edit('改' + lab);
+          }, f.hintOf ? f.hintOf(obj.src) : f.hint);
         }
         if (spec.hasBends) this._bendList(obj);
         /**
@@ -1014,10 +1037,12 @@ export class Panel {
 
     const spec = PRIM_SPECS[src.type];
     if (!spec) return;
+    /** ⚠ 巢狀裡面也要照 `labelOf` 換名字，⛔ 不然同一個東西兩個地方兩種叫法 */
     for (const f of spec.fields) {
-      this._rowNum(f.label, src[f.key], f, v => {
+      const lab = f.labelOf ? f.labelOf(src) : f.label;
+      this._rowNum(lab, src[f.key], f, v => {
         src[f.key] = f.int ? Math.round(v) : v;
-        this._rebuild(obj, '改' + f.label);
+        this._rebuild(obj, '改' + lab);
       });
     }
   }

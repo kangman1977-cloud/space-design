@@ -34,6 +34,11 @@ import { flattenCubic, splitCubic, cubicAt, nearestOnCubic, polyArea, DEFAULT_TO
  * ⛔ 不在這裡重寫一份。⭐ 相依單向，`profile.js` 沒有 import 回來。
  */
 import { classify } from '../sketch/profile.js';
+/**
+ * 🔴 **開放的線走不了 `extrudeMany()`**（那要封閉輪廓）——
+ * `不封口` 的鋼筆走的是「沿線掃出一片單層的帶」那一支（2026-08-31）。
+ */
+import { ribbonFromPaths } from './ribbon.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -120,8 +125,42 @@ export const PRIM_SPECS = {
     label: '鋼筆',
     fields: [
       { key: 'h', label: '高 Y', min: 0.05, step: 0.5,
+        /**
+         * 🔴 **同一個數字，三種意思 —— 標籤跟著換**
+         * （kang 2026-08-30 拍板：**共用一個欄位**，2026-08-31 實作）。
+         * ⚠ **⛔ 不要為了「說得清楚」拆成三個欄位** —— 那會有兩個
+         * 在任何時候都是沒有意義的數字，而它們還看得到、改得動
+         * 〔鐵律三：這個數字在這個狀態下有沒有意義〕。
+         */
+        labelOf: src => (!src || !src.open) ? '高 Y' : (src.up ? '高度' : '寬度'),
+        hintOf: src => (!src || !src.open)
+          ? '往上拉多高（公分）—— 就是畫的時候工具列上那個「厚度」。'
+            + '⭐ 這個數字【隨時改得了】，⛔ 不像「轉成可編輯網格」是不可逆的'
+          : (src.up
+              ? '這道牆從地面往上長多高（公分）。'
+                + '⚠ 牆的【厚薄】⛔ 不在這裡 —— 那是上面的「板厚」'
+              : '這片板沿著線往【兩側】各長一半，總共這麼寬（公分）。'
+                + '⚠ 板的【厚薄】⛔ 不在這裡 —— 那是上面的「板厚」'),
         hint: '往上拉多高（公分）—— 就是畫的時候工具列上那個「厚度」。'
             + '⭐ 這個數字【隨時改得了】，⛔ 不像「轉成可編輯網格」是不可逆的' }
+    ],
+    /**
+     * 🔴🔴 **兩顆開關（kang 2026-08-30 拍板；他要求工具列與右側面板【都要有】）。**
+     *
+     * ⚠ **`up` 只在 `open` 開著時才出現** —— 封起來的形狀沒有「往不往上長」
+     * 這回事，擺在那裡就是一個按了什麼都不會變的東西（坑第 21 條）。
+     *
+     * 🔴 **改 `open` 會連動物件的「種類」**（solid ⇄ sheet）——
+     * 那一段在 `toolbar.js`，⛔ 不在這裡：`prim.js` 不認識 `ModelObject`。
+     */
+    toggles: [
+      { key: 'open', label: '不封口',
+        hint: '關（預設）＝ 頭尾接起來、圍成形狀，往上擠成【實心塊】。'
+            + '開 ＝ 就是一條線，拿去做【板】或【牆】 —— '
+            + '厚薄改走上面的「板厚」，種類會自動變成板件' },
+      { key: 'up', label: '往上長', when: src => !!src && !!src.open,
+        hint: '開 ＝ 沿著線【立成一道牆】（數字是高度）。'
+            + '關 ＝ 沿著線【加厚成一片板】平躺在地上（數字是寬度，兩側各一半）' }
     ]
   },
   box: {
@@ -744,6 +783,30 @@ const BUILDERS = {
    */
   pen(p) {
     const tol = num(p.tol, DEFAULT_TOL);
+    /**
+     * 🔴🔴 **`不封口`：整個物件一個旗標，⛔ 不是每條路徑各存一份**
+     * （kang 2026-08-30 拍板的第 ③ 件，2026-08-31 實作）。
+     *
+     * ⚠ **⛔ 不要改成「看 `path.closed`」** —— 那會變成
+     * **兩個地方各記一份「這支鋼筆封不封口」**，遲早不一致（坑第 31 條）。
+     * ⭐ 這裡直接把 `closed:false` **蓋上去**，
+     * 所以 `takePen()`／`peekPen()`／`loadPen()` **一行都不用改**。
+     *
+     * ⭐ 而 `flattenPenPath()` **本來就支援開放**（最後一個錨點另外補），
+     * ⛔ 不必為了這一件動它。
+     */
+    if (p.open) {
+      const lines = (p.paths || [])
+        .map(path => flattenPenPath({ ...path, closed: false }, tol))
+        .filter(pts => pts.length >= 2);
+      if (!lines.length) throw new Error('這支鋼筆還沒有畫出任何一條線');
+      /**
+       * 🔴 **開放的路徑⛔ 沒有「洞」這回事** —— 所以⛔ 不走 `classify()`。
+       * 一條線就是一片帶，兩條線就是兩片，**互相不影響**。
+       * 〔包在裡面 ＝ 洞，那個判準的前提是「圍得出面積」〕
+       */
+      return ribbonFromPaths(lines, { up: !!p.up, size: num(p.h, 3) });
+    }
     const flat = (p.paths || [])
       .map(path => flattenPenPath(path, tol))
       .filter(pts => pts.length >= 3)
