@@ -502,6 +502,18 @@ $('bridge').onclick = () => bridgeOnSelected();
 $('bisect').onclick = () => bisectSelected();
 $('knife').onclick = () => toggleKnifeMode();
 $('pen').onclick = () => togglePenMode();
+/**
+ * 🔴 **控制列上的收工鈕。⛔ 它沒有自己的行為 —— 走的是工具鈕那一支。**
+ *
+ * ⚠ **⛔ 不要在這裡另寫一份「收工要做什麼」** —— 那就變成兩條要對齊的路
+ * （坑第 31 條）。⭐ 跟 `確定曲線`／右鍵那一對同一個做法。
+ * 〔為什麼要有這顆：工具鈕搬到左側直條之後，它的名字固定是「刀具」「鋼筆」，
+ * 　⛔ 不再能靠它的文字告訴使用者「現在按下去是切下去／完成」〕
+ */
+$('toolDone').onclick = () => {
+  if (sel.knifeMode) toggleKnifeMode();
+  else if (sel.penMode) togglePenMode();
+};
 $('penCorner').onclick = () => togglePenCorner();
 $('penEdit').onclick = () => togglePenEdit();
 $('penDel').onclick = () => deletePenAnchor();
@@ -787,7 +799,8 @@ function exitOtherModes(keep) {
       endPenEdit(true);
     } else {
       sel.takePen(); sel.setPenMode(false);
-      $('pen').classList.remove('on'); $('pen').textContent = '鋼筆';
+      /** ⚠ ⛔ 不再改文字 —— 工具鈕的名字永遠是「鋼筆」（2026-08-31）*/
+      $('pen').classList.remove('on');
     }
     /** ⚠ **⛔ 這裡不可以 `return`** —— 底下還有刀具要收，漏掉就是
      *  「畫面說刀具關了，實際上沒有」（這一支開頭那則講的正是這件事）*/
@@ -1174,7 +1187,6 @@ function endPenEdit(save) {
   view.setGhost(null);
   view.sync(doc);
   $('pen').classList.remove('on');
-  $('pen').textContent = '鋼筆';
   if (save) commit('編輯鋼筆路徑');
   panel.refresh();
   updateBar();
@@ -3979,13 +3991,37 @@ function updateBar() {
   const canKnife = !!sel.active && !sel.active.isParametric;
   $('knife').disabled = !canKnife && !sel.knifeMode;
   /**
-   * 🔴 **按鈕文字要講出「現在按下去會發生什麼」。**
-   * 同一顆按鈕在模式裡是「切下去」、在模式外是「進入刀具」——
-   * ⛔ 一直寫「刀具」的話，使用者不知道點滿兩個之後該按誰（坑第 21 條）。
+   * 🔴🔴 **「現在按下去會發生什麼」現在講在【控制列】，⛔ 不在工具鈕上。**
+   * （2026-08-31 改；**kang 拍板：主工具在直條，其餘選了工具之後在控制列顯示**）
+   *
+   * ⚠ **⛔ 規則本身沒有變** —— 「按鈕文字要講出現在按下去會發生什麼」
+   * 仍然成立（坑第 21 條），只是**負責講的那顆換人**：
+   * 工具鈕講**身分**（永遠是「刀具」「鋼筆」），`#toolDone` 講**動作**。
+   *
+   * 🔴 **⛔ 不可以再對工具鈕寫 `textContent`** ——
+   * 那幾顆裡面是 `<svg>` ＋ `<span class="lab">`，寫下去會**把圖示整個洗掉**，
+   * ⚠ 而且**不會報錯**（`index.html` 的 `#rail` 註解寫著同一件事）。
    */
-  $('knife').textContent = sel.knifeMode
-    ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : '刀具（點兩個以上）')
-    : '刀具';
+  const 收工 = sel.knifeMode
+    ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : null)
+    : penEditing ? '完成'
+    : sel.penMode ? '完成' : null;
+  $('toolDone').hidden = !收工;
+  if (收工) $('toolDone').textContent = 收工;
+  /**
+   * 狀態字：**⛔ 只講「做到哪」，⛔ 不講「該按誰」** —— 該按誰是上面那顆的事。
+   * ⚠ 刀具點不到兩個時 `#toolDone` 不出現，所以那句話要由這裡講。
+   */
+  const 狀態 = sel.knifeMode
+    ? (knifePicks.length >= 2 ? '' : `刀具：在模型上點兩個以上的位置（現在 ${knifePicks.length} 個）`)
+    : sel.penMode
+      ? (penEditing ? '正在改這條路徑'
+         : sel.penCount ? `${sel.penCount} 個點`
+           + (sel.penPathCount > 1 ? `．共 ${sel.penPathCount} 條` : '')
+         : '在地板上點一下放第一個點')
+      : '';
+  $('toolState').hidden = !狀態;
+  if (狀態) $('toolState').textContent = 狀態;
   /**
    * 🔴 **鋼筆那一組只在鋼筆模式裡出現** —— 跟刀具同一套做法。
    * ⚠ **`退一點` 要在還沒放點時變灰**，⛔ 不可以按下去什麼都不發生。
@@ -4062,10 +4098,18 @@ function updateBar() {
    * ⭐ **兩條以上時後面掛一個「·N條」** —— 否則使用者看不出來
    * 自己已經在畫第幾條了。
    */
-  $('pen').textContent = penEditing ? '完成'
-    : !sel.penMode ? '鋼筆'
-    : (sel.penCount ? `鋼筆 ${sel.penCount}` : '鋼筆')
-      + (sel.penPathCount > 1 ? `·${sel.penPathCount}條` : '');
+  /**
+   * 🔴🔴 **⛔ 這裡原本寫 `$('pen').textContent = …`，2026-08-31 拿掉了。**
+   *
+   * `鋼筆` 已經是**左側直條上的工具**，它的名字**永遠是「鋼筆」** ——
+   * 「畫到幾個點」與「按哪裡收工」搬到控制列（`#toolState`／`#toolDone`，
+   * 就在這一支上面那一段）。
+   *
+   * ⚠ **⛔ 千萬不要把這一行加回來** —— 工具鈕裡面是 `<svg>` ＋ `<span class="lab">`，
+   * 寫 `textContent` 會**把圖示整個洗掉，而且不會報錯**。
+   * ⭐ 舊註解那句「按鈕文字要講出現在按下去會發生什麼」**仍然成立**，
+   * 只是負責講的那顆換成 `#toolDone` 了。
+   */
   $('pen').title = sel.penMode
     ? (sel.penEdit
         ? `改點模式：${sel.penCount} 個點。點一個點就選它，拖它＝搬位置、`

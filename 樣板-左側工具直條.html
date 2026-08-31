@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：左側工具直條 三案比較</title>
+<!--
+  🔴 這是【比較用的樣板】，⛔ 不是要上線的程式。
+  ⭐ 顏色、字級、圓角、邊框全部照 建模器/index.html 的實際 CSS 抄，
+     ⛔ 沒有自己另配一套 —— 不然比出來的結果不算數。
+  ⚠ 三案的 8 顆工具、標籤文字都一樣，只有「怎麼顯示」不同。
+-->
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #1b1e23; color: #e8eaed;
+  font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  font-size: 13px; padding: 18px;
+}
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #8b93a1; font-size: 12.5px; margin: 0 0 18px; line-height: 1.7; }
+.sub b { color: #e8eaed; }
+.cases { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+.case { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; overflow: hidden; }
+.caseHead {
+  padding: 9px 12px; background: #24272e; border-bottom: 1px solid #3a3f48;
+  font-size: 12.5px; font-weight: 600;
+}
+.caseHead .w { color: #6fa8ff; font-weight: 400; margin-left: 6px; font-size: 11.5px; }
+.stage { display: flex; height: 430px; }
+
+/* ── 左側直條（三案共用骨架，寬度與內容不同）── */
+.rail {
+  background: #24272e; border-right: 1px solid #3a3f48;
+  padding: 6px; display: flex; flex-direction: column; gap: 5px; flex: none;
+}
+.rail hr { border: 0; border-top: 1px solid #343943; margin: 3px 1px; width: 100%; }
+.tool {
+  border: 1px solid #454b56; background: #2f333c; color: #e8eaed;
+  border-radius: 6px; cursor: default; font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+}
+.tool.on { background: #2f6fd0; border-color: #4d8ae8; color: #fff; }
+.tool svg { width: 20px; height: 20px; stroke: currentColor; fill: none;
+            stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 甲：文字 */
+.a .rail { width: 88px; }
+.a .tool { padding: 8px 6px; font-size: 13px; }
+
+/* 乙：圖示 */
+.b .rail { width: 44px; }
+.b .tool { width: 32px; height: 32px; }
+
+/* 丙：圖示＋小字 */
+.c .rail { width: 66px; }
+.c .tool { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: 10.5px; line-height: 1.1; }
+.c .tool svg { width: 18px; height: 18px; }
+
+/* ── 畫面中間（示意）── */
+.canvas {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background:
+    linear-gradient(#1b1e23, #1b1e23) padding-box,
+    repeating-linear-gradient(0deg, #22262d 0 1px, transparent 1px 34px),
+    repeating-linear-gradient(90deg, #22262d 0 1px, transparent 1px 34px);
+  background-color: #1b1e23;
+}
+.ctrl {
+  background: #24272e; border-bottom: 1px solid #3a3f48;
+  padding: 6px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.ctrl .lbl { font-size: 11px; color: #8b93a1; }
+.ctrl button {
+  font-family: inherit; font-size: 13px; padding: 6px 11px; border-radius: 6px;
+  border: 1px solid #454b56; background: #2f333c; color: #e8eaed; cursor: default;
+}
+.ctrl input {
+  font-family: inherit; font-size: 13px; padding: 5px 7px; width: 58px;
+  border: 1px solid #454b56; border-radius: 6px; background: #2f333c; color: #e8eaed;
+}
+.hint {
+  margin: auto; text-align: center; color: #565c66; font-size: 12px; line-height: 1.9;
+}
+.hint b { color: #6f7681; }
+.foot {
+  border-top: 1px solid #2c313a; background: #20232a;
+  padding: 8px 10px; font-size: 11.5px; color: #8b93a1; line-height: 1.7;
+}
+.foot .good { color: #7fd18b; }
+.foot .bad  { color: #e08b8b; }
+.note {
+  margin: 22px 0 0; padding: 12px 14px; border-radius: 8px;
+  background: rgba(47,111,208,.12); border: 1px solid #2c4a75;
+  color: #a8c0e0; font-size: 12.5px; line-height: 1.85; max-width: 1180px;
+}
+.note b { color: #dbe7f7; }
+.warn {
+  margin: 12px 0 0; padding: 12px 14px; border-radius: 8px;
+  background: rgba(178,70,70,.14); border: 1px solid #7a4040;
+  color: #e6b9b9; font-size: 12.5px; line-height: 1.85; max-width: 1180px;
+}
+.warn b { color: #ffd9d9; }
+.tablet { margin: 26px 0 0; max-width: 1180px; }
+.tablet h2 { font-size: 14px; margin: 0 0 8px; }
+.barwrap { background: #20232a; border: 1px solid #3a3f48; border-radius: 8px; padding: 10px 12px; }
+.bar { display: flex; align-items: center; gap: 0; height: 26px; margin: 7px 0 3px; }
+.bar .seg { height: 100%; display: flex; align-items: center; justify-content: center;
+            font-size: 11px; border-radius: 4px 0 0 4px; }
+.bar .rest { height: 100%; flex: 1; background: #2b3038; border-radius: 0 4px 4px 0;
+             display: flex; align-items: center; justify-content: center;
+             font-size: 11px; color: #6f7681; }
+.bar .seg.a { background: #b25c5c; }
+.bar .seg.b { background: #4d8ae8; }
+.bar .seg.c { background: #c79a4a; }
+.tablet .row { font-size: 12px; color: #8b93a1; }
+</style>
+</head>
+<body>
+
+<h1>樣板：左側工具直條 —— 三案比較</h1>
+<p class="sub">
+八顆工具、標籤文字三案完全一樣，<b>只有「怎麼顯示」不同</b>。<br>
+顏色／字級／圓角／邊框<b>全部照 <code>建模器/index.html</code> 的實際 CSS 抄</b>，⛔ 沒有另配一套 —— 不然比出來不算數。<br>
+中間那條是<b>控制列</b>（隨「選到什麼」換），這裡固定顯示「選到一個面」的樣子，讓你看得出直條跟它一起佔多少。
+</p>
+
+<div class="cases">
+
+  <!-- ══ 甲：文字 ══ -->
+  <div class="case a" style="width:560px">
+    <div class="caseHead">甲　文字（2–4 字）<span class="w">直條寬 88px</span></div>
+    <div class="stage">
+      <div class="rail">
+        <button class="tool on">拉點線面</button>
+        <button class="tool">鋼筆</button>
+        <button class="tool">刀具</button>
+        <hr>
+        <button class="tool">貼合</button>
+        <button class="tool">分片</button>
+        <hr>
+        <button class="tool">移動</button>
+        <button class="tool">旋轉</button>
+        <button class="tool">縮放</button>
+      </div>
+      <div class="canvas">
+        <div class="ctrl">
+          <span class="lbl">選到 1 個面</span>
+          <button>擠出</button><button>壓平</button><button>刪除面</button>
+          <button>內縮</button><span class="lbl">寬度</span><input value="2">
+        </div>
+        <div class="hint">3D 畫面<br><b>（示意）</b></div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="good">＋ 一看就知道是什麼，⛔ 不必先學</span>
+      <span class="good">＋ 標籤直接沿用現在的，⛔ 不必新畫圖</span><br>
+      <span class="bad">－ 最寬</span>
+      <span class="bad">－「拉點線面」四個字撐開了整條的寬度</span>
+    </div>
+  </div>
+
+  <!-- ══ 乙：圖示 ══ -->
+  <div class="case b" style="width:520px">
+    <div class="caseHead">乙　圖示<span class="w">直條寬 44px</span></div>
+    <div class="stage">
+      <div class="rail">
+        <button class="tool on" title="拉點線面"><svg viewBox="0 0 24 24"><path d="M5 19V7l7-3 7 3v12"/><circle cx="5" cy="19" r="1.6"/><circle cx="19" cy="19" r="1.6"/><circle cx="12" cy="4" r="1.6"/></svg></button>
+        <button class="tool" title="鋼筆"><svg viewBox="0 0 24 24"><path d="M4 20l3-8 9-9 5 5-9 9z"/><path d="M7 12l5 5"/></svg></button>
+        <button class="tool" title="刀具"><svg viewBox="0 0 24 24"><path d="M4 4l9 9-3 3-9-9z"/><path d="M13 13l7 7"/></svg></button>
+        <hr>
+        <button class="tool" title="貼合"><svg viewBox="0 0 24 24"><rect x="3" y="8" width="8" height="8"/><rect x="13" y="8" width="8" height="8"/><path d="M11 12h2"/></svg></button>
+        <button class="tool" title="分片"><svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M7 6l5 6-5 6"/></svg></button>
+        <hr>
+        <button class="tool" title="移動"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><path d="M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+        <button class="tool" title="旋轉"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/></svg></button>
+        <button class="tool" title="縮放"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="10" height="10"/><path d="M14 14l6 6M20 14v6h-6"/></svg></button>
+      </div>
+      <div class="canvas">
+        <div class="ctrl">
+          <span class="lbl">選到 1 個面</span>
+          <button>擠出</button><button>壓平</button><button>刪除面</button>
+          <button>內縮</button><span class="lbl">寬度</span><input value="2">
+        </div>
+        <div class="hint">3D 畫面<br><b>（示意）</b></div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="good">＋ 最省寬度（44px）</span>
+      <span class="good">＋ 直條可以放很多顆也不會變長</span><br>
+      <span class="bad">－ <b>八個圖示都要先學會</b>，而它們是新畫的、⛔ 不是你熟的 AI 那套</span><br>
+      <span class="bad">－ 跟這個專案「⛔ 不用行話、欄位名去 index.html 抄」那條規則的精神不一致</span>
+    </div>
+  </div>
+
+  <!-- ══ 丙：圖示＋小字 ══ -->
+  <div class="case c" style="width:540px">
+    <div class="caseHead">丙　圖示 ＋ 小字<span class="w">直條寬 66px</span></div>
+    <div class="stage">
+      <div class="rail">
+        <button class="tool on"><svg viewBox="0 0 24 24"><path d="M5 19V7l7-3 7 3v12"/><circle cx="5" cy="19" r="1.6"/><circle cx="19" cy="19" r="1.6"/><circle cx="12" cy="4" r="1.6"/></svg>拉點線面</button>
+        <button class="tool"><svg viewBox="0 0 24 24"><path d="M4 20l3-8 9-9 5 5-9 9z"/><path d="M7 12l5 5"/></svg>鋼筆</button>
+        <button class="tool"><svg viewBox="0 0 24 24"><path d="M4 4l9 9-3 3-9-9z"/><path d="M13 13l7 7"/></svg>刀具</button>
+        <hr>
+        <button class="tool"><svg viewBox="0 0 24 24"><rect x="3" y="8" width="8" height="8"/><rect x="13" y="8" width="8" height="8"/><path d="M11 12h2"/></svg>貼合</button>
+        <button class="tool"><svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M7 6l5 6-5 6"/></svg>分片</button>
+        <hr>
+        <button class="tool"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><path d="M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>移動</button>
+        <button class="tool"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/></svg>旋轉</button>
+        <button class="tool"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="10" height="10"/><path d="M14 14l6 6M20 14v6h-6"/></svg>縮放</button>
+      </div>
+      <div class="canvas">
+        <div class="ctrl">
+          <span class="lbl">選到 1 個面</span>
+          <button>擠出</button><button>壓平</button><button>刪除面</button>
+          <button>內縮</button><span class="lbl">寬度</span><input value="2">
+        </div>
+        <div class="hint">3D 畫面<br><b>（示意）</b></div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="good">＋ 圖示不必背，字就在下面</span>
+      <span class="good">＋ 比甲窄 22px</span><br>
+      <span class="bad">－ 每顆高度變兩倍 → <b>八顆吃掉的直條高度差不多是甲的兩倍</b></span><br>
+      <span class="bad">－ 圖示還是得畫，而它只是輔助</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="tablet">
+  <h2>直條吃掉多少寬度（平板橫放 1024px 為準）</h2>
+  <div class="barwrap">
+    <div class="row">甲　文字 88px</div>
+    <div class="bar"><div class="seg a" style="width:8.6%">88</div><div class="rest">畫面剩 936px（91.4%）</div></div>
+    <div class="row">乙　圖示 44px</div>
+    <div class="bar"><div class="seg b" style="width:4.3%">44</div><div class="rest">畫面剩 980px（95.7%）</div></div>
+    <div class="row">丙　圖示＋小字 66px</div>
+    <div class="bar"><div class="seg c" style="width:6.4%">66</div><div class="rest">畫面剩 958px（93.6%）</div></div>
+  </div>
+</div>
+
+<div class="note">
+🔴 <b>量出來之後，「平板寬度」這個理由其實站不太住</b>：三案的差距是 <b>44px</b>，
+在 1024px 上是 <b>4.3%</b>。<br>
+⭐ 而真正吃掉寬度的是<b>右側面板</b>（現在就有，比這條直條寬好幾倍）——
+⛔ 不是這 8 顆工具。<br>
+⚠ 所以這一題可以<b>照「哪個比較好懂」來選，⛔ 不必為了省 44px 犧牲可讀性</b>。
+</div>
+
+<div class="warn">
+⚠ <b>⛔ 這份樣板不能告訴你的事</b>：<br>
+一、<b>圖示好不好認</b> —— 上面那八個是我現畫的，你得自己看一眼才知道認不認得出來。<br>
+二、<b>真的用起來的感覺</b> —— 這是靜態圖，⛔ 沒有接任何功能。<br>
+三、<b>平板上手指按不按得到</b> —— 甲的按鈕高 33px、乙 32px、丙 46px，
+　　而<b>一般建議的觸控目標是 44px</b>：<b>只有丙達標</b>，甲乙都得再加高
+　　（加高之後三案的高度差就會拉近，⛔ 這一點現在還沒反映在上面的圖裡）。
+</div>
+
+</body>
+</html>

@@ -66,6 +66,39 @@ select {
 
 /* ══ 主體 ══════════════════════════════════════════ */
 #main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* ═══ 左側工具直條（2026-08-31，介面編排第 1 段）═══════════════
+   ⚠ 寬度 66px 是【量過才選的】：三案（文字 88／圖示 44／圖示＋小字 66）
+     在 1024px 平板上只差 4.3%，⛔ 所以不是為了省寬度選的，是為了好認。
+     真正吃寬度的是右邊那塊 #panel（300px）。
+
+   🔴 每顆的高度 ≥ 44px 是【觸控目標】的建議值 ——
+     ⛔ 不是排版美感問題：這個工具要在平板上用，按不到就是壞的。
+     （6 上 ＋ 18 圖示 ＋ 2 間距 ＋ 12 字 ＋ 6 下 ≈ 46px）
+
+   ⚠ 直條可以捲動（overflow-y）—— 平板【橫放】時高度只有 768，
+     ⛔ 不給捲的話最下面那顆會被切掉而且完全看不出來。 */
+#rail {
+  flex: none; width: 66px; z-index: 15;
+  background: #24272e; border-right: 1px solid #3a3f48;
+  padding: 6px; display: flex; flex-direction: column; gap: 5px;
+  overflow-y: auto; overflow-x: hidden;
+}
+#rail hr { border: 0; border-top: 1px solid #343943; margin: 3px 1px; width: 100%; }
+/* ⚠ 這裡要重寫 padding/寬度：全域的 button 是「橫排一顆」的樣子 */
+#rail .tool {
+  width: 100%; padding: 6px 2px; gap: 2px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-size: 10.5px; line-height: 1.1; white-space: nowrap;
+}
+#rail .tool svg {
+  width: 18px; height: 18px;
+  stroke: currentColor; fill: none; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* ⚠ 圖示要跟著文字一起變色（.on 是白字藍底）—— currentColor 就是為了這個 */
+#rail .tool .lab { display: block; }
+
 #stage { flex: 1 1 auto; position: relative; min-width: 0; }
 #cv { display: block; width: 100%; height: 100%; touch-action: none; }
 
@@ -440,7 +473,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp" id="gEdit">
       <span class="lbl">編輯</span>
-      <button id="edit" title="編輯造型：選物件裡的點／邊／面，用箭頭把它們拉到想要的位置。要一次選好幾個就開「加選」（或按住 Shift）。要先把物件「轉成可編輯網格」">拉點線面</button>
+      <!-- 🔴 `拉點線面` 2026-08-31 搬到左側工具直條 #rail（第 1 段）。
+           ⚠ 底下那四顆過濾器（自動／點／邊／面）**還留在這裡** ——
+           它們該跟著工具走進控制列，但那是第 3 段的事，⛔ 這一段刻意不動。 -->
       <button id="efAuto" class="efBtn on" data-f="auto" title="自動：點比邊小、邊比面小，小的優先">自動</button>
       <button id="efVert" class="efBtn" data-f="vertex" title="只選點：點不到就不選，不會掉到邊或面">點</button>
       <button id="efEdge" class="efBtn" data-f="edge" title="只選邊">邊</button>
@@ -699,7 +734,24 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⭐ 底層還是「切一刀」那個平面 —— 差別只在平面從你點的兩個
         位置算出來，不是從 X／Y／Z 選一個。
       -->
-      <button id="knife" disabled title="刀具（自由切）：按一下進入。兩種畫法可以混用 ——「輕點」在模型上點你要切過的位置（會吸到最近的邊），或「按住拖」直接劃一條線過表面（線穿過邊的地方就是切點）。點完再按一次就切下去，或在最後一點快點兩下接回起點。⚠ 刀具模式下轉視角改成：桌機按右鍵拖、平板用兩指。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」">刀具</button>
+      <!--
+        🔴🔴 收工鈕 ＋ 狀態字（2026-08-31，介面編排第 1 段）。
+
+        > **kang 的原話：「鋼筆..刀具是主工具...其餘可以在選擇工具後..控制列在顯示」**
+
+        ⚠ **⛔ 這不是「多加兩個東西」，是把原本【寫在工具鈕身上】的搬過來。**
+        原本 `刀具` 那顆的字會變成「切下去（3 點）」、`鋼筆` 會變成
+        「鋼筆 12·3條」「完成」——【量過】：那些字要 71.7～94.5px，
+        而左側直條的字只放得下 **50px**，⛔ 塞不進去。
+
+        ⭐ 而這件事在指一個方向：**工具鈕是「身分」，那些字是「狀態」** ——
+        「你現在做到哪」「按哪裡收工」是控制列的事，⛔ 不是工具的名字。
+
+        🔴 `#toolDone` 走的是【跟工具鈕同一支函式】，⛔ 不是複製一份行為
+        〔跟 `確定曲線`／右鍵那一對同一個做法：兩條路指向同一個狀態〕。
+      -->
+      <button id="toolDone" hidden title="把這個工具現在做的事收工">完成</button>
+      <span class="lbl" id="toolState" hidden>—</span>
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）">吸中點</button>
       <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>
       <!--
@@ -710,7 +762,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
           右鍵／兩指轉視角），而那一層跟刀具是同一支 setDrawInput()。
         🔴 「尖角」那顆是 Alt 的替代品 —— 平板上沒有 Alt（kang 2026-08-29 選的）。
       -->
-      <button id="pen" title="鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件。【點一下】＝ 尖角、【按住拖】＝ 圓滑（拖出來的就是把手）。在最後一點【快點兩下】就完成。⚠ 鋼筆模式下轉視角改成：桌機按右鍵拖、平板用兩指">鋼筆</button>
       <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品。⭐ 開著「改點」的時候，它管的是【選到的那個點】">尖角</button>
       <!--
         改點（第 2 階段，kang 2026-08-29 拍板）：回頭拉點、拉把手。
@@ -841,8 +892,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp" id="gUnfold">
       <span class="lbl">展開</span>
-      <button id="mate" title="貼合：先點要移動的物件的點／邊／面，再點目標的點／邊／面，自動轉正並貼上去">貼合</button>
-      <button id="seam" title="指定分片：自己決定展開圖從哪裡切開。要先把物件「轉成可編輯網格」才能標">分片</button>
       <button id="unfold" title="把板件攤平成下料圖：含尺寸標註、折線、折彎補償，可列印或輸出 DXF 送雷切">展開圖</button>
       <button id="slice" title="剖面分切：切成一疊板，每片一張輪廓送 CNC，切完照號碼疊起來黏合。任何形狀都切得開，不受可展性限制">剖面分切</button>
       <button id="export3d" title="匯出 STL 給 3D 列印或 CAM。匯出前會先檢查模型封不封閉、法向對不對">3D 列印</button>
@@ -850,9 +899,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp">
       <span class="lbl">模式</span>
-      <button id="mMove" class="on">移動</button>
-      <button id="mRot">旋轉</button>
-      <button id="mScale">縮放</button>
       <button id="multi">加選</button>
       <button id="marquee" title="框選：拖曳畫一個矩形，碰到的物件全部選起來。開著時空白處拖曳不再旋轉視角">框選</button>
     </div>
@@ -883,6 +929,37 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
   </div>
 
   <div id="main">
+  <!--
+    🔴🔴 左側工具直條（2026-08-31，介面編排第 1 段）。
+
+    ⭐ 這裡只放【工具】—— 按下去會進入一個狀態、而且狀態會留著的那八顆。
+    ⛔ 命令（按一下做完就結束）與參數⛔ 不放這裡，它們的家是上面那條控制列。
+    〔分類的推導在 `介面編排-設計方向.md`〕
+
+    🔴 為什麼工具要【永遠在】：其餘的按鈕之後會改成「沒輪到就不出現」，
+    而那個做法的代價是「東西會不見」。⭐ 工具固定在這裡就是那個代價的解藥
+    —— ⛔ 拿掉它整個方案就不成立（Illustrator 也是這樣化解的）。
+
+    ⚠ 每顆裡面是【svg ＋ span.lab】兩個東西 ——
+    🔴 所以 ⛔ 不可以再對這幾顆寫 `textContent`（那會把 svg 整個洗掉，
+    而且不會報錯）。要改字就寫進 `.lab`，`main.js` 有 4 處是這樣改的。
+
+    ⚠ 圖示是 kang 2026-08-31 看過樣板挑的（`樣板-工具圖示候選.html`）：
+    鋼筆／刀具沿用他每天在用的 Illustrator 形狀、移動旋轉縮放用跨軟體通用符號
+    —— ⛔ 能沿用已經認得的就不要另外發明。
+  -->
+  <div id="rail">
+      <button id="edit" class="tool" title="編輯造型：選物件裡的點／邊／面，用箭頭把它們拉到想要的位置。要一次選好幾個就開「加選」（或按住 Shift）。要先把物件「轉成可編輯網格」"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5l8-4 8 4v9l-8 4-8-4z"/><circle cx="4" cy="7.5" r="2" fill="currentColor"/><circle cx="20" cy="7.5" r="2" fill="currentColor"/><circle cx="12" cy="20.5" r="2" fill="currentColor"/></svg><span class="lab">拉點線面</span></button>
+      <button id="pen" class="tool" title="鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件。【點一下】＝ 尖角、【按住拖】＝ 圓滑（拖出來的就是把手）。在最後一點【快點兩下】就完成。⚠ 鋼筆模式下轉視角改成：桌機按右鍵拖、平板用兩指"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l5 7-3.2 8.5L12 21l-1.8-3.5L7 9z"/><path d="M7 9h10"/><path d="M12 13.5v3"/></svg><span class="lab">鋼筆</span></button>
+      <button id="knife" class="tool" disabled title="刀具（自由切）：按一下進入。兩種畫法可以混用 ——「輕點」在模型上點你要切過的位置（會吸到最近的邊），或「按住拖」直接劃一條線過表面（線穿過邊的地方就是切點）。點完再按一次就切下去，或在最後一點快點兩下接回起點。⚠ 刀具模式下轉視角改成：桌機按右鍵拖、平板用兩指。⚠ 只加線不分家，要拆成兩個物件請接著按「分離」"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l7-6 4 4-7 6z"/><path d="M7 13l3 3"/><path d="M11 17h10" stroke-dasharray="2.6 2.4"/></svg><span class="lab">刀具</span></button>
+    <hr>
+      <button id="mate" class="tool" title="貼合：先點要移動的物件的點／邊／面，再點目標的點／邊／面，自動轉正並貼上去"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 7h7v10H2z"/><path d="M15 7h7v10h-7z"/><path d="M10.5 12h3"/><path d="M12 9.5l2 2.5-2 2.5"/></svg><span class="lab">貼合</span></button>
+      <button id="seam" class="tool" title="指定分片：自己決定展開圖從哪裡切開。要先把物件「轉成可編輯網格」才能標"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.4"/><circle cx="6" cy="6" r="2.4"/><path d="M8 16.5L20 5M8 7.5L20 19"/><path d="M2 12h20" stroke-dasharray="2.6 2.4" opacity=".55"/></svg><span class="lab">分片</span></button>
+    <hr>
+      <button id="mMove" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
+      <button id="mRot" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>
+      <button id="mScale" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h9v9H4z"/><path d="M13.5 13.5L21 21"/><path d="M21 15.5V21h-5.5"/></svg><span class="lab">縮放</span></button>
+  </div>
     <div id="stage">
       <canvas id="cv"></canvas>
       <div id="marqueeBox" hidden></div>
