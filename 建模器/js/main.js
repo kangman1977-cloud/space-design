@@ -3918,8 +3918,20 @@ $('guideAdd').onclick = () => {
    * ⭐ **講數量** —— 加了一條之後畫面上多一條青線，
    * 但在斜視角很容易被模型擋住而看不出來。數字對得起來就不會懷疑。
    */
-  toast(`參考線 ${GUIDE_AXIS_LABEL[guideAxis]} ＝ ${fmtGuide(v)} cm　`
-    + `這個方向現在有 ${doc.guides[guideAxis].length} 條`);
+  let msg = `參考線 ${GUIDE_AXIS_LABEL[guideAxis]} ＝ ${fmtGuide(v)} cm　`
+    + `這個方向現在有 ${doc.guides[guideAxis].length} 條`;
+  /**
+   * 🔴 **【診斷用，2026-08-31】把「實際畫進場景的東西」講出來。**
+   * ⚠ **⛔ 這不是功能** —— kang 的平板看不到參考線而電腦正常，
+   * 而**平板上沒有開發者工具**，提示訊息是唯一讀得到數字的地方。
+   * 〔病因確定之後這一段要拿掉〕
+   */
+  const st = view.guideStats && view.guideStats();
+  if (st) {
+    msg += `　【診斷】畫了 ${st.段} 段線 ＋ ${st.點} 顆點`
+      + `　進場景:${st.進場景 ? '是' : '否'}　看得見:${st.看得見 ? '是' : '否'}`;
+  }
+  toast(msg);
 };
 
 $('guideDel').onclick = () => {

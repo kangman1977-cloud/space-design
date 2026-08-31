@@ -579,18 +579,55 @@ export class SceneView {
       push(at(0, -R), at(0, R));         // 十字：直
     };
 
-    for (const v of g.x || []) frame((u, w) => V(v, w, u));
-    for (const v of g.y || []) frame((u, w) => V(u, v, w));
-    for (const v of g.z || []) frame((u, w) => V(u, w, v));
+    /**
+     * 🔴🔴 **【診斷用，2026-08-31】短十字 ＋ 一顆點。**
+     *
+     * ⚠ **⛔ 這不是功能，是為了找出「平板看不到參考線」的病因。**
+     * 【實測】kang 的平板：`doc.guides` 裡確實有那條線（提示說加了、
+     * 再按一次說已經有了），**而畫面上什麼都沒有**；同一台平板上
+     * **鋼筆的綠色預覽正常** —— 而鋼筆跟參考線**走同一支
+     * `_buildLineOverlay()`、同樣 `depthTest:false`**。
+     *
+     * ⇒ 兩者只剩三個差異：`renderOrder`（5 vs 7）、**線長（600cm vs 幾十）**、
+     *   **我沒傳「點」**。⭐ 所以這一版把三種東西同時畫出來，
+     *   讓一眼就分辨得出是哪一種：
+     *
+     * | 平板上看到什麼 | 病因 |
+     * |---|---|
+     * | 只有點 | **線**這個圖元在這台裝置上出問題 |
+     * | 看得到短十字、看不到大框 | **長度** —— 600cm 的線被驅動裁掉了 |
+     * | 三種都看不到 | 整組⛔ 沒進場景／被關掉（提示裡的數字會說） |
+     *
+     * 🔴 **病因確定之後這一段要拿掉或收斂**，⛔ 不要留著當功能。
+     */
+    const SHORT = 25;                    // 短十字的半長，單位 cm
+    const dots = [];
+    const probe = at => {
+      push(at(-SHORT, 0), at(SHORT, 0));
+      push(at(0, -SHORT), at(0, SHORT));
+      dots.push(at(0, 0));
+    };
+
+    for (const v of g.x || []) { const at = (u, w) => V(v, w, u); frame(at); probe(at); }
+    for (const v of g.y || []) { const at = (u, w) => V(u, v, w); frame(at); probe(at); }
+    for (const v of g.z || []) { const at = (u, w) => V(u, w, v); frame(at); probe(at); }
 
     if (!seg.length) return;
-    this._guides = this._buildLineOverlay('guides', seg, null, 0x2ad4d4);
+    this._guides = this._buildLineOverlay('guides', seg, dots, 0x2ad4d4);
     if (!this._guides) return;
     /**
      * ⚠ **`renderOrder` 要比另外那幾種預覽低**（它們是 7／8）——
      * 參考線是**一直都在**的東西，⛔ 不可以蓋住「你現在正在做的那件事」。
      */
     this._guides.traverse(o => { if (o.renderOrder) o.renderOrder = 5; });
+    /** 【診斷用】讓介面講得出「到底畫了什麼進去」 */
+    this._guideStats = {
+      條: (g.x || []).length + (g.y || []).length + (g.z || []).length,
+      段: seg.length / 2,
+      點: dots.length,
+      進場景: !!this._guides.parent,
+      看得見: this.guidesVisible
+    };
     /**
      * ⚠ **⛔ 不要再 `scene.add()` 一次** —— `_buildLineOverlay()` 自己
      * 最後一行就加進場景了。多加一次 three.js ⛔ 不會報錯，
@@ -599,7 +636,11 @@ export class SceneView {
     this._guides.visible = this.guidesVisible;
   }
 
+  /** 【診斷用，2026-08-31】上一次畫了什麼進去。⛔ 病因確定之後拿掉 */
+  guideStats() { return this._guideStats || null; }
+
   clearGuides() {
+    this._guideStats = null;
     if (!this._guides) return;
     this.scene.remove(this._guides);
     this._guides.traverse(o => {
