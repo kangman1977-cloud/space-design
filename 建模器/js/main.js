@@ -4307,6 +4307,19 @@ function updateBar() {
       + `　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
     : (hist.undoLabel ? '上一步：' + hist.undoLabel : '點一下物件選取它');
 
+  /**
+   * 🔴🔴 **過濾器（自動／點／邊／面）跟著 `拉點線面` 走**（2026-08-31，第 3 段）。
+   *
+   * ⚠ **它們是【那個工具的】過濾器** —— ⛔ 沒進編輯模式時，
+   * 「只選邊」這句話沒有對象，按了什麼都不會發生（坑第 21 條）。
+   * ⭐ 這正是 kang 拍板那條的直接應用：
+   * **主工具在直條，其餘選了工具之後才在控制列顯示。**
+   *
+   * 🔴 **⛔ 不可以只藏那四顆** —— 前面那個「編輯」的組標籤也要收，
+   * 而那是 `hideEmptyGroups()` 的事（它問「裡面還有沒有東西看得見」）。
+   */
+  for (const b of document.querySelectorAll('.efBtn')) b.hidden = !sel.editMode;
+
   hideEmptyGroups();
 }
 
