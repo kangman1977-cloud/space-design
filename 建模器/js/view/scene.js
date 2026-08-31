@@ -24,6 +24,13 @@ import { EDGE_ROLE } from '../core/mesh.js';
  *
  * 單位是 cm（世界座標）。
  */
+/**
+ * 右上角座標軸每幀要問一次「畫布現在多大」。
+ * ⚠ **共用一個 `Vector2`，⛔ 不要每幀 `new`** —— 那是每秒 60 個垃圾物件，
+ * 而它的值用完就丟（鐵律四：每幀迴圈裡的東西要看清楚）。
+ */
+const _gizmoSize = new THREE.Vector2();
+
 const HOVER_VERT_R = 2.6;
 const HOVER_EDGE_R = 0.35;
 
@@ -120,6 +127,13 @@ export class SceneView {
     this._guides = null;
 
     this._fps = { acc: 0, n: 0, last: performance.now(), value: 0 };
+
+    /**
+     * 🔴 **盯著 `#stage` 本身的大小**（2026-08-31 加）——
+     * ⛔ 只靠 `window.resize` 會漏掉「工具列重排把 3D 區撐高撐矮」那一整類。
+     * 病因與後果寫在 `_watchStageSize()` 上面。
+     */
+    this._watchStageSize();
   }
 
   _buildEnvironment() {
@@ -640,8 +654,26 @@ export class SceneView {
     if (!this._axisGizmo) this._initAxisGizmo();
     const { scene: sc, cam, size: S } = this._axisGizmo;
 
-    const el = this.canvas.parentElement;
-    const w = el.clientWidth, h = el.clientHeight;
+    /**
+     * 🔴🔴 **尺寸要跟 three.js 拿，⛔ 不可以跟 DOM 拿。**
+     *
+     * ⚠ **⛔ 這裡曾經寫 `canvas.parentElement.clientWidth/Height`，而那是錯的**
+     * 【實證 2026-08-31，kang 回報「第一次進入或重整時 XYZ 被截斷」】：
+     *
+     * 畫面的尺寸有**兩端** —— ① DOM 上那個框有多大、
+     * ② **`renderer` 自己記得的畫布緩衝區有多大**。
+     * 兩者靠 `resize()` 對齊，而 `resize()` **只在 `window` 改變大小時才被叫** ——
+     * 🔴 **工具列在字型載入後重排、`#stage` 變高，`window` ⛔ 完全沒變**，
+     * 所以那一刻**兩端是不一樣的**。
+     *
+     * ⚠ **主畫面看不出來**（它填滿整個緩衝區，被 CSS 拉伸一點肉眼分不出），
+     * ⛔ 而這一組是**按像素放在角落的** —— 兩端一差，它就被推出邊界**截斷**。
+     *
+     * ✅ 正解：**問 `renderer` 它自己現在多大**。這樣⛔ 不可能對不起來。
+     * 〔鐵律二：性質由兩端決定時，只看一端 ＝ 看錯〕
+     */
+    this.renderer.getSize(_gizmoSize);
+    const w = _gizmoSize.x, h = _gizmoSize.y;
     if (!w || !h) return;
 
     /**
@@ -1607,10 +1639,41 @@ export class SceneView {
 
   // ── 畫面 ──────────────────────────────────────────
 
+  /**
+   * 🔴🔴 **盯著 `#stage` 自己的大小，⛔ 不要只靠 `window` 的 resize。**
+   *
+   * ⚠ **`window.resize` 漏掉一整類情形**：工具列**字型載入後重排**、
+   * 收合／展開、`updateBar()` 讓某一組出現或消失 ——
+   * 這些都會讓 `#stage` 變高變矮，**而 `window` 一點都沒變**。
+   *
+   * 🔴 **後果⛔ 不只是右上角那組被截斷**（那只是最明顯的症狀）：
+   * 畫布的緩衝區停在舊尺寸，被 CSS 拉伸到新尺寸 ——
+   * **整個 3D 畫面會微微模糊，而且⛔ 沒有任何徵兆提示你**。
+   *
+   * ⭐ `ResizeObserver` 是這件事的正解：它盯的是**那個元素本身**，
+   * ⛔ 不是視窗。〔又一次「兩端要對齊，就別讓它們各走各的」〕
+   *
+   * ⚠ 舊瀏覽器沒有 `ResizeObserver` 的話就**安靜跳過** ——
+   * `window.resize` 那條路還在，⛔ 不會比現在更糟。
+   */
+  _watchStageSize() {
+    const el = this.canvas.parentElement;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    this._stageRO = new ResizeObserver(() => this.resize());
+    this._stageRO.observe(el);
+  }
+
   resize() {
     const el = this.canvas.parentElement;
     const w = el.clientWidth, h = el.clientHeight;
     if (!w || !h) return;
+    /**
+     * ⚠ **⛔ 尺寸沒變就不要動** —— `ResizeObserver` 會在每次版面變動時叫，
+     * 而 `setSize()` 會重建繪圖緩衝區。⛔ 不擋的話收合工具列那一下
+     * 會白白重建好幾次。〔鐵律四〕
+     */
+    this.renderer.getSize(_gizmoSize);
+    if (_gizmoSize.x === w && _gizmoSize.y === h) return;
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
     if (this.isOrtho) this._fitOrtho();
