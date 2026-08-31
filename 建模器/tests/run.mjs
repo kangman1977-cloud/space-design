@@ -12034,6 +12034,83 @@ section('內建鋼筆：錨點與把手 → 輪廓');
      * 　留了三倍餘裕；真的哪天超過 0.1%，那就是別的地方壞了。
      */
   }
+
+  // ═══════════════════════════════════════════════════
+  //  🔴 加厚後轉成網格（2026-08-30，kang 問出來的）
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 🔴🔴 ㉑ **把板厚烤進網格 —— 而體積要對得起來。**
+   *
+   * 〔kang 2026-08-30：「鈑件厚度並不受網格的控制」〕
+   * ⭐ **`shell()` 的中面偏移有一個好性質**（它自己的檔頭寫著）：
+   * **體積精確等於「面積 × 厚度」** —— 所以這一組**可以用數學對答案**，
+   * ⛔ 不必靠眼睛看。
+   *
+   * 🔴 **第 ⑥ 項是這一組最值錢的**：它把「展開會攤成【盒子】」
+   * **釘成事實**，⛔ 免得日後有人把它當成 bug 去「修」。
+   * ⚠ AI 一開始說「展開就走不了」——**那是推論而且是錯的**，
+   * 是 kang 質疑「變成網格後我如果分片，不也是可以展開？」才量出真相。
+   */
+  {
+    const ioM = await import('../js/core/io.js');
+    const partM = await import('../js/unfold/part.js');
+    const rulesM = await import('../js/unfold/rules.js');
+    const W = 100, D = 60, T = 1;
+    const mkPlate = () => new ioM.ModelObject({ name: '平板', kind: ioM.KIND.SHEET,
+      src: { type: 'plate', w: W, d: D, segW: 1, segD: 1 }, thickness: T });
+
+    const o = mkPlate();
+    eq('㉑ 加厚前是一張紙：⛔ 不封閉', o.mesh().isClosed(), false);
+    near('★ 　 　 而且體積是 0（一張紙沒有體積）', o.mesh().volume(), 0, 1e-9);
+
+    const r = o.bakeShelled();
+    ok('★ ② 加厚成功', r.ok, JSON.stringify(r));
+    eq('★★ ③ 之後 src 變成 mesh', o.src.type, 'mesh');
+    ok('★★ 　 　 而且【封閉】了（⛔ 不封閉的話 3D 列印會擋）', o.mesh().isClosed());
+    /** 🔴 這一項是可以自己乘的：100 × 60 × 1 */
+    near('★★ ④ 體積 ＝ 面積 × 板厚 ＝ 100×60×1', o.mesh().volume(), W * D * T, 0.5);
+
+    /** ⚠ 兩個邊界都要擋下來【並且講原因】，⛔ 不可以安靜地什麼都不做 */
+    const z = mkPlate(); z.thickness = 0;
+    const rz = z.bakeShelled();
+    ok('★ ⑤ 板厚 0 → 擋下來', !rz.ok);
+    ok('★ 　 　 而且講得出原因', /板厚是 0/.test(rz.reason || ''), rz.reason);
+    const solid = new ioM.ModelObject({ name: '方塊', kind: ioM.KIND.SOLID,
+      src: { type: 'box', w: 10, h: 10, d: 10 }, thickness: 1 });
+    const rs = solid.bakeShelled();
+    ok('★★ 　 　 本來就封閉的實體也擋下來（⛔ 不然會做出兩個盒子）', !rs.ok);
+
+    /**
+     * ⭐ **已經按過「轉成可編輯網格」的紙，還按得到這一顆** ——
+     * 因為條件是「網格開不開放」，⛔ 不是「是不是參數物件」。
+     */
+    const c = mkPlate(); c.bake();
+    ok('★★ ⑥ 已經 bake 過的紙仍然可以加厚（條件是幾何，⛔ 不是標籤）',
+       c.bakeShelled().ok);
+
+    /**
+     * 🔴🔴 **展開⛔ 沒有「走不了」—— 攤出來的是【盒子】。**
+     * 紙：100 × 60（輪廓 4 個點）　實體：202 × 260（輪廓 12 個點）
+     * ⭐ 202 ＝ 100 ＋ 1 ＋ 1 ＋ 100（上下兩片攤開 ＋ 兩條 1 cm 的邊）
+     */
+    const box2 = p => {
+      const rr = partM.unfoldObject(p, { rule: rulesM.makeRule('paper', p.thickness) });
+      const pt = (rr.pieces || [])[0];
+      if (!pt || !pt.outline) return null;
+      const xs = pt.outline.map(q => q.x), ys = pt.outline.map(q => q.y);
+      return { w: Math.max(...xs) - Math.min(...xs),
+               h: Math.max(...ys) - Math.min(...ys), n: pt.outline.length };
+    };
+    const bPaper = box2(mkPlate());
+    const bSolid = box2(o);
+    ok('★★ ⑦ 紙展開 ＝ 那一片板本身（100 × 60、4 個點）',
+       bPaper && Math.abs(bPaper.w - W) < 0.5 && Math.abs(bPaper.h - D) < 0.5
+       && bPaper.n === 4, JSON.stringify(bPaper));
+    ok('★★ 　 　 而加厚後展開【變大而且變複雜】—— 那是盒子，⛔ 不是 bug',
+       bSolid && bSolid.w > W && bSolid.h > D && bSolid.n > 4,
+       JSON.stringify(bSolid));
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -241,6 +241,60 @@ export class ModelObject {
     return this;
   }
 
+  /**
+   * 🔴🔴 **把板厚【烤進網格】，再變成網格物件**（2026-08-30，kang 問出來的）。
+   *
+   * > **他的原話：「平板與折板確實也可以轉成網格…但鈑件厚度並不受網格的控制」**
+   *
+   * ⚠ **跟 `bake()` 的差別只有一個**：先 `shell(thickness)`。
+   * ⭐ `shell()` 是現成的 —— 畫面上顯示厚度、匯出 STL 走的都是同一支。
+   *
+   * ── 🔴 之後會變成什麼（【實證】2026-08-30 沙箱）──────────
+   * 一片 100×60、板厚 1 的平板：
+   *
+   * | | 網格 | 展開出來的 |
+   * |---|---|---|
+   * | **之前** | 2 個面、⛔ 不封閉、體積 0 | **100 × 60**（輪廓 4 個點）|
+   * | **之後** | 8 個面、封閉、體積 6000 | **202 × 260**（輪廓 12 個點）|
+   *
+   * 🔴 **展開⛔ 沒有「走不了」** —— ⚠ **只是攤出來的是【一個盒子】**：
+   * 上下各一片 100×60 ＋ 四條 1 cm 寬的邊（202 ＝ 100＋1＋1＋100）。
+   * ⭐ **那⛔ 不是壞掉** —— 想做「用紙板組的中空扁盒」的話，那正是要的東西。
+   * 〔⚠ AI 一開始說「展開走不了」，那是**推論**；是 kang 質疑
+   * 　「變成網格後我如果分片，不也是可以展開？」才量出真相〕
+   *
+   * ── ⭐ ⛔ 不必改 `kind`、也⛔ 不必清 `thickness` ──────────
+   * 畫面（`scene.js` 的 `_shellThickness()`）與匯出（`exportPanel.js`）
+   * **判的都是 `mesh.isClosed()`，⛔ 不是 `kind` 這個標籤** ——
+   * 而 `shell()` 出來的**是封閉的**，所以**⛔ 不會被加厚第二次**。
+   * 〔坑第 8、30 條：判斷依據用**幾何事實**，⛔ 不用使用者可改的標籤〕
+   *
+   * @returns {{ok:boolean, reason?:string, volume?:number, faces?:number}}
+   */
+  bakeShelled() {
+    const t = Number(this.thickness) || 0;
+    if (t <= 1e-6) {
+      return { ok: false,
+        reason: '板厚是 0 —— 先把上面的「板厚」填一個大於 0 的數字' };
+    }
+    const m = this.mesh();
+    /**
+     * ⚠ **封閉的東西本來就有厚度，再加厚只會多畫一層看不見的內殼** ——
+     * 【實證見 `exportPanel.js` 檔頭】用標籤判斷會做出**兩個互不相連的盒子**。
+     */
+    if (m.isClosed()) {
+      return { ok: false,
+        reason: '這個物件本來就是封閉的實體，⛔ 不必加厚 —— 直接按「轉成可編輯網格」' };
+    }
+    let s;
+    try { s = m.shell(t); }
+    catch (e) { return { ok: false, reason: '加厚失敗：' + (e.message || String(e)) }; }
+    this.src = { type: 'mesh' };
+    const r = mergeCoplanarFaces(s);
+    this._mesh = r.ok ? r.mesh : s;
+    return { ok: true, volume: this._mesh.volume(), faces: this._mesh.faces.length };
+  }
+
   matrix() {
     return new THREE.Matrix4().compose(
       this.pos,
