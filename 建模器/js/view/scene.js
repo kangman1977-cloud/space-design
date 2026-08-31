@@ -655,6 +655,20 @@ export class SceneView {
 
     const M = 12;                        // 離角落的距離
     const r = this.renderer;
+    /**
+     * 🔴🔴 **`autoClear` 一定要先關掉。**
+     *
+     * ⚠ 它預設是 `true`，意思是「每次 `render()` 之前把畫布清乾淨」——
+     * 而這是**第二次** `render()`，⛔ 前一次剛畫好的主畫面就在那裡。
+     * ⇒ ⛔ 不關的話，剪裁區域的**顏色也會被清掉**，
+     * 右上角會變成一塊【不透明的黑方塊】，像貼上去的貼紙。
+     *
+     * 🔴 **`clearDepth()` 擋不住這件事** —— 它只清深度。
+     * ✅ 正解是：**關掉自動清除 → 自己只清深度 → 畫**。
+     * 〔實證 2026-08-31：AI 上傳後自己開線上版截圖看到那塊黑底〕
+     */
+    const autoClearWas = r.autoClear;
+    r.autoClear = false;
     r.setScissorTest(true);
     r.setViewport(w - S - M, h - S - M, S, S);
     r.setScissor(w - S - M, h - S - M, S, S);
@@ -662,6 +676,7 @@ export class SceneView {
     r.render(sc, cam);
     r.setScissorTest(false);
     r.setViewport(0, 0, w, h);           // 🔴 一定要還原，否則下一幀畫錯地方
+    r.autoClear = autoClearWas;          // 🔴 也要還原，否則主畫面不再被清
   }
 
   // ── 參考線 ────────────────────────────────────────
