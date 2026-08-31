@@ -54,23 +54,37 @@ if %errorlevel%==0 goto usenode
 
 goto nothing
 
+:: ==========================================================
+::  2026-08-31: use 平板伺服器.py instead of http.server
+::  WHY: python -m http.server sends NO Cache-Control, so the
+::  browser guesses (10%% of file age). Files edited often came
+::  back fresh, files edited rarely stayed CACHED FOR HOURS.
+::  The iPad got a NEW main.js with an OLD scene.js -> buttons
+::  worked, nothing was drawn, and NO error appeared.
+::  Full write-up: 版控工具\平板伺服器.py  (header comment)
+:: ==========================================================
+
 :usepy
-echo Starting server with Python (py)...
+echo Starting server with Python (py) - CACHING DISABLED...
 echo.
-py -3 -m http.server %PORT% --bind 0.0.0.0
+py -3 "%~dp0平板伺服器.py" %PORT%
 goto done
 
 :usepython
-echo Starting server with Python...
+echo Starting server with Python - CACHING DISABLED...
 echo.
-python -m http.server %PORT% --bind 0.0.0.0
+python "%~dp0平板伺服器.py" %PORT%
 goto done
 
 :usenode
 echo Starting server with Node (npx serve)...
 echo First run may take a minute to download the tool.
 echo.
-npx --yes serve -l %PORT%
+echo   WARNING: this fallback does NOT disable caching.
+echo   If the tablet shows stale behaviour, install Python
+echo   and run this file again - see 版控工具\平板伺服器.py
+echo.
+npx --yes serve -l %PORT% --no-clipboard
 goto done
 
 :nothing

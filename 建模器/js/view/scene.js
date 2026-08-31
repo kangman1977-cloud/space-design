@@ -579,55 +579,35 @@ export class SceneView {
       push(at(0, -R), at(0, R));         // 十字：直
     };
 
-    /**
-     * 🔴🔴 **【診斷用，2026-08-31】短十字 ＋ 一顆點。**
-     *
-     * ⚠ **⛔ 這不是功能，是為了找出「平板看不到參考線」的病因。**
-     * 【實測】kang 的平板：`doc.guides` 裡確實有那條線（提示說加了、
-     * 再按一次說已經有了），**而畫面上什麼都沒有**；同一台平板上
-     * **鋼筆的綠色預覽正常** —— 而鋼筆跟參考線**走同一支
-     * `_buildLineOverlay()`、同樣 `depthTest:false`**。
-     *
-     * ⇒ 兩者只剩三個差異：`renderOrder`（5 vs 7）、**線長（600cm vs 幾十）**、
-     *   **我沒傳「點」**。⭐ 所以這一版把三種東西同時畫出來，
-     *   讓一眼就分辨得出是哪一種：
-     *
-     * | 平板上看到什麼 | 病因 |
-     * |---|---|
-     * | 只有點 | **線**這個圖元在這台裝置上出問題 |
-     * | 看得到短十字、看不到大框 | **長度** —— 600cm 的線被驅動裁掉了 |
-     * | 三種都看不到 | 整組⛔ 沒進場景／被關掉（提示裡的數字會說） |
-     *
-     * 🔴 **病因確定之後這一段要拿掉或收斂**，⛔ 不要留著當功能。
-     */
-    const SHORT = 25;                    // 短十字的半長，單位 cm
-    const dots = [];
-    const probe = at => {
-      push(at(-SHORT, 0), at(SHORT, 0));
-      push(at(0, -SHORT), at(0, SHORT));
-      dots.push(at(0, 0));
-    };
-
-    for (const v of g.x || []) { const at = (u, w) => V(v, w, u); frame(at); probe(at); }
-    for (const v of g.y || []) { const at = (u, w) => V(u, v, w); frame(at); probe(at); }
-    for (const v of g.z || []) { const at = (u, w) => V(u, w, v); frame(at); probe(at); }
+    for (const v of g.x || []) frame((u, w) => V(v, w, u));
+    for (const v of g.y || []) frame((u, w) => V(u, v, w));
+    for (const v of g.z || []) frame((u, w) => V(u, w, v));
 
     if (!seg.length) return;
-    this._guides = this._buildLineOverlay('guides', seg, dots, 0x2ad4d4);
+    this._guides = this._buildLineOverlay('guides', seg, null, 0x2ad4d4);
     if (!this._guides) return;
     /**
      * ⚠ **`renderOrder` 要比另外那幾種預覽低**（它們是 7／8）——
      * 參考線是**一直都在**的東西，⛔ 不可以蓋住「你現在正在做的那件事」。
      */
     this._guides.traverse(o => { if (o.renderOrder) o.renderOrder = 5; });
-    /** 【診斷用】讓介面講得出「到底畫了什麼進去」 */
-    this._guideStats = {
-      條: (g.x || []).length + (g.y || []).length + (g.z || []).length,
-      段: seg.length / 2,
-      點: dots.length,
-      進場景: !!this._guides.parent,
-      看得見: this.guidesVisible
-    };
+
+    /**
+     * 🔴🔴 **⛔ 這裡曾經有一段「診斷用」的短十字 ＋ 一顆點，2026-08-31 拿掉了。**
+     *
+     * ⚠ 它要查的病因**根本不存在**：kang 的平板看不到參考線、電腦正常，
+     * 而**真正的原因是本機測試伺服器的快取** ——
+     * 平板同時拿到**新的 `main.js`** 與**舊的 `scene.js`**，
+     * 所以按鈕、提示、資料全對，而**畫線那一半的函式根本還不存在**。
+     * ⭐ 病因與修法寫在 `版控工具\平板伺服器.py` 的檔頭。
+     *
+     * 🔴 **留下來的教訓⛔ 不是「診斷碼沒用」** —— 它問對了問題
+     * （點畫得出來嗎／短線畫得出來嗎），只是**答案在別的層**。
+     * ⚠ **真正該先問的是「兩邊跑的是不是同一份程式」** ——
+     * 而那個問題**只花了一次「換成線上版試試」就答完了**。
+     * 〔鐵律五：規格上合法 ≠ 別人的軟體讀得動；這一次是
+     * 　「原始碼是對的 ≠ 那台裝置拿到的是這份原始碼」〕
+     */
     /**
      * ⚠ **⛔ 不要再 `scene.add()` 一次** —— `_buildLineOverlay()` 自己
      * 最後一行就加進場景了。多加一次 three.js ⛔ 不會報錯，
@@ -636,11 +616,7 @@ export class SceneView {
     this._guides.visible = this.guidesVisible;
   }
 
-  /** 【診斷用，2026-08-31】上一次畫了什麼進去。⛔ 病因確定之後拿掉 */
-  guideStats() { return this._guideStats || null; }
-
   clearGuides() {
-    this._guideStats = null;
     if (!this._guides) return;
     this.scene.remove(this._guides);
     this._guides.traverse(o => {
