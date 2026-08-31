@@ -4373,22 +4373,42 @@ function updateBar() {
  * ⚠ **N 要在 `hideEmptyGroups()` 之後算** —— 那一支才剛決定完誰看得見。
  */
 function updateHandles() {
+  /**
+   * ⚠ **狀態用【兩個圖示互換】表示**（實心＝展開中、空心＝收起來）——
+   * ⛔ 不用 `.on` 藍底：那在直條上的意思是「這個工具開著」，會混淆。
+   * 🔴 **⛔ 也不要用 `textContent`／`innerHTML` 去換圖示** ——
+   * 那會把 svg 洗掉，而且不會報錯〔今天已經踩過一次〕。
+   */
+  const face = (id, off) => {
+    const b = $(id);
+    b.querySelector('.ico-on').hidden = off;
+    b.querySelector('.ico-off').hidden = !off;
+  };
+
   const barOff = $('bar').hidden;
   const n = [...document.querySelectorAll('#bar .grp')].filter(g => !g.hidden).length;
+  face('barToggle', barOff);
   /**
-   * 🔴 **展開時它是右上角一顆小鈕（絕對定位，⛔ 不佔高度）；
-   * 收起來時才變成滿版的一條**（kang 2026-08-31 提的）——
-   * ⭐ 這樣「想看工具列」的時候⛔ 不必為了那顆鈕付 28px。
+   * 🔴🔴 **收著時角上要有一個數字 —— ⛔ 這不是裝飾。**
+   *
+   * 第 2、4 段之後那條工具列是「**會隨選取長出東西**」的：
+   * 收著的時候你選了一個面，`擠出` 確實出現了，**⛔ 但你看不到** ——
+   * ⚠ **症狀跟壞掉一模一樣**（坑第 21 條）。
+   * ⭐ 而直條的字只放得下 50px，「工具列 12」剛好爆掉 ⇒ 改用角標。
+   * 〔kang 2026-08-31 在三個做法裡選的〕
    */
-  $('barToggle').classList.toggle('float', !barOff);
-  $('barToggle').textContent = barOff ? `▸ 工具列　${n} 組可用` : '▴';
+  const badge = $('barToggle').querySelector('.badge');
+  badge.hidden = !(barOff && n > 0);
+  if (!badge.hidden) badge.textContent = String(n);
   $('barToggle').title = barOff
-    ? `工具列收起來了 —— 目前有 ${n} 組可以用。按一下展開`
-    : '按一下把工具列收起來（畫面會變大）';
+    ? `工具列收起來了 —— 目前有 ${n} 組可以用（角上那個數字）。按一下展開`
+    : '按一下把工具列收起來（畫面會變高）';
 
   const panelOff = $('panel').hidden;
-  $('panelToggle').textContent = panelOff ? '‹' : '›';
-  $('panelToggle').title = panelOff ? '展開右邊的物件面板' : '收合右邊的物件面板（畫面會變大）';
+  face('panelToggle', panelOff);
+  $('panelToggle').title = panelOff
+    ? '展開右邊的物件面板'
+    : '收合右邊的物件面板（畫面會變寬 300px）';
 }
 
 /**

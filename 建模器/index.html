@@ -28,9 +28,6 @@ html, body {
 /* ══ 工具列 ════════════════════════════════════════ */
 #bar {
   flex: none; z-index: 20;
-  /* 🔴 右邊留給折疊鈕（它是絕對定位的，⛔ 不佔高度）——
-     ⛔ 不預留的話最後一組會跑到它底下 */
-  padding-right: 44px;
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
   padding-top: calc(8px + env(safe-area-inset-top));
@@ -88,36 +85,6 @@ select {
    ⭐ 但一併寫上去 —— 這個專案已經在同一個坑上跌過兩次。 */
 #bar[hidden], #panel[hidden] { display: none; }
 
-.handle {
-  flex: none; padding: 0; border-radius: 0;
-  background: #20232a; border: 0; border-bottom: 1px solid #3a3f48;
-  color: #8b93a1; font-family: inherit; font-size: 11.5px;
-  cursor: pointer; user-select: none; -webkit-user-select: none;
-  height: 28px;                 /* 觸控折衷：滿版寬的橫條，橫向極好按 */
-}
-.handle:hover { background: #262a32; color: #cfd6e0; }
-
-/* 🔴🔴 **工具列【展開】的時候，那顆鈕⛔ 不可以佔一整條**（kang 2026-08-31）。
-   ⭐ 做法：**絕對定位在工具列右上角** —— `#app` 是 `position:fixed`，
-   所以它就是定位的參考框。⇒ **⛔ 完全不佔高度。**
-
-   ⚠ **⛔ 不要改成「當成一個 .grp 塞進工具列」** —— 那會佔【寬度】，
-   在平板上可能把最後一組擠到下一行 → **多花 39px，比省下的 28px 還糟**。
-   〔這是量過才選的，⛔ 不是隨手挑的做法〕 */
-.handle.float {
-  position: absolute; top: 5px; right: 5px; z-index: 21;
-  width: 34px; height: 26px; border: 1px solid #3a3f48; border-radius: 6px;
-  font-size: 13px;
-}
-/* 直的那一條：貼在面板左緣，⭐ 高度滿版所以很好按，寬度可以窄。
-   ⚠ ⛔ 不要加 `writing-mode: vertical-rl` —— 那會把 `›` 轉成【朝下】，
-   而它要講的是「往右收 ／ 往左開」，方向就講反了。 */
-.handle.vert {
-  width: 24px; height: auto; align-self: stretch;
-  border-bottom: 0; border-left: 1px solid #3a3f48;
-  font-size: 15px;
-}
-
 /* ═══ 左側工具直條（2026-08-31，介面編排第 1 段）═══════════════
    ⚠ 寬度 66px 是【量過才選的】：三案（文字 88／圖示 44／圖示＋小字 66）
      在 1024px 平板上只差 4.3%，⛔ 所以不是為了省寬度選的，是為了好認。
@@ -128,7 +95,12 @@ select {
      （6 上 ＋ 18 圖示 ＋ 2 間距 ＋ 12 字 ＋ 6 下 ≈ 46px）
 
    ⚠ 直條可以捲動（overflow-y）—— 平板【橫放】時高度只有 768，
-     ⛔ 不給捲的話最下面那顆會被切掉而且完全看不出來。 */
+     ⛔ 不給捲的話最下面那顆會被切掉而且完全看不出來。
+
+   🔴🔴 **⛔ 這一整塊 2026-08-31 被我的清理腳本誤刪過一次**
+   （「從 .handle 刪到 #stage」，而它剛好夾在中間）——
+   ⚠ **大括號平衡、四道機械檢查全過，是【看差異】才抓到的。**
+   〔跟 2026-08-20 @media print 同一類：平衡⛔ 不代表對〕 */
 #rail {
   flex: none; width: 66px; z-index: 15;
   background: #24272e; border-right: 1px solid #3a3f48;
@@ -150,6 +122,18 @@ select {
 /* ⚠ 圖示要跟著文字一起變色（.on 是白字藍底）—— currentColor 就是為了這個 */
 #rail .tool .lab { display: block; }
 
+/* 🔴 介面控制推到直條最底下 —— ⛔ 跟工具用分隔線隔開（見 #rail 那則註解） */
+#rail hr.push { margin-top: auto; }
+#rail .tool { position: relative; }
+#rail .tool .badge {
+  position: absolute; top: 3px; right: 5px;
+  min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px;
+  background: #2f6fd0; color: #fff; font-size: 9.5px; line-height: 15px;
+  text-align: center; font-weight: 600;
+}
+/* ⚠ 同一個坑的預防針：badge 沒有寫 display，本來就收得起來，但這個專案
+   已經在「作者樣式蓋過 hidden」上跌過兩次 —— ⭐ 先寫再說。 */
+#rail .badge[hidden], #rail .ico[hidden] { display: none; }
 #stage { flex: 1 1 auto; position: relative; min-width: 0; }
 #cv { display: block; width: 100%; height: 100%; touch-action: none; }
 
@@ -988,21 +972,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     </div>
   </div>
 
-  <!--
-    🔴🔴 折疊條（2026-08-31，kang 提的小優化）。
-
-    ⭐ **收起來之後它要【講話】** —— 因為第 2、4 段之後那條工具列是
-    「**會隨選取長出東西**」的：收著的時候你選了一個面，`擠出` 確實出現了，
-    ⛔ 但你看不到。⇒ ⚠ **症狀跟壞掉一模一樣**（坑第 21 條）。
-    ⇒ 所以收起來時它寫「▸ 工具列　N 組可用」，**N 隨選取變**。
-    〔kang 2026-08-31 在三個做法裡選的；⛔ 沒選「自動展開」——
-    　 明明是他收起來的，自己跳回來還會讓畫面跳一下〕
-
-    ⚠ 高度 28px 是**觸控目標**的折衷（建議 44px，但這是一條【滿版寬】的
-    橫條，橫向極好按）—— ⛔ 不是隨手填的數字。
-  -->
-  <button id="barToggle" class="handle" title="收合／展開上面的工具列">▾ 工具列</button>
-
   <div id="main">
   <!--
     🔴🔴 左側工具直條（2026-08-31，介面編排第 1 段）。
@@ -1034,6 +1003,30 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="mMove" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
       <button id="mRot" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>
       <button id="mScale" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h9v9H4z"/><path d="M13.5 13.5L21 21"/><path d="M21 15.5V21h-5.5"/></svg><span class="lab">縮放</span></button>
+    <!--
+      🔴🔴 **介面控制放在直條【最底下】，用分隔線隔開**（kang 2026-08-31）。
+
+      ⚠ **⛔ 它們不是建模工具** —— 上面那 8 顆是「主工具（進入一個狀態）」，
+      這兩顆管的是「**版面**」。混在一起會把第 1～4 段剛立好的定位弄糊，
+      ⭐ 所以用 `<hr>` 隔開、而且推到最底（`margin-top:auto`）。
+
+      🔴 **為什麼從螢幕頂端搬下來**（kang 平板實測講的）：
+      原本收起來時是一條貼在**螢幕最上緣**的細條 ——
+      **那裡是系統時間與下拉手勢的地盤，平板上很難點**。
+      ⚠ **⛔ 桌機瀏覽器量不出這件事**，是他拿平板用才發現的。
+
+      ⭐ 搬下來還多賺兩件：收著時那 28px 的細條**完全不存在了**，
+      右側那條 24px 也一起收掉。
+
+      🔴 **狀態用【兩個圖示互換】表示**（實心＝展開中、空心＝收起來）——
+      ⛔ 不用 `.on` 藍底：那在直條上的意思是「這個工具開著」，會混淆。
+      ⚠ 而且是**兩個 svg 互相 `hidden`**，⛔ 不用 `innerHTML` 換
+      〔今天的教訓：對含 svg 的按鈕寫 `textContent` 會把圖示洗掉〕。
+    -->
+    <hr class="push">
+      <button id="barToggle" class="tool" title="收合／展開上面的工具列。⭐ 收起來時角上的數字＝現在有幾組可以用"><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v5H3z" fill="currentColor" stroke="none"/><path d="M3 5h18v14H3z"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M3 5h18v14H3z"/><path d="M3 10h18" stroke-dasharray="2.4 2.2"/></svg><span class="lab">工具列</span><span class="badge" hidden>0</span></button>
+      <button id="panelToggle" class="tool" title="收合／展開右邊的物件面板（畫面會變寬 300px）"><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h7v16h-7z" fill="currentColor" stroke="none"/><path d="M3 4h18v16H3z"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M3 4h18v16H3z"/><path d="M14 4v16" stroke-dasharray="2.4 2.2"/></svg><span class="lab">面板</span><span class="badge" hidden>0</span></button>
+
   </div>
     <div id="stage">
       <canvas id="cv"></canvas>
@@ -1062,13 +1055,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       </div>
     </div>
 
-    <!--
-      🔴 右側面板的折疊條。⭐ 它是這次收合裡**買最多的一塊**：
-      面板 300px，在平板（1024）上吃掉 **29%** 的寬度，
-      而大部分時間使用者只是在看模型、⛔ 不在改參數。
-      ⚠ 而它**沒有工具列那個問題** —— 面板⛔ 不會「突然長出東西要你注意」。
-    -->
-    <button id="panelToggle" class="handle vert" title="收合／展開右邊的物件面板">›</button>
     <div id="panel"></div>
   </div>
 
