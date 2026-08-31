@@ -125,6 +125,12 @@ export class SceneView {
      */
     this.guidesVisible = true;
     this._guides = null;
+    /**
+     * 拖曳中「**現在正吸著這幾條**」的高亮（第 2 階段，2026-09-01）。
+     * ⚠ 它是**另一層疊上去的線**，⛔ 不是把 `_guides` 改色 ——
+     * 那一份是整批一個材質，改色會**三條線一起變**。
+     */
+    this._guidesHot = null;
 
     this._fps = { acc: 0, n: 0, last: performance.now(), value: 0 };
 
@@ -734,11 +740,15 @@ export class SceneView {
    * 切一刀那個是**短暫的**，而且兩者形狀完全不同
    * （切一刀是模型表面上的一圈，參考線是貫穿場景的一個平面框）。
    */
-  syncGuides(doc) {
-    this.clearGuides();
-    const g = doc && doc.guides;
-    if (!g) return;
-
+  /**
+   * 把 `{x:[…], y:[…], z:[…]}` 變成一串 `LineSegments` 用的點。
+   *
+   * ⚠ **抽出來是刻意的**：吸中高亮（`setGuideHot`）畫的是**同樣形狀
+   * 的線、只是顏色不同**，⛔ 不可以再抄一份 —— 兩份遲早會漂，
+   * 而症狀是「亮起來的那條跟原本那條差了一點點」。
+   * 〔坑第 31 條：與其讓兩條路對齊，不如只留一條路〕
+   */
+  _guideSegments(g) {
     const R = 300;                       // ＝ 地板 600cm 的一半
     const seg = [];                      // ⚠ LineSegments：每兩點一段
     const push = (a, b) => { seg.push(a, b); };
@@ -757,9 +767,18 @@ export class SceneView {
       push(at(0, -R), at(0, R));         // 十字：直
     };
 
-    for (const v of g.x || []) frame((u, w) => V(v, w, u));
-    for (const v of g.y || []) frame((u, w) => V(u, v, w));
-    for (const v of g.z || []) frame((u, w) => V(u, w, v));
+    for (const v of (g && g.x) || []) frame((u, w) => V(v, w, u));
+    for (const v of (g && g.y) || []) frame((u, w) => V(u, v, w));
+    for (const v of (g && g.z) || []) frame((u, w) => V(u, w, v));
+    return seg;
+  }
+
+  syncGuides(doc) {
+    this.clearGuides();
+    const g = doc && doc.guides;
+    if (!g) return;
+
+    const seg = this._guideSegments(g);
 
     if (!seg.length) return;
     this._guides = this._buildLineOverlay('guides', seg, null, 0x2ad4d4);
@@ -795,6 +814,7 @@ export class SceneView {
   }
 
   clearGuides() {
+    this.setGuideHot(null);
     if (!this._guides) return;
     this.scene.remove(this._guides);
     this._guides.traverse(o => {
@@ -812,7 +832,82 @@ export class SceneView {
   setGuidesVisible(on) {
     this.guidesVisible = !!on;
     if (this._guides) this._guides.visible = this.guidesVisible;
+    if (this._guidesHot) this._guidesHot.visible = this.guidesVisible;
     return this.guidesVisible;
+  }
+
+  /**
+   * 🔴 **拖曳中把「現在正吸著」的那幾條亮起來**（kang 2026-09-01 選的）。
+   *
+   * ── ⚠ 為什麼一定要有 ────────────────────────────
+   * 沒有回饋的話，「**我對準了**」跟「**剛好很接近**」在畫面上
+   * 長得一模一樣 —— 而那正是使用者要這個功能的唯一理由。
+   * 〔鐵律三：做介面與回饋 —— 讓兩個東西互相對得起來〕
+   *
+   * ── 顏色：⛔ 不換色相，只提亮 ──────────────────────
+   * 亮青 `0x9ffcfc` ＝ 同一條青色線的「亮版」。
+   * ⚠ **⛔ 不要換成別的顏色**（例如橘）：換色相會讓人以為
+   * 那是**另一種東西**，而它就是原本那條線。
+   *
+   * @param {Array<{ax:string, v:number}>|null} hits 吸中的線；空或 null ＝ 清掉
+   */
+  setGuideHot(hits) {
+    if (this._guidesHot) {
+      this.scene.remove(this._guidesHot);
+      this._guidesHot.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      this._guidesHot = null;
+    }
+    if (!hits || !hits.length) return;
+
+    const g = { x: [], y: [], z: [] };
+    for (const h of hits) if (g[h.ax]) g[h.ax].push(h.v);
+
+    const seg = this._guideSegments(g);
+    if (!seg.length) return;
+
+    this._guidesHot = this._buildLineOverlay('guidesHot', seg, null, 0x9ffcfc);
+    if (!this._guidesHot) return;
+    /**
+     * ⚠ 比 `_guides` 的 5 高一階，才蓋得住底下那條原本的線；
+     * 但仍然低於「你現在正在做的那件事」那幾種預覽（7／8）。
+     */
+    this._guidesHot.traverse(o => { if (o.renderOrder) o.renderOrder = 6; });
+    this._guidesHot.visible = this.guidesVisible;
+  }
+
+  /**
+   * **一段世界長度在螢幕上是幾個像素**（給「容許距離用螢幕像素」用）。
+   *
+   * 🔴 **⛔ 不可以用公分當容許值**：拉遠了就吸不到、拉近了到處都在吸，
+   * 而使用者⛔ 不會把「吸不到」跟「我把畫面縮小了」連在一起。
+   *
+   * ⚠ **算法照 `_syncMeasureLabelScale()` 那一段**（它又是照抄
+   * TransformControls 的）—— ⭐ 兩處用同一個式子，⛔ 不要另發明一個。
+   *
+   * @param {THREE.Vector3} [point] 透視相機要看深度；正交相機用不到
+   * @returns {number} 像素／世界單位。量不出來（畫面高度 0）回 0
+   */
+  pxPerWorld(point) {
+    const el = this.canvas.parentElement;
+    const h = (el && el.clientHeight) || 0;
+    if (!h) return 0;
+
+    const cam = this.camera;
+    let worldH;
+    if (cam.isOrthographicCamera) {
+      worldH = (cam.top - cam.bottom) / cam.zoom;
+    } else {
+      const camPos = new THREE.Vector3();
+      cam.getWorldPosition(camPos);
+      const dist = point ? camPos.distanceTo(point)
+        : camPos.distanceTo(this.orbit.target);
+      worldH = 2 * dist * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / cam.zoom;
+    }
+    if (!(worldH > 1e-9)) return 0;
+    return h / worldH;
   }
 
   /** 把鏡頭拉到看得見全部東西的位置 */

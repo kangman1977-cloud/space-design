@@ -23,6 +23,7 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds } from '../core/align.js';
+import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
          remapElements }
@@ -100,6 +101,21 @@ const HOVER_FACE_MAX = 3500;
  */
 const EDGE_GRAB_PX = 14;
 const EDGE_GRAB_PX_TOUCH = 26;
+
+/**
+ * 🔴 **參考線吸附的容許距離，單位 px**（第 2 階段，2026-09-01）。
+ *
+ * ⚠ **⛔ 這個數字是我挑的，⛔ 不是量出來的** —— 挑 8 的依據是
+ * 它跟上面 `TAP_MOVE`（8px，「這算輕點還是拖」的門檻）同一個量級，
+ * 而那一個是 kang 實測過手感的。
+ * 🔴 **⏳ 要請 kang 實測是不是「太黏」或「吸不到」再調** ——
+ * ⛔ 不要為想像中的數字辯護〔鐵律：推論不是權威事實〕。
+ *
+ * ⭐ **⛔ 桌機與觸控⛔ 沒有分兩個值**（跟 `EDGE_GRAB_PX` 不一樣）：
+ * 那一個要的是「手指點得到一條細線」，而這一個是
+ * **拖到附近會不會自己貼上去** —— 手指粗細跟它無關。
+ */
+const GUIDE_SNAP_PX = 8;
 
 /**
  * 🔴 **「顯示點」一次最多標幾個點。**
@@ -463,6 +479,15 @@ export class Selection {
     this.setSnap(1);              // 移動 1cm
     this.setSnapRot(15);          // 旋轉 15 度
     this.setSnapScale(0.05);      // 縮放 0.05 倍
+    /**
+     * 🔴 **參考線吸附預設是【關】的**（第 2 階段，2026-09-01）。
+     * ⚠ 理由是**⛔ 沒有參考線的人不該感覺到任何改變** ——
+     * 而且它跟上面那個格距⛔ 不一樣：格距是一直都在的通用行為，
+     * 這一個是「我特地放了一條線」之後才要的。
+     */
+    this.snapGuides = false;
+    /** 上一次吸中哪幾條（⛔ 只給高亮比對用，⛔ 不是真相來源） */
+    this._guideHits = null;
 
     tc.addEventListener('dragging-changed', e => {
       v.orbit.enabled = !e.value;
@@ -650,7 +675,76 @@ export class Selection {
     if (!obj.lockScale) obj.scale.copy(node.scale);
     else node.scale.copy(obj.scale);           // 鎖住的就彈回去
 
+    /**
+     * ⚠ **順序：先寫回、再吸附。** `worldBounds(obj)` 是拿 `obj.matrix()`
+     * 去轉外框的，而 `matrix()` 讀的就是上面那三行剛寫進去的值 ——
+     * 🔴 **⛔ 不可以把吸附挪到前面**，那樣算到的會是**上一幀**的外框。
+     */
+    this._applyGuideSnap(node, obj, committing);
+
     if (this.hooks.onTransform) this.hooks.onTransform(committing);
+  }
+
+  /**
+   * 🔴 **把物件吸到參考線上**（第 2 階段，2026-09-01）。
+   *
+   * ── 吸物件的哪裡：**邊緣 ＋ 中心** ────────────────────
+   * `worldBounds(obj)` 的 `min`／`center`／`max`，每個軸各挑最近的一條。
+   * 🔴 **⛔ 絕對不可以拿 `obj.pos` 去吸** —— 網格不一定以原點為中心
+   * （折板、布林結果、陣列都可能偏一邊），拿 `pos` 對齊
+   * **畫面上看起來就會沒對齊**。〔`align.js` 檔頭已經釘死過這個坑〕
+   *
+   * ── 容許距離用**螢幕像素** ─────────────────────────
+   * 見 `scene.js` 的 `pxPerWorld()`。
+   *
+   * ⚠ **只在【移動】模式吸** —— 旋轉與縮放時外框每一幀都在變形，
+   * 吸上去會變成「東西自己抖」，而使用者⛔ 不會知道是吸附在動它。
+   */
+  _applyGuideSnap(node, obj, committing) {
+    if (!this.snapGuides || this.tc.getMode() !== 'translate') {
+      this._reportGuideHits(null);
+      return;
+    }
+    const guides = this._doc && this._doc.guides;
+    if (!guides) { this._reportGuideHits(null); return; }
+
+    const b = worldBounds(obj);
+    if (b.isEmpty()) { this._reportGuideHits(null); return; }
+
+    /** 世界單位的容許值 ＝ 像素容許值 ÷（像素／世界） */
+    const center = b.getCenter(new THREE.Vector3());
+    const pxPer = this.view.pxPerWorld ? this.view.pxPerWorld(center) : 0;
+    if (!(pxPer > 0)) { this._reportGuideHits(null); return; }
+    const tol = GUIDE_SNAP_PX / pxPer;
+
+    const { delta, hits } = guideSnapDelta(b, guides, tol);
+
+    if (delta.x || delta.y || delta.z) {
+      node.position.x += delta.x;
+      node.position.y += delta.y;
+      node.position.z += delta.z;
+      obj.pos.copy(node.position);
+    }
+
+    /**
+     * ⚠ **放手的那一下要把高亮收掉** —— 留著的話畫面上會有一條
+     * 一直亮著的線，而使用者會以為那是另一種狀態。
+     */
+    this._reportGuideHits(committing ? null : hits);
+  }
+
+  /**
+   * 通知畫面「現在吸著哪幾條」。
+   *
+   * ⚠ **⛔ 一樣就不要重送** —— `objectChange` 一秒會來幾十次，
+   * 每次都重建那幾條高亮線是「每幀迴圈裡的東西」（鐵律四），
+   * 而且畫面會閃。
+   */
+  _reportGuideHits(hits) {
+    const next = hits && hits.length ? hits : null;
+    if (sameGuideHits(this._guideHits, next)) return;
+    this._guideHits = next;
+    if (this.hooks.onGuideSnap) this.hooks.onGuideSnap(next);
   }
 
   _initPointer() {
@@ -1954,6 +2048,25 @@ export class Selection {
   setSnapScale(mult) {
     this.snapScale = mult;
     this.tc.setScaleSnap(mult > 0 ? mult : null);
+  }
+
+  /**
+   * 🔴 **吸到參考線**（第 2 階段，2026-09-01）。
+   *
+   * ── ⛔ 為什麼⛔ 不能用上面那個 `setTranslationSnap()` ────────
+   * 那是 three.js 內建的「**位移量的整數倍**」——
+   * 參考線放在 **47.3** 就永遠吸不到。
+   * ⇒ 只能掛在 `objectChange` 上自己算（見 `_applyGuideSnap`）。
+   *
+   * ── 🔴 兩個吸附同時開著時，**參考線贏**（kang 2026-09-01 拍板）──
+   * three.js 先把位移吸成 1cm 的整數倍，**我們接著再把它挪到線上** ——
+   * ⭐ 所以順序天然就是「參考線覆蓋格距」，⛔ 不必去關掉誰。
+   * ⚠ 對照組（沒選的兩個）是「格距贏」與「開一個就自動關另一個」。
+   */
+  setSnapGuides(on) {
+    this.snapGuides = !!on;
+    if (!this.snapGuides) this._reportGuideHits(null);
+    return this.snapGuides;
   }
 
   get dragging() { return !!this.tc.dragging; }

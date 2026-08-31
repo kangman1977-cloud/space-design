@@ -974,6 +974,23 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="snapNum" type="number" step="any" min="0" hidden
              title="吸附格距：直接打一個精確的數字按 Enter（移動＝cm、旋轉＝度）。打了之後左邊那幾顆就不亮了，因為你用的不是它們給的值。打 0 ＝ 關閉">
       <span id="snapNumUnit" class="unit" hidden>cm</span>
+
+      <!--
+        🔴🔴 吸到參考線（2026-09-01，參考線第 2 階段）。
+
+        ⚠ `data-sm="translate"` ＝ **只在移動模式出現** —— 旋轉與縮放時
+        外框每一幀都在變形，吸上去會變成「東西自己抖」。
+
+        ⭐ class 刻意⛔ 不是 `snapBtn`：那一群是「格距那四顆」，
+        它們是**互斥的一組值**，而這一顆是**獨立的開關**。
+        混在一起的話 syncSnapRow() 的 `Number(dataset.s) === cur` 會把它
+        當成一個值去比〔鐵律二：⛔ 不要讓兩種東西共用一條判斷〕。
+
+        🔴 兩個吸附同時開著時【參考線贏】（kang 2026-09-01 拍板）——
+        理由寫在 select.js 的 setSnapGuides 上面。
+      -->
+      <button id="snapGuide" class="snapGuideBtn" data-sm="translate" hidden
+              title="吸到參考線：拖物件時，物件的邊緣或中心靠近參考線就自動貼上去（三個軸各自吸，所以可以一次對到一個角）。⭐ 跟左邊的格距同時開著時【參考線贏】——參考線在 47.3 這種位置也吸得到。吸中的那條線會亮起來">吸到參考線</button>
     </div>
 
     <!--
@@ -1083,7 +1100,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ **第 10 顆就會爆** —— 那個數字寫在這裡，⛔ 不要憑感覺再加。
         ⚠ 而「手指按不按得到」我量不出來，要 kang 拿平板看。
       -->
-      <button id="guide" class="tool" title="參考線：在指定的座標放一條線，用來對齊排列。⭐ 三個視角【共用】—— 因為一條線在 3D 裡其實是一個平面，前視看到的直線跟上視看到的是同一條。按一下進入，選方向（X／Y／Z）＋打位置就能加。⚠ 這一階段還不能在畫面上點線、也還不會吸附"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v16M21 4v16" opacity=".45"/><path d="M9 2v20" stroke-dasharray="3 2.4"/><path d="M2 15h20" stroke-dasharray="3 2.4"/><circle cx="9" cy="15" r="1.6" fill="currentColor" stroke="none"/></svg><span class="lab">參考線</span></button>
+      <button id="guide" class="tool" title="參考線：在指定的座標放一條線，用來對齊排列。⭐ 三個視角【共用】—— 因為一條線在 3D 裡其實是一個平面，前視看到的直線跟上視看到的是同一條。按一下進入，選方向（X／Y／Z）＋打位置就能加。⭐ 要讓物件吸上去，去「吸附」那一組按「吸到參考線」。⚠ 這一階段還不能在畫面上點線"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v16M21 4v16" opacity=".45"/><path d="M9 2v20" stroke-dasharray="3 2.4"/><path d="M2 15h20" stroke-dasharray="3 2.4"/><circle cx="9" cy="15" r="1.6" fill="currentColor" stroke="none"/></svg><span class="lab">參考線</span></button>
     <hr>
       <button id="mMove" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
       <button id="mRot" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>

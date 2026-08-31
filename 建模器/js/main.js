@@ -148,6 +148,14 @@ const sel = new Selection(view, {
     if (committing) commit('變換物件');
     else updateBar();
   },
+  /**
+   * 🔴 **拖曳中「現在正吸著哪幾條參考線」→ 把它們亮起來**（2026-09-01）。
+   *
+   * ⚠ **⛔ 這裡不 toast** —— `objectChange` 一秒會來幾十次，
+   * 而拖曳的過程中一直跳訊息會蓋掉畫面也吵。
+   * ⭐ 回饋走**畫面**（線變亮），⛔ 不走文字。〔kang 2026-09-01 選的〕
+   */
+  onGuideSnap: hits => view.setGuideHot(hits),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
   onEditPick: (el, info) => editPick(el, info),
@@ -3692,6 +3700,15 @@ function syncSnapRow() {
     b.classList.toggle('on', mine && Number(b.dataset.s) === cur);
   }
 
+  /**
+   * 🔴 **`吸到參考線` 跟那四顆走同一條顯示規則，但⛔ 不是同一群。**
+   * 它是**獨立的開關**，⛔ 不是「格距的其中一個值」——
+   * 所以 `on` 問的是 `sel.snapGuides`，⛔ 不是跟 `cur` 比大小。
+   */
+  const sg = $('snapGuide');
+  sg.hidden = off || sg.dataset.sm !== m;
+  sg.classList.toggle('on', !!sel.snapGuides);
+
   const showNum = !off && !!k && k.num;
   $('snapNum').hidden = !showNum;
   $('snapNumUnit').hidden = !showNum;
@@ -3709,6 +3726,23 @@ function syncSnapRow() {
 for (const b of document.querySelectorAll('.snapBtn')) {
   b.onclick = () => applySnap(Number(b.dataset.s));
 }
+
+/**
+ * 🔴 **吸到參考線：一顆獨立的開關**（2026-09-01，參考線第 2 階段）。
+ *
+ * ⚠ **開著但一條線都沒有的時候一定要講** —— 否則使用者按了、
+ * 拖了、什麼都沒發生，然後以為這顆按鈕壞了。
+ * 〔鐵律三：⛔ 不要讓「沒東西可吸」跟「吸附壞了」長得一樣〕
+ */
+$('snapGuide').onclick = () => {
+  const on = sel.setSnapGuides(!sel.snapGuides);
+  syncSnapRow();
+  if (!on) { toast('吸到參考線：關'); return; }
+  const n = doc.guideCount();
+  toast(n
+    ? `吸到參考線：開　目前有 ${n} 條　⭐ 物件的邊緣或中心靠近就會貼上去`
+    : '吸到參考線：開　⚠ 目前一條參考線都沒有 —— 先按左邊的「參考線」加一條', !n);
+};
 
 /**
  * 🔴 **Enter 只負責「離開欄位」，⛔ 不要在這裡直接套用。**

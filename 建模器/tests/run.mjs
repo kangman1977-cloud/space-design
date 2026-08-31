@@ -12406,6 +12406,92 @@ section('參考線：三串數字、去重、存讀檔往返');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  參考線 第 2 階段：吸附的數學（2026-09-01）
+//
+//  🔴 這一組驗的是 `guideSnap.js` —— 它刻意⛔ 不碰 three.js、
+//  ⛔ 不碰畫面，所以**沙箱測得到**。
+//  ⚠ **測不到的那一半**：手感（8px 黏不黏）、高亮看不看得出來、
+//  平板上按不按得到 —— 那幾項只有 kang 驗得了。
+// ═══════════════════════════════════════════════════════
+{
+  const gs = await import('../js/core/guideSnap.js');
+
+  /** 一個 0→10 / 0→20 / 0→30 的盒子；中心是 (5, 10, 15) */
+  const B = () => ({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 30 } });
+  const G = (o) => ({ x: [], y: [], z: [], ...o });
+
+  // ── ① 沒有線 ＝ 什麼都不動 ──
+  {
+    const r = gs.guideSnapDelta(B(), G({}), 2);
+    eq('① 一條參考線都沒有：X 位移', r.delta.x, 0);
+    eq('　 吸中幾條', r.hits.length, 0);
+  }
+
+  // ── ② 三個候選各吸一次（min／center／max）──
+  {
+    const r = gs.guideSnapDelta(B(), G({ x: [1] }), 2);
+    eq('★ ② 線在 1，盒子左緣在 0 → 往右挪', r.delta.x, 1);
+    eq('　 吸到的是哪個候選', r.hits[0].from, 'min');
+
+    const c = gs.guideSnapDelta(B(), G({ x: [6] }), 2);
+    eq('★ 　 線在 6，中心在 5 → 挪 1', c.delta.x, 1);
+    eq('　 吸到的是哪個候選', c.hits[0].from, 'center');
+
+    const m = gs.guideSnapDelta(B(), G({ x: [11] }), 2);
+    eq('★ 　 線在 11，右緣在 10 → 挪 1', m.delta.x, 1);
+    eq('　 吸到的是哪個候選', m.hits[0].from, 'max');
+  }
+
+  // ── ③ 超出容許就⛔ 不吸（容許值是呼叫端換算好的世界距離）──
+  {
+    const r = gs.guideSnapDelta(B(), G({ x: [20] }), 2);
+    eq('★ ③ 線太遠（差 10 > 容許 2）：⛔ 不動', r.delta.x, 0);
+    eq('　 ⛔ 也不該回報吸中', r.hits.length, 0);
+
+    const zero = gs.guideSnapDelta(B(), G({ x: [1] }), 0);
+    eq('　 容許值 0 ＝ 關掉，⛔ 不吸', zero.delta.x, 0);
+  }
+
+  // ── ④ 🔴 各軸各自吸（kang 2026-09-01 拍板的那一條）──
+  {
+    const r = gs.guideSnapDelta(B(), G({ x: [1], y: [21] }), 2);
+    eq('★★ ④ X 吸 X 的線', r.delta.x, 1);
+    eq('★★ 　 Y 同時也吸 Y 的線（＝ 一次對到一個角）', r.delta.y, 1);
+    eq('　 Y 吸的是右緣（20 → 21）', r.hits.find(h => h.ax === 'y').from, 'max');
+    eq('★ 　 一共吸中幾條', r.hits.length, 2);
+    eq('　 ⛔ 沒有線的 Z 不動', r.delta.z, 0);
+  }
+
+  // ── ⑤ 🔴 平手時留最先的那個（⛔ 不可以每次不一樣）──
+  {
+    // 左緣 0 距線 2 ＝ 2；右緣 10 距線 8 ＝ 2 —— **一樣近**
+    const r = gs.guideSnapDelta(B(), G({ x: [2, 8] }), 3);
+    eq('★★ ⑤ 兩邊一樣近：留【左緣】那個，⛔ 不亂跳', r.delta.x, 2);
+    eq('　 吸到的是哪個候選', r.hits[0].from, 'min');
+  }
+
+  // ── ⑥ 髒資料⛔ 不可以把整個吸附弄壞 ──
+  {
+    const r = gs.guideSnapDelta(B(), G({ x: [NaN, 1, Infinity] }), 2);
+    eq('⑥ 陣列裡混著 NaN／Infinity：好的那條照樣吸', r.delta.x, 1);
+    eq('　 只吸中一條', r.hits.length, 1);
+
+    const noBounds = gs.guideSnapDelta(null, G({ x: [1] }), 2);
+    eq('　 ⛔ 沒有外框：不炸、回 0', noBounds.delta.x, 0);
+  }
+
+  // ── ⑦ sameGuideHits：⛔ 不要每一幀都重建高亮 ──
+  {
+    const a = [{ ax: 'x', v: 20 }, { ax: 'y', v: 5 }];
+    ok('⑦ 同樣的兩條 → 一樣', gs.sameGuideHits(a, [{ ax: 'x', v: 20 }, { ax: 'y', v: 5 }]));
+    ok('　 值變了 → ⛔ 不一樣', gs.sameGuideHits(a, [{ ax: 'x', v: 21 }, { ax: 'y', v: 5 }]) === false);
+    ok('　 少一條 → ⛔ 不一樣', gs.sameGuideHits(a, [{ ax: 'x', v: 20 }]) === false);
+    ok('　 null 跟 null → 一樣（都沒吸中）', gs.sameGuideHits(null, null));
+    ok('　 null 跟一條 → ⛔ 不一樣', gs.sameGuideHits(null, a) === false);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
