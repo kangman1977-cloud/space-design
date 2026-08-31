@@ -747,6 +747,28 @@ export class Selection {
     if (this.hooks.onGuideSnap) this.hooks.onGuideSnap(next);
   }
 
+  /**
+   * 鎖著視角、而這一次拖曳**看起來就是想轉視角** → 講一句（**同一次拖只講一次**）。
+   *
+   * ── ⚠ 要排掉哪些「其實不是想轉視角」的拖曳 ────────────
+   * · 在拖 gizmo（`tc.dragging`）—— 那是在搬東西
+   * · 在畫線（刀具的 `_stroke`、鋼筆的 `penMode`）—— 左鍵本來就被借走了
+   * · 框選模式 —— 空白處拖是拉框，⛔ 本來就不轉
+   * ⇒ **⛔ 排錯的代價是「誤報」，而誤報比漏報更糟**（鐵律三）。
+   *
+   * ⚠ **要移動超過 `TAP_MOVE` 才算** —— 點一下（選取／取消選取）
+   * ⛔ 不是想轉視角，那樣會變成點哪裡都跳訊息。
+   */
+  _tellIfViewLocked(e) {
+    if (!this.view.viewLocked) return;
+    const d = this._down;
+    if (!d || d.told || d.button !== 0) return;
+    if (this.tc.dragging || this._stroke || this.penMode || this.marqueeMode) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < TAP_MOVE) return;
+    d.told = true;
+    if (this.hooks.onViewLockedDrag) this.hooks.onViewLockedDrag();
+  }
+
   _initPointer() {
     const cv = this.view.canvas;
 
@@ -893,6 +915,15 @@ export class Selection {
     });
 
     cv.addEventListener('pointermove', e => {
+      /**
+       * 🔴🔴 **鎖著視角還想拖著轉 → 一定要講一句**（2026-09-01）。
+       *
+       * ⚠ **⛔ 安靜地沒反應是最糟的做法** —— 使用者過一陣子會忘記自己鎖了，
+       * 然後「怎麼轉不動」會被當成**程式壞了**〔坑第 21 條那一類〕。
+       * ⭐ 那顆按鈕亮著是**看得到的**，但講一句是**問得到的**，兩個都要。
+       */
+      this._tellIfViewLocked(e);
+
       /**
        * 🔴 **鋼筆也要看得見自己畫到哪** —— 游標那一段要跟著跑，
        * 而**按住拖的時候要看得到把手把線拉彎**，

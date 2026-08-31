@@ -69,6 +69,8 @@ export class SceneView {
 
     this.orbit = new OrbitControls(this.camera, canvas);
     this.orbit.target.set(0, 40, 0);
+    /** 視角鎖定（2026-09-01，kang 提的）。⛔ 只鎖「轉」，見 `setViewLock()` */
+    this.viewLocked = false;
     this.orbit.enableDamping = true;
     this.orbit.dampingFactor = 0.08;
     this.orbit.minDistance = 20;
@@ -1672,6 +1674,37 @@ export class SceneView {
    * ⭐ **平板那兩列才是重點**：`touches` 跟 `mouseButtons` 是分開的兩個設定，
    * 少改一個的話平板上單指會變成轉視角，畫不出東西。
    */
+  /**
+   * 🔴🔴 **鎖住視角：拖曳⛔ 不再轉，但平移與縮放照用**（kang 2026-09-01 提的）。
+   *
+   * ── 為什麼要有 ────────────────────────────────────
+   * 在**前／側／上**做精確對位時，一個不小心就把視角轉掉了 ——
+   * ⚠ **平板上更嚴重**，手指很容易誤觸。
+   * ⭐ 而它還把「參考線第 3 階段」的手勢衝突整個消滅掉：
+   * 鎖住之後**左鍵／單指拖在那個狀態下沒有別的用途**，拖參考線就天經地義，
+   * ⛔ 不必再去分「這一次拖曳是要轉視角還是要拖線」
+   * 〔刀具那一輪為「兩個收件人搶同一次拖曳」付過代價〕。
+   *
+   * ── ⭐ 只鎖【轉】，⛔ 不鎖平移與縮放（kang 拍板）──────────
+   * 在平面視圖上還是會想放大看細節、挪到旁邊去 —— PS 也是這樣。
+   * 鎖的只是「**畫面會不會歪掉**」。
+   *
+   * ── 🔴 為什麼用 `enableRotate`，⛔ 不是去改 `mouseButtons` ────
+   * `setDrawInput()` 已經在改 `mouseButtons`／`touches` 了，
+   * **兩個地方寫同一組設定必然打架**（鐵律二）。
+   * ⭐ `enableRotate` 是**另一個維度**：它擋的是「轉」這件事本身，
+   * 所以刀具模式把右鍵設成 ROTATE 時，鎖著就**照樣轉不動** ——
+   * ⚠ **⛔ 那是刻意的**：鎖是使用者自己按的，⛔ 不該被別的功能偷偷解開。
+   *
+   * ⚠ **⛔ 不擋「切到某個標準視角」**（前／側／上／等角那幾顆）——
+   * 那是**跳到一個固定角度**，⛔ 不是拖著轉。鎖了就換不了視角會很難用。
+   */
+  setViewLock(on) {
+    this.viewLocked = !!on;
+    this.orbit.enableRotate = !this.viewLocked;
+    return this.viewLocked;
+  }
+
   setDrawInput(on) {
     /** 一個無效值 ＝ 那個手勢什麼都不做（兩個 switch 的 default 都是 NONE） */
     const NONE = -1;

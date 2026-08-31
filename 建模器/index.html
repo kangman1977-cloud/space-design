@@ -1031,6 +1031,17 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="vTop" title="上視圖（俯視）">上</button>
       <button id="vIso" class="on" title="等角（斜看）">等角</button>
       <button id="vOrtho" title="正交投影：關掉近大遠小。要精確對位一定要開">正交</button>
+      <!--
+        🔴🔴 視角鎖定（2026-09-01，kang 提的）。
+
+        ⚠ 只鎖【轉】—— 平移與縮放照用（在平面視圖上還是要放大看細節）。
+        ⛔ 也不擋「前／側／上／等角」那幾顆：那是跳到固定角度，不是拖著轉。
+
+        ⭐ 它還把「參考線第 3 階段」的手勢衝突消滅掉：鎖住之後
+        左鍵／單指拖沒有別的用途，拖參考線就天經地義。
+        理由全文在 scene.js 的 setViewLock。
+      -->
+      <button id="vLock" title="鎖定視角：拖曳不再轉動畫面，⚠ 但平移（右鍵拖／兩指）與縮放照樣可以用。做精確對位時很有用 —— 尤其平板，手指很容易誤觸把視角轉掉。⭐ 「前／側／上／等角」那幾顆仍然按得動（那是跳到固定角度，不是拖著轉）">鎖定</button>
     </div>
 
     <div class="grp">

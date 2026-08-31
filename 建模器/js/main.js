@@ -156,6 +156,13 @@ const sel = new Selection(view, {
    * ⭐ 回饋走**畫面**（線變亮），⛔ 不走文字。〔kang 2026-09-01 選的〕
    */
   onGuideSnap: hits => view.setGuideHot(hits),
+  /**
+   * 🔴 **鎖著視角還想拖著轉 → 講一句**（2026-09-01）。
+   * ⚠ **⛔ 安靜地沒反應**的話，使用者會以為程式壞了〔坑第 21 條那一類〕。
+   * ⭐ 訊息要**講得出怎麼解開**，⛔ 不是只說「鎖住了」。
+   */
+  onViewLockedDrag: () => toast('視角鎖定中，所以轉不動　'
+    + '⭐ 要轉的話按「視角」那一組的「鎖定」解開', true),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
   onEditPick: (el, info) => editPick(el, info),
@@ -471,6 +478,20 @@ function setOrtho(on) {
   toast(now ? '正交投影：關掉近大遠小，可以照著畫面對位'
             : '透視投影：看整體量體用');
 }
+
+/**
+ * 🔴🔴 **鎖定視角**（2026-09-01，kang 提的）。⛔ 只鎖「轉」。
+ *
+ * ⚠ **訊息一定要講出「平移與縮放還能用」** —— 否則使用者會以為
+ * 整個畫面都動不了，而那⛔ 不是事實。
+ */
+$('vLock').onclick = () => {
+  const now = view.setViewLock(!view.viewLocked);
+  $('vLock').classList.toggle('on', now);
+  toast(now
+    ? '視角鎖定：拖曳⛔ 不再轉動畫面　⭐ 平移（右鍵拖／兩指）與縮放照樣可以用'
+    : '視角解鎖：拖曳又可以轉了');
+};
 
 $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
