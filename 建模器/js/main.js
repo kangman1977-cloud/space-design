@@ -986,11 +986,12 @@ let penEditing = null;
 
 /**
  * 🔴 **`改點` 的開關**（工具列那一顆）。
- * ⚠ **少於 3 個點就擋下來講原因** —— 那時候沒有東西可以改。
+ * ⚠ **點太少就擋下來講原因** —— 那時候沒有東西可以改。
+ * 🔴 **最少幾個點問 `sel.penMinPts`**（封起來 3、不封口 2），⛔ 不寫死。
  */
 function togglePenEdit() {
-  if (sel.penCount < 3) {
-    toast('至少要有 3 個點才有東西可以改', true);
+  if (sel.penCount < sel.penMinPts) {
+    toast(`至少要有 ${sel.penMinPts} 個點才有東西可以改`, true);
     return;
   }
   sel.setPenEdit(!sel.penEdit);
@@ -1057,9 +1058,15 @@ function editPenPath(obj) {
         + '⚠ 按過「轉成可編輯網格」的話，那串錨點就已經不在了', true);
     return;
   }
-  const list = (obj.src.paths || []).filter(p => p && Array.isArray(p.a) && p.a.length >= 6);
+  /**
+   * 🔴 **最少幾個點要看這個物件封不封口**（不封口的兩點就是一條直牆）——
+   * ⛔ 不可以寫死 3，那會讓一條兩點的牆「路徑讀不出來」。
+   */
+  const minPts = obj.src.open ? 2 : 3;
+  const list = (obj.src.paths || [])
+    .filter(p => p && Array.isArray(p.a) && p.a.length >= minPts * 2);
   if (!list.length) {
-    toast('這支鋼筆的路徑讀不出來（少於 3 個點）', true);
+    toast(`這支鋼筆的路徑讀不出來（少於 ${minPts} 個點）`, true);
     return;
   }
   if (Math.abs(obj.scale.x) < 1e-9 || Math.abs(obj.scale.z) < 1e-9) {
@@ -1225,7 +1232,10 @@ function finishPen() {
   sel.setPenMode(false);
   if (!paths) {
     panel.refresh(); updateBar();
-    toast('至少要放 3 個點才圍得出一個形狀 —— 這次畫的不算', true);
+    /** 🔴 **一條線只要 2 個點** —— ⛔ 對它講「圍得出形狀」是胡說 */
+    toast(sel.penNoClose
+      ? '至少要放 2 個點才有一條線 —— 這次畫的不算'
+      : '至少要放 3 個點才圍得出一個形狀 —— 這次畫的不算', true);
     return;
   }
   const h = +$('penH').value;
@@ -3988,7 +3998,7 @@ function updateBar() {
    * ⛔ 按下去什麼都不發生的按鈕就是坑第 21 條。
    */
   $('penEdit').hidden = !sel.penMode;
-  $('penEdit').disabled = sel.penCount < 3;
+  $('penEdit').disabled = sel.penCount < sel.penMinPts;
   $('penEdit').classList.toggle('on', !!sel.penEdit);
   /**
    * 🔴 **`刪點` 只在 `改點` 開著時出現**（第 3 階段）。
@@ -3997,14 +4007,14 @@ function updateBar() {
    * ⭐ **加點⛔ 沒有按鈕**（點線上就是加），只有刪點需要一顆。
    */
   $('penDel').hidden = !(sel.penMode && sel.penEdit);
-  $('penDel').disabled = sel.penSel < 0 || sel.penCount <= 3;
+  $('penDel').disabled = sel.penSel < 0 || sel.penCount <= sel.penMinPts;
   /**
    * 🔴 **`加一條` 在鋼筆模式下一直看得到**（畫的時候、改的時候都要按得到）——
    * ⭐ 那正是 kang 要的「兩邊都做」，而它們是同一支。
    * ⚠ 目前這條不到 3 個點就變灰（收進去只會變成垃圾）。
    */
   $('penAddPath').hidden = !sel.penMode;
-  $('penAddPath').disabled = sel.penCount < 3;
+  $('penAddPath').disabled = sel.penCount < sel.penMinPts;
   /**
    * 🔴 **`改點` 開著的時候，這幾顆是「畫」用的，⛔ 一個都不該出現。**
    * ⚠ 留著的話使用者會按 `確定曲線`／`退一點`，而那是在改另一件事 ——

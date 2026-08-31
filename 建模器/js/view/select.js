@@ -2898,6 +2898,24 @@ export class Selection {
   get penCount() { return this._pen ? Math.floor(this._pen.a.length / 2) : 0; }
 
   /**
+   * 🔴🔴 **一條路徑至少要幾個錨點 —— 封不封口不一樣。**
+   *
+   * | | 最少 | 為什麼 |
+   * |---|---|---|
+   * | 封起來 | **3** | 兩個點**圍不出面積**，擠出會失敗 |
+   * | 不封口 | **2** | 兩個點就是**一條直線** —— 那是一片完全正常的板／牆 |
+   *
+   * 🔴 **這一條是 2026-08-31 開線上版實測時撞到的**：
+   * 舊的 `>= 6`（＝ 3 個錨點）寫死在**五個地方**
+   * （`takePen`／`peekPen`／`penNewPath`／`loadPen`，加上 `main.js` 兩顆按鈕），
+   * 所以**畫一條兩點的直牆，收工時會被整條丟掉**，
+   * 而訊息還說「至少要放 3 個點才圍得出一個形狀」——
+   * ⚠ **那句話對封閉是對的，對一條線是胡說**。
+   * ⭐ 現在全部改成問這一支，⛔ 不要再寫死數字。
+   */
+  get penMinPts() { return this.penNoClose ? 2 : 3; }
+
+  /**
    * 🔴 **把畫好的東西交出去，並清空。** 呼叫端負責建物件。
    * ⚠ **少於 3 個錨點回 `null`** —— 兩個點圍不出面積，擠出會失敗。
    */
@@ -2911,8 +2929,9 @@ export class Selection {
    * @returns {{ok:boolean, n?:number, reason?:string}} `n` ＝ 收完之後共幾條
    */
   penNewPath() {
-    if (!this._pen || this._pen.a.length < 6) {
-      return { ok: false, reason: '目前這一條還不到 3 個點 —— 先把它畫完' };
+    const min = this.penMinPts;
+    if (!this._pen || this._pen.a.length < min * 2) {
+      return { ok: false, reason: `目前這一條還不到 ${min} 個點 —— 先把它畫完` };
     }
     this._penDone.push(this._pen);
     this._pen = null;
@@ -2955,12 +2974,14 @@ export class Selection {
    * **一條都不剩就回 `null`**。
    */
   takePen() {
+    /** ⚠ **最少幾個點要問 `penMinPts`** —— ⛔ 不可以寫死 3（見那一則） */
+    const need = this.penMinPts * 2;
     const all = [];
     for (const p of this._penDone) {
-      if (p && p.a.length >= 6) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
+      if (p && p.a.length >= need) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
     }
     const p = this._pen;
-    if (p && p.a.length >= 6) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
+    if (p && p.a.length >= need) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
     this._pen = null;
     this._penDone = [];
     this._penDown = null;
@@ -2985,9 +3006,10 @@ export class Selection {
    */
   peekPen() {
     const cp = p => ({ closed: true, a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() });
+    const need = this.penMinPts * 2;
     const all = [];
-    for (const p of this._penDone) if (p && p.a.length >= 6) all.push(cp(p));
-    if (this._pen && this._pen.a.length >= 6) all.push(cp(this._pen));
+    for (const p of this._penDone) if (p && p.a.length >= need) all.push(cp(p));
+    if (this._pen && this._pen.a.length >= need) all.push(cp(this._pen));
     return all.length ? all : null;
   }
 
@@ -3113,8 +3135,13 @@ export class Selection {
    * @returns {number} 載進來幾個錨點（⛔ 少於 3 個回 0 並且不載）
    */
   loadPen(paths) {
+    /**
+     * ⚠ **這一支要在 `penNoClose` 擺好之後才呼叫** —— 一條兩點的直牆
+     * 才進得來（`editPenPath()` 就是照這個順序）。
+     */
+    const need = this.penMinPts * 2;
     const list = (Array.isArray(paths) ? paths : [paths])
-      .filter(p => p && Array.isArray(p.a) && p.a.length >= 6)
+      .filter(p => p && Array.isArray(p.a) && p.a.length >= need)
       .map(p => ({ a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() }));
     if (!list.length) return 0;
     /** ⚠ **最後一條當成「目前這一條」** —— 其餘進 `_penDone` */
@@ -3334,7 +3361,8 @@ export class Selection {
     if (!this._pen || i < 0 || i >= this.penCount) {
       return { ok: false, reason: '先點一個錨點，再按「刪點」' };
     }
-    const r = penRemoveAnchor(this._pen, i);
+    /** ⚠ 下限要**傳下去** —— 不封口的話 2 個點還是一條線（見 `penMinPts`） */
+    const r = penRemoveAnchor(this._pen, i, 24, this.penMinPts);
     if (!r.ok) return r;
     this._penSel = -1;
     this._penDragA = null;

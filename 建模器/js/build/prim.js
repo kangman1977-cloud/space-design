@@ -484,11 +484,20 @@ export function penAddAnchor(path, seg, t) {
  * @param {object} path 就地修改
  * @returns {{ok:boolean, fitted?:boolean, reason?:string}}
  */
-export function penRemoveAnchor(path, i, samples = 24) {
+export function penRemoveAnchor(path, i, samples = 24, min = 3) {
   if (!path || !path.a) return { ok: false, reason: '沒有路徑' };
   const n = Math.floor(path.a.length / 2);
   if (!(i >= 0 && i < n)) return { ok: false, reason: '沒有這一個點' };
-  if (n <= 3) return { ok: false, reason: '只剩 3 個點了 —— 再刪就圍不出一個形狀' };
+  /**
+   * 🔴 **下限跟著「封不封口」走**（2026-08-31 補）：
+   * 封起來要 3 個才圍得出形狀，**不封口 2 個就是一條線**。
+   * ⚠ ⛔ 不可以寫死 3 —— 那會讓一條三點的牆刪不回兩點的直牆。
+   */
+  if (n <= min) {
+    return { ok: false, reason: min === 2
+      ? '只剩 2 個點了 —— 再刪就不成一條線'
+      : '只剩 3 個點了 —— 再刪就圍不出一個形狀' };
+  }
 
   const prev = (i - 1 + n) % n;
   const segA = penSeg(path, prev);          // prev → i

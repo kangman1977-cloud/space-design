@@ -12239,7 +12239,33 @@ section('鋼筆 不封口：甲 加厚成板 ／ 乙 立成牆');
        +polylineLength([{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 8 }]).toFixed(9), 9);
   }
 
-  /** ⑧ 存讀檔要把兩顆開關帶回來（⛔ 掉了的話重開就變回實心塊） */
+  /**
+   * 🔴🔴 ⑧ **兩個點就是一條線 —— 下限跟著「封不封口」走。**
+   *
+   * 〔2026-08-31 開線上版實測時撞到的：畫一條**兩點的直牆**，
+   * 　收工時被整條丟掉，而訊息還說「至少要放 3 個點才圍得出一個形狀」——
+   * 　**那句話對封閉是對的，對一條線是胡說**。〕
+   *
+   * ⚠ **舊的 `>= 6`（3 個錨點）寫死在六個地方**，這裡守得住的是
+   * `penRemoveAnchor()` 那一道（其餘在 `select.js`／`main.js`，碰 DOM）。
+   */
+  {
+    const three = () => ({ a: [0, 0, 50, 0, 50, 30], hi: [0, 0, 0, 0, 0, 0], ho: [0, 0, 0, 0, 0, 0] });
+    const closed = prim.penRemoveAnchor(three(), 1);
+    ok('★★ ⑧ 封起來：只剩 3 個點就⛔ 不給刪', !closed.ok && /圍不出/.test(closed.reason || ''),
+       closed.reason);
+    const open = prim.penRemoveAnchor(three(), 1, 24, 2);
+    ok('★★ 　 不封口：下限是 2，所以刪得動', open.ok, JSON.stringify(open));
+    const two = prim.penRemoveAnchor({ a: [0, 0, 50, 0], hi: [0, 0, 0, 0], ho: [0, 0, 0, 0] }, 0, 24, 2);
+    ok('　 但剩 2 個就擋下來，而且話講的是「線」⛔ 不是「形狀」',
+       !two.ok && /一條線/.test(two.reason || ''), two.reason);
+    /** ⭐ 而兩個點真的做得出東西 —— ⛔ 不是「勉強不報錯」 */
+    near('★ 　 兩點的牆：面積 ＝ 50 × 8',
+         prim.buildPrim('pen', { h: 8, open: true, up: true,
+           paths: [{ a: [0, 0, 50, 0], hi: [], ho: [] }] }).area(), 400, 1e-9);
+  }
+
+  /** ⑨ 存讀檔要把兩顆開關帶回來（⛔ 掉了的話重開就變回實心塊） */
   {
     const ioM = await import('../js/core/io.js');
     const doc = new ioM.Doc();
@@ -12249,7 +12275,7 @@ section('鋼筆 不封口：甲 加厚成板 ／ 乙 立成牆');
     }));
     const back = ioM.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
     const s = back.objects[0].src;
-    ok('★★ ⑧ 存讀檔往返：不封口與往上長都還在', s.open === true && s.up === true,
+    ok('★★ ⑨ 存讀檔往返：不封口與往上長都還在', s.open === true && s.up === true,
        JSON.stringify({ open: s.open, up: s.up }));
     eq('　 種類還是板件', back.objects[0].kind, ioM.KIND.SHEET);
     near('★ 　 讀回來面積一樣', back.objects[0].mesh().area(), LEN * 12, 1e-9);
