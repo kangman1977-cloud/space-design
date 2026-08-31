@@ -184,19 +184,29 @@
 | 步驟 | 誰做 |
 |---|---|
 | 1. 改檔案 ＋ 寫 `版控工具\commit-msg.txt` | Claude |
-| **2. 🔴 跑三道機械檢查**（見下）| Claude |
-| 3. `1-看差異.bat` → Claude 逐行確認沒動到不該動的 | kang → Claude |
-| 4. `2-存檔.bat` → `3-上傳網路.bat` | kang |
+| **2. 🔴 跑四道機械檢查**（見下）| Claude |
+| 3. `1-看差異.bat` → Claude 逐行確認沒動到不該動的 | **Claude**（2026-08-31 起）|
+| 4. `2-存檔.bat` → `3-上傳網路.bat` | **Claude，⚠ 上傳一定要當次問過 kang** |
 | 5. 🔴 **實測 → 回報 → Claude 當場回寫並結案** | kang → Claude |
 
-**第 2 步的三道**（⛔ 存檔前一定要跑完）：
+🔴 **第 3、4 步 2026-08-31 起 Claude 可以自己點那三個 `.bat`**（kang 授權）——
+分級與理由見 `PROJECT_LOG.md`「協作規則 → 三個 `.bat` 誰來點」。
+
+**第 2 步的四道**（⛔ 存檔前一定要跑完）：
 
 ```
 node 建模器/tests/run.mjs                    改過建模器核心
 node 文件工具/目次產生器.js --all             改過任何 ## 節
+node 文件工具/兩端檢查.js                     改過 index.html 或 js/ 的顯示邏輯
 cd 建模器 && node --input-type=module -e "import('./js/main.js').catch(e=>{if(e instanceof SyntaxError)process.exit(1)})"
                                              改過 js/ 底下任何檔案
 ```
+
+🔴 **第三道是 2026-08-31 加的，而它守的是【一整類】的錯**：
+**狀態由 HTML 的初始屬性 ＋ JS 的指派「兩端」決定，只改一端 ＝ 沒改**（鐵律二）。
+⚠ 那一天我把 45 個 `disabled` 改成 `hidden`，**HTML 那端沒動** →
+**34 顆按鈕看得到卻永遠按不下去**，而**原本的三道全部放它過關**。
+⭐ **它只問結構⛔ 不問語意**（第一版問「JS 有沒有人清它」，當場誤報 `editNum`）。
 
 ⭐ **目次產生器要在寫完文件之後、存檔之前跑** ——
 它會改 `PROJECT_LOG.md`／`HISTORY.md`，先存檔就得多開一個 commit 補目次。
