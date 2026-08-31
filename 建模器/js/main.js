@@ -3617,17 +3617,115 @@ function syncModeButtons() {
   for (const [id, mode] of [['mMove', 'translate'], ['mRot', 'rotate'], ['mScale', 'scale']]) {
     $(id).classList.toggle('on', mode === m);
   }
+  /**
+   * 🔴🔴 **吸附那一欄跟著模式換，掛在這裡⛔ 不是掛在 `updateBar()`。**
+   *
+   * ⚠ **`setMode()` ⛔ 沒有叫 `updateBar()`** —— 它只叫 `syncModeButtons()`
+   * 與 `updateEditNum()`。寫在 `updateBar()` 裡的話，**按了模式鈕
+   * 那一欄不會換**，而選取一變它又突然換了 —— 使用者看到的是
+   * 「這個東西時靈時不靈」。〔鐵律二：性質由兩端決定〕
+   *
+   * ⭐ 而這一支有**四個**呼叫點，⛔ 不只 `setMode()`：選到一個「點」時
+   * `_attachEditProxy()` 會自己把 gizmo 切回移動，那條路⛔ 不經過
+   * `setMode()`。掛在這裡四個一次涵蓋。
+   */
+  syncSnapRow();
 }
 
+// ═══════════════════════════════════════════════════════
+//  吸附
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 三種變換的吸附，各自一組。
+ *
+ * ⚠ **`unit` 是給人看的字，`set` 是真正動手的那一支** ——
+ * ⛔ 不要把單位寫死在 toast 裡（舊版寫死 `cm`，旋轉一接上去就會說錯話）。
+ *
+ * `num: false` ＝ **這一種⛔ 不給自由輸入**（縮放）。理由見
+ * `select.js` 的 `setSnapScale`：等差與等比兩種需求，
+ * 同一個欄位表達不出來。
+ */
+const SNAP_KIND = {
+  translate: { unit: 'cm', num: true,  get: () => sel.snapStep,  set: v => sel.setSnap(v) },
+  rotate:    { unit: '度', num: true,  get: () => sel.snapRot,   set: v => sel.setSnapRot(v) },
+  scale:     { unit: '倍', num: false, get: () => sel.snapScale, set: v => sel.setSnapScale(v) }
+};
+
+/**
+ * gizmo 現在掛著沒有。
+ *
+ * 🔴 **條件要跟 `select.js` 掛 gizmo 的條件【一模一樣】** ——
+ * 編輯模式看選到幾個**元素**，物件模式看選到幾個**物件**。
+ * ⚠ 抽成一支是因為 `updateBar()` 與 `syncSnapRow()` 兩邊都要問，
+ * 而**同一條規則只寫一次**（文件三鐵律之一，在程式碼上同樣成立）。
+ */
+function gizmoOff() {
+  return sel.editMode ? sel.editCount === 0 : sel.count === 0;
+}
+
+/**
+ * 吸附那一欄：只留下目前模式的那一組，其餘收起來。
+ *
+ * ⭐ **四顆按鈕的 `on` 也在這裡對** —— 因為使用者可能打了一個
+ * 按鈕上沒有的數字（2.5），那時候**四顆都不該亮**：
+ * 亮著就是在說「你用的是這一顆給的值」，而那是假的。
+ */
+function syncSnapRow() {
+  const m = sel.mode;
+  const k = SNAP_KIND[m];
+  const off = gizmoOff();
+  const cur = k ? k.get() : 0;
+
+  for (const b of document.querySelectorAll('.snapBtn')) {
+    const mine = b.dataset.sm === m;
+    b.hidden = off || !mine;
+    b.classList.toggle('on', mine && Number(b.dataset.s) === cur);
+  }
+
+  const showNum = !off && !!k && k.num;
+  $('snapNum').hidden = !showNum;
+  $('snapNumUnit').hidden = !showNum;
+  if (showNum) {
+    $('snapNumUnit').textContent = k.unit;
+    // 正在打字時⛔ 不要覆蓋他打到一半的字〔照 updateEditNum 那條〕
+    if (document.activeElement !== $('snapNum')) $('snapNum').value = String(cur);
+  }
+}
+
+/**
+ * 四顆按鈕 ＝ **把數字填進欄位的捷徑**，⛔ 不是另一套機制。
+ * 〔跟 `editNum` 同一條：入口分開、動作只走一條〕
+ */
 for (const b of document.querySelectorAll('.snapBtn')) {
-  b.onclick = () => {
-    const s = Number(b.dataset.s);
-    sel.setSnap(s);
-    for (const x of document.querySelectorAll('.snapBtn')) {
-      x.classList.toggle('on', Number(x.dataset.s) === s);
-    }
-    toast(s > 0 ? `吸附 ${s}cm` : '吸附關閉');
-  };
+  b.onclick = () => applySnap(Number(b.dataset.s));
+}
+
+/**
+ * 🔴 **Enter 只負責「離開欄位」，⛔ 不要在這裡直接套用。**
+ * 直接套用的話 `keydown` 一次、瀏覽器接著發的 `change` 再一次，
+ * **同一個動作會走兩遍**（kang 2026-08-25 在 `editNum` 上實測抓到過）。
+ */
+$('snapNum').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('snapNum').blur(); }
+});
+$('snapNum').addEventListener('change', () => applySnap(Number($('snapNum').value)));
+
+/**
+ * 套用吸附格距。**兩個入口（按鈕／打字）都走這一支。**
+ *
+ * ⚠ **負數與 NaN 一律當成 0（＝關閉）** —— 打了 `-5` 之後
+ * `setTranslationSnap(-5)` 會讓拖曳的行為變得無法解釋，
+ * 而使用者⛔ 不會想到是自己那個減號造成的。
+ */
+function applySnap(v) {
+  const k = SNAP_KIND[sel.mode];
+  if (!k) return;
+  const s = Number.isFinite(v) && v > 0 ? v : 0;
+  k.set(s);
+  syncSnapRow();
+  const NAME = { translate: '移動', rotate: '旋轉', scale: '縮放' };
+  toast(s > 0 ? `${NAME[sel.mode]}吸附 ${s} ${k.unit}` : `${NAME[sel.mode]}吸附關閉`);
 }
 
 $('marquee').onclick = function () {
@@ -3756,7 +3854,12 @@ function updateBar() {
    * 物件模式看的是**選到幾個物件**。⛔ 只寫 `sel.count === 0` 會讓
    * 「進了編輯模式但還沒點任何點」的時候，那三組還留在畫面上。
    */
-  const gizmoOff = sel.editMode ? sel.editCount === 0 : sel.count === 0;
+  /**
+   * ⚠ **這一條規則的家是 `gizmoOff()`**（就在「吸附」那一節上面）——
+   * 2026-08-31 抽出去了，因為 `syncSnapRow()` 也要問同一件事，
+   * 而**同一條規則只寫一次**。⛔ 不要在這裡就地重寫一份。
+   */
+  const off = gizmoOff();
   /**
    * ⚠ **`.pvBtn` 是我第一版漏掉的** —— 我照工具列的組別清單以為「方向」
    * 那四顆都是 `.spBtn`，實際是 **`.spBtn`（世界／法向）＋ `.pvBtn`（重心／
@@ -3764,10 +3867,17 @@ function updateBar() {
    * 🔴 **⛔ 這是「推論不是權威事實」** —— 後來是**問 DOM**
    * （列出 `#bar` 裡所有的 class）才確定的，⛔ 不是看清單猜的。
    */
-  for (const cls of ['.spBtn', '.pvBtn', '.snapBtn']) {
-    for (const b of document.querySelectorAll(cls)) b.hidden = gizmoOff;
+  for (const cls of ['.spBtn', '.pvBtn']) {
+    for (const b of document.querySelectorAll(cls)) b.hidden = off;
   }
-  for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = gizmoOff;
+  /**
+   * 🔴 **`.snapBtn` 2026-08-31 從上面那個迴圈移出來，交給 `syncSnapRow()`。**
+   * ⚠ 理由：吸附那一欄現在還要**再篩一次模式**，⛔ 不是單純的
+   * 「有沒有選到東西」。留在上面的話，切到旋轉模式會把移動那四顆
+   * 一起顯示出來 —— **兩個地方寫同一顆按鈕的顯示條件，必然會打架**。
+   */
+  syncSnapRow();
+  for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = off;
 
   /**
    * 擠出：**選到一個面才給按**。

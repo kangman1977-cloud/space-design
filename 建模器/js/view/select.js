@@ -447,10 +447,17 @@ export class Selection {
   _initGizmo() {
     const v = this.view;
     const tc = new TransformControls(v.camera, v.canvas);
-    this.tc = tc;                 // setSnap() 會用到，必須先指派
+    this.tc = tc;                 // 三支 setSnap*() 會用到，必須先指派
 
     tc.setSize(isTouch() ? 1.5 : 1.0);
-    this.setSnap(1);
+    /**
+     * ⚠ **這三個預設值⛔ 不可以動** —— 2026-08-31 拆開之前，
+     * 一支 `setSnap(1)` 就是設出這三個值（旋轉 15 度、縮放 0.05 寫死在裡面）。
+     * 拆開只是讓它們**各自開得了關、填得了數字**，⛔ 不是改預設行為。
+     */
+    this.setSnap(1);              // 移動 1cm
+    this.setSnapRot(15);          // 旋轉 15 度
+    this.setSnapScale(0.05);      // 縮放 0.05 倍
 
     tc.addEventListener('dragging-changed', e => {
       v.orbit.enabled = !e.value;
@@ -1903,14 +1910,45 @@ export class Selection {
   get mode() { return this.tc.getMode(); }
 
   /**
-   * 吸附格距，單位 cm。0 ＝ 關閉。
-   * 跟平面規劃器的網格吸附是同一件事，價值在「尺寸乾不乾淨」。
+   * ── 吸附：三種變換各自一支（2026-08-31 拆開）──────────
+   *
+   * 🔴 **原本是一支 `setSnap(step)` 同時設三件事**：
+   * 移動用參數值、**旋轉寫死 15 度、縮放寫死 0.05**，
+   * 而後兩者**只跟著「開／關」走，跟參數無關**。
+   *
+   * ⚠ **那個形狀有兩個問題**，kang 2026-08-31 兩個都碰到了：
+   * ① 想打 2.5cm 這種非整數的格距，四顆固定按鈕給不了；
+   * ② 想要「**位置吸得死死的、但角度能微微斜一點**」——
+   *    一個總開關做不到（反過來也一樣：角度鎖 90 度、位置自由）。
+   *
+   * ⭐ **拆開之後三個各自獨立**。初始值刻意維持 1cm／15 度／0.05
+   * 完全不變 —— 這一輪改的是「能不能自己填」，⛔ 不是預設行為。
+   *
+   * ⚠ **`snapStep` 這個欄位名⛔ 不可以改** —— 它有兩個下游讀者
+   * （擠出的預設距離與那顆按鈕的 title，見 `main.js`）。
+   *
+   * ✘ **縮放刻意只留開關、⛔ 不開放自由輸入**（kang 2026-08-31 收回：
+   * 「既然縮放較複雜..這就不要處理...維持目前的機制」）——
+   * 「0.05 倍一格」是等差，而「一次放大兩倍」是等比，
+   * **兩種需求用同一個欄位表達不出來**，要開放得先重想單位。
    */
+
+  /** 移動的吸附格距，單位 cm。0 ＝ 關閉。 */
   setSnap(step) {
     this.snapStep = step;
     this.tc.setTranslationSnap(step > 0 ? step : null);
-    this.tc.setRotationSnap(step > 0 ? THREE.MathUtils.degToRad(15) : null);
-    this.tc.setScaleSnap(step > 0 ? 0.05 : null);
+  }
+
+  /** 旋轉的吸附格距，單位**度**。0 ＝ 關閉。 */
+  setSnapRot(deg) {
+    this.snapRot = deg;
+    this.tc.setRotationSnap(deg > 0 ? THREE.MathUtils.degToRad(deg) : null);
+  }
+
+  /** 縮放的吸附格距，單位**倍**。0 ＝ 關閉。 */
+  setSnapScale(mult) {
+    this.snapScale = mult;
+    this.tc.setScaleSnap(mult > 0 ? mult : null);
   }
 
   get dragging() { return !!this.tc.dragging; }

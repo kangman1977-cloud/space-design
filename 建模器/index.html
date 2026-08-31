@@ -936,11 +936,44 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     </div>
 
     <div class="grp">
+      <!--
+        🔴🔴 吸附 2026-08-31 改成【三套，跟著模式換】。
+
+        ⭐ 判準：吸附格距【只在對應的模式裡有意義】——
+        移動的公分數在旋轉模式裡沒有意義，反之亦然。
+        三者不會同時需要，所以永遠只顯示一組 ⇒ 版面成本 ≈ 0。
+
+        ⚠ `data-sm` ＝ 這一顆屬於哪個模式（translate／rotate／scale）。
+        顯示邏輯在 main.js 的 syncSnapRow()，⛔ 掛在 syncModeButtons() 裡
+        （setMode() ⛔ 不叫 updateBar()，只寫在那裡按了不會換 —— 鐵律二）。
+
+        ⭐ 欄位是唯一的真相，按鈕只是【幫你把數字填進去】：
+        打 2.5 進去，四顆全部不亮。〔跟 editNum 同一條路〕
+
+        ✘ 縮放刻意只有開關、⛔ 沒有輸入欄（kang 2026-08-31 收回自由輸入）——
+        理由寫在 select.js 的 setSnapScale 上面。
+      -->
       <span class="lbl">吸附</span>
-      <button class="snapBtn" data-s="0">關</button>
-      <button class="snapBtn on" data-s="1">1cm</button>
-      <button class="snapBtn" data-s="5">5cm</button>
-      <button class="snapBtn" data-s="10">10cm</button>
+
+      <!-- 移動 -->
+      <button class="snapBtn" data-sm="translate" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="translate" data-s="1">1</button>
+      <button class="snapBtn" data-sm="translate" data-s="5">5</button>
+      <button class="snapBtn" data-sm="translate" data-s="10">10</button>
+
+      <!-- 旋轉：15／45／90，kang 2026-08-31 選的（做盒子、折板 90 最常用）-->
+      <button class="snapBtn" data-sm="rotate" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="rotate" data-s="15">15</button>
+      <button class="snapBtn" data-sm="rotate" data-s="45">45</button>
+      <button class="snapBtn" data-sm="rotate" data-s="90">90</button>
+
+      <!-- 縮放 -->
+      <button class="snapBtn" data-sm="scale" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="scale" data-s="0.05">0.05</button>
+
+      <input id="snapNum" type="number" step="any" min="0" hidden
+             title="吸附格距：直接打一個精確的數字按 Enter（移動＝cm、旋轉＝度）。打了之後左邊那幾顆就不亮了，因為你用的不是它們給的值。打 0 ＝ 關閉">
+      <span id="snapNumUnit" class="unit" hidden>cm</span>
     </div>
 
     <div class="grp">
