@@ -492,6 +492,7 @@ $('pen').onclick = () => togglePenMode();
 $('penCorner').onclick = () => togglePenCorner();
 $('penEdit').onclick = () => togglePenEdit();
 $('penDel').onclick = () => deletePenAnchor();
+$('penAddPath').onclick = () => addPenPath();
 $('penSnapDeg').oninput = () => {
   const d = +$('penSnapDeg').value;
   if (Number.isFinite(d) && d > 0) sel.penSnapDeg = d;
@@ -943,6 +944,28 @@ function togglePenEdit() {
 }
 
 /**
+ * 🔴 **加一條路徑**（工具列 `加一條`，第 3 階段·做洞）。
+ *
+ * ⭐ **畫的時候按、跟事後進 `編輯路徑` 再按，走的是同一支** ——
+ * kang 2026-08-30 要「兩邊都做」，⭐ 而這樣做**只有一條路**
+ * 〔坑第 31 條：與其讓兩條路對齊，不如換一個只有一條路的定義〕。
+ *
+ * ⚠ **⛔ 這裡不判「新的那條會不會變成洞」** —— 那是幾何的事，
+ * `classify()` 在生成網格時判（巢狀深度偶數＝實心、奇數＝洞）。
+ * 使用者畫在外面就是第二塊，畫在裡面就是洞，**⛔ 不必先宣告**。
+ */
+function addPenPath() {
+  const r = sel.penNewPath();
+  if (!r.ok) { toast(r.reason, true); return; }
+  /** ⚠ `改點` 開著時要先關掉 —— 接下來是**畫**，⛔ 不是改 */
+  if (sel.penEdit) sel.setPenEdit(false);
+  updateBar();
+  toast(`開始畫第 ${r.n} 條　`
+      + '⭐ 畫在剛才那個形狀【裡面】＝ 挖一個洞；'
+      + '畫在【外面】＝ 同一個物件裡多一塊');
+}
+
+/**
  * 🔴 **刪掉選到的那個錨點**（工具列 `刪點`，第 3 階段）。
  *
  * ⚠ **擬合失敗要講出來** —— kang 選的是「擬合，盡量讓形狀不變」，
@@ -976,8 +999,8 @@ function editPenPath(obj) {
         + '⚠ 按過「轉成可編輯網格」的話，那串錨點就已經不在了', true);
     return;
   }
-  const p0 = obj.src.paths && obj.src.paths[0];
-  if (!p0 || !Array.isArray(p0.a) || p0.a.length < 6) {
+  const list = (obj.src.paths || []).filter(p => p && Array.isArray(p.a) && p.a.length >= 6);
+  if (!list.length) {
     toast('這支鋼筆的路徑讀不出來（少於 3 個點）', true);
     return;
   }
@@ -990,7 +1013,8 @@ function editPenPath(obj) {
     id: obj.id,
     rot: obj.rot.clone(),
     posY: obj.pos.y,
-    path: { a: p0.a.slice(), hi: p0.hi.slice(), ho: p0.ho.slice() }
+    /** ⚠ **全部路徑都要留一份** —— 按取消時要整個還原（做洞之後不只一條） */
+    paths: list.map(p => ({ a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() }))
   };
   obj.rot.set(0, 0, 0);
   obj.pos.y = 0;
@@ -998,13 +1022,15 @@ function editPenPath(obj) {
   view.setGhost(obj.id);
   /** ⚠ **順序不能換**：`setPenMode()` 會把 `_pen` 與 `penEdit` 都清掉 */
   sel.setPenMode(true);
-  sel.loadPen(penPathToWorld(p0, obj));
+  sel.loadPen(list.map(p => penPathToWorld(p, obj)));
   sel.setPenEdit(true);
   $('pen').classList.add('on');
   panel.refresh();
   updateBar();
-  toast(`編輯「${obj.name}」的路徑（${Math.floor(p0.a.length / 2)} 個點）　`
-      + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線。'
+  const np = list.reduce((s, p) => s + Math.floor(p.a.length / 2), 0);
+  toast(`編輯「${obj.name}」的路徑（${list.length} 條、${np} 個點）　`
+      + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線、點線上＝加一個點。'
+      + '⭐ 按「加一條」可以再畫一條 —— **包在裡面的那條就是洞**。'
       + '⚠ 這個物件暫時被【攤平】而且變半透明，按「完成」就轉回原本的角度');
 }
 
@@ -1017,11 +1043,12 @@ function applyPenEdit() {
   if (!penEditing) return;
   const obj = doc.objects.find(o => o.id === penEditing.id);
   if (!obj || !obj.src || !obj.src.paths) return;
-  const p = sel.peekPen();
-  if (!p) return;
-  const loc = penPathToLocal(p, obj);
-  if (!loc) return;
-  obj.src.paths[0] = loc;
+  const ps = sel.peekPen();
+  if (!ps) return;
+  const loc = ps.map(p => penPathToLocal(p, obj));
+  /** ⚠ 有任何一條換不出本地座標就整批放棄，⛔ 不要寫一半進去 */
+  if (loc.some(l => !l)) return;
+  obj.src.paths = loc;
   obj.invalidate();
   view.sync(doc);
   updateBar();
@@ -1038,14 +1065,14 @@ function endPenEdit(save) {
   penEditing = null;
   const obj = doc.objects.find(o => o.id === st.id);
   if (obj && obj.src && obj.src.paths) {
-    let next = st.path;
+    let next = st.paths;
     if (save) {
-      const p = sel.peekPen();
-      const loc = p ? penPathToLocal(p, obj) : null;
-      /** ⚠ 換不出本地座標就**保留原樣**，⛔ 不要寫一份壞掉的進去 */
-      if (loc) next = loc;
+      const ps = sel.peekPen();
+      const loc = ps ? ps.map(p => penPathToLocal(p, obj)) : null;
+      /** ⚠ 有任何一條換不出來就**整批保留原樣**，⛔ 不要寫一份壞掉的進去 */
+      if (loc && !loc.some(l => !l)) next = loc;
     }
-    obj.src.paths[0] = next;
+    obj.src.paths = next;
     obj.rot.copy(st.rot);
     obj.pos.y = st.posY;
     obj.invalidate();
@@ -1107,10 +1134,11 @@ function togglePenMode() {
 function finishPen() {
   /** ⚠ **保險絲**：改既有物件的路徑⛔ 不可以走到「建新物件」這條路 */
   if (penEditing) { endPenEdit(true); return; }
-  const path = sel.takePen();
+  /** ⚠ **2026-08-30 起 `takePen()` 回的是一疊路徑**（做洞要第二條） */
+  const paths = sel.takePen();
   $('pen').classList.remove('on');
   sel.setPenMode(false);
-  if (!path) {
+  if (!paths) {
     panel.refresh(); updateBar();
     toast('至少要放 3 個點才圍得出一個形狀 —— 這次畫的不算', true);
     return;
@@ -1123,7 +1151,7 @@ function finishPen() {
   const obj = new ModelObject({
     name: `鋼筆 ${doc.objects.length + 1}`,
     kind: KIND.SOLID,
-    src: { type: 'pen', h, paths: [path] }
+    src: { type: 'pen', h, paths }
   });
   /**
    * ⚠ **原點置中，⛔ 不要讓它留在世界原點** —— 畫在遠處的形狀，
@@ -1137,9 +1165,11 @@ function finishPen() {
   commit('鋼筆');
   panel.refresh();
   updateBar();
-  const n = Math.floor(path.a.length / 2);
-  toast(`已建立「${obj.name}」：${n} 個點、高 ${h} cm　`
-      + '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）');
+  const n = paths.reduce((s, p) => s + Math.floor(p.a.length / 2), 0);
+  toast(`已建立「${obj.name}」：${paths.length} 條路徑、${n} 個點、高 ${h} cm　`
+      + (paths.length > 1
+          ? '⭐ 包在裡面的那條已經變成【洞】'
+          : '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）'));
 }
 
 function cancelPenMode() {
@@ -3856,6 +3886,13 @@ function updateBar() {
    */
   $('penDel').hidden = !(sel.penMode && sel.penEdit);
   $('penDel').disabled = sel.penSel < 0 || sel.penCount <= 3;
+  /**
+   * 🔴 **`加一條` 在鋼筆模式下一直看得到**（畫的時候、改的時候都要按得到）——
+   * ⭐ 那正是 kang 要的「兩邊都做」，而它們是同一支。
+   * ⚠ 目前這條不到 3 個點就變灰（收進去只會變成垃圾）。
+   */
+  $('penAddPath').hidden = !sel.penMode;
+  $('penAddPath').disabled = sel.penCount < 3;
   /**
    * 🔴 **`改點` 開著的時候，這幾顆是「畫」用的，⛔ 一個都不該出現。**
    * ⚠ 留著的話使用者會按 `確定曲線`／`退一點`，而那是在改另一件事 ——

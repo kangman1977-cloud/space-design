@@ -27,8 +27,13 @@ import { extrudeMany } from './extrude.js';
  * 鋼筆畫的貝茲曲線跟 SVG 匯進來的**是同一種東西**，
  * ⛔ 不要為了避免跨檔就在這裡重寫一支細分。
  */
-import { flattenCubic, splitCubic, cubicAt, nearestOnCubic, DEFAULT_TOL }
+import { flattenCubic, splitCubic, cubicAt, nearestOnCubic, polyArea, DEFAULT_TOL }
   from '../sketch/svgPath.js';
+/**
+ * 🔴 **判「哪一圈是洞」跟匯入線稿走同一支**（2026-08-30）——
+ * ⛔ 不在這裡重寫一份。⭐ 相依單向，`profile.js` 沒有 import 回來。
+ */
+import { classify } from '../sketch/profile.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -697,18 +702,32 @@ const BUILDERS = {
    * ⚠ **拉直過程中間長出來的點⛔ 全部不是轉角** —— 它們在曲線上。
    * 〔`oc` 這一欄是展開圖判折線用的，⛔ 不是裝飾〕
    *
-   * ── ⚠ 第 1 階段⛔ 不做「洞」 ───────────────────────────
-   * 一條路徑 ＝ 一個形狀。`extrude` 的 `holes` 欄位留著沒用，
-   * 日後要做洞時**⛔ 不必改資料格式**，只要決定哪一條包住哪一條。
+   * ── 🔴 洞（2026-08-30 加，第 3 階段）────────────────────
+   * **包在裡面的那一條路徑就是洞。** 判準走 `profile.js` 的 `classify()`
+   * —— **巢狀深度是偶數 ＝ 實心，奇數 ＝ 洞**。
+   *
+   * ⚠ **⛔ 不用繞向判斷**（順時針／逆時針）：畫的人不一定照規矩，
+   * 而「在不在裡面」是**幾何事實**，繞向只是慣例。
+   * ⭐ **跟匯入線稿⛔ 不是各判一次，是同一支函式** —— 兩份遲早會不一致。
+   *
+   * ⚠ **`classify()` 一定要有 `area`**，所以這裡補算 `polyArea()`；
+   * ⛔ 少了它每一條都會被當成外框，**洞會變成疊在上面的實心塊**
+   * （【實證 2026-08-29】外 40×40 ＋ 內 20×20 → 體積 10000，⛔ 不是 6000）。
    *
    * ⚠ **⛔ 不放進 `PRIM_DEFAULTS`** —— 理由跟 `extrude` 完全一樣：
    * 它沒辦法從零生成（要有人先畫），放進選單就是一個按了會壞的項目。
    */
   pen(p) {
     const tol = num(p.tol, DEFAULT_TOL);
-    const shapes = (p.paths || [])
-      .map(path => ({ pts: flattenPenPath(path, tol) }))
-      .filter(s => s.pts.length >= 3);
+    const flat = (p.paths || [])
+      .map(path => flattenPenPath(path, tol))
+      .filter(pts => pts.length >= 3)
+      .map(pts => ({ pts, area: polyArea(pts) }));
+    /**
+     * ⚠ **面積接近 0 的先丟掉** —— 那種形狀 `pointInPoly` 判不準，
+     * 而且擠出來什麼都不是。〔跟 `readSVG()` 的 `tiny` 同一條〕
+     */
+    const shapes = classify(flat.filter(s => Math.abs(s.area) >= 1e-6));
     if (!shapes.length) throw new Error('這支鋼筆還沒有畫出任何封閉的形狀');
     return extrudeMany(shapes, num(p.h, 3));
   },

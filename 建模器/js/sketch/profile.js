@@ -213,8 +213,16 @@ function parseLen(s) {
  * 不用路徑的繞向判斷，因為畫的人不一定照規矩（Illustrator 的複合路徑
  * 靠方向，但手畫的、別人給的、轉檔過的都可能是亂的）。
  * 「在不在裡面」是幾何事實，繞向只是慣例。
+ *
+ * 🔴 **2026-08-30 改成 `export`** —— 鋼筆「做洞」要用同一支。
+ * ⚠ **⛔ 不要在 `prim.js` 那邊重寫一份**：判「哪一圈是洞」是同一件事，
+ * 兩份遲早會不一致（坑第 31 條）。
+ * ⭐ 相依方向查過：`profile.js` 一個 `import` 都沒繞回 `prim.js`，⛔ 不會循環。
+ *
+ * @param {Array<{pts:Array<{x,y}>, area:number}>} shapes ⚠ **一定要有 `area`**
+ * @returns {Array} 外框陣列，每個帶著自己的 `holes`
  */
-function classify(shapes) {
+export function classify(shapes) {
   const list = shapes.map(s => ({ ...s, depth: 0, holes: [] }));
 
   for (const a of list) {

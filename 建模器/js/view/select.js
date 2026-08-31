@@ -213,6 +213,19 @@ export class Selection {
     this.penSnapDeg = PEN_SNAP_DEG;
     /** 正在畫的那一條：{ a:[], hi:[], ho:[] }，⛔ 還沒變成物件 */
     this._pen = null;
+    /**
+     * 🔴🔴 **已經畫完的【其他】路徑**（第 3 階段「做洞」，2026-08-30）。
+     * ⛔ **不含**正在畫／正在改的那一條 —— 那一條永遠是 `_pen`。
+     *
+     * ⭐ **為什麼這樣分，⛔ 不是存成一個陣列加一個索引**：
+     * 既有的每一支（`_penAddAnchor`／`_penSetLastHandle`／`penUndo`／
+     * 命中測試／預覽）**都是對 `_pen` 操作的** ——
+     * 保持「目前這一條就叫 `_pen`」，那些**一行都不用改**。
+     * 🔴 要改別條時就**把兩者交換**（`_penSwitchTo()`），
+     * ⛔ 不是到處加「現在是第幾條」的判斷。
+     * 〔坑第 31 條：與其讓兩條路對齊，不如換一個只有一條路的定義〕
+     */
+    this._penDone = [];
     /** 按下去的當下記起來的東西（⛔ 不可以事後從 e 補算，鍵與位置都是初始狀態） */
     this._penDown = null;
     /** 上一次鋼筆輕點的時間與位置，用來認「快點兩下」＝ 收尾 */
@@ -2837,6 +2850,8 @@ export class Selection {
     this._penSel = -1;
     this._penDragA = null;
     this._penDragH = null;
+    /** ⚠ 其他那幾條也要丟掉 —— 留著的話下次進來會接續上一次的形狀 */
+    this._penDone = [];
     return this.penMode;
   }
 
@@ -2860,9 +2875,68 @@ export class Selection {
    * 🔴 **把畫好的東西交出去，並清空。** 呼叫端負責建物件。
    * ⚠ **少於 3 個錨點回 `null`** —— 兩個點圍不出面積，擠出會失敗。
    */
-  takePen() {
-    const p = this._pen;
+  /**
+   * 🔴 **把目前這一條收起來，開始畫新的一條**（`加一條`，2026-08-30）。
+   *
+   * ⭐ **畫的時候按、跟事後進 `編輯路徑` 再按，走的是同一支** ——
+   * ⛔ 沒有第二條路。
+   *
+   * ⚠ **少於 3 個錨點不給收** —— 那條圍不出形狀，收進去只會變成垃圾。
+   * @returns {{ok:boolean, n?:number, reason?:string}} `n` ＝ 收完之後共幾條
+   */
+  penNewPath() {
+    if (!this._pen || this._pen.a.length < 6) {
+      return { ok: false, reason: '目前這一條還不到 3 個點 —— 先把它畫完' };
+    }
+    this._penDone.push(this._pen);
     this._pen = null;
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._penParked = false;
+    this._penHover = -1;
+    this._drawPenPreview();
+    return { ok: true, n: this._penDone.length + 1 };
+  }
+
+  /** 目前總共幾條路徑（含正在畫的那一條）。呼叫端拿去講話與決定按鈕狀態 */
+  get penPathCount() {
+    return this._penDone.length + (this._pen && this._pen.a.length ? 1 : 0);
+  }
+
+  /**
+   * 🔴 **換去改第 `k` 條**（`_penDone` 的索引）——**把它跟 `_pen` 交換**。
+   * ⭐ 交換之後「目前這一條」仍然叫 `_pen`，
+   * 所以底下每一支⛔ 都不必知道有第幾條這回事。
+   */
+  _penSwitchTo(k) {
+    if (k < 0 || k >= this._penDone.length) return false;
+    const cur = this._pen;
+    this._pen = this._penDone[k];
+    if (cur && cur.a.length) this._penDone[k] = cur;
+    else this._penDone.splice(k, 1);
+    return true;
+  }
+
+  /**
+   * 🔴 **把畫好的東西交出去，並清空。** 呼叫端負責建物件。
+   *
+   * ⚠ **2026-08-30 起回的是【一疊路徑】，⛔ 不再是一條** ——
+   * 做洞需要第二條。⭐ 只有一條時就是長度 1 的陣列，
+   * ⛔ 呼叫端不必分兩種情形。
+   *
+   * ⚠ **少於 3 個錨點的那些會被丟掉**（圍不出面積）；
+   * **一條都不剩就回 `null`**。
+   */
+  takePen() {
+    const all = [];
+    for (const p of this._penDone) {
+      if (p && p.a.length >= 6) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
+    }
+    const p = this._pen;
+    if (p && p.a.length >= 6) all.push({ closed: true, a: p.a, hi: p.hi, ho: p.ho });
+    this._pen = null;
+    this._penDone = [];
     this._penDown = null;
     this._lastPenTap = null;
     this._penHover = -1;
@@ -2873,8 +2947,7 @@ export class Selection {
     this._penDragA = null;
     this._penDragH = null;
     if (this.view && this.view.clearPenPreview) this.view.clearPenPreview();
-    if (!p || p.a.length < 6) return null;
-    return { closed: true, a: p.a, hi: p.hi, ho: p.ho };
+    return all.length ? all : null;
   }
 
   /**
@@ -2885,11 +2958,11 @@ export class Selection {
    * 症狀是「**拖一下，選取就跳掉了**」。
    */
   peekPen() {
-    if (!this._pen || this._pen.a.length < 6) return null;
-    return {
-      closed: true,
-      a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice()
-    };
+    const cp = p => ({ closed: true, a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() });
+    const all = [];
+    for (const p of this._penDone) if (p && p.a.length >= 6) all.push(cp(p));
+    if (this._pen && this._pen.a.length >= 6) all.push(cp(this._pen));
+    return all.length ? all : null;
   }
 
   /** 退掉最後一個錨點（畫錯時往回一步）。回傳還剩幾個 */
@@ -3013,16 +3086,21 @@ export class Selection {
    * @param {{a:number[], hi:number[], ho:number[]}} path 世界座標的錨點與把手
    * @returns {number} 載進來幾個錨點（⛔ 少於 3 個回 0 並且不載）
    */
-  loadPen(path) {
-    if (!path || !Array.isArray(path.a) || path.a.length < 6) return 0;
-    this._pen = { a: path.a.slice(), hi: path.hi.slice(), ho: path.ho.slice() };
+  loadPen(paths) {
+    const list = (Array.isArray(paths) ? paths : [paths])
+      .filter(p => p && Array.isArray(p.a) && p.a.length >= 6)
+      .map(p => ({ a: p.a.slice(), hi: p.hi.slice(), ho: p.ho.slice() }));
+    if (!list.length) return 0;
+    /** ⚠ **最後一條當成「目前這一條」** —— 其餘進 `_penDone` */
+    this._pen = list.pop();
+    this._penDone = list;
     this._penSel = -1;
     this._penDragA = null;
     this._penDragH = null;
     /** ⚠ 載進來的是**已經畫完**的東西，⛔ 不要有一條線黏著游標跑 */
     this._penParked = true;
     this._drawPenPreview();
-    return this.penCount;
+    return this.penPathCount;
   }
 
   /**
@@ -3122,6 +3200,44 @@ export class Selection {
   }
 
   /**
+   * 🔴 **`改點` 專用：跑遍【所有】路徑找錨點**（做洞之後可能有好幾條）。
+   *
+   * ⚠ **⛔ 畫的模式不可以用這一支** —— 閉合、轉尖角判斷的是
+   * 「**這一條**的第一個／最後一個錨點」，跨路徑就全錯了。
+   *
+   * ⭐ **做法是暫時把 `_pen` 換過去再問一次**，⛔ 不是複製一份命中測試 ——
+   * 兩份遲早會不一致（坑第 31 條）。⚠ 問完**一定要換回來**。
+   *
+   * @returns {{k:number, i:number}|null} `k` ＝ −1 表示就在目前這一條
+   */
+  _penHitAnchorAny(clientX, clientY) {
+    const i0 = this._penHitAnchor(clientX, clientY);
+    if (i0 >= 0) return { k: -1, i: i0 };
+    const cur = this._pen;
+    for (let k = 0; k < this._penDone.length; k++) {
+      this._pen = this._penDone[k];
+      const i = this._penHitAnchor(clientX, clientY);
+      this._pen = cur;
+      if (i >= 0) return { k, i };
+    }
+    return null;
+  }
+
+  /** 同上，但找的是**線上**（點線上 ＝ 加一個點）。⚠ 一樣要換回來 */
+  _penHitSegmentAny(clientX, clientY, g) {
+    const s0 = this._penHitSegment(clientX, clientY, g);
+    if (s0) return { k: -1, seg: s0 };
+    const cur = this._pen;
+    for (let k = 0; k < this._penDone.length; k++) {
+      this._pen = this._penDone[k];
+      const s = this._penHitSegment(clientX, clientY, g);
+      this._pen = cur;
+      if (s) return { k, seg: s };
+    }
+    return null;
+  }
+
+  /**
    * `改點` 的按下去：**把手 → 錨點 → 線上 → 空白**，四層。
    *
    * ⚠ **順序⛔ 不可以動**：
@@ -3134,8 +3250,11 @@ export class Selection {
     if (!g || !this._pen) return;
     const hh = this._penHitHandle(e.clientX, e.clientY);
     if (hh) { this._penDragH = hh; return; }
-    const ia = this._penHitAnchor(e.clientX, e.clientY);
-    if (ia >= 0) {
+    const ha = this._penHitAnchorAny(e.clientX, e.clientY);
+    if (ha) {
+      /** ⚠ 命中在別條 → **換過去**，換完「目前這一條」仍然叫 `_pen` */
+      if (ha.k >= 0) this._penSwitchTo(ha.k);
+      const ia = ha.i;
       this._penSel = ia;
       this._penDragA = {
         i: ia, gx: g.x, gz: g.z,
@@ -3150,8 +3269,10 @@ export class Selection {
      * ⭐ 走 `penAddAnchor()`（de Casteljau），⛔ 不是插一個尖角點 ——
      * 使用者要的是「多一個**可以調**的點」，⛔ 不是改形狀。
      */
-    const seg = this._penHitSegment(e.clientX, e.clientY, g);
-    if (seg) {
+    const hs = this._penHitSegmentAny(e.clientX, e.clientY, g);
+    if (hs) {
+      if (hs.k >= 0) this._penSwitchTo(hs.k);
+      const seg = hs.seg;
       const r = penAddAnchor(this._pen, seg.seg, seg.t);
       if (r.ok) {
         this._penSel = r.at;
@@ -3272,6 +3393,24 @@ export class Selection {
      */
     const flat = this._penFlatWorld(!!opt.closed || this.penEdit);
     for (let i = 0; i + 1 < flat.length; i++) { pts.push(flat[i], flat[i + 1]); }
+    /**
+     * 🔴 **其他那幾條也要畫出來**（做洞之後可能有好幾條，2026-08-30）。
+     * ⚠ ⛔ 不畫的話，按了 `加一條` 之後**前一條會整個消失** ——
+     * 使用者只會以為它不見了（坑第 21 條）。
+     * ⭐ 一樣**暫時把 `_pen` 換過去**再問，⛔ 不複製一份拉直的邏輯。
+     */
+    if (this._penDone.length) {
+      const cur = this._pen;
+      for (const other of this._penDone) {
+        if (!other || other.a.length < 4) continue;
+        this._pen = other;
+        const f = this._penFlatWorld(true);
+        for (let i = 0; i + 1 < f.length; i++) { pts.push(f[i], f[i + 1]); }
+        const m = Math.floor(other.a.length / 2);
+        for (let i = 0; i < m; i++) dots.push(this._penWorld(i));
+      }
+      this._pen = cur;
+    }
     /** 游標那一段（還沒放下去的） */
     if (extra) { pts.push(this._penWorld(n - 1), extra); }
     /**

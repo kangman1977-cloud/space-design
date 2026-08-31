@@ -730,6 +730,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
            直接接 114.12 —— 好將近 90 倍。測試釘著這個對比。
         ⚠ 加點【不需要按鈕】（點線上就是加），只有刪點需要。
       -->
+      <!--
+        加一條（第 3 階段·做洞）：同一個物件裡再畫一條路徑。
+
+        🔴 包在裡面的那一條就是【洞】—— 判準走 profile.js 的 classify()
+           （巢狀深度偶數＝實心、奇數＝洞），跟匯入線稿同一支。
+        ⭐ 畫的時候按、跟事後進「編輯路徑」再按，走的是【同一支】——
+           kang 2026-08-30 要「兩邊都做」，而這樣做只有一條路。
+      -->
+      <button id="penAddPath" hidden title="加一條：把目前這條收起來，開始畫新的一條。⭐ 包在裡面的那一條就會變成【洞】（畫一個外框、再畫一個小框 ＝ 開一個窗）。⚠ 目前這條要先畫到 3 個點以上">加一條</button>
       <button id="penDel" hidden title="刪點：把選到的那個錨點拿掉。⭐ 它兩側那兩段會【擬合】成一段，所以形狀盡量不變（⛔ 不是直接拉直）。⚠ 只剩 3 個點就不給刪 —— 再刪就圍不出一個形狀">刪點</button>
       <span class="lbl" id="penHLbl" hidden>厚度</span>
       <input id="penH" type="number" min="0.05" step="0.5" value="3" hidden
