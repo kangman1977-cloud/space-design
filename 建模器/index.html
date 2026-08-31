@@ -976,6 +976,37 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span id="snapNumUnit" class="unit" hidden>cm</span>
     </div>
 
+    <!--
+      🔴🔴 參考線那一組（2026-08-31，第 1 階段）。
+
+      ⚠ 整組 `hidden` —— **只在按了左邊那顆 `參考線` 之後才出現**
+      （見 main.js 的 updateBar）。⛔ 判準不是「有沒有選到東西」，
+      是「在不在參考線模式」—— 參考線⛔ 不需要選任何物件。
+
+      ⭐ **那個下拉是被「刪掉某一條」逼出來的**：`全部清掉` 是全刪，
+      而這一階段還不能點畫面上的線，⛔ 沒有辦法指定是哪一條。
+      而它順便解決了「挪一條線」：選現有的一條 → 位置欄自動填它的值
+      → 改數字按 Enter ＝ 挪它。
+      🔴 第 3 階段在畫面上點到某條線 ＝ 在這個下拉裡選了它 ——
+      **同一個狀態、同一個欄位**，⛔ 不是另一套機制。
+    -->
+    <div class="grp" id="gGuide" hidden>
+      <span class="lbl">參考線</span>
+      <button class="gaBtn on" data-ga="x" title="X ＝ 左右。這條線在【前視】與【上視】都看得到（直的）">X</button>
+      <button class="gaBtn" data-ga="y" title="Y ＝ 上下（高度）。這條線在【前視】與【側視】都看得到（橫的）">Y</button>
+      <button class="gaBtn" data-ga="z" title="Z ＝ 前後。這條線在【上視】（橫的）與【側視】（直的）都看得到">Z</button>
+      <select id="guideList" title="這個方向現有的參考線。選一條，位置欄就會填上它的值 —— 接著可以改數字挪它，或按「刪這條」">
+        <option value="">（新的）</option>
+      </select>
+      <span class="lbl">位置</span>
+      <input id="guideNum" type="number" step="any"
+             title="這條參考線的座標，單位 cm（世界座標，跟右側面板的位置是同一組數字）。打完按 Enter">
+      <span class="unit">cm</span>
+      <button id="guideAdd" title="照左邊的方向與位置加一條新的參考線。⚠ 同一個位置已經有線了就不會重複加">加一條</button>
+      <button id="guideDel" disabled title="刪掉下拉裡選中的那一條。⚠ 要先在下拉裡選一條">刪這條</button>
+      <button id="guideClear" title="把【全部三個方向】的參考線都刪掉。⚠ 這是刪除⛔ 不是隱藏 —— 只想暫時看不到請用「檢視」那組的「顯示參考線」">全部清掉</button>
+    </div>
+
     <div class="grp">
       <span class="lbl">視角</span>
       <button id="vFront" title="正視圖（從前面看）。對齊要靠這個 —— 透視圖裡對不準">前</button>
@@ -999,6 +1030,13 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="vertDots" class="on" title="顯示點：把這個物件所有的點標成小白圈。「邊上加點」加在邊中間的點沒有它就看不到位置。⚠ 只在過濾器是「點」或「自動」時有作用；覺得卡就關掉">顯示點</button>
       <button id="measureHud" class="on" title="標尺寸：選到的點／邊／面有多大，顯示在【畫面左下角】那一塊（⛔ 不會擋住 XYZ 拉桿）。邊看長度、面看面積與周長、多選看總計與外框，每一種都附重心座標。⭐ 剛好選到【兩個】同一種的時候，還會多報「距離」與 XYZ 各差多少。⚠ 右邊面板那一行不受這顆按鈕影響">標尺寸</button>
       <button id="measureCircle" title="量圓：把選到的那一圈邊【當成圓】來看，在畫面左下角多報半徑、幾段、每段弦長，以及「網格真值 vs 視為理想圓差多少」。⚠ 它不會判斷這一圈是不是真的圓（方塊的四個角在數學上也共圓）—— 你按了就表示你要問。🔴 那個差額是資訊⛔不是誤差，想更接近圓要回頭把 seg 開高">量圓</button>
+      <!--
+        🔴 參考線的顯示開關放這裡，判準就是這一組上面那則註解自己寫的：
+        「管的都是**看得見什麼**，⛔ 一個都不會改變模型」。
+        ⚠ **關掉是⛔ 不畫，線還在、存檔也還在** —— 那跟「全部清掉」是兩回事，
+        所以 title 與提示訊息都要把這句講出來（看不見 ≠ 不存在）。
+      -->
+      <button id="showGuides" class="on" title="顯示參考線：把三個方向的參考線畫出來（青色）。⚠ 關掉只是【看不到】—— 線還在、存檔也還在，⛔ 不是刪掉。要真的刪請用左邊「參考線」那一組">顯示參考線</button>
       <button id="edges" class="on">稜線</button>
       <button id="wire">線框</button>
       <button id="frame">全部入鏡</button>
@@ -1032,6 +1070,20 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     <hr>
       <button id="mate" class="tool" title="貼合：先點要移動的物件的點／邊／面，再點目標的點／邊／面，自動轉正並貼上去"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 7h7v10H2z"/><path d="M15 7h7v10h-7z"/><path d="M10.5 12h3"/><path d="M12 9.5l2 2.5-2 2.5"/></svg><span class="lab">貼合</span></button>
       <button id="seam" class="tool" title="指定分片：自己決定展開圖從哪裡切開。要先把物件「轉成可編輯網格」才能標"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.4"/><circle cx="6" cy="6" r="2.4"/><path d="M8 16.5L20 5M8 7.5L20 19"/><path d="M2 12h20" stroke-dasharray="2.6 2.4" opacity=".55"/></svg><span class="lab">分片</span></button>
+      <!--
+        🔴🔴 參考線（2026-08-31，kang 拿 Photoshop 的截圖來要的）。
+
+        ⭐ 放在這一群（貼合／分片）而⛔ 不是上面那群，判準是【性質】：
+        上面那群（拉點線面／鋼筆／刀具）會**改變形狀**，
+        這一群是**輔助** —— 而參考線跟 `貼合` 正好是同一類：
+        兩者都是「把東西放到正確的位置」。⛔ 它一格模型都不會動。
+
+        🔴 量過了（1024×768 橫向）：加這第 9 顆之後空隙還剩 27.5px，
+        ⛔ 不會出現捲動、底下兩顆收合鈕也⛔ 不會被推出視線。
+        ⚠ **第 10 顆就會爆** —— 那個數字寫在這裡，⛔ 不要憑感覺再加。
+        ⚠ 而「手指按不按得到」我量不出來，要 kang 拿平板看。
+      -->
+      <button id="guide" class="tool" title="參考線：在指定的座標放一條線，用來對齊排列。⭐ 三個視角【共用】—— 因為一條線在 3D 裡其實是一個平面，前視看到的直線跟上視看到的是同一條。按一下進入，選方向（X／Y／Z）＋打位置就能加。⚠ 這一階段還不能在畫面上點線、也還不會吸附"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v16M21 4v16" opacity=".45"/><path d="M9 2v20" stroke-dasharray="3 2.4"/><path d="M2 15h20" stroke-dasharray="3 2.4"/><circle cx="9" cy="15" r="1.6" fill="currentColor" stroke="none"/></svg><span class="lab">參考線</span></button>
     <hr>
       <button id="mMove" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
       <button id="mRot" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>

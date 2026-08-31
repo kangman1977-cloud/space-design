@@ -669,10 +669,80 @@ export function explodeArray(obj) {
 //  整份文件
 // ═══════════════════════════════════════════════════════
 
+/**
+ * 🔴 **參考線：三個方向各一串公分數。**
+ *
+ * ── ⛔ 為什麼⛔ 不按「視角」分 ────────────────────────
+ * kang 要的是「**針對每個視角做參考線**」，而在 3D 裡那件事會自己合併：
+ * 一條螢幕上的線其實是**一個平面**，所以前視拉的直線（X＝某個數）
+ * 跟上視拉的直線**是同一個東西**，只是從兩個方向看它。
+ *
+ * ⇒ 只有 **X／Y／Z 三種**，而每一種**同時出現在兩個視角裡**。
+ * 〔kang 2026-08-31 拍板「共用」。完整推導在 `規格\建模器-參考線.md`〕
+ *
+ * ── ⚠ ⛔ 它不是物件 ──────────────────────────────
+ * ⛔ 不進 `objects`、⛔ 不生網格、⛔ 不被展開、⛔ 不被 3D 列印檢查看到。
+ * ⭐ 所以它**⛔ 不會踩到待辦裡「丙 只當參考線」那個卡點**
+ * （那一條卡在「兩種 KIND 都會產生網格，會被誤報不封閉」）。
+ */
+export const GUIDE_AXES = ['x', 'y', 'z'];
+
+/** 空的三串。⚠ 每次都要新的物件，⛔ 不可以共用同一份（會被兩個 Doc 共寫） */
+export function emptyGuides() {
+  return { x: [], y: [], z: [] };
+}
+
+/**
+ * 把讀進來的東西整成乾淨的三串：
+ * 只留有限的數字、排序、**去掉重複**。
+ *
+ * ⚠ **去重是必要的，⛔ 不是潔癖**：兩條疊在同一個位置的線，
+ * 畫面上**看起來只有一條**，而下拉裡會出現兩列一模一樣的選項 ——
+ * 使用者刪掉一條會發現「線還在」，那看起來就是壞掉。
+ */
+export function normalizeGuides(raw) {
+  const out = emptyGuides();
+  if (!raw || typeof raw !== 'object') return out;
+  for (const ax of GUIDE_AXES) {
+    const arr = Array.isArray(raw[ax]) ? raw[ax] : [];
+    const seen = new Set();
+    for (const v of arr) {
+      /**
+       * 🔴🔴 **⛔ 不可以只寫 `Number.isFinite(Number(v))`。**
+       *
+       * ⚠ `Number(null)` 是 **0**、`Number('')` 也是 **0**、
+       * `Number(true)` 是 **1** —— 而 **0 是完全合法的參考線位置**
+       * （原點那一條），所以⛔ 沒有辦法用「值等於 0」把它們濾掉。
+       * ⇒ 一個 `null` 會**安靜地變成一條在原點的線**。
+       *
+       * 【實證 2026-08-31】這是**測試抓到的**，⛔ 不是我想到的 ——
+       * 我原本寫的就是 `Number(v)` 那一版，而它在 `{x:[..., null, ...]}`
+       * 上多長出一條 `0`。
+       *
+       * ✅ 正解是**先看型別再轉**：只有數字、以及去掉空白後⛔ 不是空的字串
+       * 才有資格被轉換。
+       */
+      const n = typeof v === 'number' ? v
+        : (typeof v === 'string' && v.trim() !== '') ? Number(v)
+        : NaN;
+      if (!Number.isFinite(n)) continue;
+      // 對到 0.001 cm ＝ 10 微米。比這更近的兩條線⛔ 沒有人分得出來
+      const k = Math.round(n * 1000);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out[ax].push(k / 1000);
+    }
+    out[ax].sort((a, b) => a - b);
+  }
+  return out;
+}
+
 export class Doc {
   constructor() {
     this.head = { name: '未命名', date: today(), note: '' };
     this.objects = [];
+    /** 參考線。⚠ 它跟 `objects` 平行，⛔ 不是 objects 的一種 */
+    this.guides = emptyGuides();
   }
 
   add(obj) { this.objects.push(obj); return obj; }
@@ -685,15 +755,61 @@ export class Doc {
 
   byId(id) { return this.objects.find(o => o.id === id) || null; }
 
+  /**
+   * ⚠ **`clear()` 刻意⛔ 不清參考線。**
+   * 呼叫它的是「刪掉所有物件」那條路，而參考線是**版面的東西**，
+   * ⛔ 不是模型的一部分 —— 把模型換掉、格線還在，才是使用者預期的。
+   * 要清參考線有自己的一支：`clearGuides()`。
+   */
   clear() { this.objects.length = 0; return this; }
 
+  /** 加一條。回傳 true ＝ 真的加了，false ＝ 同一個位置已經有了 */
+  addGuide(ax, v) {
+    if (!GUIDE_AXES.includes(ax) || !Number.isFinite(v)) return false;
+    const before = this.guides[ax].length;
+    this.guides[ax] = normalizeGuides({ [ax]: [...this.guides[ax], v] })[ax];
+    return this.guides[ax].length > before;
+  }
+
+  /** 刪一條。⚠ 用「最接近」找，⛔ 不用嚴格相等 —— 浮點數對不起來 */
+  removeGuide(ax, v) {
+    if (!GUIDE_AXES.includes(ax)) return false;
+    const i = this.guides[ax].findIndex(g => Math.abs(g - v) < 5e-4);
+    if (i < 0) return false;
+    this.guides[ax].splice(i, 1);
+    return true;
+  }
+
+  /** @param {string} [ax] 只清一個方向；不給就三個都清 */
+  clearGuides(ax) {
+    if (ax) { if (GUIDE_AXES.includes(ax)) this.guides[ax] = []; }
+    else this.guides = emptyGuides();
+    return this;
+  }
+
+  guideCount() {
+    return GUIDE_AXES.reduce((n, ax) => n + this.guides[ax].length, 0);
+  }
+
+  /**
+   * 🔴 **`guides` ⛔ 沒有跳版號，這是刻意的。**
+   *
+   * `migrate()` 只擋 `v > DOC_VERSION`，**多出來的欄位它不看** ——
+   * 所以 v4 的檔案帶著 `guides` 存出去，**在還沒更新的程式上照樣開得起來**
+   * （只是看不到參考線）。跳成 v5 反而會把舊分頁擋在門外。
+   *
+   * ⭐ 判準是這個專案自己立的：**v4 是第一個「真的要動資料」的版本**
+   * （`migrateBendSrc` 把 `b.r` 換算成 `b.ri`），而這一次
+   * ⛔ 不動任何既有欄位的意義。日後真的要改 `guides` 的形狀再跳。
+   */
   toJSON() {
     return {
       type: DOC_TYPE,
       v: DOC_VERSION,
       unit: UNIT,
       head: { ...this.head },
-      objects: this.objects.map(o => o.toJSON())
+      objects: this.objects.map(o => o.toJSON()),
+      guides: normalizeGuides(this.guides)
     };
   }
 
@@ -701,6 +817,14 @@ export class Doc {
     const data = migrate(d);
     this.head = { ...this.head, ...(data.head || {}) };
     this.objects = (data.objects || []).map(ModelObject.fromJSON);
+    /**
+     * ⚠ **一定要走 `normalizeGuides()`，⛔ 不可以直接接手那個物件**：
+     * ① 舊檔沒有這一欄（給空的）；
+     * ② 別人手改過的檔可能塞字串或 null 進來；
+     * ③ **⛔ 不重新指派的話，Undo 的快照會跟現在的 Doc 共用同一個陣列**
+     *    —— 那會讓「復原」什麼都沒還原。
+     */
+    this.guides = normalizeGuides(data.guides);
     return this;
   }
 

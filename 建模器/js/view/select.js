@@ -194,6 +194,11 @@ export class Selection {
      * 而是**在地板上放錨點**。
      */
     this.penMode = false;
+    /**
+     * 🔴 **參考線模式**（2026-08-31 加）。開著的時候⛔ 不拖物件
+     * （gizmo 收起來），控制列那一組才出得來。⚠ 第 1 階段⛔ 還不能點線。
+     */
+    this.guideMode = false;
     /** 下一個錨點強制是尖角（工具列那顆「尖角」切換鈕） */
     this.penCorner = false;
     /**
@@ -2840,7 +2845,31 @@ export class Selection {
    * 而 gizmo 會把按下去的事件吃掉，第一筆就畫不出來。
    */
   get inPickMode() {
-    return this.seamMode || this.mateMode || this.knifeMode || this.penMode;
+    return this.seamMode || this.mateMode || this.knifeMode || this.penMode
+      || this.guideMode;
+  }
+
+  /**
+   * 🔴 **參考線模式**（2026-08-31 第 1 階段）。
+   *
+   * ── 為什麼它也算 `inPickMode` ────────────────────────
+   * ⚠ **⛔ 這一階段還沒有任何東西要「點」**（線是打數字加的）——
+   * 但它照樣要進來，理由是**另一半**：`inPickMode` 會把 gizmo 收起來
+   * （`tc.enabled = false`）。**參考線那一排開著的時候⛔ 不應該拖得動物件** ——
+   * 那是規格上寫的「跟拖物件會不會打架」那條。
+   *
+   * ⭐ 而**第 3 階段要點線的時候，這個閘門已經在了**，⛔ 不必再改一次。
+   *
+   * ⚠ **⛔ 不要順手接 `setDrawInput()`**（刀具與鋼筆那一對接了）——
+   * 那是「左鍵空出來給畫、轉視角換到右鍵」，而這一階段
+   * **左鍵完全沒有用途**，接了只會讓轉視角莫名其妙變成右鍵。
+   */
+  setGuideMode(on) {
+    this.guideMode = !!on;
+    this.tc.enabled = !this.inPickMode;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.inPickMode;
+    return this.guideMode;
   }
 
   setMateMode(on) {

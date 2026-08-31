@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, download, openFile, autosave, loadAutosave,
-         penPathToWorld, penPathToLocal }
+         penPathToWorld, penPathToLocal, GUIDE_AXES }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
@@ -808,6 +808,15 @@ function exitOtherModes(keep) {
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
     knifePicks = []; hideKnifeLine();
+  }
+  /**
+   * 🔴 **參考線也要收**（2026-08-31）。
+   * ⚠ 它這一階段**⛔ 不吃畫面上的點擊**，所以⛔ 不會去搶 `pointerup` 那條鏈 ——
+   * 但它會**把 gizmo 收起來**（`inPickMode`）。⛔ 不收的話就是
+   * 「按了鋼筆，物件卻還是拖不動」，而**畫面上完全沒有線索**。
+   */
+  if (keep !== 'guide' && sel.guideMode) {
+    sel.setGuideMode(false); $('guide').classList.remove('on');
   }
 }
 
@@ -3728,6 +3737,226 @@ function applySnap(v) {
   toast(s > 0 ? `${NAME[sel.mode]}吸附 ${s} ${k.unit}` : `${NAME[sel.mode]}吸附關閉`);
 }
 
+// ═══════════════════════════════════════════════════════
+//  參考線（第 1 階段：線本身）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **參考線：在指定的座標放一條線，用來對齊排列。**
+ * kang 2026-08-31 拿 Photoshop「新參考線」的截圖來要的。
+ *
+ * ── 🔴 三個視角【共用】，⛔ 不是各自一組 ──────────────
+ * 他原本要的是「針對每個視角做參考線」，而在 3D 裡那件事**會自己合併**：
+ * 一條螢幕上的線其實是**一個平面**，所以「前視拉的直線」跟
+ * 「上視拉的直線」**是同一個東西**，只是從兩個方向看它。
+ * ⇒ 只有 X／Y／Z 三種，每一種同時出現在**兩個**視角裡。
+ * 〔他看完推導後拍板「共用」。完整版在 `規格\建模器-參考線.md`〕
+ *
+ * ── ⭐ 欄位是唯一的真相，下拉是「選哪一條」──────────────
+ * 選 `（新的）` → 打數字 → `加一條`；
+ * 選現有的一條 → **欄位自動填上它的值** → 改數字 ＝ 挪它、`刪這條` ＝ 刪它。
+ * 🔴 第 3 階段在畫面上點到某條線，就是**在這個下拉裡選了它** ——
+ * ⛔ 不是另一套機制。
+ *
+ * ── Undo ⛔ 什麼都不用做 ────────────────────────────
+ * `hist` 的快照就是 `doc.toJSON()`，而參考線在 `doc.guides` 裡。
+ * 只要動完呼叫 `commit()`，復原就自動成立。
+ */
+let guideAxis = 'x';
+
+/** 這一條的座標；`null` ＝ 下拉停在「（新的）」 */
+let guidePicked = null;
+
+const GUIDE_AXIS_LABEL = { x: 'X 左右', y: 'Y 上下', z: 'Z 前後' };
+
+/**
+ * 把那一排刷成跟 `doc.guides` 一致。
+ *
+ * ⚠ **每一次動完都要叫** —— 加、刪、清、換方向、**還有 Undo**。
+ * 🔴 Undo 那條路⛔ 不經過任何按鈕（`hist.set → loadJSON → view.sync`），
+ * 所以它是靠 `updateBar()` 被叫到的（`commit()` 最後一行會叫）。
+ */
+function syncGuideRow() {
+  const on = sel.guideMode;
+
+  /**
+   * 🔴🔴 **這裡藏的是【裡面那幾顆】，⛔ 不是那一組本身。**
+   *
+   * ⚠ **`hideEmptyGroups()` 跑在這一支後面**，而它是照
+   * 「裡面還有沒有東西看得見」重設每一組的 `hidden`
+   * 【已查證 · `main.js` 的 `hideEmptyGroups()`】——
+   * ⇒ 我要是在這裡寫 `$('gGuide').hidden = !on`，
+   * **它會在下一行把那一組又打開**，而且⛔ 不會報錯。
+   *
+   * 🔴 **這正是鐵律二的另一張臉**：兩個地方寫同一個元素的顯示條件，
+   * 必然打架。⭐ 分工是「**這一支管裡面那幾顆，組別歸 `hideEmptyGroups()`**」
+   * —— 工具列上其他每一組本來就是這樣運作的。
+   */
+  for (const b of document.querySelectorAll('.gaBtn')) {
+    b.hidden = !on;
+    b.classList.toggle('on', b.dataset.ga === guideAxis);
+  }
+  for (const id of ['guideList', 'guideNum', 'guideAdd', 'guideDel', 'guideClear']) {
+    $(id).hidden = !on;
+  }
+  if (!on) return;
+
+  const list = doc.guides[guideAxis] || [];
+  /**
+   * ⚠ **選中的那一條可能已經不在了**（按了刪除、或 Undo 把它還原掉）——
+   * ⛔ 不清掉的話下拉會停在一個不存在的值，而 `刪這條` 按下去沒反應。
+   */
+  if (guidePicked !== null && !list.some(v => Math.abs(v - guidePicked) < 5e-4)) {
+    guidePicked = null;
+  }
+
+  const box = $('guideList');
+  box.innerHTML = '';
+  box.appendChild(new Option(list.length ? '（新的）' : '（還沒有）', ''));
+  for (const v of list) box.appendChild(new Option(`${fmtGuide(v)} cm`, String(v)));
+  box.value = guidePicked === null ? '' : String(guidePicked);
+
+  $('guideDel').disabled = guidePicked === null;
+  $('guideClear').disabled = doc.guideCount() === 0;
+
+  // 正在打字時⛔ 不要覆蓋他打到一半的字〔照 updateEditNum 那條〕
+  if (document.activeElement !== $('guideNum')) {
+    $('guideNum').value = guidePicked === null ? '' : String(guidePicked);
+  }
+}
+
+/** ⚠ 尾巴的 0 砍掉：`20` ⛔ 不要印成 `20.0000` */
+function fmtGuide(v) { return String(Math.round(v * 1000) / 1000); }
+
+$('guide').onclick = function () {
+  const on = !sel.guideMode;
+  if (on) exitOtherModes('guide');
+  sel.setGuideMode(on);
+  this.classList.toggle('on', on);
+  guidePicked = null;
+  updateBar();
+  /**
+   * ⚠ **⛔ 不要只說「參考線開啟」** —— 這一階段**畫面上點不到任何東西**，
+   * 而使用者剛按完一顆工具鈕，直覺會去點畫面。⛔ 不講的話那就是
+   * 「按了沒反應」（坑第 21 條）。
+   */
+  toast(on
+    ? '參考線：在上面選方向（X／Y／Z）＋打位置，按「加一條」。⚠ 這一階段還不能在畫面上點線'
+    : '參考線關閉');
+};
+
+for (const b of document.querySelectorAll('.gaBtn')) {
+  b.onclick = () => {
+    guideAxis = b.dataset.ga;
+    guidePicked = null;          // 換了方向，上一個選擇沒有意義了
+    syncGuideRow();
+    toast(`參考線方向：${GUIDE_AXIS_LABEL[guideAxis]}　`
+      + `這個方向現在有 ${doc.guides[guideAxis].length} 條`);
+  };
+}
+
+$('guideList').onchange = () => {
+  const raw = $('guideList').value;
+  guidePicked = raw === '' ? null : Number(raw);
+  syncGuideRow();
+};
+
+/**
+ * 🔴 **Enter 只負責「離開欄位」，⛔ 不要在這裡直接套用。**
+ * 直接套用的話 `keydown` 一次、瀏覽器接著發的 `change` 再一次，
+ * **同一個動作會走兩遍**（kang 2026-08-25 在 `editNum` 上實測抓到過）。
+ */
+$('guideNum').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('guideNum').blur(); }
+});
+
+/**
+ * 在欄位打數字：
+ * - 下拉停在「（新的）」→ **只是填著**，⛔ 不動任何東西（要按「加一條」）
+ * - 下拉選著某一條 → **把那一條挪過去**
+ *
+ * ⚠ **為什麼「新的」那一半刻意什麼都不做**：打數字的當下就自動加一條的話，
+ * 打 `1` 想繼續打 `12` 的人會**先加出一條在 1 的線**。
+ * ⭐ 分成「打」與「加」兩步是**故意的**，⛔ 不是漏做。
+ */
+$('guideNum').addEventListener('change', () => {
+  if (guidePicked === null) return;
+  const v = parseFloat($('guideNum').value);
+  if (!Number.isFinite(v)) { syncGuideRow(); return; }
+  if (Math.abs(v - guidePicked) < 5e-4) return;      // 沒動就不記一步 Undo
+
+  const from = guidePicked;
+  doc.removeGuide(guideAxis, from);
+  if (!doc.addGuide(guideAxis, v)) {
+    /**
+     * ⚠ **那個位置已經有一條了** —— 剛才刪掉的要放回去，
+     * ⛔ 否則使用者會發現「我只是打了個數字，結果少一條線」。
+     */
+    doc.addGuide(guideAxis, from);
+    syncGuideRow();
+    toast(`${fmtGuide(v)} cm 已經有一條參考線了，⛔ 沒有搬過去`, true);
+    return;
+  }
+  guidePicked = v;
+  commit('挪參考線');
+  toast(`參考線 ${GUIDE_AXIS_LABEL[guideAxis]}：${fmtGuide(from)} → ${fmtGuide(v)} cm`);
+});
+
+$('guideAdd').onclick = () => {
+  const v = parseFloat($('guideNum').value);
+  if (!Number.isFinite(v)) {
+    toast('先在「位置」打一個數字（單位 cm，可以是負的）', true);
+    return;
+  }
+  if (!doc.addGuide(guideAxis, v)) {
+    toast(`${fmtGuide(v)} cm 已經有一條參考線了`, true);
+    return;
+  }
+  guidePicked = v;
+  commit('加參考線');
+  /**
+   * ⭐ **講數量** —— 加了一條之後畫面上多一條青線，
+   * 但在斜視角很容易被模型擋住而看不出來。數字對得起來就不會懷疑。
+   */
+  toast(`參考線 ${GUIDE_AXIS_LABEL[guideAxis]} ＝ ${fmtGuide(v)} cm　`
+    + `這個方向現在有 ${doc.guides[guideAxis].length} 條`);
+};
+
+$('guideDel').onclick = () => {
+  if (guidePicked === null) { toast('先在下拉裡選一條要刪的', true); return; }
+  const v = guidePicked;
+  if (!doc.removeGuide(guideAxis, v)) { syncGuideRow(); return; }
+  guidePicked = null;
+  commit('刪參考線');
+  toast(`刪掉 ${GUIDE_AXIS_LABEL[guideAxis]} ＝ ${fmtGuide(v)} cm　`
+    + `這個方向還有 ${doc.guides[guideAxis].length} 條`);
+};
+
+$('guideClear').onclick = () => {
+  const n = doc.guideCount();
+  if (!n) { toast('現在⛔ 沒有任何參考線'); return; }
+  doc.clearGuides();
+  guidePicked = null;
+  commit('清掉全部參考線');
+  /**
+   * ⚠ **要講「三個方向都清了」** —— 使用者眼前只看得到目前這個方向的下拉，
+   * 很容易以為只清了這一個。⭐ 而且要提醒 Undo 救得回來。
+   */
+  toast(`三個方向的參考線全部清掉了（共 ${n} 條）。按「復原」可以救回來`);
+};
+
+$('showGuides').onclick = function () {
+  const on = view.setGuidesVisible(!view.guidesVisible);
+  this.classList.toggle('on', on);
+  /**
+   * 🔴 **關掉的時候一定要講「線還在」** —— ⛔ 不講的話它跟「全部清掉」
+   * 在畫面上是**一模一樣的**（線都不見了），而那兩件事⛔ 不可以混淆。
+   */
+  toast(on
+    ? `顯示參考線（現在有 ${doc.guideCount()} 條）`
+    : `參考線隱藏了 —— ⚠ 線還在、存檔也還在（共 ${doc.guideCount()} 條），⛔ 不是刪掉`);
+};
+
 $('marquee').onclick = function () {
   const on = sel.setMarqueeMode(!sel.marqueeMode);
   this.classList.toggle('on', on);
@@ -3877,6 +4106,14 @@ function updateBar() {
    * 一起顯示出來 —— **兩個地方寫同一顆按鈕的顯示條件，必然會打架**。
    */
   syncSnapRow();
+  /**
+   * 🔴 **參考線那一排也在這裡刷新。**
+   * ⚠ **⛔ 判準不是 `gizmoOff`** —— 參考線⛔ 不需要選任何物件，
+   * 它的閘門是「在不在參考線模式」。⭐ 掛在這裡的理由是**Undo**：
+   * 復原走 `hist.set → loadJSON → view.sync`，⛔ 不經過任何按鈕，
+   * 而 `commit()` 最後一行會叫 `updateBar()` —— 這條路一起涵蓋。
+   */
+  syncGuideRow();
   for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = off;
 
   /**

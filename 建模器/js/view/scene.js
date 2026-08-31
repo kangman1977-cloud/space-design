@@ -111,6 +111,13 @@ export class SceneView {
 
     this.showEdges = true;
     this.wireframe = false;
+    /**
+     * 參考線畫不畫。⚠ **預設開** —— 加了一條線卻看不到，
+     * ⛔ 跟「這顆按鈕壞了」分不出來（坑第 21 條）。
+     * 線本身的家在 `doc.guides`，這裡只管**畫不畫**。
+     */
+    this.guidesVisible = true;
+    this._guides = null;
 
     this._fps = { acc: 0, n: 0, last: performance.now(), value: 0 };
   }
@@ -213,6 +220,16 @@ export class SceneView {
     this.pickables = [...this.byId.values()];
     this._seamsDirty = false;      // 這一輪已經全部重畫過了
     this._geomDirty = false;
+
+    /**
+     * 🔴 **參考線也在這裡重畫。**
+     *
+     * ⚠ **⛔ 不可以只在「按了加一條」的時候畫** —— `Undo` 走的是
+     * `hist.set → doc.loadJSON() → view.sync(doc)`，⛔ 不經過任何按鈕。
+     * 掛在 `sync()` 裡，**復原、讀檔、開新檔三條路一次全涵蓋**。
+     * 〔鐵律二的同一個形狀：兩端都要，只改一端 ＝ 沒改〕
+     */
+    this.syncGuides(doc);
     /**
      * ⚠ **一定要放在 `sync()` 的最後重套一次** —— 編輯路徑的時候
      * 每拖一下都會 `sync()`，⛔ 不重套的話半透明會在第一次重建時掉回不透明，
@@ -515,6 +532,93 @@ export class SceneView {
   }
 
   setGridVisible(on) { this.grid.visible = on; }
+
+  // ── 參考線 ────────────────────────────────────────
+
+  /**
+   * 🔴 **參考線：一條螢幕上的線，在 3D 裡是一個平面。**
+   *
+   * ── 為什麼畫成「井字」而⛔ 不是一片半透明的面 ──────────
+   * 半透明的面會**把模型的顏色染掉**，而參考線是**輔助**、⛔ 不是內容 ——
+   * 染色會讓人以為模型變了。所以每個平面只畫**四條邊 ＋ 一個十字**：
+   * 從任何一個正交視角看過去，它投影出來**就是一條直線**（正是 PS 的樣子），
+   * 而斜看的時候看得出它是一個平面 —— ⭐ 那正好解釋了「三個視角共用」
+   * 這件事，⛔ 不必用文字說明。
+   *
+   * ── 尺寸跟著地板走 ──────────────────────────────
+   * 地板網格是 600cm（見 `_initLights` 那段）。參考線用同一個範圍，
+   * ⚠ **⛔ 不要另外寫一個數字** —— 兩個數字遲早會不一樣，
+   * 而使用者只會看到「參考線比地板短一截」。
+   *
+   * ── 顏色 ────────────────────────────────────────
+   * 青色 `0x2ad4d4`（kang 2026-08-31 選的，＝ Photoshop 的參考線顏色）。
+   * ⚠ **跟「切一刀預覽」是同一個值** —— 容許它的理由：
+   * 切一刀那個是**短暫的**，而且兩者形狀完全不同
+   * （切一刀是模型表面上的一圈，參考線是貫穿場景的一個平面框）。
+   */
+  syncGuides(doc) {
+    this.clearGuides();
+    const g = doc && doc.guides;
+    if (!g) return;
+
+    const R = 300;                       // ＝ 地板 600cm 的一半
+    const seg = [];                      // ⚠ LineSegments：每兩點一段
+    const push = (a, b) => { seg.push(a, b); };
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+    /**
+     * 一個平面畫五樣東西：四條邊 ＋ 中央的十字。
+     * @param {(u:number, v:number) => THREE.Vector3} at 平面上的座標 → 世界座標
+     */
+    const frame = at => {
+      push(at(-R, -R), at(R, -R));
+      push(at(R, -R), at(R, R));
+      push(at(R, R), at(-R, R));
+      push(at(-R, R), at(-R, -R));
+      push(at(-R, 0), at(R, 0));         // 十字：橫
+      push(at(0, -R), at(0, R));         // 十字：直
+    };
+
+    for (const v of g.x || []) frame((u, w) => V(v, w, u));
+    for (const v of g.y || []) frame((u, w) => V(u, v, w));
+    for (const v of g.z || []) frame((u, w) => V(u, w, v));
+
+    if (!seg.length) return;
+    this._guides = this._buildLineOverlay('guides', seg, null, 0x2ad4d4);
+    if (!this._guides) return;
+    /**
+     * ⚠ **`renderOrder` 要比另外那幾種預覽低**（它們是 7／8）——
+     * 參考線是**一直都在**的東西，⛔ 不可以蓋住「你現在正在做的那件事」。
+     */
+    this._guides.traverse(o => { if (o.renderOrder) o.renderOrder = 5; });
+    /**
+     * ⚠ **⛔ 不要再 `scene.add()` 一次** —— `_buildLineOverlay()` 自己
+     * 最後一行就加進場景了。多加一次 three.js ⛔ 不會報錯，
+     * 但那個節點會**被登記兩次**，移除時只清掉一份 —— 線會留在畫面上。
+     */
+    this._guides.visible = this.guidesVisible;
+  }
+
+  clearGuides() {
+    if (!this._guides) return;
+    this.scene.remove(this._guides);
+    this._guides.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._guides = null;
+  }
+
+  /**
+   * ⚠ **關掉只是⛔ 不畫，線還在（存檔也還在）。**
+   * 這跟「全部清掉」是兩回事 —— 呼叫端的訊息要講清楚，
+   * 否則使用者會以為線被刪了（坑第 21 條的反面：看不見 ≠ 不存在）。
+   */
+  setGuidesVisible(on) {
+    this.guidesVisible = !!on;
+    if (this._guides) this._guides.visible = this.guidesVisible;
+    return this.guidesVisible;
+  }
 
   /** 把鏡頭拉到看得見全部東西的位置 */
   frameAll(doc) {

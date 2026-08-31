@@ -12282,6 +12282,130 @@ section('鋼筆 不封口：甲 加厚成板 ／ 乙 立成牆');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  參考線（第 1 階段：線本身）
+// ═══════════════════════════════════════════════════════
+
+section('參考線：三串數字、去重、存讀檔往返');
+
+/**
+ * 🔴🔴 **這一節守的是「線會不會安靜地不見」，⛔ 不是幾何。**
+ *
+ * ⚠ 參考線⛔ 沒有形狀可以量 —— 它就是三串公分數。
+ * 所以能對答案的只有**數量與內容**，而那正好是最容易靜默出錯的地方：
+ * 存檔漏一欄、`Undo` 共用同一個陣列、去重把不該去的去掉。
+ *
+ * ⭐ **`Undo` 那一項是刻意放進來的**：`hist` 的快照就是 `doc.toJSON()`，
+ * 而**⛔ 不重新指派陣列的話，快照跟現在的 Doc 會共用同一個陣列** ——
+ * 症狀是「按了復原，什麼都沒還原」，⛔ 而且不會報錯。
+ */
+{
+  const ioM = await import('../js/core/io.js');
+
+  // ── ① 空的 Doc ──
+  {
+    const doc = new ioM.Doc();
+    eq('① 新文件：一條參考線都沒有', doc.guideCount(), 0);
+    ok('　 三個方向都在', ['x', 'y', 'z'].every(a => Array.isArray(doc.guides[a])));
+  }
+
+  // ── ② 加、去重、排序 ──
+  {
+    const doc = new ioM.Doc();
+    ok('② 加一條 X＝20', doc.addGuide('x', 20));
+    ok('　 同一個位置再加一次 → 擋下來', doc.addGuide('x', 20) === false);
+    ok('　 加 X＝5（比較小）', doc.addGuide('x', 5));
+    eq('★ 　 X 有幾條', doc.guides.x.length, 2);
+    eq('★ 　 而且【由小到大】排好了', doc.guides.x.join(','), '5,20');
+    ok('　 別的方向互不影響：Y＝20 加得進去', doc.addGuide('y', 20));
+    eq('★ 　 三個方向總共', doc.guideCount(), 3);
+    ok('　 ⛔ 不是數字的擋下來', doc.addGuide('x', NaN) === false);
+    ok('　 ⛔ 不存在的方向擋下來', doc.addGuide('w', 1) === false);
+  }
+
+  // ── ③ 刪一條：用「最接近」找，⛔ 不用嚴格相等 ──
+  {
+    const doc = new ioM.Doc();
+    doc.addGuide('z', 12.5);
+    ok('③ 刪 Z＝12.5', doc.removeGuide('z', 12.5));
+    eq('　 刪完剩幾條', doc.guides.z.length, 0);
+    doc.addGuide('z', 12.5);
+    ok('★ 　 差 0.0001 也刪得掉（浮點數對不起來的那個坑）',
+       doc.removeGuide('z', 12.5001));
+    doc.addGuide('z', 12.5);
+    ok('　 但差 1 就⛔ 不該刪到別人', doc.removeGuide('z', 13.5) === false);
+    eq('　 那一條還在', doc.guides.z.length, 1);
+  }
+
+  // ── ④ clear() ⛔ 不清參考線；clearGuides() 才清 ──
+  {
+    const doc = new ioM.Doc();
+    doc.add(new ioM.ModelObject({ src: { type: 'box', w: 10, h: 10, d: 10 } }));
+    doc.addGuide('x', 1); doc.addGuide('y', 2); doc.addGuide('z', 3);
+    doc.clear();
+    eq('④ 刪光物件之後，物件數', doc.objects.length, 0);
+    eq('★ 　 而參考線【一條都沒少】（它是版面的東西，⛔ 不是模型的）',
+       doc.guideCount(), 3);
+    doc.clearGuides('x');
+    eq('　 只清 X 之後', doc.guideCount(), 2);
+    doc.clearGuides();
+    eq('　 全部清掉之後', doc.guideCount(), 0);
+  }
+
+  // ── ⑤ 存讀檔往返 ──
+  {
+    const doc = new ioM.Doc();
+    doc.addGuide('x', 20); doc.addGuide('x', -7.5);
+    doc.addGuide('y', 45); doc.addGuide('z', 0);
+    const json = JSON.parse(JSON.stringify(doc.toJSON()));
+    const back = ioM.Doc.fromJSON(json);
+    eq('★★ ⑤ 存讀檔往返：總數一樣', back.guideCount(), 4);
+    eq('★ 　 X 那兩條（含負數）逐字相同', back.guides.x.join(','), '-7.5,20');
+    eq('　 Y', back.guides.y.join(','), '45');
+    eq('★ 　 Z＝0 ⛔ 沒有被當成「假值」丟掉', back.guides.z.join(','), '0');
+    eq('　 版號⛔ 沒有跳（多一個選填欄位⛔ 不必跳版）', json.v, ioM.DOC_VERSION);
+  }
+
+  // ── ⑥ 舊檔（⛔ 沒有 guides 那一欄）讀得動 ──
+  {
+    const doc = new ioM.Doc();
+    doc.addGuide('x', 99);
+    const json = JSON.parse(JSON.stringify(doc.toJSON()));
+    delete json.guides;                       // 假裝這是這個功能之前存的檔
+    const back = ioM.Doc.fromJSON(json);
+    eq('★ ⑥ 舊檔沒有那一欄 → 讀成空的，⛔ 不會爆', back.guideCount(), 0);
+    ok('　 三個方向還是陣列', ['x', 'y', 'z'].every(a => Array.isArray(back.guides[a])));
+  }
+
+  // ── ⑦ 🔴 Undo 的快照⛔ 不可以跟現在的 Doc 共用同一個陣列 ──
+  {
+    const doc = new ioM.Doc();
+    doc.addGuide('x', 10);
+    const snap = JSON.parse(JSON.stringify(doc.toJSON()));   // ＝ hist 拍的快照
+    doc.addGuide('x', 20);
+    doc.addGuide('x', 30);
+    eq('⑦ 拍完快照又加了兩條，現在有', doc.guides.x.length, 3);
+    eq('★★ 　 而快照裡【還是只有一條】', snap.guides.x.length, 1);
+    doc.loadJSON(snap);                                       // ＝ 按下復原
+    eq('★★ 　 復原之後回到一條', doc.guides.x.length, 1);
+    doc.addGuide('x', 77);
+    eq('★★ 　 再加一條⛔ 不會污染快照', snap.guides.x.length, 1);
+  }
+
+  // ── ⑧ 手改過的髒檔案：字串、null、重複、亂序 ──
+  {
+    const doc = new ioM.Doc();
+    const back = doc.loadJSON({
+      type: 'model-doc', v: 4, unit: 'cm', objects: [],
+      guides: { x: ['20', null, 5, 20, 'abc', Infinity], y: 3, z: null }
+    });
+    eq('★ ⑧ 髒資料：X 只留下 5 與 20（字串轉得動、重複去掉）',
+       back.guides.x.join(','), '5,20');
+    eq('　 Y ⛔ 不是陣列 → 空的', back.guides.y.length, 0);
+    eq('　 Z 是 null → 空的', back.guides.z.length, 0);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
