@@ -11989,6 +11989,44 @@ section('內建鋼筆：錨點與把手 → 輪廓');
      */
     ok('★★ 　 有洞的網格【仍然是封閉的】', cls([outer, inner]));
     ok('★ 　 兩塊 ＋ 洞也封閉', cls([outer, inner, far]));
+
+    /**
+     * 🔴🔴 **鋼筆物件的右側面板【原本什麼都沒有】。**（2026-08-30 補）
+     *
+     * 〔kang 2026-08-30 問出來的：「進入編輯時...是不能編輯的」〕
+     * ⛔ **病因**：`toolbar.js` 是「**去 `PRIM_SPECS` 查得到才顯示東西**」，
+     * 而 `pen` **不在裡面** → 既改不了厚度，
+     * 也**沒有「轉成可編輯網格」那顆**。
+     * 🔴 **而 `extrude`（匯入線稿）有** —— 兩個走同一條路的功能行為不一致。
+     *
+     * ⚠ **第 ② 項是這一組的紅線**：加進 `PRIM_SPECS` **⛔ 不可以**
+     * 讓它跑進「新增」下拉 —— 那會變成一個**按了會壞**的項目
+     * （鋼筆沒辦法從零生成，一定要有人先畫）。
+     */
+    ok('★★ 　 ① pen 在 PRIM_SPECS 裡（右側面板才有東西）',
+       'pen' in prim.PRIM_SPECS);
+    ok('★★ 　 ② ⛔ 但【不在】新增下拉裡（那是從 PRIM_DEFAULTS 產生的）',
+       !prim.PRIM_TYPES.includes('pen'), prim.PRIM_TYPES.join(' '));
+    eq('★ 　 ③ 它的欄位就是高度',
+       prim.PRIM_SPECS.pen.fields.map(f => f.key).join(','), 'h');
+    {
+      const ioM = await import('../js/core/io.js');
+      const o = new ioM.ModelObject({ name: '鋼筆', kind: ioM.KIND.SOLID,
+        src: { type: 'pen', h: 5, paths: [outer] } });
+      near('★ 　 ④ 高度 5 → 體積 8000', o.mesh().volume(), 8000, 0.5);
+      o.src.h = 10; o.invalidate();
+      near('★★ 　 　 改成 10 → 體積【剛好兩倍】', o.mesh().volume(), 16000, 0.5);
+      /**
+       * 🔴 **`bake()` 之後那串錨點會不見** —— 形狀一格不差，
+       * 但 `編輯路徑` 回不去。⚠ 這一項釘的是那個**代價**，
+       * ⛔ 免得日後有人以為 bake 是無損的。
+       */
+      const before = o.mesh().volume();
+      o.bake();
+      eq('★★ 　 ⑤ bake 之後 src 變成 mesh', o.src.type, 'mesh');
+      near('★★ 　 　 而形狀【一格不差】', o.mesh().volume(), before, 1e-6);
+      ok('★★ 　 　 但那串錨點【不見了】（＝ 編輯路徑回不去）', !o.src.paths);
+    }
     /**
      * ⭐ **上界 0.1% 的物理意義**：一個 1000 cm³ 的東西差 1 cm³ ——
      * 而拉直本身的容許值就是 0.2 cm，**取樣誤差本來就該在這個量級**。
