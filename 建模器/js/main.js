@@ -3757,8 +3757,16 @@ function updateBar() {
    * 「進了編輯模式但還沒點任何點」的時候，那三組還留在畫面上。
    */
   const gizmoOff = sel.editMode ? sel.editCount === 0 : sel.count === 0;
-  for (const b of document.querySelectorAll('.spBtn')) b.hidden = gizmoOff;
-  for (const b of document.querySelectorAll('.snapBtn')) b.hidden = gizmoOff;
+  /**
+   * ⚠ **`.pvBtn` 是我第一版漏掉的** —— 我照工具列的組別清單以為「方向」
+   * 那四顆都是 `.spBtn`，實際是 **`.spBtn`（世界／法向）＋ `.pvBtn`（重心／
+   * 最後選的）** 兩個 class。⇒ ⛔ 那一組因此永遠收不起來。
+   * 🔴 **⛔ 這是「推論不是權威事實」** —— 後來是**問 DOM**
+   * （列出 `#bar` 裡所有的 class）才確定的，⛔ 不是看清單猜的。
+   */
+  for (const cls of ['.spBtn', '.pvBtn', '.snapBtn']) {
+    for (const b of document.querySelectorAll(cls)) b.hidden = gizmoOff;
+  }
   for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = gizmoOff;
 
   /**
