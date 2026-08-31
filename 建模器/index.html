@@ -28,6 +28,9 @@ html, body {
 /* ══ 工具列 ════════════════════════════════════════ */
 #bar {
   flex: none; z-index: 20;
+  /* 🔴 右邊留給折疊鈕（它是絕對定位的，⛔ 不佔高度）——
+     ⛔ 不預留的話最後一組會跑到它底下 */
+  padding-right: 44px;
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
   padding-top: calc(8px + env(safe-area-inset-top));
@@ -76,6 +79,44 @@ select {
 
 /* ══ 主體 ══════════════════════════════════════════ */
 #main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* ═══ 折疊條（2026-08-31）═══════════════════════════════
+   🔴🔴 `#bar[hidden]` 這一行**不是多餘的** —— 跟 `.grp[hidden]` 同一個坑：
+   `hidden` 的 `display:none` 是【瀏覽器預設樣式】，而 `#bar { display:flex }`
+   是【作者樣式】—— 作者的贏。⛔ 沒有這一行，收合【完全不生效而且不報錯】。
+   ⚠ `#panel` 目前沒有寫 display，所以本來就收得起來；
+   ⭐ 但一併寫上去 —— 這個專案已經在同一個坑上跌過兩次。 */
+#bar[hidden], #panel[hidden] { display: none; }
+
+.handle {
+  flex: none; padding: 0; border-radius: 0;
+  background: #20232a; border: 0; border-bottom: 1px solid #3a3f48;
+  color: #8b93a1; font-family: inherit; font-size: 11.5px;
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  height: 28px;                 /* 觸控折衷：滿版寬的橫條，橫向極好按 */
+}
+.handle:hover { background: #262a32; color: #cfd6e0; }
+
+/* 🔴🔴 **工具列【展開】的時候，那顆鈕⛔ 不可以佔一整條**（kang 2026-08-31）。
+   ⭐ 做法：**絕對定位在工具列右上角** —— `#app` 是 `position:fixed`，
+   所以它就是定位的參考框。⇒ **⛔ 完全不佔高度。**
+
+   ⚠ **⛔ 不要改成「當成一個 .grp 塞進工具列」** —— 那會佔【寬度】，
+   在平板上可能把最後一組擠到下一行 → **多花 39px，比省下的 28px 還糟**。
+   〔這是量過才選的，⛔ 不是隨手挑的做法〕 */
+.handle.float {
+  position: absolute; top: 5px; right: 5px; z-index: 21;
+  width: 34px; height: 26px; border: 1px solid #3a3f48; border-radius: 6px;
+  font-size: 13px;
+}
+/* 直的那一條：貼在面板左緣，⭐ 高度滿版所以很好按，寬度可以窄。
+   ⚠ ⛔ 不要加 `writing-mode: vertical-rl` —— 那會把 `›` 轉成【朝下】，
+   而它要講的是「往右收 ／ 往左開」，方向就講反了。 */
+.handle.vert {
+  width: 24px; height: auto; align-self: stretch;
+  border-bottom: 0; border-left: 1px solid #3a3f48;
+  font-size: 15px;
+}
 
 /* ═══ 左側工具直條（2026-08-31，介面編排第 1 段）═══════════════
    ⚠ 寬度 66px 是【量過才選的】：三案（文字 88／圖示 44／圖示＋小字 66）
@@ -947,6 +988,21 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     </div>
   </div>
 
+  <!--
+    🔴🔴 折疊條（2026-08-31，kang 提的小優化）。
+
+    ⭐ **收起來之後它要【講話】** —— 因為第 2、4 段之後那條工具列是
+    「**會隨選取長出東西**」的：收著的時候你選了一個面，`擠出` 確實出現了，
+    ⛔ 但你看不到。⇒ ⚠ **症狀跟壞掉一模一樣**（坑第 21 條）。
+    ⇒ 所以收起來時它寫「▸ 工具列　N 組可用」，**N 隨選取變**。
+    〔kang 2026-08-31 在三個做法裡選的；⛔ 沒選「自動展開」——
+    　 明明是他收起來的，自己跳回來還會讓畫面跳一下〕
+
+    ⚠ 高度 28px 是**觸控目標**的折衷（建議 44px，但這是一條【滿版寬】的
+    橫條，橫向極好按）—— ⛔ 不是隨手填的數字。
+  -->
+  <button id="barToggle" class="handle" title="收合／展開上面的工具列">▾ 工具列</button>
+
   <div id="main">
   <!--
     🔴🔴 左側工具直條（2026-08-31，介面編排第 1 段）。
@@ -1006,6 +1062,13 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       </div>
     </div>
 
+    <!--
+      🔴 右側面板的折疊條。⭐ 它是這次收合裡**買最多的一塊**：
+      面板 300px，在平板（1024）上吃掉 **29%** 的寬度，
+      而大部分時間使用者只是在看模型、⛔ 不在改參數。
+      ⚠ 而它**沒有工具列那個問題** —— 面板⛔ 不會「突然長出東西要你注意」。
+    -->
+    <button id="panelToggle" class="handle vert" title="收合／展開右邊的物件面板">›</button>
     <div id="panel"></div>
   </div>
 

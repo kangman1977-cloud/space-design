@@ -4358,6 +4358,37 @@ function updateBar() {
   for (const b of document.querySelectorAll('.efBtn')) b.hidden = !sel.editMode;
 
   hideEmptyGroups();
+  updateHandles();
+}
+
+/**
+ * 🔴🔴 **折疊條要【講話】** —— ⛔ 這不是裝飾。
+ *
+ * 第 2、4 段之後那條工具列是「**會隨選取長出東西**」的：
+ * 收著的時候你選了一個面，`擠出` 確實出現了，**⛔ 但你看不到** ——
+ * ⚠ **症狀跟壞掉一模一樣**（坑第 21 條）。
+ * ⇒ 收起來時寫「**▸ 工具列　N 組可用**」，**N 隨選取變**，
+ * 你就知道「現在裡面有東西」。
+ *
+ * ⚠ **N 要在 `hideEmptyGroups()` 之後算** —— 那一支才剛決定完誰看得見。
+ */
+function updateHandles() {
+  const barOff = $('bar').hidden;
+  const n = [...document.querySelectorAll('#bar .grp')].filter(g => !g.hidden).length;
+  /**
+   * 🔴 **展開時它是右上角一顆小鈕（絕對定位，⛔ 不佔高度）；
+   * 收起來時才變成滿版的一條**（kang 2026-08-31 提的）——
+   * ⭐ 這樣「想看工具列」的時候⛔ 不必為了那顆鈕付 28px。
+   */
+  $('barToggle').classList.toggle('float', !barOff);
+  $('barToggle').textContent = barOff ? `▸ 工具列　${n} 組可用` : '▴';
+  $('barToggle').title = barOff
+    ? `工具列收起來了 —— 目前有 ${n} 組可以用。按一下展開`
+    : '按一下把工具列收起來（畫面會變大）';
+
+  const panelOff = $('panel').hidden;
+  $('panelToggle').textContent = panelOff ? '‹' : '›';
+  $('panelToggle').title = panelOff ? '展開右邊的物件面板' : '收合右邊的物件面板（畫面會變大）';
 }
 
 /**
@@ -4463,6 +4494,45 @@ function loop() {
      */
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+ *  折疊：工具列與右側面板（2026-08-31，kang 提的小優化）
+ * ═══════════════════════════════════════════════════════ */
+
+/**
+ * 🔴 **收合之後一定要叫 `view.resize()`。**
+ * ⚠ `#stage` 變大了，但**視窗尺寸沒變 → ⛔ 不會有 resize 事件**，
+ * 畫布會維持舊的大小：畫面被拉伸、而且**點下去的位置會偏掉**
+ * （`pickElement()` 的 NDC 是照畫布尺寸算的）。
+ * ⇒ ⛔ 這一行不是保險，是**必要**的。
+ */
+const LS_UI = 'modeler.ui.collapse';
+function loadUI() {
+  try { return JSON.parse(localStorage.getItem(LS_UI)) || {}; }
+  catch (e) { return {}; }
+}
+function saveUI(o) {
+  try { localStorage.setItem(LS_UI, JSON.stringify(o)); } catch (e) { /* 無所謂 */ }
+}
+
+function setCollapsed(which, on) {
+  const el = $(which === 'bar' ? 'bar' : 'panel');
+  el.hidden = !!on;
+  const st = loadUI(); st[which] = !!on; saveUI(st);
+  updateBar();
+  /** ⚠ 版面改了才叫 —— 見上面那一則 */
+  view.resize();
+}
+
+$('barToggle').onclick = () => setCollapsed('bar', !$('bar').hidden);
+$('panelToggle').onclick = () => setCollapsed('panel', !$('panel').hidden);
+
+/** 開場照上次的狀態擺（⛔ 不叫 setCollapsed，那會在還沒 updateBar 前跑） */
+(function restoreUI() {
+  const st = loadUI();
+  $('bar').hidden = !!st.bar;
+  $('panel').hidden = !!st.panel;
+})();
 
 window.addEventListener('resize', () => view.resize());
 view.resize();
