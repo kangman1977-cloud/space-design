@@ -71,6 +71,8 @@ export class SceneView {
     this.orbit.target.set(0, 40, 0);
     /** 視角鎖定（2026-09-01，kang 提的）。⛔ 只鎖「轉」，見 `setViewLock()` */
     this.viewLocked = false;
+    /** 🔴 誰在擋旋轉（`viewLock`／`marquee`）。⛔ 空的才轉得動，見 `setRotateBlock()` */
+    this._rotateBlocks = new Set();
     this.orbit.enableDamping = true;
     this.orbit.dampingFactor = 0.08;
     this.orbit.minDistance = 20;
@@ -1701,8 +1703,30 @@ export class SceneView {
    */
   setViewLock(on) {
     this.viewLocked = !!on;
-    this.orbit.enableRotate = !this.viewLocked;
+    this.setRotateBlock('viewLock', this.viewLocked);
     return this.viewLocked;
+  }
+
+  /**
+   * 🔴🔴 **`orbit.enableRotate` 只有這一支在寫，⛔ 其他人一律走這裡。**
+   *
+   * ── ⚠ 為什麼要這樣 ────────────────────────────────
+   * 【實證 2026-09-01】`setMarqueeMode()` **本來也在直接寫 `enableRotate`** ——
+   * 於是：**鎖著視角 → 開框選 → 關框選 → 鎖定被偷偷解開了，
+   * 而那顆按鈕還亮著**。⛔ 看得見的狀態跟真正的狀態分家，
+   * 是最難查的那一種〔坑第 21 條的反面〕。
+   *
+   * ⭐ **與其讓兩條路對齊，不如只留一條路**〔坑第 31 條〕：
+   * 每個要擋旋轉的人**登記一個名字**，有人登記著就是不能轉。
+   * ⇒ 兩個都開著的時候，先關掉哪一個都⛔ 不會誤放。
+   *
+   * ⚠ **`enablePan` ⛔ 沒有跟著做** —— 目前只有框選在關它，
+   * 而視角鎖定**刻意不鎖平移**。⭐ 只有一個寫的人就⛔ 不需要這一套。
+   */
+  setRotateBlock(key, on) {
+    if (on) this._rotateBlocks.add(key);
+    else this._rotateBlocks.delete(key);
+    this.orbit.enableRotate = this._rotateBlocks.size === 0;
   }
 
   setDrawInput(on) {

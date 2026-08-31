@@ -750,10 +750,20 @@ export class Selection {
   /**
    * 鎖著視角、而這一次拖曳**看起來就是想轉視角** → 講一句（**同一次拖只講一次**）。
    *
-   * ── ⚠ 要排掉哪些「其實不是想轉視角」的拖曳 ────────────
+   * ── 🔴🔴 【哪一顆鍵算「想轉視角」】要問 OrbitControls，⛔ 不可以寫死 ──
+   * 【實證 2026-09-01，我開的實測清單第 9 項本來會直接失敗】
+   * 第一版寫死「只看**左鍵**」，⚠ 而**刀具與鋼筆模式下轉視角的鍵是右鍵**
+   * （`setDrawInput()` 把 `RIGHT` 換成了 `ROTATE`）——
+   * 所以在那兩個模式下鎖著、右鍵怎麼拖都**不會有任何訊息**。
+   * ⭐ 正解是**直接問 `orbit.mouseButtons` 現在誰是 `ROTATE`**，
+   * ⛔ 不要自己記第二份〔同一條規則只寫一次，在程式上一樣成立〕。
+   * ⇒ 這樣也**⛔ 不必再排除 `penMode`／`_stroke`**：畫線用的是左鍵，
+   * 而那時候左鍵**本來就不是 `ROTATE`**，自然不會誤報。
+   *
+   * ── ⚠ 還要排掉哪些「其實不是想轉視角」的拖曳 ────────────
    * · 在拖 gizmo（`tc.dragging`）—— 那是在搬東西
-   * · 在畫線（刀具的 `_stroke`、鋼筆的 `penMode`）—— 左鍵本來就被借走了
    * · 框選模式 —— 空白處拖是拉框，⛔ 本來就不轉
+   *   （⚠ 框選也會擋旋轉，但那⛔ 不是「視角鎖定」，講出來會是誤報）
    * ⇒ **⛔ 排錯的代價是「誤報」，而誤報比漏報更糟**（鐵律三）。
    *
    * ⚠ **要移動超過 `TAP_MOVE` 才算** —— 點一下（選取／取消選取）
@@ -762,8 +772,15 @@ export class Selection {
   _tellIfViewLocked(e) {
     if (!this.view.viewLocked) return;
     const d = this._down;
-    if (!d || d.told || d.button !== 0) return;
-    if (this.tc.dragging || this._stroke || this.penMode || this.marqueeMode) return;
+    if (!d || d.told) return;
+    if (this.tc.dragging || this.marqueeMode) return;
+
+    const mb = this.view.orbit.mouseButtons;
+    const rotateBtn = mb.LEFT === THREE.MOUSE.ROTATE ? 0
+      : mb.MIDDLE === THREE.MOUSE.ROTATE ? 1
+        : mb.RIGHT === THREE.MOUSE.ROTATE ? 2 : -1;
+    if (d.button !== rotateBtn) return;
+
     if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < TAP_MOVE) return;
     d.told = true;
     if (this.hooks.onViewLockedDrag) this.hooks.onViewLockedDrag();
@@ -1455,7 +1472,13 @@ export class Selection {
   setMarqueeMode(on) {
     this.marqueeMode = !!on;
     const orb = this.view.orbit;
-    orb.enableRotate = !this.marqueeMode;
+    /**
+     * 🔴 **⛔ 這裡不可以直接寫 `orb.enableRotate`**（2026-09-01 改）——
+     * 視角鎖定也要擋旋轉，兩個人各寫各的的話，
+     * **關掉框選會把還鎖著的視角偷偷解開**（實測抓到）。
+     * ⇒ 一律登記到 `setRotateBlock()`，⛔ 那是唯一在寫它的地方。
+     */
+    this.view.setRotateBlock('marquee', this.marqueeMode);
     orb.enablePan = !this.marqueeMode;
     if (!this.marqueeMode) this._endMarquee(null, false);
     return this.marqueeMode;
