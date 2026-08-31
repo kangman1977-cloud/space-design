@@ -533,6 +533,137 @@ export class SceneView {
 
   setGridVisible(on) { this.grid.visible = on; }
 
+  // ── 世界座標軸指示器（右上角）──────────────────────
+
+  /**
+   * 🔴 **右上角那三根小軸：⛔ 不管你選了什麼，永遠告訴你 X／Y／Z 朝哪邊。**
+   *
+   * ── 為什麼要做（kang 2026-08-31 提的）────────────────
+   * ⚠ 這跟他 2026-08-25 回報的「**操作上時常會搞錯 XYZ**」是**同一個病**，
+   * 而當時的解法（在 gizmo 的拉桿上標 X／Y／Z）**只在選到東西時才出現** ——
+   * 🔴 **⛔ 而切「前／側／上」視角的時候，手上通常什麼都沒選。**
+   * ⇒ 缺的正是一個「**永遠都在、跟選取無關**」的方向指示。
+   *
+   * ⭐ 而這個建模器是 **Y 軸向上**、Z 是深度 —— 跟很多人習慣的
+   * 「Z 向上」相反，所以憑印象猜一定會猜錯。
+   *
+   * ── 為什麼用「第二個場景 ＋ 剪裁視窗」，⛔ 不是 HTML ─────
+   * 這三根軸要**跟著主相機轉**。用 HTML 疊上去的話每一幀都要自己算投影；
+   * 開一個**只有三根軸的小場景**，把主相機的**旋轉**抄過來，
+   * three.js 自己就會投影對 —— ⛔ 一行三角函數都不用寫。
+   *
+   * ⚠ **只抄旋轉，⛔ 不抄位置與縮放**：它要表達的是「方向」，
+   * ⛔ 不是「你離模型多遠」。所以它的相機永遠在固定距離、用正交投影。
+   *
+   * ── 效能（鐵律四）────────────────────────────────
+   * 每幀多畫 **3 條線 ＋ 3 個字**，而且**⛔ 不隨模型大小成長** ——
+   * 它跟場景裡有幾個物件完全無關。
+   */
+  _initAxisGizmo() {
+    const S = 78;                      // 右上角那塊的邊長（像素）
+    this._axisGizmo = { size: S };
+
+    const sc = new THREE.Scene();
+    /**
+     * ⚠ 範圍寫死 ±1.35：軸長 1，留一點邊給端點的字。
+     * ⛔ 不要跟著畫面大小變 —— 它是固定尺寸的角落元件。
+     */
+    const cam = new THREE.OrthographicCamera(-1.35, 1.35, 1.35, -1.35, 0.1, 10);
+    cam.position.set(0, 0, 3);
+
+    /**
+     * 顏色與字**刻意跟 gizmo 的拉桿標籤同一組**
+     * （`select.js` 的 `_initAxisLabels`）—— ⛔ 不要另挑一組，
+     * 那會變成「兩個地方講同一件事而長得不一樣」，使用者要翻譯兩次。
+     * ⚠ 純藍在深色背景上幾乎看不見，所以 Z 用亮一點的藍。
+     */
+    const AXES = [
+      { k: 'x', dir: [1, 0, 0], color: 0xff4d4d, css: '#ff4d4d' },
+      { k: 'y', dir: [0, 1, 0], color: 0x4dff6a, css: '#4dff6a' },
+      { k: 'z', dir: [0, 0, 1], color: 0x6b8cff, css: '#6b8cff' }
+    ];
+
+    for (const a of AXES) {
+      const d = new THREE.Vector3(...a.dir);
+
+      /**
+       * ⚠ **正負兩邊都要畫**，只是負的那半畫暗一點。
+       * ⛔ 只畫正的話，從背面看過去三根軸會**全部縮成一個點**，
+       * 而那正是「我到底在看哪一面」最需要幫助的時候。
+       */
+      const line = (from, to, col, op) => {
+        const g = new THREE.BufferGeometry().setFromPoints([from, to]);
+        const m = new THREE.LineBasicMaterial({
+          color: col, transparent: true, opacity: op, depthTest: false
+        });
+        sc.add(new THREE.LineSegments(g, m));
+      };
+      const O = new THREE.Vector3(0, 0, 0);
+      line(O, d.clone().multiplyScalar(1), a.color, 1);
+      line(O, d.clone().multiplyScalar(-0.72), a.color, 0.3);
+
+      // 端點的字。做法跟 select.js 的軸標籤一樣：先描深色邊再填色
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const g2 = cv.getContext('2d');
+      g2.font = 'bold 46px "Noto Sans TC", Arial, sans-serif';
+      g2.textAlign = 'center';
+      g2.textBaseline = 'middle';
+      g2.lineWidth = 6;
+      g2.strokeStyle = 'rgba(0,0,0,0.85)';
+      g2.strokeText(a.k.toUpperCase(), 32, 34);
+      g2.fillStyle = a.css;
+      g2.fillText(a.k.toUpperCase(), 32, 34);
+
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthTest: false, depthWrite: false
+      }));
+      sp.scale.setScalar(0.62);
+      sp.position.copy(d).multiplyScalar(1.02);
+      sc.add(sp);
+    }
+
+    this._axisGizmo.scene = sc;
+    this._axisGizmo.cam = cam;
+  }
+
+  /**
+   * 每一幀畫一次。
+   *
+   * 🔴 **`setScissorTest` 用完一定要關掉** —— ⛔ 不關的話下一幀主畫面
+   * 只會畫在右上角那一小塊，**而症狀是「整個畫面幾乎全黑」**，
+   * ⛔ 完全看不出跟這一段有關。
+   */
+  _renderAxisGizmo() {
+    if (!this._axisGizmo) this._initAxisGizmo();
+    const { scene: sc, cam, size: S } = this._axisGizmo;
+
+    const el = this.canvas.parentElement;
+    const w = el.clientWidth, h = el.clientHeight;
+    if (!w || !h) return;
+
+    /**
+     * ⚠ **只抄旋轉** —— 用 `quaternion`，⛔ 不要 `copy(camera)`
+     * （那會把位置也抄過來，軸就飛到模型旁邊去了）。
+     * 相機繞著原點退到固定距離，所以看到的永遠是「現在的朝向」。
+     */
+    cam.quaternion.copy(this.camera.quaternion);
+    cam.position.set(0, 0, 3).applyQuaternion(cam.quaternion);
+    cam.updateMatrixWorld();
+
+    const M = 12;                        // 離角落的距離
+    const r = this.renderer;
+    r.setScissorTest(true);
+    r.setViewport(w - S - M, h - S - M, S, S);
+    r.setScissor(w - S - M, h - S - M, S, S);
+    r.clearDepth();                      // ⚠ ⛔ 不清深度的話會被主畫面擋掉
+    r.render(sc, cam);
+    r.setScissorTest(false);
+    r.setViewport(0, 0, w, h);           // 🔴 一定要還原，否則下一幀畫錯地方
+  }
+
   // ── 參考線 ────────────────────────────────────────
 
   /**
@@ -1492,6 +1623,7 @@ export class SceneView {
      */
     this._syncMeasureLabelScale();
     this.renderer.render(this.scene, this.camera);
+    this._renderAxisGizmo();
   }
 
   get fps() { return this._fps.value; }
