@@ -21,6 +21,7 @@ import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
+import { fetchLatest } from '../core/appver.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -54,12 +55,109 @@ export class Panel {
       <section id="pAna">
         <h2>結構分析 <button id="anaRun" class="mini">重新計算</button></h2>
         <div id="anaBody" class="empty">選一個物件後按「重新計算」</div>
+      </section>
+      <!--
+        🔴🔴 程式版本（2026-08-31，kang 提的）。⛔ 這一段⛔ 不可以用反引號！
+        （它住在一個 template literal 裡面 —— 見這一段底下那則註解）
+
+        ⭐ 放這裡⛔ 不是隨便挑的：refresh() 只動 pForm／pEmpty／anaBody，
+        所以這一塊【不管有沒有選到物件都會在】——
+        而你要按它的時機正是「畫面剛載入、什麼都還沒選」。
+
+        ⚠ ⛔ 不放工具列：版面是這個專案最稀缺的資源
+        （頂端 bar 花了四段才從 346px 壓到 103px、左側直條只剩 27.5px），
+        而這顆是【偶爾才按一次】的東西。
+
+        ⭐ kang 拍板它是永久功能，⛔ 不是開發期的臨時品 ——
+        他的理由：「也許未來使用一段時間..還會請你再優化」。
+        ⇒ 所以名字與說明都用【永久的意思】：
+        「確認我現在跑的，是不是最新的那一版」。
+      -->
+      <section id="pVer">
+        <h2>程式版本 <button id="verGet" class="mini">抓最新版</button></h2>
+        <div id="verBody" class="empty">按「抓最新版」<br><span>剛上傳完想馬上看新版時用</span></div>
       </section>`;
 
     this.form = this.root.querySelector('#pForm');
     this.empty = this.root.querySelector('#pEmpty');
     this.anaBody = this.root.querySelector('#anaBody');
     this.root.querySelector('#anaRun').onclick = () => this.analyse(true);
+
+    this.verBody = this.root.querySelector('#verBody');
+    this.root.querySelector('#verGet').onclick = () => this.fetchLatestVersion();
+  }
+
+  /**
+   * 🔴🔴 **上面那一大段 HTML 住在一個 template literal（反引號字串）裡面
+   * —— 所以【裡面的註解一個反引號都不可以出現】。**
+   *
+   * ⚠ **【實證 2026-08-31】我在那則 HTML 註解裡照平常的習慣寫了
+   * `` `refresh()` `` 這種標記，字串當場被提前結束**，
+   * 錯誤是 `SyntaxError: Unexpected identifier 'refresh'` ——
+   * ⛔ 訊息指著 200 行以外的地方，完全看不出病因在註解裡。
+   *
+   * ⭐ **抓到它的是「真的解析一次」那道**（`vm.SourceTextModule`），
+   * ⛔ 四道機械檢查裡的另外三道都放它過關。
+   * 〔又一次：語法錯在 ES 模組裡會讓整份檔案一行都不跑〕
+   */
+
+  /**
+   * 🔴 **抓最新版**：把瀏覽器的快取換成伺服器上最新的，
+   * 有變就重新載入。⭐ 病因與做法的完整說明在 `core/appver.js` 的檔頭。
+   *
+   * ⚠ **三種結果都要講出來** —— 尤其是「連不上」：
+   * 吞掉錯誤而顯示「已經是最新版」是**假的保證**，
+   * 比什麼都不講更糟（鐵律三：誤報比漏報更糟）。
+   */
+  async fetchLatestVersion() {
+    const btn = this.root.querySelector('#verGet');
+    const say = (html, cls = 'empty') => {
+      this.verBody.className = cls;
+      this.verBody.innerHTML = html;
+    };
+
+    btn.disabled = true;
+    say('抓取中…');
+
+    let r;
+    try {
+      r = await fetchLatest((done, total) => say(`抓取中… ${done} / ${total}`));
+    } catch (e) {
+      btn.disabled = false;
+      say(`🔴 出錯了<br><span>${String(e && e.message ? e.message : e)}</span>`);
+      return;
+    }
+
+    if (!r.ok) {
+      btn.disabled = false;
+      /**
+       * ⚠ **⛔ 不可以寫「已經是最新版」** —— 我們**根本沒問到**。
+       * 講「⛔ 沒辦法確認」才是誠實的。
+       */
+      say(`🔴 ⛔ 沒辦法確認<br><span>${r.error}</span>`);
+      return;
+    }
+
+    if (r.changed > 0) {
+      /**
+       * ⭐ **講一句再重載** —— 畫面突然自己重來一次，
+       * ⛔ 不講的話跟「當掉了」分不出來（坑第 21 條）。
+       * ⚠ **⛔ 不會弄丟東西**：每做完一步都有自動暫存。
+       */
+      say(`✅ 抓到新版（${r.changed} 個檔有變）<br><span>正在重新載入…</span>`);
+      setTimeout(() => location.reload(), 700);
+      return;
+    }
+
+    btn.disabled = false;
+    /**
+     * ⚠ **要把「這個判斷會漏報」講出來，⛔ 不要給假的保證。**
+     * 比對用的是**檔案大小** —— 某次改動如果剛好沒改變大小，這裡會說
+     * 「已經最新」而其實不是。⭐ 但**快取已經被換成新的了**，
+     * 所以「再按一次或手動重整」一定拿得到新的（見 `appver.js` 檔頭）。
+     */
+    say(`✅ 已經是最新版${r.stamp ? `<br><span>版本 ${r.stamp}</span>` : ''}`
+      + `<br><span>⚠ 比對的是檔案大小；快取已換新，重整一次一定是最新的</span>`);
   }
 
   // ═══════════════════════════════════════════════════
