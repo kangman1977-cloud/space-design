@@ -70,7 +70,13 @@ const sel = new Selection(view, {
   onMeasure: r => updateMeasureBox(r),
   /** 刀具：點下去吸到最近的邊，`hit` 帶著那條邊與邊上的落點 */
   onKnifePick: (hit, info) => knifePick(hit, info),
-  onPenAdd: n => { $('pen').textContent = `鋼筆 ${n}`; updateBar(); },
+  /**
+   * ⚠ **⛔ 這裡不再自己設按鈕文字**（2026-08-30 改）——
+   * 文字的決定權統一在 `updateBar()`。
+   * 🔴 **兩個地方各設一次就是兩條要對齊的路**：按了 `加一條` 之後
+   * 目前這條明明是 0 個點，按鈕卻還停在「鋼筆 4」（實測照出來的）。
+   */
+  onPenAdd: () => updateBar(),
   onPenFinish: () => finishPen(),
   /**
    * 🔴 **指到第一個錨點時要講一句** —— Adobe 是用「游標旁出現小圓圈」，
@@ -3917,11 +3923,19 @@ function updateBar() {
   $('penUndo').disabled = sel.penCount === 0;
   $('penCancel').hidden = !sel.penMode;
   /**
-   * 🔴 **改既有物件的路徑時，那一顆的意思是「完成」** ——
-   * ⛔ 一直寫「鋼筆 N」的話，使用者不知道按誰才收得了工（坑第 21 條，
-   * 跟 `刀具` 那一顆同一條）。
+   * 🔴 **`鋼筆` 那一顆的文字只在這裡決定，⛔ 別處不要再設一次。**
+   *
+   * ⚠ **改既有物件的路徑時它的意思是「完成」** —— ⛔ 一直寫「鋼筆 N」
+   * 的話，使用者不知道按誰才收得了工（坑第 21 條，跟 `刀具` 同一條）。
+   * ⚠ **按了 `加一條` 之後目前這條是 0 個點** —— 就要變回「鋼筆」，
+   * ⛔ 不可以停在上一條的數字（2026-08-30 實測照出來的）。
+   * ⭐ **兩條以上時後面掛一個「·N條」** —— 否則使用者看不出來
+   * 自己已經在畫第幾條了。
    */
-  if (penEditing) $('pen').textContent = '完成';
+  $('pen').textContent = penEditing ? '完成'
+    : !sel.penMode ? '鋼筆'
+    : (sel.penCount ? `鋼筆 ${sel.penCount}` : '鋼筆')
+      + (sel.penPathCount > 1 ? `·${sel.penPathCount}條` : '');
   $('pen').title = sel.penMode
     ? (sel.penEdit
         ? `改點模式：${sel.penCount} 個點。點一個點就選它，拖它＝搬位置、`
