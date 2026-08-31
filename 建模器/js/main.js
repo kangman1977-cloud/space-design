@@ -3725,12 +3725,41 @@ function updateBar() {
   $('del').hidden = sel.count === 0;
   $('dup').hidden = sel.count === 0;
 
+  /**
+   * 🔴 **布林與陣列 2026-08-31（第 4 段）改成「沒輪到就不出現」。**
+   * ⚠ **條件一個字都沒改** —— 它們本來就是上下文命令，
+   * 只是還停在「變灰」那個表達方式。
+   */
   // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
-  for (const id of ['bUnion', 'bSub', 'bInt']) $(id).disabled = !canDoBool;
+  for (const id of ['bUnion', 'bSub', 'bInt']) $(id).hidden = !canDoBool;
 
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
-  for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).disabled = sel.count < 1;
+  for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).hidden = sel.count < 1;
+
+  /**
+   * 🔴🔴 **方向／數值／吸附：沒選到東西就不出現**（2026-08-31，第 4 段）。
+   *
+   * ⚠ **⛔ 判準⛔ 不是「哪一顆變換工具亮著」** —— `移動／旋轉／縮放`
+   * **永遠有一顆亮著**（預設是 `移動`），拿它當閘門等於沒做。
+   * ⭐ **正確的判準是程式自己寫的**：**gizmo 只在選到東西時才掛上去**
+   * （`select.js` 的 `_refresh()`：沒選到就 `tc.detach()`）——
+   * 而這三組全部是「**拖 gizmo 時**」才有意義的參數：
+   * 往哪個方向拉、繞哪裡轉、拖的時候吸幾公分、剛才拖了多少。
+   *
+   * 🔴 **⛔ 這一段是我先講錯、驗過才更正的** ——
+   * 原本提議「跟著變換工具走」，而那三顆永遠有一顆亮著。
+   */
+  /**
+   * ⚠ **條件要跟 `select.js` 掛 gizmo 的條件【一模一樣】**：
+   * 編輯模式看的是**選到幾個元素**（gizmo 掛在元素的替身上），
+   * 物件模式看的是**選到幾個物件**。⛔ 只寫 `sel.count === 0` 會讓
+   * 「進了編輯模式但還沒點任何點」的時候，那三組還留在畫面上。
+   */
+  const gizmoOff = sel.editMode ? sel.editCount === 0 : sel.count === 0;
+  for (const b of document.querySelectorAll('.spBtn')) b.hidden = gizmoOff;
+  for (const b of document.querySelectorAll('.snapBtn')) b.hidden = gizmoOff;
+  for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = gizmoOff;
 
   /**
    * 擠出：**選到一個面才給按**。

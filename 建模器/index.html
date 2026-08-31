@@ -469,16 +469,16 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp" id="gBool">
       <span class="lbl">布林</span>
-      <button id="bUnion" disabled title="聯集：把選取的物件合成一個">∪ 聯集</button>
-      <button id="bSub" disabled title="差集：從第一個選取的物件挖掉其餘的">− 差集</button>
-      <button id="bInt" disabled title="交集：只留下互相重疊的部分">∩ 交集</button>
+      <button id="bUnion" hidden title="聯集：把選取的物件合成一個">∪ 聯集</button>
+      <button id="bSub" hidden title="差集：從第一個選取的物件挖掉其餘的">− 差集</button>
+      <button id="bInt" hidden title="交集：只留下互相重疊的部分">∩ 交集</button>
     </div>
 
     <div class="grp" id="gArray">
       <span class="lbl">陣列</span>
-      <button id="aLinear" disabled title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
-      <button id="aRadial" disabled title="環形陣列：繞一個軸平均分佈，例如法蘭上的螺栓孔">環形</button>
-      <button id="aMirror" disabled title="鏡射：對稱複製一份，例如機箱的左右側板">鏡射</button>
+      <button id="aLinear" hidden title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
+      <button id="aRadial" hidden title="環形陣列：繞一個軸平均分佈，例如法蘭上的螺栓孔">環形</button>
+      <button id="aMirror" hidden title="鏡射：對稱複製一份，例如機箱的左右側板">鏡射</button>
     </div>
 
     <div class="grp" id="gEdit">
@@ -892,7 +892,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <span class="lbl" id="editNumLbl"
             title="拖曳中會即時顯示這一次移動／旋轉／縮放了多少，放開之後可以直接打精確數字按 Enter">數值</span>
-      <input id="editNum" type="number" step="0.1" disabled
+      <input id="editNum" type="number" step="0.1" hidden
              title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
       <span id="editNumUnit" class="unit">—</span>
     </div>
