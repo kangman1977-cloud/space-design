@@ -118,6 +118,18 @@ const EDGE_GRAB_PX_TOUCH = 26;
 const GUIDE_SNAP_PX = 8;
 
 /**
+ * 🔴 **視線在那個軸上有多少分量，才算「這個視角看不出它」**（第 3 階段，2026-09-01）。
+ *
+ * ⭐ **這一個數字同時做了兩件事**，所以⛔ 不必去問「現在是哪個視角」：
+ * · 正交的**前／側／上** → 視線正好平行某一軸，另外兩軸的分量是 **0** ⇒ 算得出來
+ * · **等角**或**透視** → 三個軸都有分量 ⇒ 一律擋掉
+ * 〔問幾何，⛔ 不問模式 —— 模式名字會多一種就漏一種〕
+ *
+ * ⚠ **⛔ 不可以用 0**：相機的方向是浮點數算出來的，⛔ 不會剛好是 0。
+ */
+const AXIS_PICK_EPS = 1e-3;
+
+/**
  * 🔴 **「顯示點」一次最多標幾個點。**
  *
  * 超過就不畫，並且**講出來** —— ⛔ 硬畫下去讓平板卡死是最糟的做法。
@@ -805,6 +817,39 @@ export class Selection {
       this._down = { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button };
 
       /**
+       * 🔴 **參考線模式：按下去的當下就記「有沒有壓在某條線上」**
+       *（第 3 階段，2026-09-01）。
+       *
+       * ⚠ **⛔ 不可以等到 `pointermove` 再問** —— 那時候游標已經離開那條線了，
+       * 抓到的會是「現在在哪」，⛔ 不是「一開始抓住的是誰」。
+       * ⭐ 這正是 `TransformControls.axis` 那次的教訓
+       * （2026-08-25）與「哪一顆鍵」那條同一件事：**初始狀態要在當下記起來**。
+       */
+      /**
+       * 🔴🔴 **抓到線的那一瞬間就擋掉旋轉**（⛔ 放手就還原）。
+       *
+       * ⚠ **⛔ 這⛔ 不是「自動幫他鎖視角」**（那件事 kang 明確說不要，
+       * 只要提醒一句）—— 這是**手勢仲裁**：他正抓著一條線在拖的**這一下**，
+       * 畫面⛔ 不可以同時轉。**⛔ 按鈕狀態一格都沒動，放手就恢復原狀。**
+       *
+       * 🔴 **⛔ 不擋的話會亂跳**：一轉視角，「螢幕位置換算成座標」的
+       * 前提（視線平行某一軸）就破了，那條線會跟著游標亂飄。
+       *
+       * ⭐ 走的是 `setRotateBlock()` 那張登記表 —— 所以**跟視角鎖定
+       * 疊在一起也⛔ 不會誤放**（放手只收回自己那一張）。
+       */
+      this._releaseGuideRotate();
+      if (this.guideMode && e.button === DRAW_BUTTON) {
+        const ax = this._curGuideAxis();
+        this._guideDrag = { ax, hit: this._guideAt(e.clientX, e.clientY, ax), moved: false };
+        if (this._guideDrag.hit !== null && this.view.setRotateBlock) {
+          this.view.setRotateBlock('guideDrag', true);
+        }
+      } else {
+        this._guideDrag = null;
+      }
+
+      /**
        * 🔴 **第二根手指／第二顆鍵按下來 ＝ 這是轉視角，不是畫線。**
        *
        * ⚠ **平板上這一條才是重點**：兩指轉視角時，**第一根手指早就
@@ -940,6 +985,30 @@ export class Selection {
        * ⭐ 那顆按鈕亮著是**看得到的**，但講一句是**問得到的**，兩個都要。
        */
       this._tellIfViewLocked(e);
+
+      /**
+       * 🔴 **參考線：抓著一條線在拖**（第 3 階段，2026-09-01）。
+       *
+       * ⚠ **要超過 `TAP_MOVE` 才算開始拖** —— 手一定會抖，
+       * ⛔ 不擋的話「點一下選它」會變成「把它挪走 0.02cm」。
+       * ⭐ 判準沿用現成的那個門檻，⛔ 不另外定〔坑第 31 條〕。
+       */
+      if (this._guideDrag && this._guideDrag.hit !== null) {
+        const g = this._guideDrag;
+        const d0 = this._down;
+        if (d0 && Math.hypot(e.clientX - d0.x, e.clientY - d0.y) >= TAP_MOVE) {
+          const v = this._axisValueAt(e.clientX, e.clientY, g.ax);
+          if (v !== null) {
+            const to = this._snapGuideVal(v);
+            if (to !== g.hit && this.hooks.onGuideDrag
+                && this.hooks.onGuideDrag(g.ax, g.hit, to, false)) {
+              g.hit = to;
+            }
+            g.moved = true;
+          }
+        }
+        return;
+      }
 
       /**
        * 🔴 **鋼筆也要看得見自己畫到哪** —— 游標那一段要跟著跑，
@@ -1080,6 +1149,13 @@ export class Selection {
     cv.addEventListener('pointercancel', () => {
       this._endMarquee(null, false);
       this._stroke = null;
+      /**
+       * ⚠ **手指被系統收走（來電、切換 App）也要放開那張登記** ——
+       * ⛔ 不放的話症狀是「**突然就轉不動了**」，而使用者⛔ 不會把它
+       * 跟「剛才拖了一條參考線」連在一起。
+       */
+      this._guideDrag = null;
+      this._releaseGuideRotate();
       if (this.hooks.onKnifeStrokeMove) this.hooks.onKnifeStrokeMove(null);
     });
 
@@ -1092,6 +1168,43 @@ export class Selection {
 
       const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
       const dt = performance.now() - d.t;
+
+      /**
+       * 🔴🔴 **參考線模式：點一下 ＝ 生一條／選一條；拖 ＝ 挪一條**
+       *（第 3 階段，2026-09-01）。
+       *
+       * ⭐ **點到某條線 ＝ 在下拉裡選了它** —— 同一個狀態、同一個欄位
+       * （`main.js` 的 `guidePicked`），⛔ 不是另一套機制。
+       *
+       * ⚠ **「這個視角看不出這個軸」要講出來，⛔ 不可以安靜地沒反應**
+       * ——「我明明點了卻什麼都沒發生」是最糟的回饋〔坑第 21 條那一類〕。
+       */
+      if (this.guideMode) {
+        const g = this._guideDrag;
+        this._guideDrag = null;
+        this._releaseGuideRotate();          // ⚠ 每一條路都要放手，所以放最前面
+        const ax = g ? g.ax : this._curGuideAxis();
+
+        /** 拖完了 → 記一步 Undo（拖曳中已經一路改過去了） */
+        if (g && g.moved) {
+          if (this.hooks.onGuideDrag) this.hooks.onGuideDrag(ax, g.hit, g.hit, true);
+          return;
+        }
+        /** 拖了一段但**⛔ 一開始沒抓到線** → 什麼都不做（那多半是想轉視角） */
+        if (dist > TAP_MOVE) return;
+
+        const v = this._axisValueAt(e.clientX, e.clientY, ax);
+        if (v === null) {
+          if (this.hooks.onGuideNoAxis) this.hooks.onGuideNoAxis(ax);
+          return;
+        }
+        if (g && g.hit !== null) {
+          if (this.hooks.onGuidePick) this.hooks.onGuidePick(ax, g.hit);
+          return;
+        }
+        if (this.hooks.onGuideAdd) this.hooks.onGuideAdd(ax, this._snapGuideVal(v));
+        return;
+      }
 
       /**
        * 🔴 **一筆畫：拖得夠遠就是畫線，不是點選。**
@@ -3753,6 +3866,88 @@ export class Selection {
    * ⚠ NDC 的換算跟 `pickElement()` **完全一樣**，⛔ 不要自己另寫一套
    * —— 那一套已經處理過畫布不佔滿視窗的情形（`_toCanvasPx()`）。
    */
+  /**
+   * 🔴 **螢幕上的一點 →【某一個軸】的世界座標**（參考線第 3 階段，2026-09-01）。
+   *
+   * ── ⚠ 為什麼會「算不出來」──────────────────────────
+   * 螢幕上一個點在 3D 裡是**一條射線**。
+   * 只有當**視線⛔ 不含那個軸的分量**時，整條射線上那個軸的值才一樣 ——
+   * 也就是**正交的前／側／上**。
+   * 斜視角（等角）或透視下，那個值是**無限多解** ——
+   * 🔴 **補不到唯一就明講，⛔ 不要猜**〔坑第 24 條〕。
+   *
+   * ⭐ **⛔ 這裡不去問「現在是哪個視角」**：問幾何就好，
+   * 而且它連「前視圖想放 Z 方向的線」那種情形也一起擋掉了 ——
+   * ⚠ 前視看的是 XY，**Z 正好是視線方向**，看不出深度。
+   *
+   * @returns {number|null} `null` ＝ 這個視角看不出這個軸
+   */
+  _axisValueAt(clientX, clientY, ax) {
+    const r = this._toCanvasPx(clientX, clientY);
+    this._ndc.x = (r.x / r.w) * 2 - 1;
+    this._ndc.y = -(r.y / r.h) * 2 + 1;
+    this._ray.setFromCamera(this._ndc, this.view.camera);
+    if (Math.abs(this._ray.ray.direction[ax]) > AXIS_PICK_EPS) return null;
+    return this._ray.ray.origin[ax];
+  }
+
+  /**
+   * 游標下面有沒有參考線（回那條線的座標，沒有回 `null`）。
+   *
+   * ⭐ **用螢幕像素比，⛔ 不用射線** —— 參考線那一層的 `raycast` 本來就關掉了
+   * （`_buildLineOverlay()` 最後一行），而一條沒有粗細的線本來也打不太到。
+   * ⚠ 而在「點得到」的那三個視角裡，這件事簡單到只是**兩個數字相減**：
+   * 線在 20、游標算出來是 20.3，差 0.3cm × 每公分幾像素 ＝ 螢幕上差幾格。
+   *
+   * ⚠ **觸控要放寬**（沿用 `EDGE_GRAB_PX_TOUCH`，⛔ 不新定一個值）。
+   */
+  _guideAt(clientX, clientY, ax) {
+    const v = this._axisValueAt(clientX, clientY, ax);
+    if (v === null || !this._doc) return null;
+    const list = (this._doc.guides && this._doc.guides[ax]) || [];
+    if (!list.length) return null;
+
+    const px = this.view.pxPerWorld ? this.view.pxPerWorld() : 0;
+    if (!(px > 0)) return null;
+    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+
+    let best = null;
+    for (const g of list) {
+      const d = Math.abs(g - v) * px;
+      if (d > grab) continue;
+      if (!best || d < best.d) best = { d, g };
+    }
+    return best ? best.g : null;
+  }
+
+  /**
+   * 拖出來／點出來的位置**沿用「吸附」那一組的格距**（kang 2026-09-01 拍板）。
+   * ⭐ **⛔ 不多發明一套** —— 格距開 1 就吸成整數 cm，按 `關` 就自由。
+   */
+  _snapGuideVal(v) {
+    const s = this.snapStep;
+    return s > 0 ? Math.round(v / s) * s : v;
+  }
+
+  /** 目前選的方向。⭐ **真相在 `main.js` 的 `guideAxis`**，這裡⛔ 不存第二份 */
+  _curGuideAxis() {
+    return (this.hooks.guideAxis && this.hooks.guideAxis()) || 'x';
+  }
+
+  /**
+   * 把「拖參考線時擋掉旋轉」那一張登記收回來。
+   *
+   * 🔴 **`pointerdown` 開頭也會叫它一次** —— ⭐ **它自己會清乾淨**，
+   * ⛔ 不必靠「每一條離開的路都記得收」。
+   * ⚠ 那正是刀具那一輪學到的：**⛔ 不要用一個要靠紀律維護的集合去擋**，
+   * 漏收一次就永遠卡住（症狀是「突然就轉不動了」）。
+   */
+  _releaseGuideRotate() {
+    if (this.view && this.view.setRotateBlock) {
+      this.view.setRotateBlock('guideDrag', false);
+    }
+  }
+
   _groundAt(clientX, clientY) {
     if (!this.view || !this.view.groundPoint) return null;
     const r = this._toCanvasPx(clientX, clientY);

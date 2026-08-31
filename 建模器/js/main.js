@@ -163,6 +163,77 @@ const sel = new Selection(view, {
    */
   onViewLockedDrag: () => toast('視角鎖定中，所以轉不動　'
     + '⭐ 要轉的話按「視角」那一組的「鎖定」解開', true),
+
+  // ── 參考線 第 3 階段：在畫面上點／拖（2026-09-01）──────────
+  /**
+   * ⭐ **方向的真相只有一份**（這支檔案上面那個 `guideAxis`）——
+   * `select.js` ⛔ 不存第二份，它問這裡。
+   */
+  guideAxis: () => guideAxis,
+
+  /**
+   * 在畫面上點一下 → **生一條線在那裡**，⛔ 而且下拉自動選中它
+   * （＝ 打數字加出來的那條走的是同一條路）。
+   */
+  onGuideAdd: (ax, v) => {
+    if (!doc.addGuide(ax, v)) {
+      toast(`那個位置已經有一條 ${GUIDE_AXIS_LABEL[ax]} 的參考線了`, true);
+      return;
+    }
+    guidePicked = v;
+    view.syncGuides(doc);
+    syncGuideRow();
+    commit('加參考線');
+    toast(`參考線 ${GUIDE_AXIS_LABEL[ax]} ＝ ${fmtGuide(v)} cm　`
+      + `這個方向現在有 ${doc.guides[ax].length} 條`);
+  },
+
+  /**
+   * 🔴 **點到某條線 ＝ 在下拉裡選了它** —— 同一個狀態、同一個欄位，
+   * ⛔ 不是另一套機制（規格檔第 3 階段那一條）。
+   */
+  onGuidePick: (ax, v) => {
+    guidePicked = v;
+    syncGuideRow();
+    toast(`選到 ${GUIDE_AXIS_LABEL[ax]} ＝ ${fmtGuide(v)} cm　`
+      + '⭐ 可以直接拖它，或在位置欄打精確數字');
+  },
+
+  /**
+   * 拖著一條線走。**拖曳中一路改過去，放手才記一步 Undo。**
+   *
+   * ⚠ **拖曳中⛔ 不叫 `syncGuideRow()`** —— 那會把下拉整個重建，
+   * 一秒幾十次會閃。⭐ 只更新**位置欄**（那是使用者盯著的那個數字）。
+   *
+   * @returns {boolean} 有沒有真的挪過去（撞到別條線就回 `false`）
+   */
+  onGuideDrag: (ax, from, to, committing) => {
+    if (committing) {
+      guidePicked = to;
+      syncGuideRow();
+      commit('挪參考線');
+      toast(`參考線 ${GUIDE_AXIS_LABEL[ax]} → ${fmtGuide(to)} cm`);
+      return true;
+    }
+    if (!doc.removeGuide(ax, from)) return false;
+    if (!doc.addGuide(ax, to)) {
+      doc.addGuide(ax, from);          // ⚠ 撞到別條 → 原封不動退回去
+      return false;
+    }
+    guidePicked = to;
+    view.syncGuides(doc);
+    if (document.activeElement !== $('guideNum')) $('guideNum').value = fmtGuide(to);
+    return true;
+  },
+
+  /**
+   * 🔴 **這個視角看不出這個軸 → 講出來，⛔ 不可以安靜地沒反應。**
+   * ⚠ 「我明明點了卻什麼都沒發生」是最糟的回饋〔坑第 21 條那一類〕。
+   * ⭐ 訊息要**講得出該切到哪個視角**，⛔ 不是只說「不行」。
+   */
+  onGuideNoAxis: ax => toast(
+    `這個視角看不出 ${GUIDE_AXIS_LABEL[ax]} 的位置　`
+    + `⭐ 切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
   onEditPick: (el, info) => editPick(el, info),
@@ -3825,6 +3896,18 @@ let guidePicked = null;
 const GUIDE_AXIS_LABEL = { x: 'X 左右', y: 'Y 上下', z: 'Z 前後' };
 
 /**
+ * 🔴 **哪個視角看得出這個軸**（第 3 階段，2026-09-01）。
+ *
+ * ⚠ 一個視角看得見**兩個**軸，看不見的那個正是**視線的方向**：
+ * 前視看 XY（看不出 Z）、上視看 XZ（看不出 Y）、側視看 ZY（看不出 X）。
+ * ⇒ 每個軸剛好有**兩個**視角點得到。
+ *
+ * ⭐ 這張表**只拿來講話**，⛔ 不拿來判斷 —— 判斷是問幾何
+ * （`select.js` 的 `_axisValueAt()`），⛔ 不是比對視角名字。
+ */
+const GUIDE_AXIS_VIEW = { x: '「前」或「上」', y: '「前」或「側」', z: '「上」或「側」' };
+
+/**
  * 把那一排刷成跟 `doc.guides` 一致。
  *
  * ⚠ **每一次動完都要叫** —— 加、刪、清、換方向、**還有 Undo**。
@@ -3891,12 +3974,18 @@ $('guide').onclick = function () {
   guidePicked = null;
   updateBar();
   /**
-   * ⚠ **⛔ 不要只說「參考線開啟」** —— 這一階段**畫面上點不到任何東西**，
-   * 而使用者剛按完一顆工具鈕，直覺會去點畫面。⛔ 不講的話那就是
-   * 「按了沒反應」（坑第 21 條）。
+   * 🔴 **⛔ 不自動幫他鎖視角，但沒鎖就提醒一句**（kang 2026-09-01 拍板）。
+   *
+   * ⚠ **自動改使用者按過的狀態是這個專案踩過的坑** ——
+   * 進 `編輯路徑` 時程式偷偷擺好工具列兩顆，收工⛔ 不還原的話
+   * 他下一次畫新東西會莫名其妙變成一道牆，**而他從頭到尾沒按過那顆**。
+   * ⭐ 所以這裡只**講**，⛔ 不動。
    */
   toast(on
-    ? '參考線：在上面選方向（X／Y／Z）＋打位置，按「加一條」。⚠ 這一階段還不能在畫面上點線'
+    ? (view.viewLocked
+        ? '參考線：切到「前／側／上」，在畫面上點一下就生一條；點到線可以拖著走'
+        : '參考線：在畫面上點之前，先切到「前／側／上」　'
+          + '⭐ 要拖線建議先按「視角」那一組的「鎖定」，不然畫面會跟著轉')
     : '參考線關閉');
 };
 
