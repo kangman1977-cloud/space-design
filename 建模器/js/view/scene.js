@@ -131,6 +131,16 @@ export class SceneView {
      * 那一份是整批一個材質，改色會**三條線一起變**。
      */
     this._guidesHot = null;
+    /**
+     * 🔴🔴 **高亮的【真相】記在這裡，⛔ 不是記在那個節點上。**
+     *
+     * ⚠ **這是 2026-09-01 上線先驗抓到的 bug 的修法**：
+     * `sync()` 每一幀都會叫 `syncGuides()` → `clearGuides()`，
+     * 而清掉的是**節點** —— 記著 hits 才能在同一支裡**把它重建回來**。
+     * ⛔ 不記的話，畫面上永遠看不到高亮（吸附是對的、只是看不見），
+     * 而**四道機械檢查與 2560 項測試一項都碰不到它**。
+     */
+    this._guideHotHits = null;
 
     this._fps = { acc: 0, n: 0, last: performance.now(), value: 0 };
 
@@ -773,9 +783,33 @@ export class SceneView {
     return seg;
   }
 
+  /**
+   * 🔴 **重畫參考線 ＝ 三步：清掉 → 畫線 → 把高亮接回去。**
+   *
+   * ⚠ **⛔ 不可以把第三步寫在 `_buildGuideLines()` 裡面** ——
+   * 那一支有三個 `return`（沒有 guides／沒有線段／建不出來），
+   * 高亮會在其中兩條路上被漏掉，而**那正是 2026-09-01 那個 bug 的形狀**。
+   */
   syncGuides(doc) {
     this.clearGuides();
     const g = doc && doc.guides;
+    this._pruneGuideHot(g);
+    this._buildGuideLines(g);
+    this._rebuildGuideHot();
+  }
+
+  /**
+   * ⚠ **高亮只留【還存在】的那幾條** —— 拖到一半有人把線刪掉的話，
+   * ⛔ 不剪的話畫面上會留著一條「亮著、但已經不存在」的線。
+   */
+  _pruneGuideHot(g) {
+    if (!this._guideHotHits) return;
+    const keep = this._guideHotHits.filter(h =>
+      g && Array.isArray(g[h.ax]) && g[h.ax].some(v => Math.abs(v - h.v) < 5e-4));
+    this._guideHotHits = keep.length ? keep : null;
+  }
+
+  _buildGuideLines(g) {
     if (!g) return;
 
     const seg = this._guideSegments(g);
@@ -813,8 +847,23 @@ export class SceneView {
     this._guides.visible = this.guidesVisible;
   }
 
+  /**
+   * ⚠ **只移除那個節點，⛔ 不動 `_guideHotHits`。**
+   * 「現在正吸著哪幾條」是**拖曳的狀態**，⛔ 不是畫面的狀態 ——
+   * 重畫參考線⛔ 不代表使用者放手了。
+   */
+  _removeGuideHotNode() {
+    if (!this._guidesHot) return;
+    this.scene.remove(this._guidesHot);
+    this._guidesHot.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._guidesHot = null;
+  }
+
   clearGuides() {
-    this.setGuideHot(null);
+    this._removeGuideHotNode();
     if (!this._guides) return;
     this.scene.remove(this._guides);
     this._guides.traverse(o => {
@@ -852,14 +901,19 @@ export class SceneView {
    * @param {Array<{ax:string, v:number}>|null} hits 吸中的線；空或 null ＝ 清掉
    */
   setGuideHot(hits) {
-    if (this._guidesHot) {
-      this.scene.remove(this._guidesHot);
-      this._guidesHot.traverse(o => {
-        if (o.geometry) o.geometry.dispose();
-        if (o.material) o.material.dispose();
-      });
-      this._guidesHot = null;
-    }
+    this._guideHotHits = (hits && hits.length) ? hits.slice() : null;
+    this._rebuildGuideHot();
+  }
+
+  /**
+   * 照 `_guideHotHits` 把高亮畫出來。
+   *
+   * 🔴 **`syncGuides()` 末尾也會叫它** —— 那是「清掉節點之後
+   * 要把它接回去」的那一步，⛔ 少了它高亮就永遠看不到。
+   */
+  _rebuildGuideHot() {
+    this._removeGuideHotNode();
+    const hits = this._guideHotHits;
     if (!hits || !hits.length) return;
 
     const g = { x: [], y: [], z: [] };
