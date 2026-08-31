@@ -41,6 +41,16 @@ html, body {
   display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
   padding: 3px 8px 3px 6px; border: 1px solid #3a3f48; border-radius: 8px;
 }
+/* 🔴🔴 ⛔ 這一行【不是多餘的】—— ⛔ 不要因為「hidden 本來就會隱藏」把它刪掉。
+
+   `hidden` 屬性的效果是 `display: none`，但那是【瀏覽器預設樣式】，
+   而上面的 `.grp { display: flex }` 是【作者樣式】—— **作者的贏**。
+   ⇒ ⛔ 沒有這一行，`g.hidden = true` 對 `.grp`【完全不生效】，
+     而且**不會報錯、看起來就像程式沒跑到**。
+
+   ⭐ 這個專案已經踩過一次：底下 `.uwWin[hidden] { display: none; }`
+     就是為了同一件事存在的。 */
+.grp[hidden] { display: none; }
 .grp > .lbl {
   flex: none; white-space: nowrap;
   font-size: 11px; color: #8b93a1; margin-right: 2px;

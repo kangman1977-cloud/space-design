@@ -1939,8 +1939,9 @@ function updateToCircleBtn() {
   }
   const ok = verts.length >= 3;
 
-  $('toCircle').disabled = !ok;
-  $('circleR').disabled = !ok;
+  /** 🔴 2026-08-31 第 2 段：改成「沒輪到就不出現」，⛔ 不再變灰 */
+  $('toCircle').hidden = !ok;
+  $('circleR').hidden = !ok;
   $('toCircle').title = ok
     ? `把選到的 ${verts.length} 個點推回一個正圓（會先壓到同一個平面）`
     : (sel.editMode ? '至少要選到 3 個點 —— 選一個面，或開「加選」選一圈邊'
@@ -3721,8 +3722,8 @@ function updateBar() {
 
   $('undo').disabled = !hist.canUndo;
   $('redo').disabled = !hist.canRedo;
-  $('del').disabled = sel.count === 0;
-  $('dup').disabled = sel.count === 0;
+  $('del').hidden = sel.count === 0;
+  $('dup').hidden = sel.count === 0;
 
   // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
@@ -3738,7 +3739,7 @@ function updateBar() {
    * 而不是按下去被罵。`title` 也跟著換，滑過去就講得出缺什麼。
    */
   const face = sel.editMode && sel.editSel && sel.editSel.kind === 'face';
-  $('extrude').disabled = !face;
+  $('extrude').hidden = !face;
   $('extrude').title = face
     ? `從選到的面長出新的一段（先長 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，再用箭頭拉）`
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
@@ -3762,8 +3763,8 @@ function updateBar() {
   /**
    * 內縮：**選到一個面才給按**（一次一個，跟擠出同一條界線）。
    */
-  $('inset').disabled = !face;
-  $('insetW').disabled = !face;
+  $('inset').hidden = !face;
+  $('insetW').hidden = !face;
   $('inset').title = face
     ? (sel.editCount > 1
         ? `內縮一次只能一個面（現在選了 ${sel.editCount} 個）`
@@ -3775,7 +3776,7 @@ function updateBar() {
    * 刪除面：**選到面就給按**（一個或多個都行）。
    * 補洞：**不需要進編輯模式**，選到非參數物件就能按 —— 它處理整個物件。
    */
-  $('delFace').disabled = !face;
+  $('delFace').hidden = !face;
   $('delFace').title = face
     ? (sel.editCount > 1
         ? `把選到的 ${sel.editCount} 個面拿掉。⚠ 網格會變開放，之後不能做布林（可以用「補洞」補回來）`
@@ -3784,7 +3785,7 @@ function updateBar() {
                     : '先按「拉點線面」進入編輯模式，再選面');
 
   const canFill = sel.active && !sel.active.isParametric;
-  $('fillHoles').disabled = !canFill;
+  $('fillHoles').hidden = !canFill;
   $('fillHoles').title = !sel.active
     ? '先選一個物件'
     : (sel.active.isParametric
@@ -3797,15 +3798,15 @@ function updateBar() {
    * 「有幾個洞」是按下去之後才講的話。⚠ 每次 `updateBar()` 都去掃一遍
    * 邊界邊，那是**寫進每幀迴圈、而且會隨模型大小成長**的東西（坑第 22 條）。
    */
-  $('bridge').disabled = !canFill;
-  $('bridgeTurn').disabled = !canFill;
+  $('bridge').hidden = !canFill;
+  $('bridgeTurn').hidden = !canFill;
   $('bridge').title = !sel.active
     ? '先選一個物件'
     : (sel.active.isParametric
         ? '參數物件接了也留不住（開檔會照參數重新生成）。要接請先按「轉成可編輯網格」'
         : '把這個物件上剛好兩個洞接成一段管。⚠ 兩根管子請先按「∪ 聯集」合成一個物件，再各刪掉一個蓋子');
 
-  $('flatten').disabled = !face;
+  $('flatten').hidden = !face;
   $('flatten').title = face
     ? (sel.editCount > 1
         ? `把選到的 ${sel.editCount} 個面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變`
@@ -3823,8 +3824,8 @@ function updateBar() {
    */
   const edge1 = sel.editMode && sel.editSel && sel.editSel.kind === 'edge'
              && sel.editCount === 1;
-  $('loopCut').disabled = !edge1;
-  $('loopCutN').disabled = !edge1;
+  $('loopCut').hidden = !edge1;
+  $('loopCutN').hidden = !edge1;
   /**
    * 沿面滑動：**選到邊就給按**（⚠ 跟環切「一次只能一條」相反）——
    * 它吃的是**一整圈**，一條邊根本滑不動。
@@ -3840,15 +3841,15 @@ function updateBar() {
    * 「工具列在、CSS 也對，但一行 JS 都沒跑」，**⛔ 完全看不出是哪裡的錯**。
    */
   const slideOk = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
-  $('slide').disabled = !slideOk;
-  $('slideAmt').disabled = !slideOk;
-  $('slideUnit').disabled = !slideOk;
+  $('slide').hidden = !slideOk;
+  $('slideAmt').hidden = !slideOk;
+  $('slideUnit').hidden = !slideOk;
   /**
    * 平行複製：**條件跟沿面滑動完全一樣**（吃同一種選取）——
    * ⭐ 所以借同一個 `slideOk`，⛔ 不重寫一份判斷式（坑第 31 條）。
    */
-  $('offsetLoop').disabled = !slideOk;
-  $('offsetW').disabled = !slideOk;
+  $('offsetLoop').hidden = !slideOk;
+  $('offsetW').hidden = !slideOk;
   $('offsetLoop').title = slideOk
     ? `在選到的 ${sel.editCount} 條邊兩側各加一圈平行的線。`
       + '只加線、形狀完全不變（體積面積精確不變）。做加強筋、邊框、溝槽'
@@ -3873,9 +3874,9 @@ function updateBar() {
    */
   const edgeAny = sel.editMode && sel.editCount > 0
     && sel.editSels.every(e => e.kind === 'edge');
-  $('bevel').disabled = !edgeAny;
-  $('bevelW').disabled = !edgeAny;
-  $('bevelSeg').disabled = !edgeAny;
+  $('bevel').hidden = !edgeAny;
+  $('bevelW').hidden = !edgeAny;
+  $('bevelSeg').hidden = !edgeAny;
   $('bevel').title = edgeAny
     ? (sel.editCount > 1
         ? `把選到的 ${sel.editCount} 條邊都換成斜切面，相鄰的地方角落會自動長出來`
@@ -3883,7 +3884,7 @@ function updateBar() {
     : (sel.editMode ? '先選邊（可以開「加選」選好幾條）'
                     : '先按「拉點線面」進入編輯模式，再選邊');
 
-  $('selRing').disabled = !edge1;
+  $('selRing').hidden = !edge1;
   $('selRing').title = edge1
     ? '從這條邊【橫著跨過】四邊形繞一圈全部選起來（也可以先按它看環切會切在哪）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
@@ -3892,7 +3893,7 @@ function updateBar() {
    * 選一條線：條件跟「選一圈」一模一樣（正好選到一條邊）——
    * ⚠ 兩顆的差別在**走法**，不在**能不能按**。
    */
-  $('selLoop').disabled = !edge1;
+  $('selLoop').hidden = !edge1;
   $('selLoop').title = edge1
     ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
@@ -3902,7 +3903,7 @@ function updateBar() {
    * ⚠ **⛔ 不要因為它「選出來的是面」就改成要先選面** ——
    * 從一個面出發有兩個方向，結果不唯一（坑第 24 條）。
    */
-  $('selRingFaces').disabled = !edge1;
+  $('selRingFaces').hidden = !edge1;
   $('selRingFaces').title = edge1
     ? '跟「選一圈」走同一條路，但選起來的是【面】（一整圈側面）。按下去會自動切到「面」'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
@@ -3912,7 +3913,7 @@ function updateBar() {
    * 它就是拿來取代「一條一條點」的。
    */
   const canAll = sel.editMode && !!sel.active;
-  $('selAllEdges').disabled = !canAll;
+  $('selAllEdges').hidden = !canAll;
   $('selAllEdges').title = canAll
     ? '把這個物件所有看得見的邊一次選起來（方塊 12 條）。要做整個物件的導角／圓角就先按它'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
@@ -3921,8 +3922,8 @@ function updateBar() {
    * 選轉角：**跟「全選邊」同一個條件** —— 選到物件就給按，不必先選邊。
    * ⚠ 它掃的是整個物件，種子不是「現在選到哪一條」。
    */
-  $('selSharp').disabled = !canAll;
-  $('sharpDeg').disabled = !canAll;
+  $('selSharp').hidden = !canAll;
+  $('sharpDeg').hidden = !canAll;
   $('selSharp').title = canAll
     ? '把所有【折起來】的邊一次選起來（夾角大於旁邊那個度數）。標分片切割線的捷徑'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
@@ -3933,8 +3934,8 @@ function updateBar() {
    * ⚠ 種子是 **active（最後選的那一個）**，跟「中心＝最後選的」同一套。
    */
   const canSimilar = sel.editMode && !!sel.editSel;
-  $('selSimilar').disabled = !canSimilar;
-  $('similarMode').disabled = !canSimilar;
+  $('selSimilar').hidden = !canSimilar;
+  $('similarMode').hidden = !canSimilar;
   $('selSimilar').title = canSimilar
     ? `跟【最後選的那一個${sel.editSel.kind === 'edge' ? '邊' : sel.editSel.kind === 'face' ? '面' : '點'}】同一類的全部選起來`
     : (sel.editMode ? '先選一個面或一條邊當範本'
@@ -3948,9 +3949,9 @@ function updateBar() {
    * 而這一段每次選取變動都會跑。按下去再講原因就好。
    */
   const canChecker = sel.editMode && sel.editCount >= 3;
-  $('selChecker').disabled = !canChecker;
-  $('checkerNth').disabled = !canChecker;
-  $('checkerFrom').disabled = !canChecker;
+  $('selChecker').hidden = !canChecker;
+  $('checkerNth').hidden = !canChecker;
+  $('checkerFrom').hidden = !canChecker;
   $('selChecker').title = canChecker
     ? `把現在這 ${sel.editCount} 個隔幾個留一個（做格柵鏤空）。`
       + '⚠ 要連成一圈或一條才算得出來'
@@ -3962,9 +3963,15 @@ function updateBar() {
    * 它切的是整個物件，位置由旁邊的軸與座標決定。
    */
   const canBisect = sel.editMode && !!sel.active;
-  $('bisect').disabled = !canBisect;
-  $('bisectAxis').disabled = !canBisect;
-  $('bisectAt').disabled = !canBisect;
+  $('bisect').hidden = !canBisect;
+  $('bisectAxis').hidden = !canBisect;
+  $('bisectAt').hidden = !canBisect;
+  /**
+   * ⚠ **範圍提示那個 span 也要跟著收** —— ⛔ 不收的話，`切一刀` 那一組
+   * 整組不見了，卻留下一句孤零零的「Y：0 ～ 45」在工具列上。
+   * 🔴 它原本⛔ 沒有被任何地方管顯示（只管文字），是第 2 段才需要的。
+   */
+  $('bisectRange').hidden = !canBisect;
   $('bisect').title = canBisect
     ? '在旁邊指定的位置用一個平面把整個物件切開，加上一圈新的線。'
       + '只加線不改形狀，切完那一圈會自動選中'
@@ -4143,7 +4150,7 @@ function updateBar() {
    */
   const edgeAnySel = sel.editMode && sel.editCount > 0
     && sel.editSels.every(e => e.kind === 'edge');
-  $('separate').disabled = !edgeAnySel;
+  $('separate').hidden = !edgeAnySel;
   $('separate').title = edgeAnySel
     ? `沿著這 ${sel.editCount} 條邊把物件拆成兩個獨立的物件。`
       + '⚠ 斷面是空的，要補請按「補洞」'
@@ -4160,8 +4167,8 @@ function updateBar() {
    */
   const edgeSome = sel.editMode && sel.editCount > 0
     && sel.editSels.every(e => e.kind === 'edge');
-  $('subdivEdge').disabled = !edgeSome;
-  $('subdivN').disabled = !edgeSome;
+  $('subdivEdge').hidden = !edgeSome;
+  $('subdivN').hidden = !edgeSome;
   $('subdivEdge').title = edgeSome
     ? `在選到的 ${sel.editCount} 條邊上各放點，什麼都不連 —— `
       + '接著用「多點連接」把它們連成你要的形狀'
@@ -4173,7 +4180,7 @@ function updateBar() {
 
   const manyVerts = sel.editMode && sel.editCount >= 2
     && sel.editSels.every(e => e.kind === 'vertex');
-  $('connectVerts').disabled = !manyVerts;
+  $('connectVerts').hidden = !manyVerts;
   $('connectVerts').title = manyVerts
     ? (sel.editCount > 2
         ? `照你選的順序把這 ${sel.editCount} 個點連成 ${sel.editCount - 1} 段，`
@@ -4194,7 +4201,7 @@ function updateBar() {
    */
   const threeVerts = sel.editMode && sel.editCount >= 3
     && sel.editSels.every(e => e.kind === 'vertex');
-  $('faceFromVerts').disabled = !threeVerts;
+  $('faceFromVerts').hidden = !threeVerts;
   $('faceFromVerts').title = threeVerts
     ? `照你選的順序，把這 ${sel.editCount} 個點圍成一個面`
       + (sel.editCount > 3 ? '。⚠ 它們不在同一個平面上的話會講出偏離多少' : '')
@@ -4213,8 +4220,8 @@ function updateBar() {
    */
   const twoEdges = sel.editMode && sel.editCount === 2
     && sel.editSels.every(e => e.kind === 'edge');
-  $('splitFace').disabled = !twoEdges;
-  $('splitFaceT').disabled = !twoEdges;
+  $('splitFace').hidden = !twoEdges;
+  $('splitFaceT').hidden = !twoEdges;
   $('splitFace').title = twoEdges
     ? '在這兩條邊上各長一個點再連起來，把面切成兩塊。0.5 ＝ 正中間（兩等分）'
     : !sel.editMode
@@ -4231,8 +4238,8 @@ function updateBar() {
    * ⚠ 參數物件灰掉：它的繞向是程式自己生的，而且改了也留不住。
    */
   const fixable = sel.active && !sel.active.isParametric;
-  $('fixNormals').disabled = !fixable;
-  $('flipNormals').disabled = !fixable;
+  $('fixNormals').hidden = !fixable;
+  $('flipNormals').hidden = !fixable;
   if (!sel.active) {
     $('fixNormals').title = $('flipNormals').title = '先選一個物件';
   } else if (sel.active.isParametric) {
@@ -4268,6 +4275,9 @@ function updateBar() {
    * 擋著的時候使用者只能手動把種類改成板件繞過去，而得到的數字一模一樣。
    */
   const any = doc.objects.length > 0;
+  /** ⚠ 這三顆⛔ 不跟著第 2 段換頁 —— 條件是「檔案裡有沒有物件」，
+   *  ⛔ 不是「選到什麼」；而且底下那則註解 2026-08-22 就講過
+   *  「擋在按鈕上使用者只看得到一顆灰掉的按鈕，不知道為什麼」*/
   $('unfold').disabled = !any;
   $('unfold').title = any
     ? '攤平成下料圖：含尺寸標註、折線，可列印或輸出 DXF 送雷切／CNC'
@@ -4296,6 +4306,29 @@ function updateBar() {
     ? `${act.name}${act.copies > 1 ? ` ×${act.copies}` : ''}`
       + `　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
     : (hist.undoLabel ? '上一步：' + hist.undoLabel : '點一下物件選取它');
+
+  hideEmptyGroups();
+}
+
+/**
+ * 🔴🔴 **整組都不見了，那個組標籤也要收起來**（2026-08-31，介面編排第 2 段）。
+ *
+ * ⚠ **⛔ 不收的話，工具列上會留下一堆孤兒標籤** ——
+ * 「編輯」「選取」「加線」幾個字掛在那裡，右邊什麼都沒有。
+ *
+ * ⭐ **⛔ 這裡刻意⛔ 不列名單，而是問「裡面還有沒有東西看得見」** ——
+ * 名單會過期（每加一顆按鈕就要記得回來改），而這個問法**永遠是對的**。
+ * 〔跟「⛔ 會過期的數字一律現算，不存」同一條〕
+ *
+ * ⚠ **判準只看 button／input／select，⛔ 不看 span** ——
+ * 那些 `.lbl` 本身就是標籤，拿它當「還有東西」會讓空組永遠收不起來。
+ */
+function hideEmptyGroups() {
+  for (const g of document.querySelectorAll('#bar .grp')) {
+    const live = [...g.querySelectorAll('button, input, select')]
+      .some(el => !el.hidden);
+    g.hidden = !live;
+  }
 }
 
 const f1 = v => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(1);
