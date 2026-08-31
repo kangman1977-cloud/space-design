@@ -463,8 +463,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">編輯</span>
       <button id="undo" disabled>復原</button>
       <button id="redo" disabled>重做</button>
-      <button id="dup" disabled>複製</button>
-      <button id="del" class="warn" disabled>刪除</button>
+      <button id="dup" hidden>複製</button>
+      <button id="del" class="warn" hidden>刪除</button>
     </div>
 
     <div class="grp" id="gBool">
@@ -546,9 +546,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⛔ 不做 Blender 那個「2 個點就建一條邊」——「多點連接」已經是那件事，
         　 兩顆按鈕做同一件事就是【功能之間的定位互相模糊】。
       -->
-      <button id="faceFromVerts" disabled title="點連成面：選 3 個以上的點，照【你點選的順序】圍出一個面。⭐ 補洞只認得完整的一圈邊界，想自己挑幾個角拉一片出來就用這個。⚠ 選 4 個以上而它們不在同一個平面上時照樣會建，但會講出偏離多少（想弄平接著按「壓平」）。⛔ 只想把點連成線請用「多點連接」">點連成面</button>
-      <button id="extrude" disabled title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
-      <button id="flatten" disabled title="壓平：把選到的面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變（圓柱那一段會被削平）。想把好幾片 seg 變成一個平面就用它">壓平</button>
+      <button id="faceFromVerts" hidden title="點連成面：選 3 個以上的點，照【你點選的順序】圍出一個面。⭐ 補洞只認得完整的一圈邊界，想自己挑幾個角拉一片出來就用這個。⚠ 選 4 個以上而它們不在同一個平面上時照樣會建，但會講出偏離多少（想弄平接著按「壓平」）。⛔ 只想把點連成線請用「多點連接」">點連成面</button>
+      <button id="extrude" hidden title="擠出面：從選到的面長出新的一段（做鹿角就是重複這個動作）。先長一段吸附格距的距離，再用箭頭拉到想要的長度">擠出</button>
+      <button id="flatten" hidden title="壓平：把選到的面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變（圓柱那一段會被削平）。想把好幾片 seg 變成一個平面就用它">壓平</button>
       <!--
         環切：選一條邊，程式沿著它繞出一整圈，在中間加上新的線。
         它只加線、不改形狀（體積精確不變），改形狀是接著「拉那一圈邊」的事。
@@ -560,10 +560,10 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⛔ 它不做「把點平均分佈」—— 那是對照表上另一個獨立項目。
         半徑欄位選到東西時會自動填入擬合值，打數字可以覆蓋。
       -->
-      <button id="toCircle" disabled title="變成正圓：把選到的那一圈點推回一個正圓。會先壓到同一個平面，再推到同一個半徑。半徑欄位會自動填入【最接近現在這一圈的圓】，要精確就自己打數字">變成正圓</button>
+      <button id="toCircle" hidden title="變成正圓：把選到的那一圈點推回一個正圓。會先壓到同一個平面，再推到同一個半徑。半徑欄位會自動填入【最接近現在這一圈的圓】，要精確就自己打數字">變成正圓</button>
       <input id="circleR" type="number" min="0.01" step="0.1"
              title="圓的半徑（cm）：選到東西時會自動填入最接近的半徑，點移動最少。要改成精確尺寸就直接打數字">
-      <button id="loopCut" disabled title="環切：選一條邊，沿著它繞一整圈加上新的線（方塊繞 4 條、32 段圓柱繞 32 條）。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做斜面、收腰、階梯">環切</button>
+      <button id="loopCut" hidden title="環切：選一條邊，沿著它繞一整圈加上新的線（方塊繞 4 條、32 段圓柱繞 32 條）。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做斜面、收腰、階梯">環切</button>
       <input id="loopCutN" type="number" min="1" max="32" step="1" value="1"
              title="刀數：一次要切幾刀。切點平均分佈（1 刀在中點、2 刀在 1/3 與 2/3）">
       <!--
@@ -576,16 +576,16 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 兩種單位的結果在【被拉歪過的形狀】上不一樣，所以兩個都給
         （kang 2026-08-28 拍板）：公分＝等距離、％＝等比例。
       -->
-      <button id="slide" disabled title="沿面滑動：把選到的那一圈邊沿著表面挪位置，不會離開表面。環切完直接按這顆就能調切線的位置。正值往上（或畫面上比較高的那一側），打負數往反方向">沿面滑動</button>
+      <button id="slide" hidden title="沿面滑動：把選到的那一圈邊沿著表面挪位置，不會離開表面。環切完直接按這顆就能調切線的位置。正值往上（或畫面上比較高的那一側），打負數往反方向">沿面滑動</button>
       <input id="slideAmt" type="number" step="0.5" value="1"
-             title="滑多少：正值往上、負值往下。滑過頭會停在端點並告訴你最多能滑多少" disabled>
+             title="滑多少：正值往上、負值往下。滑過頭會停在端點並告訴你最多能滑多少" hidden>
       <!--
         ⚠ 這顆是【單顆切換】，不是一組互斥按鈕，所以 ⛔ 不用 class="on" ——
         藍底在這個工具列一律代表「開著」，單顆切換用它會被讀成開／關。
         改成【按鈕上的字就是目前的單位】，按一下換過去。
       -->
       <button id="slideUnit" data-u="cm"
-              title="按一下切換單位。公分＝每個點都走一樣的距離；％＝每個點都走自己那一段的同一個比例（100% 剛好到底）。⚠ 形狀被拉歪過的時候，兩者結果不一樣。⭐ 這顆同時管「沿面滑動」與「平行複製」" disabled>公分</button>
+              title="按一下切換單位。公分＝每個點都走一樣的距離；％＝每個點都走自己那一段的同一個比例（100% 剛好到底）。⚠ 形狀被拉歪過的時候，兩者結果不一樣。⭐ 這顆同時管「沿面滑動」與「平行複製」" hidden>公分</button>
       <!--
         平行複製：跟沿面滑動吃同一種選取（一整圈邊），但它【加線】而不是【搬線】。
 
@@ -596,16 +596,16 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⭐ 單位刻意跟滑動共用同一顆「公分／％」按鈕 ——
            語意完全一樣，而工具列桌機上已經在換行了（kang 說優化延後）。
       -->
-      <button id="offsetLoop" disabled title="平行複製：在選到的那一圈邊，兩側各加一圈平行的線。做加強筋、邊框、溝槽。只加線、形狀完全不變（體積面積精確不變）">平行複製</button>
+      <button id="offsetLoop" hidden title="平行複製：在選到的那一圈邊，兩側各加一圈平行的線。做加強筋、邊框、溝槽。只加線、形狀完全不變（體積面積精確不變）">平行複製</button>
       <input id="offsetW" type="number" min="0.1" step="0.5" value="2"
-             title="離原本那一圈多遠。單位看旁邊那顆「公分／％」。超過就會停在端點並告訴你" disabled>
+             title="離原本那一圈多遠。單位看旁邊那顆「公分／％」。超過就會停在端點並告訴你" hidden>
       <!--
         選一圈：跟環切共用同一支 edgeRing()，只是不切、只選。
         環切已經把走訪寫好了，這顆按鈕幾乎是免費的。
       -->
-      <button id="selRing" disabled title="選一圈：從選到的那條邊【橫著跨過】四邊形繞一圈，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個。⚠ 跟「選一條線」不同：這個是繞著物件一圈">選一圈</button>
-      <button id="selLoop" disabled title="選一條線：從選到的那條邊【順著同一條線】一直走到底（球上選一條經線邊 → 整條經線從極走到極）。⚠ 需要四價的點：方塊與圓柱的角是三價，走不動只會選到一條，那是正常的。要選一整條經線標成分片切割線就用這個">選一條線</button>
-      <button id="selRingFaces" disabled title="選一圈面：跟「選一圈」走同一條路，但選起來的是【面】不是邊（方塊 4 個側面、32 段圓柱 32 個側面、球一整條緯度帶 12 個）。要一整圈一起擠出、壓平、刪掉就用這個。⚠ 一樣要先選【一條邊】—— 從一個面出發的話有兩個方向，結果不唯一。按下去會自動切到「面」">選一圈面</button>
+      <button id="selRing" hidden title="選一圈：從選到的那條邊【橫著跨過】四邊形繞一圈，全部選起來（方塊 4 條、32 段圓柱 32 條）。要一次拉整圈、或要看環切會切在哪，先按這個。⚠ 跟「選一條線」不同：這個是繞著物件一圈">選一圈</button>
+      <button id="selLoop" hidden title="選一條線：從選到的那條邊【順著同一條線】一直走到底（球上選一條經線邊 → 整條經線從極走到極）。⚠ 需要四價的點：方塊與圓柱的角是三價，走不動只會選到一條，那是正常的。要選一整條經線標成分片切割線就用這個">選一條線</button>
+      <button id="selRingFaces" hidden title="選一圈面：跟「選一圈」走同一條路，但選起來的是【面】不是邊（方塊 4 個側面、32 段圓柱 32 個側面、球一整條緯度帶 12 個）。要一整圈一起擠出、壓平、刪掉就用這個。⚠ 一樣要先選【一條邊】—— 從一個面出發的話有兩個方向，結果不唯一。按下去會自動切到「面」">選一圈面</button>
       <!--
         全選邊：kang 2026-08-25 實測逼出來的。
 
@@ -617,7 +617,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 只做「邊」不做點與面，因為只有邊真的需要：
         內縮／擠出一次只吃一個面，點的全選 ＝ 整體移動（物件模式就能做）。
       -->
-      <button id="selAllEdges" disabled title="全選邊：把這個物件所有看得見的邊一次選起來。要做整個物件的導角／圓角就先按它 —— 方塊 12 條邊不必再一條一條點">全選邊</button>
+      <button id="selAllEdges" hidden title="全選邊：把這個物件所有看得見的邊一次選起來。要做整個物件的導角／圓角就先按它 —— 方塊 12 條邊不必再一條一條點">全選邊</button>
       <!--
         選轉角：依夾角一次選出模型上所有折起來的邊（Blender 的 Select Sharp Edges）。
 
@@ -626,7 +626,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         　 而 isMarkable() 早就擋掉了（「本來就是外輪廓」）。
         　 → 所以平板按下去是 0 條，那個情形一定要講出原因（坑第 21 條）。
       -->
-      <button id="selSharp" disabled title="選轉角：把模型上所有【折起來】的邊一次選起來（夾角大於旁邊那個度數的）。標分片切割線時先按它，不必一條一條點。⚠ 平板的四周、洞口那一圈是【開口邊緣】，沒有夾角可以算，選不進來">選轉角</button>
+      <button id="selSharp" hidden title="選轉角：把模型上所有【折起來】的邊一次選起來（夾角大於旁邊那個度數的）。標分片切割線時先按它，不必一條一條點。⚠ 平板的四周、洞口那一圈是【開口邊緣】，沒有夾角可以算，選不進來">選轉角</button>
       <input id="sharpDeg" type="number" min="1" max="180" step="1" value="30"
              title="幾度以上算轉角：方塊的角是 90 度、32 段圓柱的側面只有 11.25 度。放大只選明顯的折角，調小連緩轉角也選進來">
       <!--
@@ -634,7 +634,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         四種判準是 kang 2026-08-27 選的，四種都要。
         種子用 active（橘色那個）—— 跟「中心＝最後選的」同一套。
       -->
-      <button id="selSimilar" disabled title="選相似：跟【最後選的】那一個同一類的元素全部選起來。要選起球的全部 32 片就用它，不必點 32 下。判準在旁邊挑">選相似</button>
+      <button id="selSimilar" hidden title="選相似：跟【最後選的】那一個同一類的元素全部選起來。要選起球的全部 32 片就用它，不必點 32 下。判準在旁邊挑">選相似</button>
       <select id="similarMode" title="什麼叫「相似」：同法向＝朝同一個方向的面；同面積＝一樣大的面；同邊長＝一樣長的邊；同邊數＝三角形選三角形、四邊形選四邊形">
         <option value="normal">同法向</option>
         <option value="area">同面積</option>
@@ -650,17 +650,17 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 排不出一圈或一條就擋下來講原因（方塊按選轉角的 12 條就是）。
         ⚠ 一圈沒有起點 ——「從第幾個開始」是拿來把格柵整體挪一格的。
       -->
-      <button id="selChecker" disabled title="隔一個選一個：把選到的那一圈，隔幾個留一個（32 片側面 → 16 片 → 按「刪除面」＝ 一圈格柵）。⚠ 選到的東西要連成一圈或一條才算得出來 —— 先用「選一圈面」「選一圈」「選一條線」選好再按">隔一個選一個</button>
+      <button id="selChecker" hidden title="隔一個選一個：把選到的那一圈，隔幾個留一個（32 片側面 → 16 片 → 按「刪除面」＝ 一圈格柵）。⚠ 選到的東西要連成一圈或一條才算得出來 —— 先用「選一圈面」「選一圈」「選一條線」選好再按">隔一個選一個</button>
       <input id="checkerNth" type="number" min="2" max="99" step="1" value="2"
-             title="隔幾個留一個：2 ＝ 留一個跳一個（32 → 16）、3 ＝ 留一個跳兩個（32 → 11）" disabled>
+             title="隔幾個留一個：2 ＝ 留一個跳一個（32 → 16）、3 ＝ 留一個跳兩個（32 → 11）" hidden>
       <input id="checkerFrom" type="number" min="1" max="99" step="1" value="1"
-             title="從第幾個開始：拿來把格柵整體挪一格 —— 1 換成 2 選到的就是另外那一半。⚠ 一圈沒有「第一個」，所以它是相對的，不是指定某一個面" disabled>
+             title="從第幾個開始：拿來把格柵整體挪一格 —— 1 換成 2 選到的就是另外那一半。⚠ 一圈沒有「第一個」，所以它是相對的，不是指定某一個面" hidden>
       <!--
         內縮：沿著面的外緣往面內長一圈邊。只加線、形狀不變。
         內圈那個新面會自動選中 → 接著用「拉面」沿法向推，就是凹槽／面板開口／邊框。
         （不做 Blender 的 Depth，理由同擠出方案 C：一個動作一件事）
       -->
-      <button id="inset" disabled title="內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。只加線、形狀不變。內圈那個新面會自動選中，接著用箭頭沿法向推就是凹槽、面板開口、邊框">內縮</button>
+      <button id="inset" hidden title="內縮：沿著選到那個面的外緣，往面內長出一圈新的邊。只加線、形狀不變。內圈那個新面會自動選中，接著用箭頭沿法向推就是凹槽、面板開口、邊框">內縮</button>
       <input id="insetW" type="number" min="0.1" step="0.1" value="1"
              title="內縮寬度（cm）：新的一圈離原本的邊多遠。四個角會自動做尖角接合（miter），實際牆距就是這個數字">
       <!--
@@ -669,7 +669,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         而且它可能一次產生很多片（12 條邊全導 ＝ 20 片），
         gizmo 會停在它們的共同重心，也就是模型內部，反而擋住你看形狀。
       -->
-      <button id="bevel" disabled title="導角：把選到的邊換成一片斜切面（45 度斜切）。相鄰的邊一起導時，角落會自動長出一個面。可以一次選好幾條邊">導角</button>
+      <button id="bevel" hidden title="導角：把選到的邊換成一片斜切面（45 度斜切）。相鄰的邊一起導時，角落會自動長出一個面。可以一次選好幾條邊">導角</button>
       <input id="bevelW" type="number" min="0.1" step="0.1" value="1"
              title="導角寬度（cm）：斜切面離原本那條邊多遠。⚠ 太大會跟旁邊的邊打架，做出怪形狀">
       <!--
@@ -685,8 +685,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         刪除面 ＋ 補洞：一對。沒有刪除面就做不出洞，沒有補洞就補不回去。
         ⚠ 刪除面會讓網格變開放 → 不能再做布林，展開與 STL 行為也會變。
       -->
-      <button id="delFace" disabled title="刪除面：把選到的面拿掉，那裡會變成一個洞。⚠ 網格會變成開放的，之後不能再做布林運算。補得回來 —— 用旁邊的「補洞」">刪除面</button>
-      <button id="fillHoles" disabled title="補洞：把這個物件上所有的洞補起來。⚠ 板件（本來就是一張沒有厚度的面）按了會被封起來，那時體積會是 0">補洞</button>
+      <button id="delFace" hidden title="刪除面：把選到的面拿掉，那裡會變成一個洞。⚠ 網格會變成開放的，之後不能再做布林運算。補得回來 —— 用旁邊的「補洞」">刪除面</button>
+      <button id="fillHoles" hidden title="補洞：把這個物件上所有的洞補起來。⚠ 板件（本來就是一張沒有厚度的面）按了會被封起來，那時體積會是 0">補洞</button>
       <!--
         橋接：兩個洞 → 中間長出一段管。
 
@@ -697,9 +697,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 兩根管子要先按「∪ 聯集」合成一個物件才接得起來
         —— 跨物件不能一起編輯。
       -->
-      <button id="bridge" disabled title="橋接：把物件上剛好兩個洞接成一段管（過渡段、接頭、變徑管）。⚠ 兩根管子請先按「∪ 聯集」合成一個物件，再各刪掉一個蓋子。兩圈的點數要一樣">橋接</button>
+      <button id="bridge" hidden title="橋接：把物件上剛好兩個洞接成一段管（過渡段、接頭、變徑管）。⚠ 兩根管子請先按「∪ 聯集」合成一個物件，再各刪掉一個蓋子。兩圈的點數要一樣">橋接</button>
       <input id="bridgeTurn" type="number" min="-64" max="64" step="1" value="0"
-             title="轉幾格：接的時候把另一圈轉幾個點再接。0 ＝ 最近的點對最近的點（直筒、變徑管），打數字就會扭轉成麻花柱" disabled>
+             title="轉幾格：接的時候把另一圈轉幾個點再接。0 ＝ 最近的點對最近的點（直筒、變徑管），打數字就會扭轉成麻花柱" hidden>
       <!--
         任意切線：用一個平面把整個物件切開，只加線、不改形狀。
 
@@ -711,7 +711,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         （而且物件被搬過位置之後更猜不到）。鐵律三：
         「讓兩個數字互相對得起來，錯誤才會自己現形」。
       -->
-      <button id="bisect" disabled title="切一刀：在指定的位置用一個平面把整個物件切開，加上一圈新的線。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做收腰、階梯、斜面。跟「環切」的差別：環切順著形狀繞，這一顆是你指定位置直接橫切">切一刀</button>
+      <button id="bisect" hidden title="切一刀：在指定的位置用一個平面把整個物件切開，加上一圈新的線。只加線不改形狀，切完那一圈會自動選中，直接用箭頭拉就能做收腰、階梯、斜面。跟「環切」的差別：環切順著形狀繞，這一顆是你指定位置直接橫切">切一刀</button>
       <select id="bisectAxis" title="從哪個方向切。座標是空間裡的實際位置，跟對齊、貼合、剖面分切看到的是同一套數字">
         <option value="x">X</option>
         <option value="y" selected>Y</option>
@@ -732,7 +732,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 拆出來的兩塊是開放的（斷面是洞），要補按現成的「補洞」——
         ⛔ 不在這裡偷偷補，使用者要的可能就是碗（薄殼件）。
       -->
-      <button id="separate" disabled title="分離：沿著選到的那一圈邊，把物件拆成兩個獨立的物件。先用「切一刀」或「環切」切一圈（切完會自動選中），再按這裡。⚠ 拆出來的斷面是空的，要補請用「補洞」">分離</button>
+      <button id="separate" hidden title="分離：沿著選到的那一圈邊，把物件拆成兩個獨立的物件。先用「切一刀」或「環切」切一圈（切完會自動選中），再按這裡。⚠ 拆出來的斷面是空的，要補請用「補洞」">分離</button>
       <!--
         刀具：kang 2026-08-25 要的「自由切」——
         「切一刀是要用數值控制...我不能真的自由切我想要的區塊..
@@ -844,10 +844,10 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         要放在特定位置就加完用「拉點」移過去。
         跟「加線只加線、形狀交給拉點」同一條分工。
       -->
-      <button id="subdivEdge" disabled title="邊上加點：在選到的邊上放點，什麼都不連。放好之後用「多點連接」把它們連成你要的形狀。要放在特定位置，加完用「拉點」移過去">邊上加點</button>
+      <button id="subdivEdge" hidden title="邊上加點：在選到的邊上放點，什麼都不連。放好之後用「多點連接」把它們連成你要的形狀。要放在特定位置，加完用「拉點」移過去">邊上加點</button>
       <input id="subdivN" type="number" min="1" max="32" step="1" value="1"
              title="每條邊上加幾個點，平均分佈。1 就是中點">
-      <button id="connectVerts" disabled title="多點連接：選好幾個角，照你選的順序一段一段連起來，面會被切開。兩個點就是連一條線。形狀完全不變，新的線會自動選中，接著用箭頭拉就能做屋頂、折線。⚠ 每一段的兩個點要在同一個面上，而且不能相鄰（相鄰本來就有線了）">多點連接</button>
+      <button id="connectVerts" hidden title="多點連接：選好幾個角，照你選的順序一段一段連起來，面會被切開。兩個點就是連一條線。形狀完全不變，新的線會自動選中，接著用箭頭拉就能做屋頂、折線。⚠ 每一段的兩個點要在同一個面上，而且不能相鄰（相鄰本來就有線了）">多點連接</button>
       <!--
         面上加線：跟「連接兩點」分成兩顆，kang 2026-08-25 拍板
         （「畢竟效果呈現不同」）。
@@ -859,7 +859,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         ⚠ 兩條邊在面的迴圈上是繞著走的，所以第二條要反過來算，
         否則 0.3 會切出一條斜線 —— 見 edit.js splitFaceByEdges() 檔頭。
       -->
-      <button id="splitFace" disabled title="面上加線：在同一個面上選兩條邊，各長出一個點再連起來，那個面被切成兩塊。0.5 就是正中間（兩等分）。形狀完全不變，新的線會自動選中。⚠ 那兩條邊的另一側也會跟著多一個點，那是必須的，不然網格會破洞">面上加線</button>
+      <button id="splitFace" hidden title="面上加線：在同一個面上選兩條邊，各長出一個點再連起來，那個面被切成兩塊。0.5 就是正中間（兩等分）。形狀完全不變，新的線會自動選中。⚠ 那兩條邊的另一側也會跟著多一個點，那是必須的，不然網格會破洞">面上加線</button>
       <input id="splitFaceT" type="number" min="0.01" max="0.99" step="0.05" value="0.5"
              title="切在邊的哪個位置：0.5 ＝ 正中間（兩等分），0.3 ＝ 靠一邊三成。兩條邊會一起移，切出來的線是平行的">
     </div>
@@ -870,8 +870,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     -->
     <div class="grp" id="gNormal">
       <span class="lbl">法向</span>
-      <button id="fixNormals" disabled title="修法向：把面的朝向重算成「一致而且朝外」。⚠ 繞向錯了畫面上完全看不出來，但 STL 送去列印會被判成非流形。3D 列印面板報「法向朝內」時就按這個">修法向</button>
-      <button id="flipNormals" disabled title="翻面：把整個物件的面朝向全部翻過來。⚠ 板件那種沒有厚度的殼，「外側」在數學上沒有定義，「修法向」不會去猜——那時候用這顆自己決定">翻面</button>
+      <button id="fixNormals" hidden title="修法向：把面的朝向重算成「一致而且朝外」。⚠ 繞向錯了畫面上完全看不出來，但 STL 送去列印會被判成非流形。3D 列印面板報「法向朝內」時就按這個">修法向</button>
+      <button id="flipNormals" hidden title="翻面：把整個物件的面朝向全部翻過來。⚠ 板件那種沒有厚度的殼，「外側」在數學上沒有定義，「修法向」不會去猜——那時候用這顆自己決定">翻面</button>
     </div>
 
     <!--
