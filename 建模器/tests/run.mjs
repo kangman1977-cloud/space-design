@@ -8337,6 +8337,78 @@ section('刀具：點一串位置，依序切過去');
      !tiny.ok && /多點連接/.test(tiny.reason || ''), tiny.reason);
 
   /**
+   * 🔴🔴 **繞一圈閉合之後【分得開】**（2026-09-01，kang 回報的 bug）。
+   *
+   * ⚠ **病因**：閉合（快點兩下）是**把第一個點複製一份加到最後**，
+   * 而插點那一步照著在**同一個位置又插了一個頂點** ——
+   * 那一圈的頭尾變成**兩個重合但不同的點**，中間夾著**一條長度 0 的邊**，
+   * 而 `分離` 的走訪就從那條邊**穿過去**了。
+   *
+   * ⭐ **對照組是 `切一刀`**：同一個方塊、同一個位置，它給 12 個頂點、
+   * 0 條長度 0 的邊、分得開 —— **兩邊的新邊都是 4 條、面都是 10**，
+   * 唯一的差別就是那個重複點。
+   */
+  {
+    const b2 = baked('box', { w: 60, h: 45, d: 40 });
+    const vi2 = b2._vertIndex();
+    const ups = [];
+    for (const he of b2.edges()) {
+      const A = he.v.p, B = he.to.p;
+      if (Math.abs(A.x - B.x) < 1e-6 && Math.abs(A.z - B.z) < 1e-6
+          && Math.abs(A.y - B.y) > 1) ups.push(he);
+    }
+    eq('前提：方塊有 4 條直立的角柱邊', ups.length, 4);
+    ups.sort((p, q) => Math.atan2(p.v.p.z, p.v.p.x) - Math.atan2(q.v.p.z, q.v.p.x));
+    const ring = ups.map(he => ({
+      a: vi2.get(he.v.id), b: vi2.get(he.to.id),
+      p: he.v.p.clone().lerp(he.to.p, 0.5)
+    }));
+    /** ⚠ 這一行就是「快點兩下閉合」做的事：把第一個點複製一份加到最後 */
+    ring.push({ ...ring[0], p: ring[0].p.clone() });
+
+    const rr = edit.knifePath(b2, ring);
+    ok('★ 繞一圈閉合，切得下去', rr.ok, rr.reason);
+    eq('★ 連成 4 段', rr.segments, 4);
+    eq('★★ 頂點 8 → 12（⛔ 不是 13）—— 重複的那個點要被合併掉',
+       rr.mesh.verts.length, 12);
+
+    let zero = 0;
+    for (const he of rr.mesh.edges()) if (he.v.p.distanceTo(he.to.p) < 1e-9) zero++;
+    eq('★★ 🔴 長度 0 的邊：0 條', zero, 0);
+
+    let dup = 0;
+    const vs2 = rr.mesh.verts;
+    for (let i = 0; i < vs2.length; i++) {
+      for (let j = i + 1; j < vs2.length; j++) {
+        if (vs2[i].p.distanceTo(vs2[j].p) < 1e-9) dup++;
+      }
+    }
+    eq('★★ 🔴 位置重合的頂點對：0', dup, 0);
+
+    const di2 = rr.mesh._vertIndex();
+    const kk = (x, y) => (x < y ? `${x}-${y}` : `${y}-${x}`);
+    const want = new Set(rr.newEdges.map(([x, y]) => kk(x, y)));
+    const wall = [];
+    for (const he of rr.mesh.edges()) {
+      const x = di2.get(he.v.id), y = di2.get(he.to.id);
+      if (want.has(kk(x, y))) wall.push(he);
+    }
+    eq('★ 切出來的新邊 4 條', want.size, 4);
+    const sep = edit.separateAlongEdges(rr.mesh, wall);
+    ok('★★★ 🔴 分離：真的分得開', sep.ok, sep.reason);
+    eq('★★★ 分成幾塊', sep.parts, 2);
+
+    /** ⭐ 對照組：`切一刀` 在同一個位置切，兩邊要給同一組數字 */
+    const b3 = baked('box', { w: 60, h: 45, d: 40 });
+    const bi = edit.bisect(b3, { n: new THREE.Vector3(0, 1, 0), d: 0 });
+    ok('對照組：切一刀切得下去', bi.ok, bi.reason);
+    eq('★★ 對照組的頂點數跟刀具閉合【一樣】',
+       bi.mesh.verts.length, rr.mesh.verts.length);
+    eq('★★ 對照組的面數跟刀具閉合【一樣】',
+       bi.mesh.faces.length, rr.mesh.faces.length);
+  }
+
+  /**
    * 🔴 兩個點不同屬一個面 → 擋，而且要說「中間再點一個」。
    * ⚠ **樣本要先去量**：頂面的邊跟底面的邊**可能同屬一個側面**
    * （那樣是連得起來的，不是 bug）。要挑真的跨不過去的那一組。
