@@ -12605,6 +12605,75 @@ section('參考線：三串數字、去重、存讀檔往返');
   }
 }
 
+section('擠出邊：從板子的外緣長出一片面（折邊／裙邊）');
+{
+  const sh = baked('plate', { w: 60, d: 40, t: 0 });
+  const ec2 = m => [...m.edges()].length;
+  const chi2 = m => m.verts.length - ec2(m) + m.faces.length;
+  const bnd = [...sh.edges()].filter(h => h.face && (!h.twin || !h.twin.face));
+  eq('前提：一塊平板有 4 條外緣的邊', bnd.length, 4);
+
+  /**
+   * 🔴🔴 **這一組數字就是繞向的檢查。**
+   * 每片裙邊：**頂點 +2、邊 +3、面 +1 → χ 剛好不變**。
+   * ⚠ 繞向排錯（照抄 `extrudeFace()`）的話 **twin 配不上、邊數會爆** ——
+   * 〔權威版：`規格\建模器-點線面編輯.md`「側牆的繞向⛔ 不可以照抄」〕
+   * ⭐ **抓錯的是邊數，⛔ 不是 χ。**
+   */
+  for (const k of [1, 2, 4]) {
+    const pick = bnd.slice(0, k);
+    const r = edit.extrudeBoundaryEdges(sh, pick, 5);
+    ok(`選 ${k} 條外緣的邊，長得出來`, r.ok, r.reason);
+    const m = r.mesh;
+    eq(`★★ 選 ${k} 條 → 頂點 +${2 * k}`, m.verts.length - sh.verts.length, 2 * k);
+    eq(`★★★ 選 ${k} 條 → 邊 +${3 * k}（⛔ 多出來就是繞向排錯）`,
+       ec2(m) - ec2(sh), 3 * k);
+    eq(`★★ 選 ${k} 條 → 面 +${k}`, m.faces.length - sh.faces.length, k);
+    eq(`★★ χ 一格都沒變`, chi2(m), chi2(sh));
+    ok(`　　結構沒問題、仍然是 1 塊`, m.validate().ok && m.validate().components === 1);
+    const want = pick.reduce((s, h) => s + h.v.p.distanceTo(h.to.p) * 5, 0);
+    rel(`★★ 面積 ＝ 每條邊長 × 5 加起來`, m.area() - sh.area(), want);
+  }
+
+  /**
+   * 🔴 **轉角【留缺口】**（kang 2026-09-01 拍板，⛔ 不自動補角）：
+   * 兩片相鄰只共用原本那個角，**各自有自己的外側兩點** →
+   * ⇒ 新增的點是 **4** 個。⚠ 偷偷合併的話會變成 3 個。
+   * ⭐ 那正是紙盒該有的樣子：各摺 90 度立起來剛好碰在一起，
+   * 而「自動補角」摺起來會多一塊料。
+   */
+  {
+    const r = edit.extrudeBoundaryEdges(sh, bnd.slice(0, 2), 5);
+    const key = v => `${v.p.x.toFixed(3)},${v.p.y.toFixed(3)},${v.p.z.toFixed(3)}`;
+    const before = new Set(sh.verts.map(key));
+    const added = r.mesh.verts.filter(v => !before.has(key(v)));
+    eq('★★★ 兩片相鄰 → 新增 4 個點（⛔ 不是 3 個 —— 轉角留缺口，⛔ 沒有合併）',
+       added.length, 4);
+  }
+
+  /**
+   * 🔴 **內部的邊要擋**（kang 2026-09-01 拍板，⚠ **⛔ 不是做不到**）。
+   * 量過的後果：面積 +1200（對的），**而體積 108000 → 117000** ——
+   * 那片面沒有厚度，⛔ 不可能有體積；封閉變否、一塊被判成 2 塊。
+   * ⭐ **訊息一定要指出【真的走得通的那條路】**（鐵律六：⛔ 不寫假的退路）。
+   */
+  {
+    const box = baked('box', { w: 60, d: 45, h: 40 });
+    eq('前提：方塊⛔ 沒有外緣的邊',
+       [...box.edges()].filter(h => h.face && (!h.twin || !h.twin.face)).length, 0);
+    const inner = [...box.edges()].find(h => h.face && h.twin && h.twin.face);
+    const r = edit.extrudeBoundaryEdges(box, [inner], 5);
+    ok('★★ 方塊的稜線（兩邊都有面）要擋，而且要指出改用「擠出」',
+       !r.ok && /擠出/.test(r.reason || '') && /外緣/.test(r.reason || ''), r.reason);
+  }
+
+  /** 擋關與去重 */
+  ok('★ 寬度 0 要擋', !edit.extrudeBoundaryEdges(sh, bnd.slice(0, 1), 0).ok);
+  ok('★ 一條都沒選要擋', !edit.extrudeBoundaryEdges(sh, [], 5).ok);
+  eq('★★ 同一條邊選兩次只長 1 片（⛔ 不是兩片疊在一起）',
+     edit.extrudeBoundaryEdges(sh, [bnd[0], bnd[0]], 5).added, 1);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

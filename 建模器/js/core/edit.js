@@ -5499,3 +5499,144 @@ export function recenterMesh(mesh) {
   out.moved = true;
   return out;
 }
+
+// ═══════════════════════════════════════════════════════
+//  擠出邊：從板子的外緣長出一片面（折邊、裙邊、擋板）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴🔴 **從選到的【開放邊緣】各長出一片面。**（2026-09-01，kang 從對照表挑的）
+ *
+ * ── ⚠ 它⛔ 不是 `extrudeFace()` 的變形，是另一支 ────────────
+ * `extrudeFace()` **明文擋掉「這個面在網格的開放邊緣上」**，
+ * 而**板件的外緣正是開放邊緣** —— ⇒ 兩支的適用範圍**剛好相反**，
+ * ⛔ 不要想著共用（那會變成「兩個地方各判一次」，坑第 31 條）。
+ *
+ * ── 🔴🔴 繞向：⛔ 絕對不可以照抄 `extrudeFace()` ──────────
+ * 新面必須**逆著**原本那條半邊走（`to → v`），⛔ 不是順著。
+ * ⚠ 順著 ＝ **兩個面在同一條邊上走同方向** ＝ 面貼反、配不出 twin
+ * （橋接第一版就是這樣，χ **−62**、不封閉）。
+ * ⭐ **抓錯要用【邊數】，⛔ 不是 χ** —— 見下面那組斷言。
+ * 〔權威版：`規格\建模器-點線面編輯.md`「側牆的繞向⛔ 不可以照抄 `extrudeFace()`」〕
+ *
+ * ── 🔴 每片裙邊各長各的，⛔ 不在轉角合併（kang 2026-09-01 拍板「留缺口」）──
+ * 相鄰的兩片**只共用原本那個角**，各自有自己的外側兩點 →
+ * 轉角留一個楔形缺口。⭐ **那正是紙盒該有的樣子**：各摺 90 度立起來之後
+ * 側邊剛好碰在一起，而且**面積⛔ 不會憑空多出來**。
+ * ⚠ 「自動補角」看起來完整，**摺起來卻多一塊料** —— kang 看過圖之後否決。
+ *
+ * ⇒ **每一片：頂點 ＋2、邊 ＋3、面 ＋1 → χ 剛好不變。**
+ * 🔴 **這一組數字就是機械斷言**：繞向排錯的話 twin 配不上，邊數會多出來。
+ *
+ * ── ⛔ 內部的邊擋下來（kang 2026-09-01 拍板，⚠ ⛔ 不是做不到）──────
+ * 在兩側都有面的邊上長第三片，**量出來的後果**（方塊稜線長一片 40×30）：
+ * 面積 13800 → 15000（＋1200，**對的**），
+ * 🔴 **而體積 108000 → 117000（＋9000）—— 那片面沒有厚度，⛔ 不可能有體積**；
+ * 封閉變否、**一塊被判成 2 塊**、驗證說「這條邊被兩個以上的面共用」。
+ * ⚠ 那正是日誌檔頭「開放的網格也算得出體積是錯的」那個病，
+ * 差別是**這一次會變成使用者按一顆按鈕就做得出來**。
+ *
+ * @param {Mesh} mesh
+ * @param {object[]} hes 選到的半邊（哪一半都可以，裡面會正規化）
+ * @param {number} dist 寬度（cm，要 > 0）
+ * @returns {{ok:boolean, mesh?:Mesh, reason?:string, added?:number, newFaceKeys?:string[]}}
+ */
+export function extrudeBoundaryEdges(mesh, hes, dist) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(hes) || !hes.length) {
+    return { ok: false, reason: '先選至少一條板子外緣的邊' };
+  }
+  if (!Number.isFinite(dist) || dist <= 0) {
+    return { ok: false, reason: '寬度要大於 0' };
+  }
+
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh._faceList(vi);
+
+  /**
+   * ⚠ **同一條邊被選兩次只做一片** —— 使用者可能點到兩個半邊。
+   * ⛔ 不去重的話會長出兩片疊在一起的面（而且⛔ 不會報錯）。
+   */
+  const seen = new Set();
+  const jobs = [];
+  for (const he0 of hes) {
+    if (!he0) continue;
+    /** 🔴 正規化成「有面的那一半」—— 那一半才知道要往哪邊長 */
+    const he = he0.face ? he0 : (he0.twin && he0.twin.face ? he0.twin : null);
+    if (!he) return { ok: false, reason: '選到的邊兩側都沒有面（這條線是孤立的）' };
+
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    /** 🔴 兩側都有面 → 擋（kang 拍板；理由在檔頭） */
+    if (he.twin && he.twin.face) {
+      return {
+        ok: false,
+        reason: '這條邊的兩邊都有面了 —— 擠出邊只能從板子的【外緣】長。'
+              + '想在這裡加東西，請改用「擠出」選那個面'
+      };
+    }
+    jobs.push({ he, a, b });
+  }
+  if (!jobs.length) return { ok: false, reason: '先選至少一條板子外緣的邊' };
+
+  for (const job of jobs) {
+    const { he, a, b } = job;
+    const n = mesh.computeFaceNormal(he.face);
+    if (!n || n.lengthSq() < 1e-12) {
+      return { ok: false, reason: '算不出旁邊那片面的法向（那個面可能是扁的）' };
+    }
+    const pa = points[a], pb = points[b];
+    const d = pb.clone().sub(pa);
+    const len = d.length();
+    if (!(len > 1e-9)) return { ok: false, reason: '有一條邊的長度是 0' };
+    d.divideScalar(len);
+
+    /**
+     * 🔴 **往外的方向 ＝ 沿著旁邊那片面、垂直於這條邊、離開那個面。**
+     *
+     * ⚠ **⛔ 不用「面的繞向一定是逆時針」去推方向** —— 那是個假設，
+     * 而這個專案的面來自各種地方（匯入線稿、布林、分離…）。
+     * ⭐ **改成量出來**：往外走一點會**離面的重心更遠**，⛔ 不必相信任何約定。
+     * 〔鐵律：推論不是權威事實〕
+     */
+    let out = d.clone().cross(n).normalize();
+    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+    const cen = new THREE.Vector3();
+    const fv = mesh.faceVerts(he.face);
+    for (const v of fv) cen.add(v.p);
+    cen.divideScalar(fv.length);
+    if (mid.clone().add(out).distanceTo(cen) < mid.distanceTo(cen)) out.negate();
+
+    const off = out.multiplyScalar(dist);
+    const a2 = points.length; points.push(pa.clone().add(off));
+    const b2 = points.length; points.push(pb.clone().add(off));
+
+    /**
+     * 🔴🔴 **逆著原本那條半邊走（`b → a`），⛔ 不是順著。**
+     * 順著就是橋接第一版那個錯：兩個面在同一條邊上同方向 → 配不出 twin。
+     */
+    faces.push([b, a, a2, b2]);
+    job.newFace = [b, a, a2, b2];
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `長出來會做成壞掉的網格：${pre.fatal[0]}` };
+
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  /**
+   * ⚠ **回報「新長出來的那幾片」的邊，讓介面接著把它們選起來** ——
+   * 跟環切、平行複製同一個作風：使用者接下來多半要拉它們。
+   * ⭐ 用**座標**對回去，⛔ 不用索引（`cleanRebuild()` 會重排）。
+   */
+  const key3 = p => `${p.x.toFixed(6)},${p.y.toFixed(6)},${p.z.toFixed(6)}`;
+  const newFaceKeys = jobs.map(j => j.newFace.map(i => key3(points[i])).join('|'));
+
+  return { ok: true, mesh: out, added: jobs.length, newFaceKeys };
+}

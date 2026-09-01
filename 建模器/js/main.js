@@ -35,6 +35,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
+         extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
@@ -585,6 +586,7 @@ $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
+$('extrudeEdge').onclick = () => extrudeEdgesSelected();
 $('flatten').onclick = () => flattenSelected();
 $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
@@ -2190,6 +2192,69 @@ function extrudeSelected() {
   toast(got
     ? `已擠出 ${step} cm（新增 ${r.walls} 面側牆）　用箭頭拉到想要的長度`
     : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`);
+}
+
+/**
+ * 🔴 **擠出邊：從板子的外緣各長出一片面**（折邊、裙邊、擋板）。
+ *
+ * ── ⚠ 它⛔ 不是上面那顆的變形 ─────────────────────────
+ * `extrudeFace()` **明文擋掉開放邊緣**，而這一顆**只吃開放邊緣** ——
+ * 兩者的適用範圍**剛好相反**，⛔ 不要想著合成一顆。
+ *
+ * ⭐ **寬度⛔ 不新增第三個數字**：直接用「吸附」現在選的值，
+ * 關掉時 1 cm —— **跟上面那顆一模一樣的作法**（kang 2026-09-01 點頭）。
+ *
+ * ⭐ 長完把**新的那幾片選起來** —— 跟環切、平行複製同一個作風，
+ * 使用者接下來多半要用 `拉點線面` 把它們折起來。
+ */
+function extrudeEdgesSelected() {
+  const el = sel.editSel;
+  if (!el || el.kind !== 'edge') {
+    toast('先在編輯模式下選板子外緣的邊，再按「擠出邊」', true);
+    return;
+  }
+  const step = sel.snapStep > 0 ? sel.snapStep : 1;
+  const obj = el.obj;
+  const hes = sel.editSels.filter(e => e.kind === 'edge' && e.he).map(e => e.he);
+
+  const r = extrudeBoundaryEdges(obj.mesh(), hes, step);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(r.added > 1 ? `擠出邊 ${r.added} 片 ${step} cm` : `擠出邊 ${step} cm`);
+
+  /**
+   * ⚠ 一定要在 `commit()` 之後才選 —— 跟擠出、環切、平行複製同一條理由：
+   * `commit()` 走 `revalidate()`，而這裡換掉了整個網格物件。
+   *
+   * ⭐ **用座標對回去，⛔ 不用索引** —— `cleanRebuild()` 會重排。
+   */
+  const key3 = p => `${p.x.toFixed(6)},${p.y.toFixed(6)},${p.z.toFixed(6)}`;
+  const want = new Set(r.newFaceKeys || []);
+  const picks = [];
+  for (const f of r.mesh.faces) {
+    const vs = r.mesh.faceVerts(f).map(v => key3(v.p));
+    /** ⚠ 起點可能被重排到別的位置，所以每一種輪轉都要試 */
+    for (let i = 0; i < vs.length; i++) {
+      if (want.has(vs.slice(i).concat(vs.slice(0, i)).join('|'))) { picks.push(f); break; }
+    }
+  }
+  const got = picks.length === 1 ? sel.selectFace(obj, picks[0]) : 0;
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [r.added > 1 ? `已長出 ${r.added} 片，每片寬 ${step} cm`
+                            : `已長出 1 片，寬 ${step} cm`];
+  if (r.added > 1) {
+    /** 🔴 轉角留缺口要主動講，⛔ 不要讓他以為是 bug（坑第 24 條） */
+    bits.push('⚠ 轉角會留一個缺口 —— 那是對的，各摺 90 度立起來剛好碰在一起');
+  }
+  bits.push('接下來用「拉點線面」把它折到想要的角度');
+  toast(bits.join('　'));
 }
 
 /**
@@ -4512,6 +4577,20 @@ function updateBar() {
     ? `從選到的面長出新的一段（先長 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，再用箭頭拉）`
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
                     : '先按「拉點線面」進入編輯模式，再選一個面');
+
+  /**
+   * 🔴 **擠出邊：選到【邊】的時候才出現**（2026-09-01）。
+   * ⚠ 它跟上面那顆是**互斥**的（一個吃面、一個吃邊），所以⛔ 不會同時冒出來。
+   * ⭐ `title` 要把**現在的寬度**講出來 —— 那個數字來自「吸附」，
+   * 而使用者⛔ 不會自己把兩件事連起來。
+   */
+  const anyEdge = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
+  const ew = sel.snapStep > 0 ? sel.snapStep : 1;
+  $('extrudeEdge').hidden = !anyEdge;
+  $('extrudeEdge').title = anyEdge
+    ? `從選到的【外緣】各長出一片面，寬 ${ew} cm（＝吸附現在的值）。長完可以再用「拉點線面」調`
+    : (sel.editMode ? '先選至少一條板子外緣的邊（把過濾器切到「邊」）'
+                    : '先按「拉點線面」進入編輯模式，再選外緣的邊');
 
   /**
    * 編輯模式下選到「點」時，旋轉與縮放要灰掉。
