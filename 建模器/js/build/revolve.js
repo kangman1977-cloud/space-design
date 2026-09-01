@@ -224,12 +224,26 @@ export function revolve(pts, opt = {}) {
   let rmin = Infinity, rmax = 0;
   for (const q of parts) { if (q.r < rmin) rmin = q.r; if (q.r > rmax) rmax = q.r; }
 
+  /**
+   * 🔴🔴 **回「頭尾各離中心線多遠」，⛔ 不是只回最小值。**
+   *
+   * ⚠ **【實證 2026-09-02，AI 上線上版自己按出來的】**
+   * 舊版只回 `min`，而介面拿它印「碰到了 → 實體」——
+   * **結果欄位旁寫「碰到了 → 實體」，按下去卻說「沒碰到 → 薄殼」，兩句話打架。**
+   * 🔴 病因：**只有一端碰到時 `min` 也是 0**，而封閉要**兩端都碰到**
+   * （只有一端 ＝ 一頭收成尖、另一頭開著 ＝ 一個碗）。
+   * ⭐ 〔鐵律三：**讓兩個數字互相對得起來**，⛔ 不要讓兩個訊息各說各話〕
+   */
+  const headR = parts[0].r;
+  const tailR = parts[closedProfile ? 0 : m - 1].r;
   return {
     ok: true,
     mesh,
     poles: pole.filter(Boolean).length,
     rings: seg,
     closed: mesh.isClosed(),
-    profileR: { min: rmin, max: rmax }
+    closedProfile,
+    profileR: { min: rmin, max: rmax, head: headR, tail: tailR },
+    endsOnAxis: [headR <= ON_AXIS_TOL, tailR <= ON_AXIS_TOL]
   };
 }

@@ -12950,6 +12950,27 @@ section('旋轉成形（Spin／車床）—— 2026-09-02');
     eq('★★★ smooth 邊 ＝ 非極點的 2 圈 × 32 格', n, 2 * SEG);
   }
 
+  /**
+   * 🔴🔴 **只碰到【一端】：`min` 也是 0，但它⛔ 不是封閉的。**
+   * 【實證 2026-09-02，AI 上線上版自己按出來的】舊版介面拿 `min` 判斷
+   * ⇒ 欄位旁寫「碰到了 → 實體」，按下去卻說「沒碰到 → 薄殼」，**兩句話打架**。
+   * ⭐ 這一組就是在守「**兩個訊息不可以各說各話**」（鐵律三）。
+   */
+  {
+    const r = revolve([V(0,0,0), V(R,0,0), V(R,H,0)], { axis:'y', a:0, b:0, seg:SEG });
+    ok('★★★ 只碰到一端 → ⛔ 不封閉（是一個碗）', r.ok && r.closed === false);
+    eq('★★ 頭碰到、尾沒碰到', JSON.stringify(r.endsOnAxis), JSON.stringify([true, false]));
+    near('★★ 最小值仍然是 0（⛔ 所以不可以拿它當「是不是實體」的判準）',
+         r.profileR.min, 0, 1e-9);
+    eq('★ 一端收成一個尖', r.poles, 1);
+  }
+  {
+    const r = revolve([V(0,0,0), V(R,0,0), V(R,H,0), V(0,H,0)], { axis:'y', a:0, b:0, seg:SEG });
+    eq('★★★ 兩端都碰到 → 兩個都是 true', JSON.stringify(r.endsOnAxis),
+       JSON.stringify([true, true]));
+    ok('★★ 而它確實是封閉的', r.closed === true);
+  }
+
   /** 擋關 */
   {
     const r = revolve([V(-10,0,0), V(10,0,0), V(10,20,0)], { axis:'y', a:0, b:0, seg:SEG });

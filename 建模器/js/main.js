@@ -2938,9 +2938,12 @@ function revolveSelected() {
     `已轉出「${obj.name}」　${r.rings} 格 × ${r.mesh.faces.length / r.rings} 段`
       + ` ＝ ${r.mesh.faces.length} 個面`
   ];
+  /** ⚠ 這句要跟欄位旁那句**用同一個判準**，⛔ 不可以一個看最小值、一個看頭尾 */
   bits.push(r.closed
-    ? '輪廓頭尾有碰到中心線 → 轉成【封閉的實體】，可以直接列印'
-    : '輪廓頭尾沒碰到中心線 → 轉成【一張薄殼】（板件），厚度用上面的「板厚」');
+    ? '輪廓兩端都碰到中心線 → 轉成【封閉的實體】，可以直接列印'
+    : (r.poles
+        ? '只碰到一端 → 轉成【一個碗】（板件），開口那面是空的，要補請按「補洞」'
+        : '兩端都沒碰到中心線 → 轉成【一張薄殼】（板件），厚度用上面的「板厚」'));
   if (r.poles) bits.push(`有 ${r.poles} 端收成一個尖`);
   toast(bits.join('　'));
 }
@@ -3025,8 +3028,19 @@ function updateRevolveRange() {
   const axis = $('revAxis').value;
   const r = revolve(p.points, { axis, a: +$('revA').value, b: +$('revB').value, seg: 3 });
   if (!r.ok) { span.textContent = ''; return; }
-  span.textContent = `離中心線 ${fmtCm(r.profileR.min)} ～ ${fmtCm(r.profileR.max)}`
-    + (r.profileR.min <= 1e-4 ? '（碰到了 → 實體）' : '（沒碰到 → 薄殼）');
+  /**
+   * 🔴🔴 **講【頭尾各離中心線多遠】，⛔ 不是只講最小值。**
+   * ⚠ 【實證 2026-09-02】舊版拿 `min` 判斷，而**只有一端碰到時 `min` 也是 0**
+   * ⇒ 欄位旁寫「碰到了 → 實體」，按下去卻說「沒碰到 → 薄殼」，**兩句話打架**。
+   * ⭐ 封閉要**兩端都碰到**；只有一端 ＝ 一頭收成尖、另一頭開著 ＝ 一個碗。
+   */
+  const [h, t] = r.endsOnAxis;
+  span.textContent = r.closedProfile
+    ? '這條線首尾接在一起 → 轉出一個環'
+    : `頭 ${fmtCm(r.profileR.head)}／尾 ${fmtCm(r.profileR.tail)} 離中心線`
+      + (h && t ? '（兩端都碰到 → 實體）'
+        : (h || t) ? '（只碰到一端 → 一個碗，開口那面是空的）'
+                   : '（都沒碰到 → 一張薄殼）');
 }
 
 function separateSelected() {
