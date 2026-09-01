@@ -21,7 +21,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
-import { mergeCoplanarFaces, recenterMesh } from './edit.js';
+import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths }
   from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
@@ -579,14 +579,25 @@ export function recenterOrigin(obj) {
 
   const r = recenterMesh(mesh);
   if (!r.moved) return { ok: true, moved: false, offset: r.offset };
+  applyOriginShift(obj, r.offset);
+  return { ok: true, moved: true, offset: r.offset };
+}
 
-  /**
-   * 🔴 **⛔ 不可以寫成 `obj.pos.add(r.offset)`** —— 理由見上面那一則。
-   * 讓矩陣自己算：原本的變換 × 往「本地的 offset」平移。
-   */
+/**
+ * 🔴 **頂點搬完之後，把物件的變換補回去 —— 東西才會留在原地。**
+ *
+ * 🔴 **⛔ 不可以寫成 `obj.pos.add(offset)`**：`offset` 是**網格自己的**
+ * 座標系的量，而物件可能**轉過角度、縮放過** —— 直接加到 `pos` 上
+ * 等於把本地的量當成世界的量用，**物件會飛到別的地方**。
+ * ⭐ 讓矩陣自己算：**原本的變換 × 往「本地的 offset」平移**。
+ *
+ * ⚠ 抽成一支是因為 `recenterOrigin()` 與 `setOriginTo()` 兩邊都要，
+ * 而**同一條規則只寫一次**。
+ */
+function applyOriginShift(obj, offset) {
   const full = new THREE.Matrix4().multiplyMatrices(
     obj.matrix(),
-    new THREE.Matrix4().makeTranslation(r.offset.x, r.offset.y, r.offset.z));
+    new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
 
   const p = new THREE.Vector3();
   const q = new THREE.Quaternion();
@@ -596,6 +607,57 @@ export function recenterOrigin(obj) {
   obj.pos.copy(p);
   obj.rot.setFromQuaternion(q);
   obj.scale.copy(s);
+}
+
+/**
+ * 🔴🔴 **把原點搬到【你在畫面上點的那個地方】**
+ * （2026-09-01，kang 要的；⛔ 不新增「基準點」那個狀態）。
+ *
+ * > **為什麼用「原點」⛔ 不另開一個基準點**：原點是**物件本來就有的資料**
+ * > ⇒ 存檔、Undo、切換物件**全部免費**，而且**箭頭早就畫在原點上**。
+ * > 另開一個狀態的話，上面每一條都要重新決定，還要想它畫成什麼樣子。
+ *
+ * ⚠ **⛔ 東西一格都不動**，只有原點（箭頭站的位置）換地方 ——
+ * 跟 `recenterOrigin()` 是同一個承諾，也是同一段矩陣重算。
+ *
+ * ⚠ **⛔ 呼叫端記得 `view.markGeomDirty()`** —— 這一支**就地改頂點座標**，
+ * 網格物件⛔ 不換人，畫面察覺不到〔2026-09-01 `原點置中` 實際踩過，
+ * 規則的家在 `規格\建模器-核心架構.md`〕。
+ *
+ * @param {ModelObject} obj
+ * @param {THREE.Vector3} worldPoint 你點到的那個位置（**世界座標**）
+ */
+export function setOriginTo(obj, worldPoint) {
+  if (!obj) return { ok: false, reason: '沒有選到物件' };
+  if (!worldPoint) return { ok: false, reason: '沒有點到東西' };
+
+  /**
+   * ⚠ **鋼筆這裡⛔ 不支援**（`recenterOrigin()` 支援它，因為那是「搬參數」）——
+   * 這一支搬的是**頂點**，而鋼筆的形狀是那串錨點，改頂點留不住。
+   * ⭐ 訊息要**講得出出路**〔坑第 11 條：講了問題就要給解法〕。
+   */
+  if (obj.src && obj.src.type !== 'mesh') {
+    return {
+      ok: false,
+      reason: '這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」'
+    };
+  }
+
+  const mesh = obj.mesh();
+  if (!mesh || !mesh.verts.length) return { ok: false, reason: '這個物件沒有幾何' };
+
+  /**
+   * 🔴 **世界座標 → 網格自己的座標系**（物件可能轉過、縮放過）。
+   * ⛔ 不轉的話點在哪原點就跑到哪 —— 而那是**世界的那個位置**，
+   * ⛔ 不是你點到的那個角。
+   */
+  const local = worldPoint.clone()
+    .applyMatrix4(obj.matrix().clone().invert());
+
+  const r = shiftMeshOrigin(mesh, local);
+  if (!r.moved) return { ok: true, moved: false, offset: r.offset };
+
+  applyOriginShift(obj, r.offset);
   return { ok: true, moved: true, offset: r.offset };
 }
 

@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
-         explodeShapes, recenterOrigin, download, openFile, autosave, loadAutosave,
+         explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, GUIDE_AXES }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
@@ -254,6 +254,8 @@ const sel = new Selection(view, {
     + `⭐ 切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
+  /** 🔴 原點指定：點到什麼就把原點搬到那裡（2026-09-01） */
+  onOriginPick: el => originPick(el),
   onEditPick: (el, info) => editPick(el, info),
   onEditDrag: (committing, el) => editDrag(committing, el),
   onEditCancel: () => editCancelled(),
@@ -294,6 +296,12 @@ const app = {
   doc, view, sel, hist,
   get head() { return doc.head; },
   onEdit: label => { view.sync(doc); commit(label); },
+  /**
+   * 🔴 **右側面板也要收得掉那些互斥模式**（2026-09-01，原點指定要用）。
+   * ⚠ **⛔ 不要讓面板自己去 `sel.setXxxMode(false)` 一個一個關** ——
+   * 那會變成第二份互斥規則，而真相只有 `exitOtherModes()` 一份。
+   */
+  exitOtherModes: keep => exitOtherModes(keep),
   onExplode: obj => explodeSelected(obj),
   /** 🔴 右側面板的 `編輯路徑` —— 回頭改鋼筆物件那一串錨點（第 2 階段） */
   onEditPenPath: obj => editPenPath(obj),
@@ -891,6 +899,70 @@ function matePick(el) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  原點指定：把原點搬到你點的那個角／邊／面（2026-09-01）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴🔴 **點到什麼，原點就搬到哪裡。**
+ *
+ * > **kang 要的**：繞著模型上某個特定的地方轉（門的鉸鏈那種）。
+ * > ⭐ **⛔ 不新增「基準點」狀態**，擴充**物件本來就有的原點** ——
+ * > 存檔、Undo、切換物件全部免費，箭頭也早就畫在原點上。
+ *
+ * ⚠ **代表點跟【貼合】同一組**（`mate.js` 的那三支）：
+ * 點 ＝ 那個頂點／邊 ＝ 中點／面 ＝ 共面區域的中心。
+ * ⛔ 不要在這裡自己再定義一次「一個面的中心是什麼」。
+ *
+ * ⚠ **一次性**：做完就自動退出 —— 這是一個動作，⛔ 不是一個要「收工」的模式。
+ */
+function originPick(el) {
+  const done = () => { sel.setOriginMode(false); panel.refresh(); };
+
+  if (!el || el.kind === 'blocked') {
+    toast('這裡點不到東西 —— 請點模型上的一個角、一條邊或一個面', true);
+    return;
+  }
+
+  /**
+   * ⚠ **只能點【自己】那個物件** —— 點別人的角當自己的原點，
+   * 東西會留在原地但原點跑到另一個物件上，畫面上完全看不懂那是什麼意思。
+   * ⭐ 擋下來並講清楚，⛔ 不要默默照做〔坑第 24 條的同一家族〕。
+   */
+  const target = sel.active;
+  if (!target) { done(); return; }
+  if (el.obj.id !== target.id) {
+    toast(`要點「${target.name}」自己身上的角／邊／面`, true);
+    return;
+  }
+
+  /** 世界座標的代表點 —— 三種各自對應貼合已經驗過的那一支 */
+  let p = null;
+  if (el.kind === 'vertex') p = vertexPoint(el.obj, el.vert);
+  else if (el.kind === 'edge') p = edgeFrame(el.obj, el.he).point;
+  else if (el.kind === 'face') p = faceFrame(el.obj, el.face).point;
+  if (!p) { done(); return; }
+
+  const r = setOriginTo(target, p);
+  if (!r.ok) { toast(r.reason, true); done(); return; }
+  if (!r.moved) { toast('原點本來就在那裡，沒有東西要搬'); done(); return; }
+
+  /**
+   * ⚠ **⛔ 少了 `markGeomDirty()` 畫面上東西會整個跳走** ——
+   * 這一支就地改頂點座標，網格物件⛔ 不換人，`_updateNode()` 察覺不到。
+   * 〔2026-09-01 `原點置中` 實際踩過，規則的家在 `規格\建模器-核心架構.md`〕
+   */
+  view.markGeomDirty();
+
+  const f = n => (Math.round(n * 100) / 100);
+  toast(`原點已經搬到你點的那個${MATE_NAME[el.kind]}　`
+    + `（那個點移了 X ${f(r.offset.x)}、Y ${f(r.offset.y)}、`
+    + `Z ${f(r.offset.z)} cm）　⚠ 東西本身一格都沒動`);
+
+  commit('原點搬到指定位置');
+  done();
+}
+
+// ═══════════════════════════════════════════════════════
 //  編輯造型（第 6 期第一刀）：拉點／拉邊／拉面
 // ═══════════════════════════════════════════════════════
 
@@ -948,6 +1020,12 @@ function exitOtherModes(keep) {
   if (keep !== 'guide' && sel.guideMode) {
     sel.setGuideMode(false); $('guide').classList.remove('on');
   }
+  /**
+   * 🔴 **原點指定模式也要收**（2026-09-01）。
+   * ⚠ 它的按鈕在**右側面板**（⛔ 不在工具列），所以這裡⛔ 沒有 classList 要清 ——
+   * **面板下次 `refresh()` 會照 `sel.originMode` 重畫**。
+   */
+  if (keep !== 'origin' && sel.originMode) sel.setOriginMode(false);
   /**
    * ⚠ **⛔ 這裡⛔ 不要叫 `syncEditXfRow()`**（2026-09-01 加了又拿掉，記在這裡）。
    *

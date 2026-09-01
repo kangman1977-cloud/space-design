@@ -11556,6 +11556,57 @@ section('原點置中：搬那個點，⛔ 不搬東西');
   }
 
   /**
+   * 🔴🔴 **⑤-b `setOriginTo()`：原點搬到【指定的世界座標點】**
+   * （2026-09-01，kang 要的「原點搬到我點的地方」）。
+   *
+   * ⚠ **物件刻意【轉過角度＋非等比縮放】** —— 那才驗得出
+   * 「本地座標」跟「世界座標」有沒有搞混：⛔ 不轉的話點在哪原點就跑到哪，
+   * 而那是**世界的那個位置**，⛔ 不是你點到的那個角。
+   */
+  {
+    const m = baked('box', { w: 60, h: 45, d: 40 });
+    const o = new ioM.ModelObject({
+      name: 'g', src: { type: 'mesh' }, mesh: m,
+      pos: new THREEr.Vector3(10, 20, 30),
+      rot: new THREEr.Euler(0.3, 0.7, 0.2),
+      scale: new THREEr.Vector3(1, 2, 1)
+    });
+    const wbox = () => {
+      const b = new THREEr.Box3(), M = o.matrix();
+      for (const v of o.mesh().verts) b.expandByPoint(v.p.clone().applyMatrix4(M));
+      return b;
+    };
+    const before = wbox();
+    const corner = before.max.clone();          // 世界座標的一個角
+
+    const r = ioM.setOriginTo(o, corner);
+    const after = wbox();
+
+    ok('⑤-b 有搬', r.ok && r.moved);
+    near('★★★ 原點正好落在你點的那個角（世界座標）',
+         o.pos.distanceTo(corner), 0, 1e-9);
+    near('★★★ 東西一格都沒動（包圍盒 min）',
+         before.min.distanceTo(after.min), 0, 1e-9);
+    near('★★★ 東西一格都沒動（包圍盒 max）',
+         before.max.distanceTo(after.max), 0, 1e-9);
+    near('★★ 非等比縮放⛔ 沒有被弄壞（1, 2, 1）',
+         o.scale.distanceTo(new THREEr.Vector3(1, 2, 1)), 0, 1e-9);
+
+    /** 再搬到同一點 ⇒ ⛔ 不製造一個什麼都沒做的動作 */
+    ok('★ 再搬一次同一個點 → moved ＝ false', ioM.setOriginTo(o, corner).moved === false);
+  }
+
+  /** ⑤-c `setOriginTo()` 一樣要擋參數物件，而且講得出出路 */
+  {
+    const o = new ioM.ModelObject({
+      name: 'prm2', src: { type: 'prim', prim: 'box', params: { w: 60, h: 45, d: 40 } }
+    });
+    const r = ioM.setOriginTo(o, new THREEr.Vector3(1, 2, 3));
+    ok('⑤-c 參數物件擋下來', r.ok === false);
+    ok('　 而且講得出出路', (r.reason || '').includes('轉成可編輯網格'), r.reason);
+  }
+
+  /**
    * ⑥ **取的是包圍盒中心，⛔ 不是重心**（kang 2026-08-29 拍板）。
    * 錐體是唯一分得出來的形狀：包圍盒中心在高度一半，重心在 1/4 處。
    */

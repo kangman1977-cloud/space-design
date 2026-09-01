@@ -5487,15 +5487,39 @@ export function refreshAfterEdit(mesh, opts = {}) {
  *          呼叫端要把物件往 **＋offset**（本地）方向補回去。
  */
 export function recenterMesh(mesh) {
+  if (!mesh || !mesh.verts.length) {
+    return { offset: new THREE.Vector3(), moved: false };
+  }
+  /**
+   * ⭐ **「置中」只是「搬到某一點」的一個特例** ——
+   * 那一點就是包圍盒中心。⇒ ⛔ 不要在這裡再寫一份平移迴圈。
+   */
+  return shiftMeshOrigin(mesh, mesh.bounds().getCenter(new THREE.Vector3()));
+}
+
+/**
+ * 🔴🔴 **把原點搬到【指定的本地座標點】——東西一格都不動。**
+ * （2026-09-01，kang 要的「原點搬到我點的地方」）
+ *
+ * ⚠ **⛔ 它只動頂點，⛔ 不動 `obj.pos`** —— 那一半是呼叫端的事
+ * （`io.js` 的 `setOriginTo()`／`recenterOrigin()` 用矩陣重算，
+ * ⛔ 不可以寫成 `obj.pos.add(offset)`，理由見那兩支的註解）。
+ *
+ * ⭐ **`recenterMesh()` 是它的特例**（那一點 ＝ 包圍盒中心）。
+ *
+ * @param {Mesh} mesh
+ * @param {THREE.Vector3} p 目標點，**網格自己的座標系**
+ * @returns {{offset: THREE.Vector3, moved: boolean}} `offset` ＝ 原點移了多少
+ */
+export function shiftMeshOrigin(mesh, p) {
   const out = { offset: new THREE.Vector3(), moved: false };
-  if (!mesh || !mesh.verts.length) return out;
+  if (!mesh || !mesh.verts.length || !p) return out;
 
-  const c = mesh.bounds().getCenter(new THREE.Vector3());
-  out.offset.copy(c);
-  /** 已經在中心就什麼都不做 —— ⛔ 不要製造一個「按了什麼都沒變」的動作 */
-  if (c.lengthSq() < 1e-20) return out;
+  out.offset.copy(p);
+  /** 已經在那裡就什麼都不做 —— ⛔ 不要製造一個「按了什麼都沒變」的動作 */
+  if (out.offset.lengthSq() < 1e-20) return out;
 
-  for (const v of mesh.verts) v.p.sub(c);
+  for (const v of mesh.verts) v.p.sub(out.offset);
   out.moved = true;
   return out;
 }

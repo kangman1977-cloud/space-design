@@ -176,6 +176,19 @@ export class Selection {
     this.mateMode = false;
 
     /**
+     * 🔴🔴 **原點指定模式**（2026-09-01，kang 要的「原點搬到我點的地方」）。
+     *
+     * ⚠ **它是【一次性】的**：點到東西就做完並自動退出，
+     * ⛔ 不像貼合要連點兩個、也⛔ 不像分片要一直標。
+     * ⇒ **⛔ 沒有「收工」的問題**，取消就是再按一次按鈕或按 Esc。
+     *
+     * ⭐ 點選那一半**完全沿用貼合那套**（`pickElement()`），
+     * 連「點到什麼算什麼」的代表點都跟它同一組
+     * （點＝那個頂點／邊＝中點／面＝共面區域的中心）。
+     */
+    this.originMode = false;
+
+    /**
      * 🔴 **刀具模式。** 開著時點畫面不是選東西，是**定切線的兩個端點**。
      *
      * kang 2026-08-25：「刀具我是想要是**自由切**」——
@@ -1675,6 +1688,16 @@ export class Selection {
         const el = this.pickElement(e.clientX, e.clientY,
                                     { vertex: true, requireMarkable: false });
         if (el && this.hooks.onMatePick) this.hooks.onMatePick(el);
+        return;
+      }
+      /**
+       * ⚠ **跟貼合共用同一組參數** —— ⛔ 不要自己開一套點選規則，
+       * 那會變成「畫面說會選到 A、按下去選到 B」（坑第 31 條）。
+       */
+      if (this.originMode) {
+        const el = this.pickElement(e.clientX, e.clientY,
+                                    { vertex: true, requireMarkable: false });
+        if (el && this.hooks.onOriginPick) this.hooks.onOriginPick(el);
         return;
       }
       this.pick(e.clientX, e.clientY, e.shiftKey || this.multi);
@@ -3568,7 +3591,7 @@ export class Selection {
    */
   get inPickMode() {
     return this.seamMode || this.mateMode || this.knifeMode || this.penMode
-      || this.guideMode;
+      || this.guideMode || this.originMode;
   }
 
   /**
@@ -3600,6 +3623,19 @@ export class Selection {
     this._refresh();
     if (this.helper) this.helper.visible = !this.inPickMode;
     return this.mateMode;
+  }
+
+  /**
+   * 🔴 **原點指定模式**（2026-09-01）—— 骨架跟 `setMateMode()` 一模一樣。
+   * ⚠ **gizmo 一定要收起來**（`inPickMode` 已經涵蓋）：
+   * 三根箭頭就站在原點上，⛔ 不收的話它會擋住你想點的那個角。
+   */
+  setOriginMode(on) {
+    this.originMode = !!on;
+    this.tc.enabled = !this.inPickMode;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.inPickMode;
+    return this.originMode;
   }
 
   /**
