@@ -587,6 +587,16 @@ $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('extrudeEdge').onclick = () => extrudeEdgesSelected();
+$('efBoundary').onclick = () => {
+  sel.includeBoundary = !sel.includeBoundary;
+  /** ⚠ 關掉時把已經選到的外緣清掉 —— ⛔ 不清的話它們還留在選取裡，而使用者以為關了 */
+  if (!sel.includeBoundary) sel.clearEditSel && sel.clearEditSel();
+  updateBar();
+  updateEditNum();
+  toast(sel.includeBoundary
+    ? '含外緣：開。板子最外圈那些線現在點得到了 —— 選好按「擠出邊」'
+    : '含外緣：關。回到平常的行為（外圈點不到）');
+};
 $('flatten').onclick = () => flattenSelected();
 $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
@@ -4584,6 +4594,14 @@ function updateBar() {
    * ⭐ `title` 要把**現在的寬度**講出來 —— 那個數字來自「吸附」，
    * 而使用者⛔ 不會自己把兩件事連起來。
    */
+  /**
+   * 🔴 **「含外緣」只在「編輯模式 ＋ 過濾器吃得到邊」時才出現。**
+   * ⚠ 其他時候它沒有意義，而一顆沒有意義的開關比沒有更糟（坑第 21 條）。
+   */
+  const edgeFilter = sel.editMode && (sel.editFilter === 'edge' || sel.editFilter === 'auto');
+  $('efBoundary').hidden = !edgeFilter;
+  $('efBoundary').classList.toggle('on', !!sel.includeBoundary);
+
   const anyEdge = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
   const ew = sel.snapStep > 0 ? sel.snapStep : 1;
   $('extrudeEdge').hidden = !anyEdge;

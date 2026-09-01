@@ -13,7 +13,8 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams, markableEdges }
+import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams, markableEdges,
+         distPointSeg }
   from '../unfold/seam.js';
 import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 /**
@@ -206,6 +207,22 @@ export class Selection {
      * （初始化／被第二根手指砍掉／`pointercancel`／`pointerup`／離開刀具模式）。
      */
     this._knifeMove = null;
+
+    /**
+     * 🔴🔴 **「含外緣」開關**（2026-09-01，`擠出邊` 用的）。
+     *
+     * ⚠ **⛔ 它⛔ 不改 `isMarkable()`** —— 那支被**分片與貼合共用**。
+     * 〔`edit.js` 補洞那支的註解自己寫著這條處方：「要做成精準版就得在
+     * 　`select.js` **另外加一支**『找最近的邊界邊』，**不能改 `isMarkable`**」〕
+     *
+     * 🔴 **預設 `false` → ⛔ 不開的話現有行為一格都沒變。**
+     * ⚠ 開著時，**吃「選到的邊」的那 8 支功能都可能收到外緣的邊** ——
+     * 那是 kang 2026-09-01 知情之後選的。
+     * ⭐ **⛔ 不是因為它比較安全，是它讓「哪裡會出事」變得可預期**：
+     * 另一案「切到『邊』就直接點得到」會連**框選**都把外緣掃進去，
+     * 而**使用者完全不會察覺**。
+     */
+    this.includeBoundary = false;
 
     /**
      * 上一次刀具輕點的時間與位置，用來認「快點兩下」。
@@ -1650,7 +1667,7 @@ export class Selection {
       }
     } else {
       /** `'auto'` 與 `'edge'` 都走邊 —— 判準用 `isMarkable()`，⛔ 不另寫一套 */
-      for (const he of markableEdges(mesh)) {
+      for (const he of this._pickableEdges(mesh)) {
         items.edges.push({
           el: { obj, kind: 'edge', he },
           pts: [toWorld(he.v.p), toWorld(he.to.p)]
@@ -1802,7 +1819,7 @@ export class Selection {
     }
 
     if (!only || only === 'edge') {
-      const near = nearestMarkableEdge(mesh, pLocal);
+      const near = this._nearestPickableEdge(mesh, pLocal);
       if (near) {
         const a = toPx(near.he.v.p), b = toPx(near.he.to.p);
         if (distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y) <= grab) {
@@ -2067,6 +2084,31 @@ export class Selection {
   }
 
 
+
+  /**
+   * 🔴 **這個網格上「現在點得到」的邊。**
+   * ⭐ 一般情形 ＝ `markableEdges()`（⛔ 不另寫一套判準）；
+   * 開了「含外緣」再**額外**把邊界邊加進來。
+   * ⚠ **⛔ 不必去重**：邊界邊本來就不在 `markableEdges()` 裡（它第一行就擋掉）。
+   */
+  _pickableEdges(mesh) {
+    const base = markableEdges(mesh);
+    if (!this.includeBoundary) return base;
+    const bnd = [...mesh.edges()].filter(he => he.face && (!he.twin || !he.twin.face));
+    return base.concat(bnd);
+  }
+
+  /** 跟 `nearestMarkableEdge()` 同一件事，只是候選名單換成上面那一支。 */
+  _nearestPickableEdge(mesh, p) {
+    if (!this.includeBoundary) return nearestMarkableEdge(mesh, p);
+    let best = null;
+    for (const he of this._pickableEdges(mesh)) {
+      const d = distPointSeg(p, he.v.p, he.to.p);
+      if (!best || d < best.dist) best = { he, dist: d };
+    }
+    return best;
+  }
+
   /**
    * 兩次 hover 指的是不是同一個東西。
    *
@@ -2091,7 +2133,7 @@ export class Selection {
     const { obj, node, pLocal } = h;
 
     const mesh = obj.mesh();
-    const near = nearestMarkableEdge(mesh, pLocal);
+    const near = this._nearestPickableEdge(mesh, pLocal);
     if (!near || !near.he) return null;
 
     /** 投影到那條邊上 → 邊上的落點 */

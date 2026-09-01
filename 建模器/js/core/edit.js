@@ -5626,9 +5626,54 @@ export function extrudeBoundaryEdges(mesh, hes, dist) {
   const pre = preflightRebuild(points, faces);
   if (!pre.ok) return { ok: false, reason: `長出來會做成壞掉的網格：${pre.fatal[0]}` };
 
+  /**
+   * 🔴🔴 **標記帳本：既有的要搬過去，而【摺線一定要標 `hard`】。**
+   *
+   * ── ⚠ 為什麼摺線非標不可（⛔ 不標就是一顆按了看不見的按鈕）──────
+   * 裙邊是**先長成跟板子平的**（kang 拍板：先長一格再用 `拉點線面` 折），
+   * ⇒ **那條原本的外緣現在是「共面的邊」** ——
+   * 而這個專案有一條貫穿全域的規則：**共面的邊 ＝ 畫面上看不見的邊**。
+   * 🔴 **不開例外的話使用者【看不到要摺的那條線在哪】**，
+   * 而且**按一次「壓平」就被併掉**（沙箱實測：面 2 → 1）。
+   *
+   * ⭐ `hard` 就是為了這件事存在的（環切是第一個例子）——
+   * 〔日誌逐字：「⛔ **日後任何『加共面的線』的功能都要記得標 `hard`**，
+   * 　否則就是坑第 21 條（按下去畫面上什麼都不會變）」〕
+   *
+   * ── ⚠ 既有的標記也一定要搬 ─────────────────────────
+   * 這裡是**整個重建**，⛔ 不搬的話分片線、平滑那些會**安靜地消失**
+   * 〔那條規則被違反兩次、兩次都出事：展開圖 5 處折彎變 45 處、
+   * 　環切的線 48 條全部歸零 —— 兩次的症狀都是「東西安靜地不見了」〕。
+   * ⭐ **入口只有 `marksOf()` / `applyMarks()` 這一對**，⛔ 不自己讀欄位。
+   */
+  const kOf2 = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const marks = new Map();
+  for (const he of mesh.edges()) {
+    marks.set(kOf2(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  }
+  for (const job of jobs) {
+    const k = kOf2(job.a, job.b);
+    marks.set(k, Object.assign({}, marks.get(k), { hard: true }));
+  }
+
   const clean = cleanRebuild(points, faces);
   const out = Mesh.fromFaceList(clean.points, clean.faces);
   out.computeNormals();
+
+  {
+    const to = i => clean.remap.get(i);
+    const di = out._vertIndex();
+    const want = new Map();
+    for (const [k, m] of marks) {
+      const [a, b] = k.split('-').map(Number);
+      const x = to(a), y = to(b);
+      if (x === undefined || y === undefined) continue;
+      want.set(kOf2(x, y), m);
+    }
+    for (const he of out.edges()) {
+      out.applyMarks(he, want.get(kOf2(di.get(he.v.id), di.get(he.to.id))));
+    }
+  }
 
   /**
    * ⚠ **回報「新長出來的那幾片」的邊，讓介面接著把它們選起來** ——
