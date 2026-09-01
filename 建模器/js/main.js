@@ -948,6 +948,16 @@ function exitOtherModes(keep) {
   if (keep !== 'guide' && sel.guideMode) {
     sel.setGuideMode(false); $('guide').classList.remove('on');
   }
+  /**
+   * 🔴🔴 **收完模式一定要刷「方向／中心／數值」那一排**（2026-09-01 補）。
+   *
+   * ⚠ **⛔ 這不是順手加的，是這一支自己漏掉的東西**：上面把編輯模式關掉了，
+   * 而那一排的顯示以前只寫在 `toggleEditMode()` 裡 ⇒
+   * 「先進編輯模式 → 直接按貼合」那條路，**整排留在物件模式的畫面上**。
+   * ⭐ **⛔ 不能指望 `updateBar()`** —— 貼合（`toggleMate`）與分片
+   * （`toggleSeam`）那兩條路⛔ 都沒有呼叫它。【已查證 · 本檔 toggleMate/toggleSeam】
+   */
+  syncEditXfRow();
 }
 
 /**
@@ -1843,7 +1853,12 @@ function knifeApply() {
    * （拉、分離）都在編輯模式裡，留在刀具模式等於逼使用者多按兩次。
    */
   if (!sel.editMode) { sel.setEditMode(true); $('edit').classList.add('on'); }
-  $('gEditXf').hidden = false;
+  /**
+   * ⚠ **⛔ 這裡原本有一行 `$('gEditXf').hidden = false`，2026-09-01 拿掉了** ——
+   * 那一排的規則現在只有一個家（`syncEditXfRow()`），而底下的 `updateBar()`
+   * 會叫它。**⛔ 而且原本那行還是錯的順序**：它在 `selectEdges()` 之前，
+   * 那時還沒選到任何邊 —— 硬開起來等於繞過「有沒有選到東西」那道閘門。
+   */
   const got = sel.selectEdges(obj, hes);
   syncModeButtons();
   panel.refresh();
@@ -1861,11 +1876,11 @@ function toggleEditMode() {
   const on = sel.setEditMode(!sel.editMode);
   $('edit').classList.toggle('on', on);
   /**
-   * 「方向」與「數值」只在編輯模式下有意義，所以整組跟著開關。
-   * 平常不佔工具列的寬 —— 工具列每多一顆按鈕，平板上就更容易把
-   * 後面的整組擠掉（`.grp` 那條 flex-wrap 註解講的同一件事）。
+   * ⚠ **⛔ 這裡原本是 `$('gEditXf').hidden = !on`** —— 而**同一件事在別的
+   * 兩個地方還各有一份**，結果 `exitOtherModes()` 那條路漏掉，
+   * 整排就賴在物件模式的畫面上（2026-09-01 kang 的截圖照出來的）。
+   * ⇒ 規則搬進 `syncEditXfRow()`，這裡靠底下的 `updateBar()` 叫它。
    */
-  $('gEditXf').hidden = !on;
   updateEditNum();
   syncModeButtons();
   /** ⚠ 離開編輯模式白圈要收掉 —— 那時候點根本選不到，留著就是雜訊 */
@@ -4089,6 +4104,56 @@ function gizmoOff() {
 }
 
 /**
+ * 🔴🔴 **「方向／中心／數值」那一排長什麼樣 —— ⛔ 只寫這一支。**
+ *
+ * ── 為什麼要抽出來（2026-09-01，kang 的截圖照出來的）────────
+ * 原本那一排的顯示寫在**三個地方**：`toggleEditMode()`、刀具切完那處、
+ * 還有 `updateBar()` 裡的兩個迴圈。而 **`exitOtherModes()` 收了編輯模式
+ * 卻⛔ 沒收那一排** ⇒「先進編輯模式 → 直接按貼合」那條路，
+ * **整排留在物件模式的畫面上，按下去完全沒作用**。
+ * ⚠ **貼合／分片那兩條路⛔ 沒有呼叫 `updateBar()`**，所以那兩個迴圈救不了它。
+ * 〔坑第 31 條：與其讓好幾條路對齊，不如換一個只有一條路的定義〕
+ *
+ * ── 三組的閘門⛔ 不一樣 ─────────────────────────────
+ * | 這一組 | 什麼時候有作用 |
+ * |---|---|
+ * | **方向**（`.spBtn`）| **兩種模式都有** —— 物件層 2026-09-01 接上了 |
+ * | **中心**（`.pvBtn`）| ⛔ **只有編輯模式** —— 物件層還沒做（下一輪）|
+ * | **數值**（`editNum*`）| ⛔ **只有編輯模式** —— `updateEditNum()` 第一行
+ *   就是 `sel.editMode ? … : null`，物件模式下永遠 disabled |
+ *
+ * ⭐ **⛔ 沒作用的就不要放在畫面上**：亮著卻不動，比按鈕不見更難查
+ * 〔鐵律三：誤報比漏報更糟〕。
+ */
+function syncEditXfRow() {
+  const off = gizmoOff();
+  const edit = sel.editMode;
+
+  $('gEditXf').hidden = off;
+
+  for (const b of document.querySelectorAll('.spBtn')) b.hidden = off;
+  /**
+   * 🔴 **物件⛔ 沒有「法向」** —— 那是面／邊／點才有的東西。
+   * 物件層級的同一顆講的是「**物件自己的角度**」，所以字要換。
+   * ⚠ **⛔ 不要為它多開一顆按鈕**：兩邊是同一個概念（非世界方向），
+   * 多一顆就是多一個要對齊的狀態，而工具列也擠不下。
+   */
+  $('spNormal').textContent = edit ? '法向' : '物件';
+  $('spNormal').title = edit
+    ? '箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個'
+    : '箭頭朝物件自己的方向：物件轉過角度之後箭頭跟著歪，拖動就是沿物件自己的軸走，不是沿世界的 X／Y／Z';
+
+  /**
+   * ⚠ **標籤要跟著按鈕一起收** —— ⛔ 不收的話物件模式會留下一個
+   * 孤零零的「中心」兩個字，而它後面什麼都沒有。
+   */
+  const editOnly = off || !edit;
+  $('pvLbl').hidden = editOnly;
+  for (const b of document.querySelectorAll('.pvBtn')) b.hidden = editOnly;
+  for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = editOnly;
+}
+
+/**
  * 吸附那一欄：只留下目前模式的那一組，其餘收起來。
  *
  * ⭐ **四顆按鈕的 `on` 也在這裡對** —— 因為使用者可能打了一個
@@ -4555,9 +4620,14 @@ function updateBar() {
    * 🔴 **⛔ 這是「推論不是權威事實」** —— 後來是**問 DOM**
    * （列出 `#bar` 裡所有的 class）才確定的，⛔ 不是看清單猜的。
    */
-  for (const cls of ['.spBtn', '.pvBtn']) {
-    for (const b of document.querySelectorAll(cls)) b.hidden = off;
-  }
+  /**
+   * 🔴 **`.spBtn` / `.pvBtn` / `editNum*` 2026-09-01 交給 `syncEditXfRow()`。**
+   * ⚠ 理由跟底下 `.snapBtn` 那則一模一樣，⛔ 而且更嚴重：
+   * 那一排的閘門現在**三組各不相同**（方向兩種模式都有、中心與數值只有
+   * 編輯模式），⛔ 而且 `updateBar()` 救不了貼合／分片那兩條路
+   * （它們⛔ 沒有呼叫 `updateBar()`）。
+   */
+  syncEditXfRow();
   /**
    * 🔴 **`.snapBtn` 2026-08-31 從上面那個迴圈移出來，交給 `syncSnapRow()`。**
    * ⚠ 理由：吸附那一欄現在還要**再篩一次模式**，⛔ 不是單純的
@@ -4573,7 +4643,6 @@ function updateBar() {
    * 而 `commit()` 最後一行會叫 `updateBar()` —— 這條路一起涵蓋。
    */
   syncGuideRow();
-  for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = off;
 
   /**
    * 擠出：**選到一個面才給按**。

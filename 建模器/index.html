@@ -929,8 +929,19 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     <div class="grp" id="gEditXf" hidden>
       <span class="lbl">方向</span>
       <button id="spWorld" class="spBtn on" data-s="world" title="箭頭朝世界的 X／Y／Z">世界</button>
+      <!--
+        🔴 **這一顆的字會被 JS 換**（見 main.js `syncEditXfRow()`）：
+        編輯模式＝「法向」（元素自己的方向）、物件模式＝「物件」（物件自己的角度）。
+        ⛔ 不要改回固定字串 —— **物件沒有法向**，那是面／邊／點才有的東西。
+        ⚠ 這裡寫「法向」只是初始值；那一排預設是 hidden，第一次顯示前
+        一定會先經過 `syncEditXfRow()`。
+      -->
       <button id="spNormal" class="spBtn" data-s="normal" title="箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個">法向</button>
-      <span class="lbl">中心</span>
+      <!--
+        ⚠ 「中心」這兩顆 2026-09-01 起**只在編輯模式出現** ——
+        物件層級的基準點還沒做（下一輪），而按了沒作用比看不到更糟。
+      -->
+      <span class="lbl" id="pvLbl">中心</span>
       <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
       <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
       <!--

@@ -2328,13 +2328,18 @@ export class Selection {
     if (node && !this.inPickMode) {
       this.tc.attach(node);
       /**
-       * ⚠ **一定要把 space 設回世界。**
-       * 編輯模式的「法向」方向是靠把 space 切成 `local` 做到的，
-       * 而 `space` 是 gizmo 自己的狀態，離開編輯模式不會自己還原 ——
-       * 不設回來的話，接著拖一般物件時箭頭會沿**物件自己的軸**走，
-       * 而使用者根本不知道自己什麼時候換過方向。
+       * 🔴 **物件層級也吃「方向」那一排了**（kang 2026-09-01 要的）。
+       *
+       * ⚠ **⛔ 這裡原本是寫死 `space = 'world'`**，註解寫著「一定要設回世界，
+       * 否則接著拖一般物件時箭頭會沿物件自己的軸走，而使用者不知道自己
+       * 換過方向」—— **那個顧慮現在由按鈕本身解決**：物件模式下那顆
+       * 顯示「物件」而且亮著，⛔ 沒有人會不知道。
+       *
+       * ⭐ **物件層級的「法向」＝ 物件自己的角度**（`local` 取的正是掛著
+       * 那個物件的世界四元數）—— 所以⛔ 不必新增狀態，沿用 `editSpace`。
+       * 一個概念一個開關，兩邊講同一件事。
        */
-      this.tc.space = 'world';
+      this.tc.space = this.editSpace === 'normal' ? 'local' : 'world';
       this.tc.showX = this.tc.showY = this.tc.showZ = true;
       // 鎖定縮放的物件不給縮放把手（跟 system 物件同樣的做法）
       if (act.lockScale && this.tc.getMode() === 'scale') this.tc.setMode('translate');
@@ -2898,6 +2903,18 @@ export class Selection {
     if (this.editSel) {
       this._rebaseProxy();
       if (this.editSpace === 'normal' && !this.lastBasisOk) this.editSpace = 'world';
+    } else if (!this.editMode) {
+      /**
+       * 🔴 **物件模式：按下去箭頭要當場轉過去。**
+       *
+       * ⭐ **⛔ 這裡不自己設 `tc.space`** —— 那條規則的家是 `_refresh()`，
+       * 在這裡再寫一份就是「兩個地方各自對齊」，而這個專案為那件事
+       * 付過代價（坑第 31 條）。⇒ 叫 `_refresh()` 本人。
+       *
+       * ⚠ **物件模式⛔ 不會退回世界**：物件永遠有自己的四元數，
+       * 算不出來的情況只存在於元素的法向基底（那是 `lastBasisOk` 管的）。
+       */
+      this._refresh();
     }
     return this.editSpace;
   }
