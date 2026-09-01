@@ -2551,6 +2551,26 @@ export function knifePath(mesh, picks) {
   const ins = new Map();
   const order = [];                     // 跟 picks 同順序的「新點暫時索引」
   for (const k of picks) {
+    /**
+     * 🔴🔴 **切點落在【模型原本的角】上 → 直接重用那個頂點，⛔ 不插新點。**
+     *（2026-09-01，kang 收回他自己「不做吸到角」那條拍板之後補的）
+     *
+     * ⭐ **這一段之所以只有三行，是因為地基本來就對**：
+     * `points` 的開頭就是**原本的頂點**（上面那行 `mesh.verts.map(...)`），
+     * 而 `rebuildWithInserts()` 回傳的 `remap` **涵蓋原本的索引** ——
+     * ⇒ 把原本的索引丟進 `order` 就成立，⛔ 完全不必碰 `ins`。
+     *
+     * 🔴 **⛔ 絕對不可以走底下那條路（在角的位置插一個新點）** ——
+     * 2026-09-01 做過、當天整輪撤掉：新點跟原本的角重合，
+     * 中間夾著一條**長度 0 的邊**，於是**每一次都切不下去**。
+     * ⚠ **⛔ 那不是「不夠準」，是「不能用」。**
+     * 〔完整經過：`規格\建模器-點線面編輯.md`「✘ 刀具⛔ 不做『吸到角』」〕
+     */
+    if (k && Number.isInteger(k.v)) {
+      if (!points[k.v]) return { ok: false, reason: '點到的角不在這個物件上' };
+      order.push(k.v);
+      continue;
+    }
     if (!k || k.a === undefined || k.b === undefined || !k.p) {
       return { ok: false, reason: '有一個點的資料不完整' };
     }
@@ -2566,8 +2586,15 @@ export function knifePath(mesh, picks) {
     if (len * s < PLANAR_TOL_CM || len * (1 - s) < PLANAR_TOL_CM) {
       return {
         ok: false,
+        /**
+         * ⚠ **訊息 2026-09-01 改過**：舊版寫「想從角落切就用『多點連接』」，
+         * 而**刀具現在自己就吸得到角了** —— 再叫他換工具是**假的退路**
+         * 〔鐵律六：⛔ 不要寫一個不存在的退路〕。
+         * 🔴 **這道擋線本身要留著** —— 它擋的是「**插一個新點**在端點附近」，
+         * 跟上面「**重用既有的角**」是兩件事。
+         */
         reason: `有一個點太靠近邊的端點了 —— 那裡會長出長度 0 的線。`
-              + `想從角落切就直接點那個角（用「多點連接」）`
+              + `想切在角落上，就把切點再往那個角推一點、讓它吸上去`
       };
     }
     if (!ins.has(key)) ins.set(key, { a: k.a, b: k.b, ids: [], ss: [] });

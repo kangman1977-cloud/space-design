@@ -1144,7 +1144,7 @@ function toggleKnifeMode() {
   toast('刀具：在模型上點你要切過的位置，或直接按住拖劃一條線（兩種可以混用）。'
       + '點完再按一次「刀具」就切下去，或在最後一點快點兩下接回起點。'
       + '⭐ 下錯了就【點那一個點】把它刪掉（游標靠近它會變大），刪錯按「退一步」；'
-      + '【按住那個點拖】就是搬它（會一直吸在邊上）。'
+      + '【按住那個點拖】就是搬它（會一直吸在邊上，拖到模型的角上會吸住）。'
       + '轉視角改成：桌機按右鍵拖、平板兩指');
 }
 
@@ -1755,24 +1755,54 @@ function knifeRestoreLastDelete() {
 function knifeCloseLoop() {
   const first = knifePicks[0];
   const last = knifePicks[knifePicks.length - 1];
-  const sameEdge = (first.a === last.a && first.b === last.b)
-                || (first.a === last.b && first.b === last.a);
+  /**
+   * ⚠ **吸到角那一種要另外認**（2026-09-01）：它⛔ 沒有 `a/b`，只有 `v`。
+   * 🔴 **兩端是同一個角時再接一次 ＝ 同一個頂點連自己**，
+   * ⛔ 不擋的話會長出一條長度 0 的線 —— 跟「同一條邊」那一種是同一個病。
+   */
+  const isV = k => Number.isInteger(k.v);
+  const sameEdge = (isV(first) || isV(last))
+    ? (isV(first) && isV(last) && first.v === last.v)
+    : ((first.a === last.a && first.b === last.b)
+    || (first.a === last.b && first.b === last.a));
   if (!sameEdge) {
     knifePicks.push({ ...first, p: first.p.clone(), world: first.world.clone() });
     drawKnifePicks();
   }
-  toast(sameEdge ? '起點跟終點已經在同一條邊上，直接切下去'
-                 : `閉合迴圈（${knifePicks.length} 個位置）`);
-  knifeApply();
+  if (knifeApply()) return;
+
+  /**
+   * 🔴🔴 **切不下去 → 把剛才那個「閉合副本」收回去。**
+   *
+   * ⚠ **⛔ 少了這一段就是 kang 2026-09-01 回報的那個 bug**：
+   * 【實證，線上版按出來的】方塊上放 2 個相鄰邊的切點 → 快點兩下 →
+   * `knifePath()` 擋下來（「這兩個點是相鄰的」），
+   * **而副本留在 `knifePicks` 裡 → 憑空多一個切點**。
+   * 🔴 而且**那一條路⛔ 沒有叫 `updateBar()`**，所以工具列寫「切下去（2 點）」、
+   * 實際卻有 3 個 —— **兩個數字對不起來**（鐵律三）。
+   *
+   * ⚠ **⛔ 它不是「移動切點」那一輪造成的**，從 `knifeCloseLoop()`
+   * 寫出來那天（2026-08-26）就在 —— **閉合失敗本來就少見，一直沒被碰到**。
+   *
+   * ⭐ **通則**：⛔ 不要「先改好資料再去試」——
+   * **試失敗的那條路一定要把自己收乾淨**，⛔ 不可以留半成品給下一個動作。
+   */
+  if (!sameEdge) { knifePicks.pop(); drawKnifePicks(); }
+  updateBar();
 }
 
-/** 真的切下去 */
+/**
+ * 真的切下去。
+ * @returns {boolean} `false` ＝ 切不下去（原因已經用 `toast` 講了）
+ */
 function knifeApply() {
   const obj = knifePicks.length ? knifePicks[0].obj : null;
-  if (!obj) { toast('先在模型上點兩個以上的位置', true); return; }
+  if (!obj) { toast('先在模型上點兩個以上的位置', true); return false; }
 
-  const r = knifePath(obj.mesh(), knifePicks.map(k => ({ a: k.a, b: k.b, p: k.p })));
-  if (!r.ok) { toast(r.reason, true); return; }
+  /** ⚠ `v` ＝ 吸到角那一種（重用既有的頂點）—— ⛔ 漏掉它就會退回「插新點」那條壞路 */
+  const r = knifePath(obj.mesh(),
+    knifePicks.map(k => ({ a: k.a, b: k.b, p: k.p, v: k.v })));
+  if (!r.ok) { toast(r.reason, true); return false; }
 
   const segs = r.segments;
   knifePicks = [];
@@ -1811,6 +1841,7 @@ function knifeApply() {
   const bits = [segs > 1 ? `已切開 ${segs} 段` : '已切開'];
   if (got) bits.push(`新的 ${got} 條線已選起來 —— 要拆成兩個物件就按「分離」`);
   toast(bits.join('　'));
+  return true;
 }
 
 function toggleEditMode() {
