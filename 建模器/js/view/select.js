@@ -200,6 +200,14 @@ export class Selection {
     this._stroke = null;
 
     /**
+     * 🔴 **正在搬的那一顆切點**（2026-09-01）：`{ i, moved }`，`null` ＝ 沒在搬。
+     * ⭐ **真相仍然只有 `main.js` 的 `knifePicks` 一份** —— 這裡只記「第幾顆」。
+     * 🔴 **它跟 `_stroke` 是互斥的**，而且**⛔ 每一個清掉 `_stroke` 的地方都要一起清**
+     * （初始化／被第二根手指砍掉／`pointercancel`／`pointerup`／離開刀具模式）。
+     */
+    this._knifeMove = null;
+
+    /**
      * 上一次刀具輕點的時間與位置，用來認「快點兩下」。
      *
      * ⚠ **慢慢再點同一處還是「取消最後一點」，一格都沒變**（kang 拍板）——
@@ -862,6 +870,14 @@ export class Selection {
        * 只要漏收一次 `pointerup` 就會永遠卡住（症狀是「突然就畫不了了」）。
        * 這裡問的是「**畫到一半又有人按下來**」，**它自己會清乾淨**。
        */
+      /**
+       * ⚠ **正在搬一顆切點時又有人按下來 → 一樣砍掉**（跟一筆畫同一條規則）。
+       * ⛔ 少了這一行，「兩指轉視角」會把那一顆留在半路上。
+       */
+      if (this._knifeMove) {
+        this._knifeMove = null;
+        if (this.hooks.onKnifeMoveEnd) this.hooks.onKnifeMoveEnd(false);
+      }
       if (this._stroke) {
         this._stroke = null;
         /**
@@ -883,8 +899,29 @@ export class Selection {
        * （兩者按下時都是 0）—— ⛔ 不必為 `pointerType` 各寫一段（坑第 31 條）。
        */
       if (this.knifeMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
-        const h = this._surfaceHit(e.clientX, e.clientY);
-        this._stroke = h ? { obj: h.obj, node: h.node, pts: [h.pLocal], world: [h.world] } : null;
+        /**
+         * 🔴🔴 **起手就落在某一顆切點上 → 這一次是「移動它」，⛔ 不是一筆畫**
+         * （2026-09-01，kang 提的）。
+         *
+         * ⭐ **⛔ 不開新模式**，因為**刪除是「點」、移動是「拖」，本來就是兩個手勢** ——
+         * 而「輕點 vs 拖」那道界線（`TAP_MOVE`）**⛔ 這裡不判**，跟一筆畫一樣
+         * 留到 `pointerup`：這時候還不知道使用者要做哪一種。
+         * 〔跟參考線第 3 階段同一個形狀：點＝選、拖＝挪，⛔ 都沒有開模式〕
+         *
+         * ⚠ **代價講在前面**：從既有切點**正上方**起手的一筆畫沒了
+         * （`_knifeHotIndex()` 的半徑內）。**kang 2026-09-01 確認可以接受** ——
+         * 一筆畫的用途是快速穿過很多條邊，⛔ 不是從某個既有點精準起筆。
+         *
+         * 🔴 **⛔ 兩個狀態不可以同時開** —— 都開的話放開手會**又移動又畫線**。
+         */
+        const mi = this._knifeHotIndex(e.clientX, e.clientY);
+        if (mi >= 0) {
+          this._knifeMove = { i: mi, moved: false };
+          this._stroke = null;
+        } else {
+          const h = this._surfaceHit(e.clientX, e.clientY);
+          this._stroke = h ? { obj: h.obj, node: h.node, pts: [h.pLocal], world: [h.world] } : null;
+        }
       }
       /**
        * 🔴 **鋼筆：按下去先記起來，⛔ 這時候還不決定是「點」還是「拖」。**
@@ -1118,6 +1155,28 @@ export class Selection {
        * 那是 O(面數)，放進 `pointermove` 就是坑第 22 條。
        * 切點統一在放開手時算一次。
        */
+      /**
+       * 🔴 **正在搬一顆切點：每一次移動都【現算】它該落在哪條邊上。**
+       *
+       * ⚠ **⛔ 它不會跟著游標跑** —— `pickEdgePoint()` 會把它吸到最近的一條邊，
+       * 那是 `knifePath()` 的前提（每個切點都必須在一條邊上），⛔ 不是偷懶。
+       * ⭐ **但可以跨到別條邊**，而且順序不變（第 N 顆搬完還是第 N 顆）。
+       *
+       * ⚠ **要移動超過 `TAP_MOVE` 才算拖** —— ⛔ 少了這一道，手指按下去
+       * 抖一下就會把那一顆搬走，而使用者要的是「輕點＝刪掉」。
+       */
+      if (this._knifeMove) {
+        const dn = this._down;
+        if (dn && Math.hypot(e.clientX - dn.x, e.clientY - dn.y) > TAP_MOVE) {
+          this._knifeMove.moved = true;
+        }
+        if (this._knifeMove.moved && this.hooks.onKnifeMove) {
+          this.hooks.onKnifeMove(
+            this._knifeMove.i,
+            this.pickEdgePoint(e.clientX, e.clientY, this._wantSnapMid(e)));
+        }
+        return;
+      }
       if (this._stroke) {
         const h = this._surfaceHit(e.clientX, e.clientY);
         /** ⚠ 只收同一個物件上的取樣：混著收會做出跨物件的線（改到沒在看的物件）*/
@@ -1161,6 +1220,11 @@ export class Selection {
     cv.addEventListener('pointercancel', () => {
       this._endMarquee(null, false);
       this._stroke = null;
+      /** ⚠ 搬到一半被系統收走 → **彈回原位**（跟拖到模型外同一條路） */
+      if (this._knifeMove) {
+        this._knifeMove = null;
+        if (this.hooks.onKnifeMoveEnd) this.hooks.onKnifeMoveEnd(false);
+      }
       /**
        * ⚠ **手指被系統收走（來電、切換 App）也要放開那張登記** ——
        * ⛔ 不放的話症狀是「**突然就轉不動了**」，而使用者⛔ 不會把它
@@ -1176,7 +1240,18 @@ export class Selection {
       this._down = null;
       const stroke = this._stroke;
       this._stroke = null;
+      /**
+       * 🔴 **搬切點的收工。⛔ 沒拖動過就什麼都不做** ——
+       * 讓它照舊落到下面「輕點 ＝ 刪掉那一顆」那條路，⛔ 不要在這裡攔截。
+       * ⭐ 那正是「刪除是點、移動是拖」得以並存的地方。
+       */
+      const kmove = this._knifeMove;
+      this._knifeMove = null;
       if (!d) return;
+      if (kmove && kmove.moved) {
+        if (this.hooks.onKnifeMoveEnd) this.hooks.onKnifeMoveEnd(true);
+        return;
+      }
 
       const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
       const dt = performance.now() - d.t;
@@ -3296,6 +3371,7 @@ export class Selection {
     /** 換模式就把上一次輕點的時間忘掉，⛔ 不要讓它跨模式湊成一次「雙擊」 */
     this._lastKnifeTap = null;
     this._stroke = null;
+    this._knifeMove = null;
     return this.knifeMode;
   }
 

@@ -141,6 +141,8 @@ const sel = new Selection(view, {
     + '⚠ 體積會差千分之幾（那是拉直成折線的取樣不同，⛔ 不是形狀變了）'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
+  onKnifeMove: (i, hit) => knifeMoveTo(i, hit),
+  onKnifeMoveEnd: ok => knifeMoveEnd(ok),
   /**
    * 🔴 **切點的位置**（給「游標靠近哪一顆」用）。
    * ⭐ **真相只有 `knifePicks` 一份**，`select.js` ⛔ 不存第二份 ——
@@ -923,7 +925,7 @@ function exitOtherModes(keep) {
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
-    knifePicks = []; knifeDeleted = []; hideKnifeLine();
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; hideKnifeLine();
   }
   /**
    * 🔴 **參考線也要收**（2026-08-31）。
@@ -994,6 +996,20 @@ let knifeDeleted = [];
  * 序號⛔ 不需要知道那個界線：`select.js` 已經幫我們判好 `info.double` 了。
  */
 let knifePickSeq = 0;
+
+/**
+ * 🔴 **正在搬的那一顆切點的【原值】**（2026-09-01，kang 提的）。
+ * `null` ＝ 沒在搬。`{ i, orig }`，`orig` 是**搬之前那一顆的完整資料**。
+ *
+ * ⭐ **存原值⛔ 不是為了 Undo，是為了「彈回原位」**（kang 拍板①）——
+ * 拖到吸不到邊的地方時**當場**還原，⛔ 不等放手：
+ * 讓他**立刻看到「這裡不行」**，⛔ 而不是放開手才發現白拖一趟。
+ *
+ * 🔴 **kang 拍板②：搬動⛔ 不進 `退一步`。** 那顆按鈕只管刪除 ——
+ * ⛔ 不要因為「順手做得到」就擴大一顆按鈕的意思，
+ * 那會讓使用者永遠猜不到按下去會退掉什麼〔功能之間的定位不可以互相模糊〕。
+ */
+let knifeMoving = null;
 
 function hideKnifeLine() {
   view.clearKnifePreview();
@@ -1116,6 +1132,7 @@ function toggleKnifeMode() {
   $('knife').classList.add('on');
   knifePicks = [];
   knifeDeleted = [];
+  knifeMoving = null;
   drawKnifePicks();
   panel.refresh();
   updateBar();
@@ -1126,7 +1143,8 @@ function toggleKnifeMode() {
    */
   toast('刀具：在模型上點你要切過的位置，或直接按住拖劃一條線（兩種可以混用）。'
       + '點完再按一次「刀具」就切下去，或在最後一點快點兩下接回起點。'
-      + '⭐ 下錯了就【點那一個點】把它刪掉（游標靠近它會變大），刪錯按「退一步」。'
+      + '⭐ 下錯了就【點那一個點】把它刪掉（游標靠近它會變大），刪錯按「退一步」；'
+      + '【按住那個點拖】就是搬它（會一直吸在邊上）。'
       + '轉視角改成：桌機按右鍵拖、平板兩指');
 }
 
@@ -1535,6 +1553,7 @@ function cancelKnifeMode() {
   $('knife').classList.remove('on');
   knifePicks = [];
   knifeDeleted = [];
+  knifeMoving = null;
   hideKnifeLine();
   panel.refresh();
   updateBar();
@@ -1645,6 +1664,47 @@ function knifeDeleteAt(i) {
 }
 
 /**
+ * 🔴 **拖曳中：把第 `i` 顆搬到新位置（每一次移動都會進來一次）。**
+ *
+ * ⚠ **`hit` 可能是 `null`** —— 拖到模型外、或那裡吸不到任何一條邊。
+ * 那時候**當場彈回原位**（kang 拍板①），⛔ 不是留在最後一個有效的位置。
+ *
+ * ⚠ **一次只能切一個物件的規矩照舊** —— 拖到別的物件上也算「不行」。
+ * ⛔ 少了這一道，切點的索引會屬於另一個網格，切下去會**改到他沒在看的物件**。
+ *
+ * ⭐ **⛔ 不記 Undo、⛔ 不進 `退一步`** —— 拖曳中一路改過去，
+ * 而整趟拖曳在「切下去」之前本來就還不是文件的一部分。
+ */
+function knifeMoveTo(i, hit) {
+  if (!knifePicks[i]) return;
+  if (!knifeMoving) knifeMoving = { i, orig: knifePicks[i] };
+
+  const ok = hit && !hit.obj.isParametric && hit.obj === knifePicks[0].obj;
+  knifePicks[i] = ok ? hit : knifeMoving.orig;
+  drawKnifePicks();
+  updateBar();
+}
+
+/**
+ * 🔴 **放開手（或被系統收走）。`ok=false` ＝ 這一趟不算，彈回原位。**
+ *
+ * ⚠ **⛔ 這裡不判「有沒有真的移動」** —— `select.js` 那邊
+ * 沒超過 `TAP_MOVE` 根本不會叫這一支（那一下是「輕點 ＝ 刪掉」）。
+ * 🔴 **兩邊各判一次的話遲早會不一致**，而症狀是「有時候刪、有時候搬」。
+ */
+function knifeMoveEnd(ok) {
+  const mv = knifeMoving;
+  knifeMoving = null;
+  if (!mv) return;
+  if (!ok && knifePicks[mv.i]) knifePicks[mv.i] = mv.orig;
+  drawKnifePicks();
+  updateBar();
+  toast(ok
+    ? `第 ${mv.i + 1} 個切點搬好了 —— 順序沒有變，它還是第 ${mv.i + 1} 個`
+    : `第 ${mv.i + 1} 個切點彈回原位了 —— 那裡吸不到任何一條邊`, !ok);
+}
+
+/**
  * 🔴 **`退一步` 那顆按鈕：把剛才刪掉的那一顆放回【原來的位置】並講一句話。**
  *
  * ⚠ **真正動資料的是 `knifeRestoreLastDelete()`** —— 快點兩下那條路
@@ -1717,6 +1777,7 @@ function knifeApply() {
   const segs = r.segments;
   knifePicks = [];
   knifeDeleted = [];
+  knifeMoving = null;
   hideKnifeLine();
   sel.setKnifeMode(false);
   $('knife').classList.remove('on');
