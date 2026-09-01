@@ -983,6 +983,18 @@ let knifePicks = [];
  */
 let knifeDeleted = [];
 
+/**
+ * 🔴🔴 **`knifePick()` 被叫過幾次**（2026-09-01，⛔ 這不是計數器，是「第幾下」）。
+ *
+ * ⚠ **它存在的唯一理由**：分辨「這一筆刪除是不是**同一次快點兩下的第一下**造成的」。
+ * `knifeDeleteAt()` 記下當時的號碼，第二下就能用 `seq === 現在 - 1` 認出來。
+ *
+ * ⭐ **⛔ 刻意不用時間** —— 用時間就要把 `DOUBLE_TAP_MS` 從 `select.js`
+ * 抄第二份過來，而「快慢的界線」只能有一個家（坑第 31 條）。
+ * 序號⛔ 不需要知道那個界線：`select.js` 已經幫我們判好 `info.double` 了。
+ */
+let knifePickSeq = 0;
+
 function hideKnifeLine() {
   view.clearKnifePreview();
 }
@@ -1554,7 +1566,27 @@ function knifePick(hit, info = {}) {
    * 雙擊的第二下本來就落在剛剛那一點上，排後面會先被當成取消。
    * 〔kang 2026-08-26 拍板：快慢是唯一的差別，逐點按的行為一格都沒變〕
    */
-  if (info.double && knifePicks.length >= 2) { knifeCloseLoop(); return; }
+  knifePickSeq++;
+
+  if (info.double) {
+    /**
+     * 🔴🔴 **先把「這一次快點兩下的【第一下】誤刪掉的那一顆」放回來。**
+     *
+     * ⚠ **⛔ 這不是保險，是必要的** —— 【實證 2026-09-01，AI 上線先驗當場踩到】：
+     * 快點兩下的第一下**⛔ 沒有辦法在當下知道自己是雙擊的第一下**
+     * （`info.double` 只有第二下才是真），所以它一定會先走刪除那條路。
+     * 🔴 **2 個點快點兩下 → 只剩 1 個，閉合完全沒發生。**
+     *
+     * ⚠ **舊版⛔ 沒有這個問題，是因為它的判定是「世界座標 0.5 公分」** ——
+     * 第一下大多打不中；而新的判定是**螢幕 19 px**，**第一下幾乎必中**。
+     * ⭐ **⛔ 教訓不是「雙擊很難」**：**放寬一個判定範圍，會把
+     * 原本靠「打不中」而相安無事的兩條路撞在一起。**
+     * 〔kang 拍板①：快點兩下維持原樣 —— 這一段就是在守那條〕
+     */
+    const d = knifeDeleted[knifeDeleted.length - 1];
+    if (d && d.seq === knifePickSeq - 1) knifeRestoreLastDelete();
+    if (knifePicks.length >= 2) { knifeCloseLoop(); return; }
+  }
 
   /**
    * 🔴 **指到某一個切點 → 刪掉它，前後兩點直接接起來。**
@@ -1599,7 +1631,7 @@ function knifePick(hit, info = {}) {
  */
 function knifeDeleteAt(i) {
   const [gone] = knifePicks.splice(i, 1);
-  knifeDeleted.push({ i, pick: gone });
+  knifeDeleted.push({ i, pick: gone, seq: knifePickSeq });
   drawKnifePicks();
   updateBar();
   /**
@@ -1613,22 +1645,41 @@ function knifeDeleteAt(i) {
 }
 
 /**
- * 🔴 **`退一步`：把剛才刪掉的那一顆放回【原來的位置】。**
+ * 🔴 **`退一步` 那顆按鈕：把剛才刪掉的那一顆放回【原來的位置】並講一句話。**
  *
- * ⚠ **索引要夾住**：刪完之後又點了新的點，原本的 `i` 可能已經超過長度了 ——
- * 那時候放在最後面是唯一說得通的落點。
- * ⛔ 不夾的話 `splice()` 會安靜地把它塞到尾巴，而使用者以為它回到原位。
+ * ⚠ **真正動資料的是 `knifeRestoreLastDelete()`** —— 快點兩下那條路
+ * 也走同一支，⛔ 只是不講話。這裡只負責「講什麼」。
  */
 function undoKnifeDelete() {
+  const r = knifeRestoreLastDelete();
+  if (!r) { toast('⛔ 沒有刪掉的切點可以放回來', true); return; }
+  toast(r.at === r.want
+    ? `放回第 ${r.at + 1} 個，共 ${knifePicks.length} 個`
+    : `原來那一格已經不在了，放到最後面 —— 第 ${r.at + 1} 個，共 ${knifePicks.length} 個`);
+}
+
+/**
+ * 🔴 **真正放回去的那一支。⛔ 它不講話。**
+ *
+ * ⚠ **會講話的話快點兩下就會冒出一句「放回第 N 個」** ——
+ * 而那一下使用者要的是「閉合並切下去」，⛔ 不是「有東西被放回來了」。
+ * ⭐ 所以**動作與說明分開**：這裡只動資料，講什麼由呼叫的人決定。
+ *
+ * @returns {?{at:number, want:number}} `null` ＝ 沒有東西可以放回來
+ */
+function knifeRestoreLastDelete() {
   const last = knifeDeleted.pop();
-  if (!last) { toast('⛔ 沒有刪掉的切點可以放回來', true); return; }
+  if (!last) return null;
+  /**
+   * ⚠ **索引要夾住**：刪完之後又點了新的點，原本的位置可能已經超過長度了 ——
+   * 那時候放在最後面是唯一說得通的落點。
+   * ⛔ 不夾的話 `splice()` 會安靜地把它塞到尾巴，而使用者以為它回到原位。
+   */
   const at = Math.min(last.i, knifePicks.length);
   knifePicks.splice(at, 0, last.pick);
   drawKnifePicks();
   updateBar();
-  toast(at === last.i
-    ? `放回第 ${at + 1} 個，共 ${knifePicks.length} 個`
-    : `原來那一格已經不在了，放到最後面 —— 第 ${at + 1} 個，共 ${knifePicks.length} 個`);
+  return { at, want: last.i };
 }
 
 /**
