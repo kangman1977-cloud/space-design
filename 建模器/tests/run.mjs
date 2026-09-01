@@ -2752,6 +2752,100 @@ section('貼合（mate.js）');
 
 section('框選（screen.js）');
 
+section('多選一起動（align.js 的 groupPivot／groupTransform）');
+
+/**
+ * 🔴 **kang 2026-09-01**：「加選或框選多個物件時…只會針對最後選到的物件
+ * 做動作…是不是因為缺少了『群組』功能?」
+ *
+ * ⛔ **不是缺群組** —— 箭頭 `attach` 在 active 那一個 node 身上。
+ * 正解是「箭頭掛整組的替身」，而**替身的數學抽在 `align.js`，
+ * 所以測得到**（`select.js` 那一半要 DOM 與場景，沙箱跑不動）。
+ */
+{
+  const A = await import('../js/core/align.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  /** 三個一樣大的方塊排成一列：外框 x ∈ [−30, 230] ⇒ 整組中心 (100, 0, 0) */
+  const mk = x => new io.ModelObject({
+    src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid', pos: V3(x, 0, 0)
+  });
+  const objs = [mk(0), mk(100), mk(200)];
+  const active = objs[2];
+
+  // ── 中心 ──
+  {
+    const p = A.groupPivot(objs, 'median', active);
+    near('★★ 重心 ＝ 整組外框的中心 X（(−30＋230)/2）', p.x, 100, 1e-9);
+    near('重心 Y', p.y, 0, 1e-9);
+    near('重心 Z', p.z, 0, 1e-9);
+
+    const q = A.groupPivot(objs, 'active', active);
+    near('★★ 最後選的 ＝ 那一個的【原點】（⛔ 不是它的外框中心）', q.x, 200, 1e-12);
+
+    /**
+     * ⭐ **單選時兩者必須是同一個點** —— 否則「單選 → 加選一個」的瞬間
+     * 箭頭會跳走，而使用者⛔ 沒有做任何跟位置有關的事。
+     */
+    const one = [mk(70)];
+    near('★★★ 只選一個時 兩種中心是同一個點',
+         A.groupPivot(one, 'median', one[0]).distanceTo(
+         A.groupPivot(one, 'active', one[0])), 0, 1e-12);
+  }
+
+  // ── 套用變換 ──
+  const snaps = objs.map(o => ({ m: o.matrix().clone(), rotOrder: o.rot.order }));
+
+  {
+    /** 純平移：三個都該位移同一個量，⛔ 跟中心完全無關 */
+    const d = new THREE.Matrix4().makeTranslation(10, 20, 30);
+    const out = A.groupTransform(d, snaps);
+    near('移動 A 位移', out[0].pos.distanceTo(V3(10, 20, 30)), 0, 1e-9);
+    near('移動 B 位移', out[1].pos.distanceTo(V3(110, 20, 30)), 0, 1e-9);
+    near('移動 C 位移', out[2].pos.distanceTo(V3(210, 20, 30)), 0, 1e-9);
+    near('移動 ⛔ 不會轉到任何一個', Math.abs(out[1].rot.y), 0, 1e-9);
+  }
+
+  {
+    /**
+     * 🔴🔴 **繞整組中心 (100,0,0) 轉 Y 90 度** ——
+     * 繞 Y 轉 90 度時 `x' ＝ z、z' ＝ −x`（相對樞紐）：
+     * · A 相對樞紐 (−100,0,0) → (0,0,100) ⇒ 世界 **(100, 0, 100)**
+     * · B 就在樞紐上           → **⛔ 不動**
+     * · C 相對樞紐 (+100,0,0) → (0,0,−100) ⇒ 世界 **(100, 0, −100)**
+     * ⭐ **這三個數字是算出來的，⛔ 不是抄執行結果。**
+     */
+    const P = V3(100, 0, 0);
+    const d = new THREE.Matrix4()
+      .makeTranslation(P.x, P.y, P.z)
+      .multiply(new THREE.Matrix4().makeRotationY(Math.PI / 2))
+      .multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
+    const out = A.groupTransform(d, snaps);
+
+    near('★★★ 繞重心轉 90 度 A 落在 (100, 0, 100)',
+         out[0].pos.distanceTo(V3(100, 0, 100)), 0, 1e-9);
+    near('★★★ 樞紐上的 B ⛔ 一格都不動',
+         out[1].pos.distanceTo(V3(100, 0, 0)), 0, 1e-9);
+    near('★★★ 繞重心轉 90 度 C 落在 (100, 0, −100)',
+         out[2].pos.distanceTo(V3(100, 0, -100)), 0, 1e-9);
+    near('★★ 每一個自己也轉了 90 度（⛔ 不是只有公轉）',
+         out[0].rot.y, Math.PI / 2, 1e-9);
+    near('縮放沒有被動到', out[0].scale.distanceTo(V3(1, 1, 1)), 0, 1e-9);
+  }
+
+  {
+    /** 鎖定縮放的：位置照樣跟著走，但 `scale` 回 `null` ⇒ 呼叫端⛔ 不套 */
+    const d = new THREE.Matrix4().makeScale(2, 2, 2);
+    const locked = [
+      { m: objs[0].matrix().clone() },
+      { m: objs[1].matrix().clone(), lockScale: true }
+    ];
+    const out = A.groupTransform(d, locked);
+    near('沒鎖的 縮放跟著變成 2 倍', out[0].scale.x, 2, 1e-9);
+    ok('★★ 鎖定縮放的 回 null（⛔ 不要套 scale）', out[1].scale === null);
+    near('★ 但它的位置照樣跟著整組走（100 × 2）', out[1].pos.x, 200, 1e-9);
+  }
+}
+
 /**
  * 框選問的是「這個物件在畫面上有沒有落在我拉的矩形裡」。
  * 那是投影問題，只需要相機，不需要 DOM —— 所以測得到。

@@ -73,6 +73,66 @@ export function unionBounds(objs) {
   return all;
 }
 
+/**
+ * 🔴🔴 **多選時箭頭站在哪**（2026-09-01，kang 的「多物件一起動」）。
+ *
+ * | mode | 是什麼 | 為什麼 |
+ * |---|---|---|
+ * | `'median'`（預設）| **整組選取的外框中心** | 畫面上看得到的那個範圍的中間；對齊也用整組外框 |
+ * | `'active'` | **最後選的那一個的原點** | ⭐ 單選時箭頭就在原點 ⇒ **切換選取時箭頭不會跳** |
+ *
+ * ⚠ **⛔ 「重心」⛔ 不用「全部頂點的平均」**（編輯模式的子元素是那樣）——
+ * 物件層級那要走訪每一個頂點，而**外框中心看得見、又便宜**。
+ * ⚠ **⛔ 「最後選的」也⛔ 不用它的外框中心** —— 那會讓「單選 → 加選一個」
+ * 的瞬間箭頭跳走，而使用者⛔ 沒有做任何跟位置有關的事。
+ *
+ * @param {ModelObject[]} objs 全部選到的
+ * @param {'median'|'active'} mode
+ * @param {ModelObject|null} active 最後選的那一個
+ */
+export function groupPivot(objs, mode = 'median', active = null) {
+  if (mode === 'active' && active) return active.pos.clone();
+  const box = unionBounds(objs);
+  if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+  return active ? active.pos.clone() : new THREE.Vector3();
+}
+
+/**
+ * 🔴🔴 **把一個變換量套到一組物件身上** —— `新的 ＝ delta × 舊的`。
+ *
+ * ⭐ **移動／旋轉／縮放三種都走這一支** —— ⛔ 不必分開寫，
+ * 它們的差別**已經在 `delta` 這個矩陣裡了**。
+ *
+ * ⚠ **`snaps` 是「按下去那一刻」拍的快照，⛔ 不是上一幀。**
+ * 每一幀都拿同一個起點重算，**浮點誤差因此⛔ 不會累積** ——
+ * 拿上一幀去疊的話，拖久了物件會慢慢歪掉，而⛔ 沒有地方看得出原因。
+ *
+ * ⚠ **`lockScale` 的物件⛔ 不套 scale，但位置照樣跟著走** ——
+ * 它跟著整組一起搬，只是自己⛔ 不變形。
+ *
+ * ⚠ **⛔ 這一支不碰任何物件** —— 照 `align.js` 的慣例**回傳新值**，
+ * 由呼叫端決定要不要套用（所以測得起來）。
+ *
+ * @param {THREE.Matrix4} delta
+ * @param {{m: THREE.Matrix4, lockScale?: boolean, rotOrder?: string}[]} snaps
+ * @returns {{pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3|null}[]}
+ *          `scale` 是 `null` ⇒ 這一個鎖著縮放，⛔ 不要套
+ */
+export function groupTransform(delta, snaps) {
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3();
+
+  return snaps.map(s => {
+    delta.clone().multiply(s.m).decompose(pos, quat, scl);
+    return {
+      pos: pos.clone(),
+      rot: new THREE.Euler().setFromQuaternion(quat, s.rotOrder || 'XYZ'),
+      scale: s.lockScale ? null : scl.clone()
+    };
+  });
+}
+
 const lo = (b, ax) => b.min[ax];
 const hi = (b, ax) => b.max[ax];
 const mid = (b, ax) => (b.min[ax] + b.max[ax]) / 2;

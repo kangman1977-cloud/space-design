@@ -23,7 +23,7 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
  */
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
-import { worldBounds } from '../core/align.js';
+import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -472,6 +472,42 @@ export class Selection {
     this._proxy.name = 'editProxy';
 
     /**
+     * 🔴🔴 **物件層級的替身 —— 多選時箭頭掛它**（2026-09-01，kang 的第 2 題）。
+     *
+     * > **他問**：「加選或框選多個物件時…只會針對最後選到的物件做動作…
+     * > 　是不是因為缺少了『群組』功能?」
+     * > **⛔ 不是缺群組** —— 是 `_refresh()` 把箭頭 `attach` 在
+     * > **active（最後選的）那一個 node** 身上，所以拖的只有它。
+     *
+     * ⚠ **它是【場景】的子節點，⛔ 不是某個 node 的子節點** ——
+     * 跟 `_proxy` 相反，因為它代表的是**整組**，⛔ 不屬於任何一個物件。
+     * ⇒ 它的座標就是世界座標，⛔ 不必做 worldToLocal。
+     *
+     * ⭐ **單選⛔ 不走它**（`count > 1` 才掛）。規則一句話講得完：
+     * **一個物件時箭頭就在它身上；多個物件時掛在一個代表整組的替身上。**
+     * 🔴 這樣**單選那條路一格都不用動** —— 而那條路已經驗過很多輪了。
+     */
+    this._objProxy = new THREE.Object3D();
+    this._objProxy.name = 'objProxy';
+    /**
+     * 🔴🔴 **⛔ 建構子裡⛔ 不要 `scene.add()` —— 第一次真的要用時才加。**
+     *
+     * ⚠ **⛔ 這不是潔癖，是實際炸過**【2026-09-01，kang 本機一開就發現】：
+     * 第一版在這裡寫 `v.scene.add(...)`，而 **`const v = this.view`
+     * 在下面幾十行才宣告** ⇒ `const` 的暫時性死區 ⇒ **ReferenceError**。
+     * 🔴 **那是執行期錯誤，⛔ 不是語法錯誤**：
+     * 「模組圖真的載入」那道檢查**只擋 `SyntaxError`**，⛔ 直接放它過關，
+     * 而症狀是**整個網頁一行都不跑**（工具列在、CSS 正常，
+     * 但新增下拉是空的、`– FPS`、物件 0）。
+     * ⭐ **改成 lazy 之後，建構子⛔ 沒有任何副作用** ——
+     * 就算再寫錯位置，也炸不掉整個模組。〔坑第 31 條的同一個精神：
+     * 與其小心不要寫錯，不如換一個寫錯也不會出事的結構〕
+     */
+
+    /** 多選拖曳的快照（按下去拍一次）。見 `_beginObjDrag()` */
+    this._objDrag = null;
+
+    /**
      * 🔴 **箭頭朝哪**：`'world'` ＝ 世界 XYZ（原本唯一的選擇）、
      * `'normal'` ＝ 選到的那個元素自己的座標系（Z 是法向）。
      *
@@ -532,6 +568,7 @@ export class Selection {
       v.orbit.enabled = !e.value;
       if (e.value) {                             // 按下去 → 拍一份初始狀態
         if (this.editSel) this._beginEditDrag();
+        else if (this._onObjProxy) this._beginObjDrag();
         return;
       }
       if (this.editSel) {                        // 放手 → 記一步 Undo
@@ -542,6 +579,14 @@ export class Selection {
          */
         if (this._drag && this._drag.cancelled) { this._rebaseProxy(); return; }
         this._writeBackEdit(true);
+      } else if (this._onObjProxy) {
+        /**
+         * ⚠ **放手之後替身要重新對準** —— 物件動過了，整組的外框中心
+         * 也跟著變。⭐ **⛔ 不必在這裡自己叫**：`onTransform(true)` 會走
+         * `commit()` → `revalidate()` → `_refresh()` → `_attachObjProxy()`，
+         * 而那一支會重設位置**並清掉快照**。
+         */
+        this._writeBackObj(true);
       } else {
         this._writeBack(true);
       }
@@ -549,6 +594,7 @@ export class Selection {
 
     tc.addEventListener('objectChange', () => {
       if (this.editSel) this._writeBackEdit(false);
+      else if (this._onObjProxy) this._writeBackObj(false);
       else this._writeBack(false);
     });
 
@@ -700,6 +746,71 @@ export class Selection {
       sp.position.copy(origin).addScaledVector(d, unit * OUT);
       sp.scale.setScalar(unit * SIZE);
     }
+  }
+
+  /** 現在箭頭掛的是「整組的替身」嗎（⛔ 不另存狀態，直接問 tc） */
+  get _onObjProxy() { return this.tc.object === this._objProxy; }
+
+  /**
+   * 🔴 **多選拖曳：按下去先拍一份快照**（2026-09-01）。
+   *
+   * ⚠ **⛔ 不可以每一幀去讀「上一幀跟這一幀差多少」** —— 那會把浮點誤差
+   * 一幀一幀累積起來，拖久了物件會慢慢歪掉，而**⛔ 沒有任何地方看得出原因**。
+   * ⭐ 正解是**跟【按下去那一刻】比**：`delta ＝ 現在 × 起點的逆`，
+   * 每一幀都從同一個起點重算 ⇒ **誤差⛔ 不累積**。
+   * 〔編輯模式的 `_beginEditDrag()` 是同一個骨架〕
+   */
+  _beginObjDrag() {
+    const p = this._objProxy;
+    p.updateMatrixWorld(true);
+    this._objDrag = {
+      inv: p.matrixWorld.clone().invert(),
+      items: this.objects.map(o => ({
+        obj: o,
+        m: o.matrix().clone(),           // 這個物件在按下去那一刻的世界矩陣
+        lockScale: !!o.lockScale,
+        rotOrder: o.rot.order             // ⚠ 各物件的 Euler 序不見得一樣
+      }))
+    };
+  }
+
+  /**
+   * 🔴 **多選拖曳：把替身的變化量套到每一個選到的物件。**
+   *
+   * `新的 ＝ delta × 舊的`，而 `delta ＝ 替身現在 × 替身起點的逆`。
+   * ⭐ **移動／旋轉／縮放三種都走這一條** —— ⛔ 不必分開寫，
+   * 因為它們的差別已經在 `delta` 這個矩陣裡了。
+   *
+   * ⚠ **鎖定縮放的物件：⛔ 不套 scale，但位置照樣跟著走** ——
+   * 它跟著整組一起搬，只是自己⛔ 不變形。
+   *
+   * ⚠ **⛔ 多選時不吸參考線**（`_applyGuideSnap` 要一個單一物件的外框）——
+   * 多個物件要吸哪一個？⛔ 沒有唯一答案〔補不到唯一就明講，坑第 24 條〕。
+   */
+  _writeBackObj(committing) {
+    const d = this._objDrag;
+    if (!d || !this._doc) return;
+
+    const p = this._objProxy;
+    p.updateMatrixWorld(true);
+    const delta = p.matrixWorld.clone().multiply(d.inv);
+
+    /**
+     * ⭐ **數學的家是 `align.js` 的 `groupTransform()`**（純函式，測得到）——
+     * 這裡只負責把結果套進文件。⛔ 不要在這裡自己 decompose。
+     */
+    const out = groupTransform(delta, d.items);
+
+    d.items.forEach((it, i) => {
+      /** ⚠ 拖到一半物件被刪掉（Undo）就跳過 —— ⛔ 不要寫進不存在的東西 */
+      if (!this._doc.byId(it.obj.id)) return;
+      const r = out[i];
+      it.obj.pos.copy(r.pos);
+      it.obj.rot.copy(r.rot);
+      if (r.scale) it.obj.scale.copy(r.scale);
+    });
+
+    if (this.hooks.onTransform) this.hooks.onTransform(committing);
   }
 
   /** 把 gizmo 拖出來的變換寫回文件 */
@@ -2325,7 +2436,18 @@ export class Selection {
 
     // 分片模式下不掛 gizmo。放在這裡是因為 _refresh() 會在選取變動、
     // Undo、讀檔之後重跑，只在 setSeamMode() 裡收一次是收不乾淨的。
+    /**
+     * 🔴🔴 **多選 → 箭頭掛「整組的替身」**（2026-09-01）。
+     * 單選維持原路（掛物件自己的 node）—— 見 `_objProxy` 那則。
+     */
+    if (node && !this.inPickMode && this.count > 1) {
+      this._attachObjProxy();
+      if (this.hooks.onChange) this.hooks.onChange(this);
+      return;
+    }
+
     if (node && !this.inPickMode) {
+      this._objDrag = null;              // 換成單選了，上一次的快照沒有意義
       this.tc.attach(node);
       /**
        * 🔴 **物件層級也吃「方向」那一排了**（kang 2026-09-01 要的）。
@@ -2412,6 +2534,14 @@ export class Selection {
     this.editPivot = pivot === 'active' ? 'active' : 'median';
     this._drag = null;              // 中心變了，上一次拖曳的基準就不同了
     if (this.editSel) { this._rebaseProxy(); this._drawEditMark(); }
+    else if (!this.editMode && this.count > 1) {
+      /**
+       * 🔴 **多選的物件模式：按下去箭頭要當場跳到新的中心**（2026-09-01）。
+       * ⭐ **⛔ 這裡不自己算** —— 規則的家是 `_attachObjProxy()`／`_objPivot()`，
+       * 在這裡再寫一份就是「兩個地方各自對齊」（坑第 31 條）。
+       */
+      this._refresh();
+    }
     return this.editPivot;
   }
 
@@ -2819,6 +2949,44 @@ export class Selection {
     this._rebaseProxy();
     this.tc.attach(this._proxy);
     this._applyModeLimit();
+  }
+
+  /**
+   * 🔴🔴 **多選：把箭頭掛到代表整組的替身上**（2026-09-01）。
+   *
+   * ⚠ **每次選取變動都會重跑** —— 替身要重新對準，
+   * 而**上一次拖曳的快照一定要清掉**（選的東西換了，那份快照對不上）。
+   */
+  _attachObjProxy() {
+    const p = this._objProxy;
+    this._objDrag = null;
+    /** ⚠ 第一次要用才加進場景 —— 見建構子那則（⛔ 建構子不做副作用） */
+    if (!p.parent) this.view.scene.add(p);
+
+    /**
+     * ⭐ **中心的規則⛔ 不寫在這裡** —— 家是 `align.js` 的 `groupPivot()`
+     * （純函式，測得到）。這裡只負責把選取交出去。
+     */
+    p.position.copy(groupPivot(this.objects, this.editPivot, this.active));
+    p.scale.set(1, 1, 1);
+
+    /**
+     * 🔴 **多選 ＋ 方向切「物件」→ 用 active 的角度。**
+     * 三個物件三個角度，**必須挑一個講得出來的規則** ——
+     * 「照你最後點的那一個」跟編輯模式的切線規則一致
+     * 〔`elementBasis()`：法向取全部的和，**切線照 active**〕。
+     */
+    if (this.editSpace === 'normal' && this.active) {
+      p.quaternion.setFromEuler(this.active.rot);
+      this.tc.space = 'local';
+    } else {
+      p.quaternion.identity();
+      this.tc.space = 'world';
+    }
+    p.updateMatrixWorld(true);
+
+    this.tc.attach(p);
+    this.tc.showX = this.tc.showY = this.tc.showZ = true;
   }
 
   /**

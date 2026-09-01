@@ -2021,11 +2021,23 @@ function setEditPivot(want) {
   }
   updateEditNum();
   panel.refresh();
-  const many = sel.editCount > 1;
-  toast(got === 'active'
-    ? (many ? '中心改成「最後點的那一個」（畫成橘色的那個）'
-            : '中心改成「最後點的那一個」。⚠ 只選一個時它跟「重心」是同一個點，看不出差別')
-    : '中心改成「全部選取頂點的重心」');
+
+  /**
+   * 🔴 **兩種模式講的東西⛔ 不一樣，話也要不一樣**（2026-09-01 補物件模式那半）。
+   * ⚠ 編輯模式講的是**點邊面**，物件模式講的是**物件** ——
+   * ⛔ 用同一句話會讓人以為自己在改別的東西〔跟 kang 講話：講畫面上的東西〕。
+   */
+  if (sel.editMode) {
+    const many = sel.editCount > 1;
+    toast(got === 'active'
+      ? (many ? '中心改成「最後點的那一個」（畫成橘色的那個）'
+              : '中心改成「最後點的那一個」。⚠ 只選一個時它跟「重心」是同一個點，看不出差別')
+      : '中心改成「全部選取頂點的重心」');
+  } else {
+    toast(got === 'active'
+      ? '中心改成「最後點的那一個物件」—— 其他物件會繞著它轉'
+      : '中心改成「全部選到的物件的中間」');
+  }
 }
 
 /**
@@ -4143,9 +4155,13 @@ function gizmoOff() {
  * | 這一組 | 什麼時候有作用 |
  * |---|---|
  * | **方向**（`.spBtn`）| **兩種模式都有** —— 物件層 2026-09-01 接上了 |
- * | **中心**（`.pvBtn`）| ⛔ **只有編輯模式** —— 物件層還沒做（下一輪）|
+ * | **中心**（`.pvBtn`）| **兩種模式都有，但物件模式要【多選】才有意義** —— 2026-09-01 接上 |
  * | **數值**（`editNum*`）| ⛔ **只有編輯模式** —— `updateEditNum()` 第一行
  *   就是 `sel.editMode ? … : null`，物件模式下永遠 disabled |
+ *
+ * 🔴 **中心那兩顆在物件模式【選一個】時要收起來** ——
+ * 單選時「重心」與「最後選的」**是同一個點**（都是那個物件的原點），
+ * ⛔ 給兩顆按不出差別的按鈕，跟畫面說謊沒有兩樣〔鐵律三〕。
  *
  * ⭐ **⛔ 沒作用的就不要放在畫面上**：亮著卻不動，比按鈕不見更難查
  * 〔鐵律三：誤報比漏報更糟〕。
@@ -4169,12 +4185,16 @@ function syncEditXfRow() {
     : '箭頭朝物件自己的方向：物件轉過角度之後箭頭跟著歪，拖動就是沿物件自己的軸走，不是沿世界的 X／Y／Z';
 
   /**
-   * ⚠ **標籤要跟著按鈕一起收** —— ⛔ 不收的話物件模式會留下一個
+   * ⚠ **標籤要跟著按鈕一起收** —— ⛔ 不收的話會留下一個
    * 孤零零的「中心」兩個字，而它後面什麼都沒有。
+   *
+   * 🔴 **物件模式要【多選】才給**：單選時兩顆講的是同一個點。
    */
+  const pivotOff = off || (!edit && sel.count < 2);
+  $('pvLbl').hidden = pivotOff;
+  for (const b of document.querySelectorAll('.pvBtn')) b.hidden = pivotOff;
+
   const editOnly = off || !edit;
-  $('pvLbl').hidden = editOnly;
-  for (const b of document.querySelectorAll('.pvBtn')) b.hidden = editOnly;
   for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = editOnly;
 }
 
