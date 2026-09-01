@@ -34,6 +34,7 @@
  */
 
 import * as THREE from 'three';
+import { elementCenter } from './edit.js';
 
 /** 貼合的對象種類 */
 export const MATE = { FACE: 'face', EDGE: 'edge', VERTEX: 'vertex' };
@@ -48,16 +49,30 @@ export const MATE = { FACE: 'face', EDGE: 'edge', VERTEX: 'vertex' };
  * 法線要用**法線矩陣**轉，不能直接套物件的變換矩陣 ——
  * 非等比縮放時法線會歪掉（拉長的方向法線要反方向壓縮）。
  * 這種錯畫面上看起來只是「貼歪了一點」，很難查。
+ *
+ * ── 🔴🔴 `point` 是【共面區域】的中心，⛔ 不是那個三角形的重心 ──
+ *
+ * **方塊在網格裡是 12 個三角形，⛔ 不是 6 個面**（`io.js` 檔頭那則講的
+ * 同一件事）。而使用者點的是「一個面」，⛔ 不是他看不見的那條對角線的一邊。
+ *
+ * ⚠ **舊版直接對 `faceVerts(face)` 取平均，那是【碰巧不出事】**：
+ * 【沙箱實測】方塊 60×45×40 的 +X 面，舊版給 **(30, 7.5, 6.667)**，
+ * 而那個面的中心是 **(30, 0, 0)**。舊的「只貼平不定位」只取**法線方向**
+ * 的分量，那個偏移剛好整個落在面內 ⇒ **被丟掉了，所以從來沒人發現**。
+ * 🔴 一改成「中心對中心」，它就**直接變成貼歪的量**，
+ * 而且歪多少**取決於點到哪一個三角形** —— ⛔ 使用者看不到那條對角線。
+ *
+ * ⭐ **`elementCenter()` 是這個專案「一個面的中心」的唯一定義** ——
+ * 編輯模式 gizmo 掛的位置、`標尺寸` 報的重心，用的都是它。
+ * ⇒ 三個地方講的中心是**同一個點**〔鐵律三：讓數字互相對得起來〕。
+ * ⛔ 不要在這裡自己再算一份。
  */
 export function faceFrame(obj, face, mesh = null) {
   const m = mesh || obj.mesh();
   m.computeNormals();
   const M = obj.matrix();
 
-  const vs = m.faceVerts(face);
-  const c = new THREE.Vector3();
-  for (const v of vs) c.add(v.p);
-  c.divideScalar(vs.length || 1).applyMatrix4(M);
+  const c = elementCenter(m, { kind: 'face', face }).applyMatrix4(M);
 
   const nm = new THREE.Matrix3().getNormalMatrix(M);
   const n = face.normal.clone().applyMatrix3(nm).normalize();
@@ -165,11 +180,25 @@ function rotateAbout(pos, rot, q, pivot) {
  *
  * 兩步：
  *   1. 轉到**兩面法線正對**（`nA` 轉成 `−nB`），繞著 A 那個面的中心轉
- *   2. 沿著 `nB` 推，讓兩個面共平面
+ *   2. **把兩個面的中心疊在一起**
  *
  * 為什麼是「正對」而不是「同向」：兩個面要貼在一起的話，它們的
  * 外法線必定指向相反方向 —— 就像兩本書合起來，封面各自朝外。
  * 轉成同向的話兩個物件會疊在一起。
+ *
+ * ── 🔴 中心對中心（kang 2026-09-01 拍板，⛔ 覆蓋舊定案）────────
+ *
+ * ⚠ **舊版⛔ 只推法線方向那一段，面內的兩個自由度刻意不動**，
+ * 理由寫在規格檔：「中心對中心？角對角？每一種都是猜的 ——
+ * 與其猜一個，不如不動」⇒ 定案是「貼合負責貼平，對齊負責定位」，**兩步**。
+ *
+ * 🔴 **kang 用下來的結論是那兩步太麻煩**，拍板改成一步。
+ * 他對「只貼平不定位」要不要留成開關的回答：「**先改掉，用不慣再說**」。
+ *
+ * ⭐ **改完之後三種貼合的規則一致了**：點對點、邊對邊（中點對中點）、
+ * 面對面（中心對中心）—— 都是「**你選的那兩個東西的代表點重合**」。
+ * ⚠ 而位移也因此**跟 `mateEdgeToEdge` 的最後一步同一個形式**，
+ * ⛔ 不再是「取法線分量」那種只有這裡才有的寫法。
  *
  * @returns {{pos, rot, ambiguous, moved}}
  */
@@ -179,11 +208,12 @@ export function mateFaceToFace(src, srcFrame, dstFrame) {
 
   const r = rotateAbout(src.pos, src.rot, q, srcFrame.point);
 
-  // 轉完之後那個面的中心也跟著轉了，要重新算才知道還差多遠
-  const cAfter = srcFrame.point.clone();          // 繞它自己轉，所以不動
-  const n = dstFrame.dir;
-  const gap = dstFrame.point.clone().sub(cAfter).dot(n);
-  r.pos.addScaledVector(n, gap);
+  /**
+   * 繞著 A 那個面的中心轉，所以轉完之後**它自己沒有動** ——
+   * 直接把它搬到目標面的中心即可。這一步同時吃掉法線方向的距離
+   * 與面內的那兩個自由度。
+   */
+  r.pos.add(dstFrame.point.clone().sub(srcFrame.point));
 
   return {
     pos: r.pos, rot: r.rot, ambiguous,
