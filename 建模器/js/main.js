@@ -700,6 +700,7 @@ $('penUndo').onclick = () => {
 };
 $('penCancel').onclick = () => cancelPenMode();
 $('knifeCancel').onclick = () => cancelKnifeMode();
+$('knifeUndoDel').onclick = () => undoKnifeDelete();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
 $('vertDots').onclick = () => toggleVertexDots();
@@ -922,7 +923,7 @@ function exitOtherModes(keep) {
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
-    knifePicks = []; hideKnifeLine();
+    knifePicks = []; knifeDeleted = []; hideKnifeLine();
   }
   /**
    * 🔴 **參考線也要收**（2026-08-31）。
@@ -963,6 +964,24 @@ function exitOtherModes(keep) {
  * ⛔ 不另開一種模式管理。
  */
 let knifePicks = [];
+
+/**
+ * 🔴 **剛才刪掉的切點，照【刪掉的順序】疊著**（2026-09-01，`退一步` 用的）。
+ *
+ * 每一筆是 `{ i, pick }` —— `i` ＝ 它原本排第幾個。
+ * ⭐ **記索引⛔ 不是記「最後面」**：kang 要的是**插回原來的位置**，
+ * 接到尾巴的話那條線的形狀跟刪之前⛔ 不一樣。
+ *
+ * ⚠ **⛔ 它跟工具列的「復原」是兩件事**：切點根本⛔ 沒進復原清單
+ * （`knifeApply()` 切下去之後才 `commit()`）——
+ * 在刀具模式裡按「復原」會退掉**更早的某個模型動作**，那正是要避開的陷阱。
+ * 〔照鋼筆 `退一點` 的先例，⛔ 不去動全域的復原〕
+ *
+ * 🔴 **離開刀具的四個出口都要清掉它**（`toggleKnifeMode`／`cancelKnifeMode`／
+ * `knifeApply`／`exitOtherModes`）—— 留著的話下一次進刀具按「退一步」，
+ * 會冒出**上一趟**的點。
+ */
+let knifeDeleted = [];
 
 function hideKnifeLine() {
   view.clearKnifePreview();
@@ -1084,6 +1103,7 @@ function toggleKnifeMode() {
   sel.setKnifeMode(true);
   $('knife').classList.add('on');
   knifePicks = [];
+  knifeDeleted = [];
   drawKnifePicks();
   panel.refresh();
   updateBar();
@@ -1094,6 +1114,7 @@ function toggleKnifeMode() {
    */
   toast('刀具：在模型上點你要切過的位置，或直接按住拖劃一條線（兩種可以混用）。'
       + '點完再按一次「刀具」就切下去，或在最後一點快點兩下接回起點。'
+      + '⭐ 下錯了就【點那一個點】把它刪掉（游標靠近它會變大），刪錯按「退一步」。'
       + '轉視角改成：桌機按右鍵拖、平板兩指');
 }
 
@@ -1501,6 +1522,7 @@ function cancelKnifeMode() {
   sel.setKnifeMode(false);
   $('knife').classList.remove('on');
   knifePicks = [];
+  knifeDeleted = [];
   hideKnifeLine();
   panel.refresh();
   updateBar();
@@ -1510,8 +1532,19 @@ function cancelKnifeMode() {
 /**
  * 點一下 → 加一個位置。
  *
- * ⚠ **再點同一個地方一次 ＝ 取消最後那一點**（kang 同意的），
+ * ⚠ **點在【已經放好的切點】上 ＝ 刪掉那一個**（kang 2026-09-01 拍板），
  * 跟編輯模式「再點一次取消選取」同一條規則 —— ⛔ 不要另發明一種。
+ *
+ * ── 🔴 2026-09-01 改掉的兩件事 ──────────────────────
+ * | | 舊 | 新 |
+ * |---|---|---|
+ * | 刪得掉哪一顆 | **只有最後一顆** | **指到哪顆就哪顆** |
+ * | 判定範圍 | 世界座標 `0.5` 公分（⚠ **模型拉遠就點不到**）| **螢幕距離**，
+ *   跟「游標靠近會變大」同一個範圍 → 🔴 **看到它變大，按下去就一定刪得掉** |
+ *
+ * ⭐ **索引是 `select.js` 現算好送過來的**（`info.hotIdx`），
+ * 這裡⛔ 不自己再算一次距離 —— 兩邊各算一份就會出現
+ * 「亮的是這顆、刪掉的是另一顆」，而那是**誤報**（鐵律三）。
  */
 function knifePick(hit, info = {}) {
   /**
@@ -1522,6 +1555,17 @@ function knifePick(hit, info = {}) {
    * 〔kang 2026-08-26 拍板：快慢是唯一的差別，逐點按的行為一格都沒變〕
    */
   if (info.double && knifePicks.length >= 2) { knifeCloseLoop(); return; }
+
+  /**
+   * 🔴 **指到某一個切點 → 刪掉它，前後兩點直接接起來。**
+   *
+   * ⚠ **要排在 `!hit` 前面**：切點就長在邊上，⛔ 沒有理由讓
+   * 「這一下有沒有吸到邊」去左右「刪不刪得掉」——
+   * 而且刪點本來就跟「吸到哪條邊」無關。
+   */
+  const hi = Number.isInteger(info.hotIdx) ? info.hotIdx : -1;
+  if (hi >= 0 && hi < knifePicks.length) { knifeDeleteAt(hi); return; }
+
   if (!hit) { toast('點在物件上 —— 那個位置會吸到最近的一條邊', true); return; }
   if (hit.obj.isParametric) {
     toast('這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」', true);
@@ -1538,22 +1582,53 @@ function knifePick(hit, info = {}) {
     return;
   }
 
-  const last = knifePicks[knifePicks.length - 1];
-  if (last && last.world.distanceTo(hit.world) < 0.5) {
-    knifePicks.pop();
-    drawKnifePicks();
-    updateBar();
-    toast(knifePicks.length ? `取消最後一點，還有 ${knifePicks.length} 個`
-                            : '取消最後一點');
-    return;
-  }
-
   knifePicks.push(hit);
   drawKnifePicks();
   updateBar();
   toast(knifePicks.length < 2
     ? '再點下一個位置（點在同一個面的另一條邊上，就會切開那個面）'
     : `已點 ${knifePicks.length} 個位置　再按一次「刀具」就切下去`);
+}
+
+/**
+ * 🔴 **刪掉第 `i` 個切點。**
+ *
+ * ⚠ **⛔ 不必自己接線**：`drawKnifePicks()` 每次都是照 `knifePicks`
+ * 從頭畫一遍，所以「前後兩點接起來」是**免費掉出來的**，
+ * ⛔ 不要另外寫一段去補那條線（那就會有第二份真相）。
+ */
+function knifeDeleteAt(i) {
+  const [gone] = knifePicks.splice(i, 1);
+  knifeDeleted.push({ i, pick: gone });
+  drawKnifePicks();
+  updateBar();
+  /**
+   * ⚠ **講「第幾個」而不是「那個點」** —— kang 驗的是畫面，
+   * 而畫面上唯一數得出來的量就是**順序與總數**（⛔ 不要用行話）。
+   */
+  const n = knifePicks.length;
+  toast(n >= 2
+    ? `刪掉第 ${i + 1} 個切點，還有 ${n} 個　按「退一步」可以放回原位`
+    : `刪掉第 ${i + 1} 個切點，還有 ${n} 個 —— ⛔ 不到兩個切不下去`);
+}
+
+/**
+ * 🔴 **`退一步`：把剛才刪掉的那一顆放回【原來的位置】。**
+ *
+ * ⚠ **索引要夾住**：刪完之後又點了新的點，原本的 `i` 可能已經超過長度了 ——
+ * 那時候放在最後面是唯一說得通的落點。
+ * ⛔ 不夾的話 `splice()` 會安靜地把它塞到尾巴，而使用者以為它回到原位。
+ */
+function undoKnifeDelete() {
+  const last = knifeDeleted.pop();
+  if (!last) { toast('⛔ 沒有刪掉的切點可以放回來', true); return; }
+  const at = Math.min(last.i, knifePicks.length);
+  knifePicks.splice(at, 0, last.pick);
+  drawKnifePicks();
+  updateBar();
+  toast(at === last.i
+    ? `放回第 ${at + 1} 個，共 ${knifePicks.length} 個`
+    : `原來那一格已經不在了，放到最後面 —— 第 ${at + 1} 個，共 ${knifePicks.length} 個`);
 }
 
 /**
@@ -1590,6 +1665,7 @@ function knifeApply() {
 
   const segs = r.segments;
   knifePicks = [];
+  knifeDeleted = [];
   hideKnifeLine();
   sel.setKnifeMode(false);
   $('knife').classList.remove('on');
@@ -4675,6 +4751,12 @@ function updateBar() {
     : '鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件';
 
   $('knifeCancel').hidden = !sel.knifeMode;
+  /**
+   * 🔴 **`退一步` 只在刀具模式、而且真的刪過東西時才出現。**
+   * ⚠ ⛔ 不用 `disabled`：一顆永遠灰著的按鈕使用者⛔ 不知道它什麼時候會亮
+   * —— 照這一排其他顆的規矩用 `hidden`（2026-08-31 那 45 個就是這樣統一的）。
+   */
+  $('knifeUndoDel').hidden = !sel.knifeMode || !knifeDeleted.length;
   /**
    * 🔴 **吸中點只在刀具模式裡出現，而且開著的時候要看得出來。**
    * ⚠ 一顆按下去畫面上什麼都不變的開關就是坑第 21 條 ——

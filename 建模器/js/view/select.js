@@ -1447,9 +1447,22 @@ export class Selection {
           const isDouble = !!lt && (now - lt.t) < DOUBLE_TAP_MS
                         && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
           this._lastKnifeTap = { x: e.clientX, y: e.clientY, t: now };
+          /**
+           * 🔴🔴 **指到哪一個切點，就把索引一起送出去**（2026-09-01，kang 提的）。
+           *
+           * ⚠ **一定要在這裡【現算】一次，⛔ 不可以拿 `this._knifeHotIdx`** ——
+           * 那個快取是 `pointermove` 填的，而**平板⛔ 沒有 hover**：
+           * 手指按下去之前不會有任何一次 move，快取**永遠是 −1**
+           * → 功能在桌機好好的、在平板完全不動。
+           * 〔鐵律二：性質由兩端決定 —— 這裡的兩端是「桌機有 hover／平板沒有」〕
+           *
+           * ⭐ **⛔ 不必擔心多算一次**：它只跑過幾個到十幾個切點，
+           * ⛔ 不隨模型大小成長（`_knifeHotIndex()` 上面寫了完整的理由）。
+           */
           this.hooks.onKnifePick(
             this.pickEdgePoint(e.clientX, e.clientY, this._wantSnapMid(e)),
-            { double: isDouble }
+            { double: isDouble,
+              hotIdx: this._knifeHotIndex(e.clientX, e.clientY) }
           );
         }
         return;
