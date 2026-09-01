@@ -527,6 +527,17 @@ export function explodeShapes(obj) {
  * @returns {{ok:boolean, reason?:string, moved?:boolean,
  *            offset?:THREE.Vector3}}
  */
+/**
+ * 🔴🔴 **呼叫端注意：這一支【就地改頂點座標】，⛔ 網格物件不會換人。**
+ *
+ * ⇒ **畫面那一半一定要自己喊 `view.markGeomDirty()`**，
+ * 否則 `scene.js` 的 `_updateNode()` **察覺不到**（它只看「網格換人／
+ * 板厚變了／有人喊 dirty」），而症狀⛔ 不是「沒反應」——
+ * **是東西會整個跳走**：`obj.pos` 更新了但幾何還是舊的，
+ * 那個位移沒有被抵銷。〔kang 2026-09-01 回報，實際發生過〕
+ *
+ * ⚠ 鋼筆那條路走 `invalidate()`（網格會換人），⛔ 不受這條影響。
+ */
 export function recenterOrigin(obj) {
   if (!obj) return { ok: false, reason: '沒有選到物件' };
   /**
