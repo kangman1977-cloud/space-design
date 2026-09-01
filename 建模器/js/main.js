@@ -5253,8 +5253,23 @@ function updateBar() {
     const p = revolveProfile();
     if (p.ok && p.points.length) {
       const f = AXIS_FIELDS[$('revAxis').value] || AXIS_FIELDS.z;
-      $('revA').value = +p.points[0][f[0]].toFixed(3);
-      $('revB').value = +p.points[0][f[1]].toFixed(3);
+      /**
+       * 🔴🔴 **填【那個座標的最小值】，⛔ 不是「輪廓的第一個點」。**
+       *
+       * ⚠ **【實證 2026-09-02，AI 上線上版按第二次才踩到】**
+       * 舊版填「第一個點」，而**第一個點⛔ 不保證是離中心線最近的那一端**
+       * ⇒ 其他點落在軸的**兩側** ⇒ 被自己的擋關擋掉
+       * 「這條線跨過中心線了」，**而使用者什麼都還沒做。**
+       *
+       * ⭐ 取最小值就同時滿足兩件事：
+       * ① **所有點都在軸的同一側**（⛔ 永遠不會被那道擋關誤擋）
+       * ② 畫碗那種「從中心線出發」的輪廓時，**端點就是最小值**
+       * 　 ⇒ 離軸 0 ⇒ 轉出封閉的實體。
+       * ⚠ 第一次按出來的那個「第一個點」版本**⛔ 沒有踩到**，
+       * 　 因為那次剛好第一個點就是最小值 —— 〔碰巧通過比失敗危險〕。
+       */
+      $('revA').value = +Math.min(...p.points.map(v => v[f[0]])).toFixed(3);
+      $('revB').value = +Math.min(...p.points.map(v => v[f[1]])).toFixed(3);
     }
   }
   revWasOn = canRevolve;
