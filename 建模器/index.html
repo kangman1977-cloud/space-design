@@ -793,21 +793,46 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
         ⚠ 這一輪【沒有】只轉半圈與兩端封口 —— kang 拍板要做，排第 2 階段。
       -->
-      <button id="revolve" hidden title="旋轉成形：把一條輪廓繞一根軸轉一圈，長成碗、罩、瓶、燈罩、圓頂。⭐ 兩種用法：①【物件模式】選一個鋼筆物件 → 用它畫的那條線 ②【編輯模式】選一串邊 → 用那串點。⚠ 輪廓的頭尾有碰到中心線就會轉成封閉的實體（可以列印），沒碰到就是一張薄殼（走展開切割，厚度用板厚欄位）。⚠ 轉出來會是一個【新的物件】，原本的不動">旋轉成形</button>
-      <select id="revAxis" hidden title="繞哪一根軸轉。⚠ 鋼筆畫的線是躺在地板上的，所以要繞【地板上的】X 或 Z 軸才轉得出立體 —— 繞 Y（垂直軸）只會得到一片平的">
+      <!--
+        🔴🔴 旋轉成形的介面 2026-09-02【收起來了】（kang 決定，⛔ 不是否決）。
+
+        ⭐ 幾何那一半【還在】：js/build/revolve.js（249 行）＋ 22 項測試，
+           一行都沒刪，而且體積／χ／極點／環／smooth 都驗過。
+           收起來的只有這一組控制項與 main.js 的接線。
+
+        🔴 為什麼收：kang 一句話問到根本 ——
+           「你只是為了達成旋轉成形，並不是真正的計畫」。
+           這一整條路（去鋼筆挖線 → 挖出問題 → 再補一個輪廓物件 →
+           中心線看不到 → 再拿參考線補）每一步都是為了讓這顆按鈕能動，
+           沒有一步是問「這個建模器缺什麼」。
+
+           ⇒ 真正缺的是【草圖】那一層：一組線，本身不是模型，
+             只是造型的來源，給旋轉成形／螺旋／掃掠／放樣共用。
+           而鋼筆現在的定位是「畫完直接生出一個東西」——它是建模工具，
+           不是草圖工具。拿它當輪廓來源是錯位。
+
+        ⚠ 而留著能按的代價是真的：工具列多 8 個控制項、用法將來還會變，
+           而現在這版其實按不太出東西（要先畫鋼筆、再打兩個座標、還是盲畫）。
+
+        ✅ 要接回來：把這一段的註解拆掉，並照 `規格\建模器-旋轉成形.md`
+           「介面收起來了」那一節把 main.js 那幾支接回去。
+           ⚠ 但接回來之前先讀 `草圖與造型-設計方向.md`——
+             輪廓來源與中心線的指定方式【本來就會換掉】。
+
+      <button id="revolve" hidden title="旋轉成形：把一條輪廓繞一根軸轉一圈，長成碗、罩、瓶、燈罩、圓頂">旋轉成形</button>
+      <select id="revAxis" hidden title="繞哪一根軸轉">
         <option value="x">繞 X</option>
         <option value="y">繞 Y</option>
         <option value="z" selected>繞 Z</option>
       </select>
       <span id="revLblA" class="lbl" hidden>X</span>
-      <input id="revA" type="number" step="0.5" value="0" hidden
-             title="軸的位置（cm）：空間裡的實際座標，跟對齊、貼合、切一刀看到的是同一套數字">
+      <input id="revA" type="number" step="0.5" value="0" hidden title="軸的位置（cm）">
       <span id="revLblB" class="lbl" hidden>Y</span>
-      <input id="revB" type="number" step="0.5" value="0" hidden
-             title="軸的位置（cm）：⚠ 軸是一條【線】，所以要兩個座標才定得出來 —— 這跟「切一刀」只要一個數字不一樣">
-      <input id="revSeg" type="number" step="1" min="3" max="360" value="32" hidden
-             title="轉一圈分成幾格（跟圓柱的「分段」是同一個意思，預設 32）。格數越多越圓、面也越多">
-      <span id="revRange" class="lbl" hidden title="輪廓離中心線多遠。⚠ 最小值是 0 才表示頭尾有碰到中心線（轉出來才會是封閉的實體）"></span>
+      <input id="revB" type="number" step="0.5" value="0" hidden title="軸的位置（cm）">
+      <input id="revSeg" type="number" step="1" min="3" max="360" value="32" hidden title="轉一圈分成幾格">
+      <span id="revRange" class="lbl" hidden></span>
+      -->
+
       <!--
         刀具：kang 2026-08-25 要的「自由切」——
         「切一刀是要用數值控制...我不能真的自由切我想要的區塊..
