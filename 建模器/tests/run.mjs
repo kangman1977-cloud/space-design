@@ -12870,6 +12870,111 @@ section('擠出邊：從板子的外緣長出一片面（折邊／裙邊）');
      edit.extrudeBoundaryEdges(sh, [bnd[0], bnd[0]], 5).added, 1);
 }
 
+
+// ═══════════════════════════════════════════════════════
+section('旋轉成形（Spin／車床）—— 2026-09-02');
+// ═══════════════════════════════════════════════════════
+{
+  const { revolve } = await import('../js/build/revolve.js');
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const SEG = 32, R = 25, H = 70;
+  /** 正 n 邊形柱的體積（⛔ 不是 πr²h —— 我們轉出來的是 32 邊形）*/
+  const prismVol = (r, h, n) => 0.5 * n * Math.sin(2 * Math.PI / n) * r * r * h;
+
+  /**
+   * 🔴🔴 **繞向：唯一抓得到的是【體積是不是正的】。**
+   * 【實證 2026-09-02】第一版照直覺寫 `[a,b,c,d]` → 體積 −136563.225，
+   * 而那個模型**畫面上看起來完全正常** —— 只有匯出 STL 的列印前檢查才抓得到
+   * 〔`extrude.js` 檔頭記著同一個坑〕。
+   */
+  {
+    const r = revolve([V(0,0,0), V(R,0,0), V(R,H,0), V(0,H,0)], { axis:'y', a:0, b:0, seg:SEG });
+    ok('★★★ 圓柱轉得出來', r.ok, r.reason);
+    ok('★★★ 體積是【正】的（負的 ＝ 整個模型法向朝內，畫面上看不出來）',
+       r.ok && r.mesh.volume() > 0, r.ok ? String(r.mesh.volume()) : '');
+    near('★★★ 體積 ＝ 正 32 邊形柱（⛔ 不是 πr²h）',
+         r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+    ok('★★ 兩端碰到中心線 → 封閉（可以列印）', r.closed === true);
+    eq('★★ 極點 2 個', r.poles, 2);
+    /**
+     * ⭐ **極點只放【一個】頂點** —— 照放 32 個重疊的點也畫得出一模一樣的圖，
+     * 但那是非流形。V ＝ 2 ＋ 32×2 ＝ 66 就是在守這件事。
+     */
+    eq('★★★ 頂點數 ＝ 2 個極點 ＋ 32×2（⛔ 不是每圈都放一份極點）',
+       r.mesh.verts.length, 2 + SEG * 2);
+    eq('★★ 尤拉數 χ ＝ 2', r.mesh.verts.length - [...r.mesh.edges()].length + r.mesh.faces.length, 2);
+  }
+
+  /** 圓錐：一端收成尖 */
+  {
+    const r = revolve([V(0,0,0), V(R,0,0), V(0,H,0)], { axis:'y', a:0, b:0, seg:SEG });
+    near('★★ 圓錐體積 ＝ 柱的三分之一', r.mesh.volume(), prismVol(R, H, SEG) / 3, 1e-6);
+    eq('★ 圓錐也是 2 個極點（底心與頂尖）', r.poles, 2);
+  }
+
+  /**
+   * 🔴 **封閉的輪廓 → 環**。⚠ 這一項守的是「鋼筆畫的路徑預設就是封閉的」——
+   * 當成開放線處理會**少接一段**，而那個缺口在畫面上很難看出來。
+   */
+  {
+    const RR = 40, a = 6;
+    const sq = [V(RR-a,-a,0), V(RR+a,-a,0), V(RR+a,a,0), V(RR-a,a,0), V(RR-a,-a,0)];
+    const r = revolve(sq, { axis:'y', a:0, b:0, seg:SEG });
+    ok('★★★ 首尾同一點的輪廓 → 轉出封閉的環（⛔ 不可以少接一段）', r.ok && r.closed);
+    eq('★★ 環的面數 ＝ 4 段 × 32 格', r.mesh.faces.length, 4 * SEG);
+    eq('★★★ 首尾那個重複的點只放一份（⛔ 不是兩個疊在一起）',
+       r.mesh.verts.length, 4 * SEG);
+    /** 帕普斯：截面積 × 繞行周長。多邊形近似一定略小，但差距有上限 */
+    const exact = (2*a)*(2*a) * 2*Math.PI*RR;
+    ok('★★ 體積 ≈ 帕普斯定理（32 格的多邊形近似，比值 0.99 以上）',
+       r.mesh.volume() / exact > 0.99 && r.mesh.volume() / exact < 1, 
+       String(r.mesh.volume() / exact));
+  }
+
+  /** 沒碰到中心線 → 薄殼（開放），那正是板件 */
+  {
+    const r = revolve([V(20,0,0), V(30,0,0), V(30,10,0)], { axis:'y', a:0, b:0, seg:SEG });
+    ok('★★ 頭尾沒碰到中心線 → 開放的薄殼（⛔ 不是壞掉）', r.ok && r.closed === false);
+    eq('★ 沒有極點', r.poles, 0);
+  }
+
+  /**
+   * 🔴 **繞的方向那些邊要標 `smooth`。**
+   * ⚠ ⛔ 不標的話展開圖會把一個平滑的轉面標成幾百道折彎
+   * 〔2026-08-23 為它付過一次代價：展開圖從 5 處折彎變成 45 處〕。
+   */
+  {
+    const r = revolve([V(0,0,0), V(R,0,0), V(R,H,0), V(0,H,0)], { axis:'y', a:0, b:0, seg:SEG });
+    let n = 0;
+    for (const he of r.mesh.edges()) if (he.smooth) n++;
+    eq('★★★ smooth 邊 ＝ 非極點的 2 圈 × 32 格', n, 2 * SEG);
+  }
+
+  /** 擋關 */
+  {
+    const r = revolve([V(-10,0,0), V(10,0,0), V(10,20,0)], { axis:'y', a:0, b:0, seg:SEG });
+    ok('★★★ 跨過中心線要擋，而且要講「只畫一邊」',
+       !r.ok && /中心線/.test(r.reason || ''), r.reason);
+  }
+  ok('★ 只有 1 個點要擋',
+     !revolve([new THREE.Vector3(1,0,0)], { axis:'y', seg:SEG }).ok);
+  ok('★ 整條都在中心線上要擋',
+     !revolve([new THREE.Vector3(0,0,0), new THREE.Vector3(0,10,0)],
+              { axis:'y', a:0, b:0, seg:SEG }).ok);
+
+  /**
+   * 🔴 **軸擺在別的位置也要對** —— ⚠ 判準是「離軸多遠」，
+   * ⛔ 不是座標的正負（軸搬走之後正負就沒有意義了）。
+   */
+  {
+    const off = 100;
+    const r = revolve([V(off,0,0), V(off+R,0,0), V(off+R,H,0), V(off,H,0)],
+                      { axis:'y', a:off, b:0, seg:SEG });
+    near('★★★ 軸搬到 x＝100，體積跟搬之前一模一樣',
+         r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

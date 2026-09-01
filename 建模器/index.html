@@ -779,6 +779,36 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="separate" hidden title="分離：沿著選到的那一圈邊，把物件拆成兩個獨立的物件。先用「切一刀」或「環切」切一圈（切完會自動選中），再按這裡。⚠ 拆出來的斷面是空的，要補請用「補洞」">分離</button>
       <!--
+        旋轉成形（2026-09-02，kang 從 Blender 對照表挑的 —— 他自己正在想這件事）：
+        一條輪廓繞一根軸轉一圈 → 碗、罩、瓶、燈罩、圓頂、輪圈、環。
+
+        🔴 這一整類在這之前建不出來：「擠出」只會沿直線長，不會轉。
+
+        ⭐ 它跟「螺旋」是同一個地基 —— 螺旋 ＝ 這一顆 ＋ 一個
+           「每轉一圈往上走多少」的欄位。那個欄位這一輪還沒做。
+
+        🔴 軸要【兩個】座標，不是一個：
+           「切一刀」定的是一個平面（一個數字就夠），軸是一條線。
+           所以兩個座標欄的標籤跟著軸變（繞 Z 就顯示 X、Y）。
+
+        ⚠ 這一輪【沒有】只轉半圈與兩端封口 —— kang 拍板要做，排第 2 階段。
+      -->
+      <button id="revolve" hidden title="旋轉成形：把一條輪廓繞一根軸轉一圈，長成碗、罩、瓶、燈罩、圓頂。⭐ 兩種用法：①【物件模式】選一個鋼筆物件 → 用它畫的那條線 ②【編輯模式】選一串邊 → 用那串點。⚠ 輪廓的頭尾有碰到中心線就會轉成封閉的實體（可以列印），沒碰到就是一張薄殼（走展開切割，厚度用板厚欄位）。⚠ 轉出來會是一個【新的物件】，原本的不動">旋轉成形</button>
+      <select id="revAxis" hidden title="繞哪一根軸轉。⚠ 鋼筆畫的線是躺在地板上的，所以要繞【地板上的】X 或 Z 軸才轉得出立體 —— 繞 Y（垂直軸）只會得到一片平的">
+        <option value="x">繞 X</option>
+        <option value="y">繞 Y</option>
+        <option value="z" selected>繞 Z</option>
+      </select>
+      <span id="revLblA" class="lbl" hidden>X</span>
+      <input id="revA" type="number" step="0.5" value="0" hidden
+             title="軸的位置（cm）：空間裡的實際座標，跟對齊、貼合、切一刀看到的是同一套數字">
+      <span id="revLblB" class="lbl" hidden>Y</span>
+      <input id="revB" type="number" step="0.5" value="0" hidden
+             title="軸的位置（cm）：⚠ 軸是一條【線】，所以要兩個座標才定得出來 —— 這跟「切一刀」只要一個數字不一樣">
+      <input id="revSeg" type="number" step="1" min="3" max="360" value="32" hidden
+             title="轉一圈分成幾格（跟圓柱的「分段」是同一個意思，預設 32）。格數越多越圓、面也越多">
+      <span id="revRange" class="lbl" hidden title="輪廓離中心線多遠。⚠ 最小值是 0 才表示頭尾有碰到中心線（轉出來才會是封閉的實體）"></span>
+      <!--
         刀具：kang 2026-08-25 要的「自由切」——
         「切一刀是要用數值控制...我不能真的自由切我想要的區塊..
         　但是刀具我是想要是自由切」

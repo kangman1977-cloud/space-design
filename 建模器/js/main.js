@@ -15,7 +15,7 @@ import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, GUIDE_AXES }
   from './core/io.js';
-import { defaultSrc, PRIM_SPECS, isSheetPrim } from './build/prim.js';
+import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
   from './build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
@@ -37,6 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
+import { revolve, AXIS_FIELDS } from './build/revolve.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick } from './core/selectops.js';
@@ -725,6 +726,10 @@ $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeUndoDel').onclick = () => undoKnifeDelete();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
+$('revolve').onclick = () => revolveSelected();
+$('revAxis').onchange = () => { updateRevolveLabels(); updateRevolveRange(); };
+$('revA').oninput = () => updateRevolveRange();
+$('revB').oninput = () => updateRevolveRange();
 $('vertDots').onclick = () => toggleVertexDots();
 $('measureHud').onclick = () => toggleMeasureHud();
 $('measureCircle').onclick = () => toggleMeasureCircle();
@@ -2865,6 +2870,165 @@ function bisectSelected() {
  * 所以走的是「打散」那條路（`doc.remove` ＋ `doc.add`），
  * ⛔ 不是 `obj.setMesh()`。
  */
+/**
+ * 🔴 **旋轉成形：一條輪廓繞一根軸轉一圈**（2026-09-02）。
+ *
+ * ── 輪廓從哪來：兩個入口（kang 拍板「兩種都要」）─────────
+ * | 模式 | 選什麼 | 輪廓 |
+ * |---|---|---|
+ * | 物件 | 一個**鋼筆**物件 | 它畫的那條線（`flattenPenPath()` 壓成折線）|
+ * | 編輯 | 一串**邊** | 那串邊的點，照選取順序 |
+ *
+ * ⭐ **兩個入口最後都變成同一種東西：一串 `THREE.Vector3`** ——
+ * 幾何那一支（`revolve()`）只認得那個，⛔ 不認識鋼筆也不認識選取
+ * 〔kang 批准的四動作框架：新功能 ＝ 既有零件換個組合〕。
+ *
+ * ── ⚠ 為什麼是「新增一個物件」，⛔ 不是就地改 ───────────
+ * 輪廓那個東西（鋼筆物件、或被選中那條邊所屬的模型）**使用者還要用**。
+ * ⭐ 做法照 `分離` 抄：`src:{type:'mesh'}` ＋ `recenterOrigin()`。
+ */
+/**
+ * 「旋轉成形那一組上一次是不是出現著」——
+ * ⚠ 用來只在**剛出現的那一瞬間**填軸的預設座標，⛔ 不是每次都填。
+ */
+let revWasOn = false;
+
+function revolveSelected() {
+  const pts = revolveProfile();
+  if (!pts.ok) { toast(pts.reason, true); return; }
+
+  const axis = $('revAxis').value;
+  const a = +$('revA').value, b = +$('revB').value;
+  const seg = +$('revSeg').value;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) {
+    toast('軸的位置要打兩個數字', true); return;
+  }
+
+  const r = revolve(pts.points, { axis, a, b, seg });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  const from = pts.obj;
+  const obj = new ModelObject({
+    name: `${from.name}－轉`,
+    /**
+     * 🔴 **種類看它轉出來封不封閉，⛔ 不照抄來源物件。**
+     * 頭尾碰到中心線 → 封閉的實體（可以列印）；沒碰到 → 一張薄殼，
+     * 那正是這個專案的**板件**（厚度由板厚欄位在匯出時才加）。
+     */
+    kind: r.closed ? KIND.SOLID : KIND.SHEET,
+    src: { type: 'mesh' },
+    mesh: r.mesh,
+    color: from.color,
+    thickness: from.thickness,
+    lockScale: from.lockScale
+  });
+  doc.add(obj);
+  recenterOrigin(obj);
+  view.sync(doc);
+  sel.set([obj.id]);
+  panel.analysisCache.clear();
+  commit('旋轉成形');
+  updateBar();
+
+  /**
+   * ⚠ 講出**使用者自己驗得出來的數字**（坑第 11 條：只說「做好了」等於沒說）。
+   * ⭐ 面數 ＝ 格數 × 段數，而段數是他畫的點數減一 —— 他數得出來。
+   */
+  const bits = [
+    `已轉出「${obj.name}」　${r.rings} 格 × ${r.mesh.faces.length / r.rings} 段`
+      + ` ＝ ${r.mesh.faces.length} 個面`
+  ];
+  bits.push(r.closed
+    ? '輪廓頭尾有碰到中心線 → 轉成【封閉的實體】，可以直接列印'
+    : '輪廓頭尾沒碰到中心線 → 轉成【一張薄殼】（板件），厚度用上面的「板厚」');
+  if (r.poles) bits.push(`有 ${r.poles} 端收成一個尖`);
+  toast(bits.join('　'));
+}
+
+/**
+ * 取輪廓：兩個入口都回「一串世界座標的點」。
+ * ⚠ **⛔ 不在這裡做任何幾何** —— 那是 `revolve()` 的事。
+ */
+function revolveProfile() {
+  // ① 編輯模式：選到的那一串邊
+  const els = sel.editSels;
+  if (sel.editMode && els.length) {
+    if (els.some(e => e.kind !== 'edge')) {
+      return { ok: false, reason: '「旋轉成形」要一串邊 —— 把上面那排切到「邊」，再選那條線' };
+    }
+    const obj = els[0].obj;
+    const M = obj.matrix();
+    /**
+     * ⚠ **照選取順序把邊接成一串點**，⛔ 不是把端點倒出來就算 ——
+     * 那樣點的順序是亂的，轉出來會自己纏在一起。
+     */
+    const out = [];
+    for (const e of els) {
+      const p0 = e.he.v.p.clone().applyMatrix4(M);
+      const p1 = e.he.to.p.clone().applyMatrix4(M);
+      if (!out.length) { out.push(p0, p1); continue; }
+      const last = out[out.length - 1];
+      if (last.distanceTo(p0) < 1e-6) out.push(p1);
+      else if (last.distanceTo(p1) < 1e-6) out.push(p0);
+      else return { ok: false, reason: '選到的邊沒有接成一條線 —— 請用「選一條線」選連續的那一串' };
+    }
+    return { ok: true, points: out, obj };
+  }
+
+  // ② 物件模式：一個鋼筆物件
+  const obj = sel.active;
+  if (!obj) {
+    return { ok: false, reason: '先選一個鋼筆物件，或按「拉點線面」進編輯模式選一串邊' };
+  }
+  if (!obj.src || obj.src.type !== 'pen') {
+    return {
+      ok: false,
+      reason: `「${obj.name}」不是鋼筆畫的 —— 旋轉成形要一條線當輪廓。`
+            + '請用鋼筆畫一條（記得按「不封口」），或進編輯模式選一串邊'
+    };
+  }
+  const paths = obj.src.paths || [];
+  if (!paths.length) return { ok: false, reason: '這支鋼筆還沒有畫出任何一條線' };
+  if (paths.length > 1) {
+    return { ok: false, reason: `這支鋼筆有 ${paths.length} 條線 —— 旋轉成形一次只轉一條` };
+  }
+  /**
+   * ⚠ **`open` 是整個物件一個旗標，⛔ 不是每條路徑各存一份**
+   * 〔`prim.js` 的 `pen()` 逐字寫著這條，⛔ 不要改成看 `path.closed`〕。
+   */
+  const flat = flattenPenPath({ ...paths[0], closed: !obj.src.open }, obj.src.tol);
+  if (flat.length < 2) return { ok: false, reason: '這條線上的點太少，轉不出東西' };
+  const M = obj.matrix();
+  /** ⚠ 輪廓的 (x, y) 對到世界的 (x, z) —— 跟擠出件同一套對應 */
+  const points = flat.map(p => new THREE.Vector3(p.x, 0, p.y).applyMatrix4(M));
+  return { ok: true, points, obj };
+}
+
+/** 兩個座標欄的標籤跟著軸變（軸是一條線，⛔ 一個數字定不出來）*/
+function updateRevolveLabels() {
+  const f = AXIS_FIELDS[$('revAxis').value] || AXIS_FIELDS.z;
+  $('revLblA').textContent = f[0].toUpperCase();
+  $('revLblB').textContent = f[1].toUpperCase();
+}
+
+/**
+ * 🔴 **把「輪廓離中心線多遠」印出來** —— 照 `切一刀` 的 `bisectRange` 那條理由：
+ * **使用者不看範圍是猜不出來要打什麼數字的**（物件被搬過位置之後更猜不到）。
+ * ⭐ 而這裡多一件事要講：**最小值是 0 才表示頭尾碰到中心線** ——
+ * 那正是「轉出來是實體還是薄殼」的分水嶺，⛔ 不講的話他只能按了才知道。
+ */
+function updateRevolveRange() {
+  const span = $('revRange');
+  if (!span || span.hidden) return;
+  const p = revolveProfile();
+  if (!p.ok) { span.textContent = ''; return; }
+  const axis = $('revAxis').value;
+  const r = revolve(p.points, { axis, a: +$('revA').value, b: +$('revB').value, seg: 3 });
+  if (!r.ok) { span.textContent = ''; return; }
+  span.textContent = `離中心線 ${fmtCm(r.profileR.min)} ～ ${fmtCm(r.profileR.max)}`
+    + (r.profileR.min <= 1e-4 ? '（碰到了 → 實體）' : '（沒碰到 → 薄殼）');
+}
+
 function separateSelected() {
   const els = sel.editSels;
   if (!sel.editMode || !els.length) {
@@ -5035,6 +5199,52 @@ function updateBar() {
       + '只加線不改形狀，切完那一圈會自動選中'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
   updateBisectRange();
+
+  /**
+   * 🔴 **旋轉成形：兩個入口，兩個條件**（2026-09-02）。
+   *
+   * ⚠ **⛔ 不可以只寫 `sel.editMode`** —— 主線用法是**物件模式選一個鋼筆物件**
+   * （鋼筆才畫得出碗那種彎的輪廓；編輯模式選邊只選得到既有模型上的線）。
+   *
+   * ⚠ **這一組六個控制項的 `hidden` 兩端都要有** ——
+   * HTML 的初始屬性 ＋ 這裡的指派。⛔ 只改一端 ＝ 沒改
+   * 〔鐵律二；2026-08-31 為它付過代價：34 顆按鈕看得到卻按不下去〕。
+   */
+  const canRevolve =
+    (sel.editMode && sel.editSels.length && sel.editSels.every(e => e.kind === 'edge'))
+    || (!sel.editMode && sel.active && sel.active.src && sel.active.src.type === 'pen');
+  for (const id of ['revolve', 'revAxis', 'revLblA', 'revA', 'revLblB', 'revB',
+                    'revSeg', 'revRange']) {
+    $(id).hidden = !canRevolve;
+  }
+  $('revolve').title = canRevolve
+    ? '把這條輪廓繞旁邊指定的那根軸轉一圈 → 碗、罩、瓶、燈罩、圓頂。'
+      + '⚠ 轉出來是一個新的物件，原本的不動'
+    : '先選一個【鋼筆】物件（記得按「不封口」），'
+      + '或按「拉點線面」進編輯模式、把過濾器切到「邊」選一串邊';
+  updateRevolveLabels();
+  /**
+   * 🔴🔴 **這一組剛出現時，把軸的座標填成輪廓的第一個點。**
+   *
+   * ⚠ **⛔ 這不是貼心，是這個功能沒有它就有一半用不到**
+   * 〔鐵律五：開清單之前問「**使用者產得出那個輸入嗎**」，2026-09-02 問出來的〕：
+   * **要轉出封閉的實體，輪廓的端點得【剛好】落在軸上**（容許值 1 微米），
+   * 而**手畫的線幾乎不可能剛好** ⇒ ⛔ 不填的話他永遠只做得出薄殼。
+   *
+   * ⭐ 做法照 `變成正圓` 的半徑欄抄：**自動填一個算得出來的值，而且打數字蓋得掉**。
+   * ⚠ **只在「從沒得按變成可以按」的那一瞬間填** —— ⛔ 每次 `updateBar()`
+   * 都填的話，使用者自己打的數字會被一直洗掉。
+   */
+  if (canRevolve && !revWasOn) {
+    const p = revolveProfile();
+    if (p.ok && p.points.length) {
+      const f = AXIS_FIELDS[$('revAxis').value] || AXIS_FIELDS.z;
+      $('revA').value = +p.points[0][f[0]].toFixed(3);
+      $('revB').value = +p.points[0][f[1]].toFixed(3);
+    }
+  }
+  revWasOn = canRevolve;
+  updateRevolveRange();
 
   /**
    * 連接兩點：**正好選到兩個點才給按。**
