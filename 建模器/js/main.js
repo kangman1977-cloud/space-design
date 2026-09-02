@@ -773,6 +773,33 @@ $('editNum').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); $('editNum').blur(); }
 });
 $('editNum').addEventListener('change', () => commitEditNumber());
+
+/**
+ * 🔴 **比例編輯的影響半徑**（kang 2026-09-02 拍板，三顆裡的第一顆）。
+ *
+ * ⚠ **入口只走 `change`，⛔ 不接 `input`** —— 邊打邊算會在打「20」的
+ * 中途先用 2 算一次，而算一次要走訪整個網格。〔跟 `editNum` 同一條：
+ * Enter 只負責離開欄位，動作只走一條路〕
+ *
+ * ⭐ **講出「會動到幾個點」**：那個數字要跟畫面上變色的點對得起來
+ * （鐵律三：讓兩個數字互相對得起來）。⛔ 沉默地改一個看不見的設定最糟。
+ */
+$('propR').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('propR').blur(); }
+});
+$('propR').addEventListener('change', () => {
+  const r = sel.setPropRadius($('propR').value);
+  // 欄位寫回去：打了負數或亂字元時，要看得到它被當成 0（⛔ 不沉默修正）
+  $('propR').value = String(r.radius);
+  if (!r.radius) {
+    toast('影響半徑 0：只動選到的那些點（拉出來會是一個尖角）');
+  } else if (!r.affected) {
+    toast(`影響半徑 ${r.radius} 公分。⚠ 還沒選任何點／邊／面，選了才看得到範圍`);
+  } else {
+    toast(`影響半徑 ${r.radius} 公分：這樣拉會動到 ${r.affected} 個點（橘色的那些）`);
+  }
+});
+
 $('unfold').onclick = () => unfoldWin.open();
 $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
@@ -2153,11 +2180,20 @@ function editPick(el, info = {}) {
     toast('不能跨物件多選（變換寫回的是某一個網格的座標）。已改成從這裡重新開始', true);
   }
 
+  /**
+   * ⚠ **影響半徑開著的時候一定要講「會動到幾個點」。**
+   * 選了一個點卻有 80 個點跟著動，那是使用者最需要先知道的事 ——
+   * ⛔ 讓他拉下去才發現，就是坑第 11 條。
+   */
+  const propNote = sel.propRadius > 0
+    ? `　影響半徑 ${sel.propRadius} 公分 → 會動到 ${sel.propAffectedCount()} 個點`
+    : '';
+
   const n = sel.editCount;
   if (n > 1) {
     const vs = elementVerts(el.obj.mesh(), sel.editSels).length;
     // 講頂點數是因為相鄰的面共用頂點 —— 「3 個面」不等於「3×4 個頂點」
-    toast(`已選 ${n} 個${EDIT_NAME[el.kind]}（共 ${vs} 個頂點）　橘色的是最後選的`);
+    toast(`已選 ${n} 個${EDIT_NAME[el.kind]}（共 ${vs} 個頂點）　橘色的是最後選的${propNote}`);
   } else {
     let extra = '';
     if (el.kind === 'face') {
@@ -2165,7 +2201,7 @@ function editPick(el, info = {}) {
       // 講出頂點數，因為「面」是共面區域不是三角形，這是使用者最容易誤會的地方
       extra = `（共面區域，${vs} 個頂點）`;
     }
-    if (!info.note) toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它`);
+    if (!info.note) toast(`選到一個${EDIT_NAME[el.kind]}${extra}，用箭頭拉它${propNote}`);
   }
   panel.refresh();
   /**

@@ -4987,6 +4987,106 @@ export function snapshotVerts(verts) {
   return (verts || []).map(v => v.p.clone());
 }
 
+// ═══════════════════════════════════════════════════════
+//  比例編輯：拉一個點，周圍照影響半徑跟著平滑地動
+// ═══════════════════════════════════════════════════════
+
+/** 影響半徑的預設值（cm）。0 ＝ 關掉，行為跟沒有這個功能時完全一樣。 */
+export const PROP_DEFAULT_RADIUS = 0;
+
+/**
+ * 🔴 **衰減曲線：「平滑」（smoothstep）。kang 2026-09-02 拍板只做這一條。**
+ *
+ * ── 為什麼是它，而不是量起來更漂亮的那一條 ──────────────
+ * 沙箱量過六條（平板 100×100、拉 10 cm、影響半徑 30 cm，分開量
+ * **中心附近**與**範圍邊緣**的最大折角，三種格子密度）：
+ *
+ * ```
+ *            格子 10cm      格子 5cm       格子 2.5cm
+ *   平滑     24.9 / 20.1    15.8 / 15.5     8.8 /  9.4
+ *   球        8.9 / 36.7     4.4 / 47.9     2.3 / 68.9
+ *   直線     25.0 / 18.4    25.0 / 18.4    25.0 / 18.4
+ *   尖       34.1 / 11.9    38.2 /  7.6    40.1 /  3.9
+ * ```
+ *
+ * 🔴🔴 **「球」是陷阱**：只量中心的話它大勝（在球體上量到 14.8° vs 27.0°，
+ * 第一版的建議就是這樣來的）—— 但它的導數在 `d = R` 是**無限大**，
+ * 折痕整個被推到**影響範圍的邊緣**去，而且**點越密越嚴重**（36.7 → 68.9）。
+ * ⚠ 這跟「固定」被刷掉是同一個病：**尖角沒有消失，只是換了地方**。
+ *
+ * ⭐ **`smoothstep` 兩端的導數都是 0**，所以中心不尖、邊緣也接得平 ——
+ * 它是唯一一條「**點加得越密，中心與邊緣一起變好**」的。
+ * 〔這也正是 Blender 拿它當預設的原因。全部經過與量測條件見
+ * 　`規格\建模器-比例編輯.md`〕
+ *
+ * @param {number} t 0（在影響範圍的邊緣）～ 1（就是被拉的那個點）
+ */
+export function propFalloff(t) {
+  if (!(t > 0)) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 拖曳開始時算一次：**哪些點要跟著動、各動多少**。
+ *
+ * 距離量的是**直線距離**，⛔ 不是沿著表面繞過去的距離。
+ *
+ * ── 🔴 為什麼是直線距離（2026-09-02 量過才決定的）────────
+ * 管子外壁 r25、內壁 r20（**壁厚 5 cm**），拉外壁一個點：影響半徑一超過
+ * 壁厚，**背面就有一半的點跟著動**（半徑 8 cm 起穩定在 50%）。
+ *
+ * ⭐ **而那是對的**：安全帽那一類是**有厚度的殼**，正面凸一塊，
+ * 背面本來就該跟著凸 —— 否則殼會被拉薄。
+ * 改用沿表面的距離，背面得繞過整個帽緣才到得了 ⇒ 背面完全不動
+ * ⇒ **壁厚被破壞**，那才是壞事。〔Blender 的預設也是直線距離〕
+ *
+ * ⚠ **會誤傷的只有一種**：兩片**應該各自獨立**的表面靠得很近
+ * （凹槽的兩壁、摺起來的兩片）。遇到再說，⛔ 不預先設計退路（鐵律六）。
+ *
+ * ── ⚠ 成本 ────────────────────────────────────────────
+ * O(選到的點數 × 全部點數)。**只在拖曳開始時跑一次**，⛔ 不在每幀迴圈裡
+ * （坑第 3、22 條）。選到的通常是個位數，全部點數幾千 —— 一次幾萬次距離
+ * 平方，遠低於一幀要畫的三角形。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[]} core 選到的那些點（權重固定 1）
+ * @param {number} radius 影響半徑 cm。<= 0 ＝ 關掉
+ * @returns {{verts: Vertex[], weights: number[]}}
+ *          `radius <= 0` 時回傳的就是 core 本身、權重全 1 ——
+ *          ⭐ 呼叫端因此**不必分支**，關掉這個功能走的是同一條路。
+ */
+export function proportionalVerts(mesh, core, radius) {
+  const coreArr = core || [];
+  if (!mesh || !(radius > 0) || !coreArr.length) {
+    return { verts: coreArr, weights: coreArr.map(() => 1) };
+  }
+
+  const inCore = new Set(coreArr);
+  const verts = coreArr.slice();
+  const weights = coreArr.map(() => 1);
+  const r2 = radius * radius;
+
+  for (const v of mesh.verts) {
+    if (!v.he || inCore.has(v)) continue;
+    /**
+     * 離**最近的**那個核心點多遠。選了一整圈邊的時候，
+     * 影響範圍就是那一圈各自往外長出來的聯集 —— 這是唯一講得通的定義。
+     */
+    let best = Infinity;
+    for (const c of coreArr) {
+      const d2 = v.p.distanceToSquared(c.p);
+      if (d2 < best) best = d2;
+    }
+    if (best > r2) continue;
+    const w = propFalloff(1 - Math.sqrt(best) / radius);
+    if (w <= 0) continue;
+    verts.push(v);
+    weights.push(w);
+  }
+  return { verts, weights };
+}
+
 /** 把快照寫回去 ＝ 取消。取消因此不是一個功能，是「什麼都不做」。 */
 export function restoreVerts(verts, base) {
   if (!verts || !base || verts.length !== base.length) return 0;
@@ -5011,18 +5111,39 @@ export function restoreVerts(verts, base) {
  * @param {THREE.Vector3[]} base 對應 verts 的初始座標（snapshotVerts 拍的）
  * @param {{pos:THREE.Vector3, quat:THREE.Quaternion}} start
  * @param {{pos:THREE.Vector3, quat:THREE.Quaternion, scale?:THREE.Vector3}} now
+ *
+ * ── 🔴 比例編輯就加在這裡，而且只有一行 ──────────────────
+ * `weights` 給了的話，每個點**走完整條變換之後，再照權重往回收**：
+ *
+ *     結果 ＝ 沒動過的位置 ＋（套完變換的位置 － 沒動過的位置）× 權重
+ *
+ * 權重 1 ＝ 完全照做（就是沒有這個功能時的行為），0 ＝ 動都不動。
+ * ⭐ **移動、旋轉、縮放三種都自動吃到** —— 收的是「位移」，
+ * ⛔ 不是去插值那個矩陣。
+ *
+ * ⚠ **旋轉時這是「位置的線性插值」，⛔ 不是「角度的插值」** ——
+ * 半徑內的點走的是**直線**而不是圓弧。Blender 的比例編輯也是這樣做的：
+ * 差別只在轉很大角度時邊緣會略往內縮，而那個量比格子還小。
+ * 〔真要走圓弧就得對每個點各算一次矩陣，代價不成比例〕
+ *
+ * @param {number[]} [weights] 對應 verts 的權重（0～1）。⛔ 不給 ＝ 全部 1。
  * @returns {number} 實際寫入的頂點數
  */
-export function applyElementTransform(verts, base, start, now) {
+export function applyElementTransform(verts, base, start, now, weights = null) {
   if (!verts || !base || verts.length !== base.length || !verts.length) return 0;
   if (!start || !now) return 0;
+  if (weights && weights.length !== verts.length) return 0;
 
   const ONE = new THREE.Vector3(1, 1, 1);
   const m0 = new THREE.Matrix4().compose(start.pos, start.quat, ONE);
   const m1 = new THREE.Matrix4().compose(now.pos, now.quat, now.scale || ONE);
   const m = m1.multiply(m0.invert());
 
-  for (let i = 0; i < verts.length; i++) verts[i].p.copy(base[i]).applyMatrix4(m);
+  for (let i = 0; i < verts.length; i++) {
+    const p = verts[i].p.copy(base[i]).applyMatrix4(m);
+    const w = weights ? weights[i] : 1;
+    if (w !== 1) p.sub(base[i]).multiplyScalar(w).add(base[i]);
+  }
   return verts.length;
 }
 

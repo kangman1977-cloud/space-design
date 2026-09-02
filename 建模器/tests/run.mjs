@@ -13017,6 +13017,160 @@ section('旋轉成形（Spin／車床）—— 2026-09-02');
   }
 }
 
+// ═══════════════════════════════════════════════════════
+//  比例編輯（2026-09-02）
+// ═══════════════════════════════════════════════════════
+
+section('比例編輯：拉一個點，周圍照影響半徑跟著動');
+
+{
+  /**
+   * 🔴 **保命線：半徑 0 ＝ 這個功能不存在。**
+   * ⛔ 這一組壞掉就表示既有行為被改動了，比任何新功能沒做好都嚴重。
+   */
+  const m = buildPrim('plate', { w: 100, d: 100, segW: 10, segD: 10 });
+  const core = [m.verts[0]];
+  const r = edit.proportionalVerts(m, core, 0);
+  eq('半徑 0：跟著動的就是選到的那些，一個都不多', r.verts.length, 1);
+  eq('半徑 0：權重是 1（＝完全照做）', r.weights[0], 1);
+  ok('半徑 0：回傳的就是原本那一份', r.verts[0] === core[0]);
+
+  const neg = edit.proportionalVerts(m, core, -5);
+  eq('負的半徑當成關掉，⛔ 不是報錯', neg.verts.length, 1);
+}
+
+{
+  // 衰減曲線本身：兩端要接得平，中間要對稱
+  near('平滑曲線：在範圍邊緣是 0', edit.propFalloff(0), 0, 1e-12);
+  near('平滑曲線：在被拉的那一點是 1', edit.propFalloff(1), 1, 1e-12);
+  near('平滑曲線：正中間剛好一半', edit.propFalloff(0.5), 0.5, 1e-12);
+  ok('平滑曲線：範圍外（t<0）一律 0', edit.propFalloff(-0.3) === 0);
+  ok('平滑曲線：t>1 一律 1', edit.propFalloff(1.7) === 1);
+
+  /**
+   * ★ **兩端的斜率都要是 0 —— 這就是選它而不選「球」的整個理由。**
+   * 「球」在 t＝0（範圍邊緣）斜率無限大，折痕會整個堆在邊緣，
+   * 而且點越密越嚴重（沙箱量到 36.7° → 68.9°）。
+   */
+  const h = 1e-4;
+  near('★ 邊緣那一端斜率是 0（折痕不會堆在範圍邊上）',
+       (edit.propFalloff(h) - edit.propFalloff(0)) / h, 0, 1e-3);
+  near('★ 中心那一端斜率也是 0（拉出來不是尖角）',
+       (edit.propFalloff(1) - edit.propFalloff(1 - h)) / h, 0, 1e-3);
+}
+
+{
+  // 板子 100×100 切成 10×10 格 → 格距 10cm，距離算得出來
+  const m = buildPrim('plate', { w: 100, d: 100, segW: 10, segD: 10 });
+  // 挑正中央那個點（x＝0、z＝0）
+  const c = m.verts.find(v => v.he && Math.hypot(v.p.x, v.p.z) < 1e-9);
+  ok('板子中央找得到一個點', !!c);
+
+  const R = 25;                       // 半徑 25 ＝ 兩格半
+  const r = edit.proportionalVerts(m, [c], R);
+  const wOf = new Map(r.verts.map((v, i) => [v, r.weights[i]]));
+
+  eq('選到的那個點權重是 1', wOf.get(c), 1);
+  ok('範圍內的點都進來了', r.verts.length > 1);
+
+  let outside = 0, wrong = 0;
+  for (const v of m.verts) {
+    if (!v.he) continue;
+    const d = Math.hypot(v.p.x - c.p.x, v.p.z - c.p.z);
+    const w = wOf.get(v);
+    if (d > R + 1e-9) { if (w !== undefined) outside++; continue; }
+    // 範圍內：權重要等於曲線算出來的值
+    const want = edit.propFalloff(1 - d / R);
+    if (want > 0 && Math.abs((w ?? 0) - want) > 1e-9) wrong++;
+  }
+  eq('★ 半徑外的點一個都沒被收進來', outside, 0);
+  eq('★ 半徑內每個點的權重都等於曲線算出來的值', wrong, 0);
+
+  // 距離越遠權重越小（同一排上的三個點）
+  const at = x => m.verts.find(v => v.he
+    && Math.abs(v.p.x - x) < 1e-9 && Math.abs(v.p.z) < 1e-9);
+  const w10 = wOf.get(at(10)), w20 = wOf.get(at(20));
+  ok('離 10cm 的點比離 20cm 的動得多', w10 > w20 && w20 > 0);
+}
+
+{
+  /**
+   * ★★★ **兩條路要對得起來**：權重全給 1，結果必須跟「⛔ 不給權重」
+   * 一模一樣 —— 這證明比例編輯是**疊在既有那條路上**，⛔ 不是另一條。
+   */
+  const mk = () => {
+    const m = buildPrim('plate', { w: 100, d: 100, segW: 6, segD: 6 });
+    m.computeNormals();
+    return m;
+  };
+  const mA = mk(), mB = mk();
+  const pick = m => m.verts.filter(v => v.he).slice(0, 4);
+
+  const vA = pick(mA), bA = edit.snapshotVerts(vA);
+  const vB = pick(mB), bB = edit.snapshotVerts(vB);
+  const start = { pos: new THREE.Vector3(0, 0, 0), quat: new THREE.Quaternion() };
+  const now   = { pos: new THREE.Vector3(0, 7, 0), quat: new THREE.Quaternion() };
+
+  edit.applyElementTransform(vA, bA, start, now);                       // 舊路
+  edit.applyElementTransform(vB, bB, start, now, vB.map(() => 1));      // 新路、權重全 1
+
+  let maxd = 0;
+  for (let i = 0; i < vA.length; i++) maxd = Math.max(maxd, vA[i].p.distanceTo(vB[i].p));
+  near('★★★ 權重全 1 ＝ 沒有比例編輯（每個頂點都在同一個位置）', maxd, 0, 1e-12);
+}
+
+{
+  // 權重真的有打折：0.5 的點只走一半
+  const m = buildPrim('plate', { w: 100, d: 100, segW: 4, segD: 4 });
+  const vs = m.verts.filter(v => v.he).slice(0, 3);
+  const base = edit.snapshotVerts(vs);
+  const start = { pos: new THREE.Vector3(0, 0, 0), quat: new THREE.Quaternion() };
+  const now   = { pos: new THREE.Vector3(0, 10, 0), quat: new THREE.Quaternion() };
+
+  edit.applyElementTransform(vs, base, start, now, [1, 0.5, 0]);
+  near('權重 1 的點走滿 10', vs[0].p.y - base[0].y, 10, 1e-9);
+  near('權重 0.5 的點只走 5', vs[1].p.y - base[1].y, 5, 1e-9);
+  near('★ 權重 0 的點紋風不動', vs[2].p.y - base[2].y, 0, 1e-12);
+}
+
+{
+  /**
+   * ⚠ 權重的長度跟頂點對不上 → **⛔ 一個字都不准寫**。
+   * 〔跟「沒有快照就什麼都不做」同一條：寧可這一幀不動，
+   * 　也不要拿錯的基準把模型悄悄改成另一個形狀〕
+   */
+  const m = buildPrim('plate', { w: 100, d: 100, segW: 4, segD: 4 });
+  const vs = m.verts.filter(v => v.he).slice(0, 3);
+  const base = edit.snapshotVerts(vs);
+  const before = vs.map(v => v.p.clone());
+  const start = { pos: new THREE.Vector3(0, 0, 0), quat: new THREE.Quaternion() };
+  const now   = { pos: new THREE.Vector3(0, 10, 0), quat: new THREE.Quaternion() };
+
+  const n = edit.applyElementTransform(vs, base, start, now, [1, 0.5]);   // 少一個
+  eq('權重長度不符：回 0', n, 0);
+  let moved = 0;
+  for (let i = 0; i < vs.length; i++) if (vs[i].p.distanceTo(before[i]) > 1e-12) moved++;
+  eq('★ 權重長度不符：一個頂點都沒被動到', moved, 0);
+}
+
+{
+  /**
+   * 🔴 **薄殼：影響半徑一超過壁厚，背面就會跟著動 —— 而那是對的。**
+   * 〔管子 外 r25／內 r20 ＝ 壁厚 5。改用沿表面的距離，背面得繞過整個
+   * 　管口才到得了 ⇒ 背面完全不動 ⇒ 壁厚被破壞。理由見 proportionalVerts()〕
+   */
+  const m = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 });
+  const outer = m.verts.find(v => v.he
+    && Math.abs(Math.hypot(v.p.x, v.p.z) - 25) < 1e-6);
+  ok('管子外壁找得到一個點', !!outer);
+
+  const inner = r => edit.proportionalVerts(m, [outer], r).verts
+    .filter(v => Math.hypot(v.p.x, v.p.z) < 22.5).length;
+
+  eq('半徑 3（比壁厚 5 小）：背面一個點都沒被拉到', inner(3), 0);
+  ok('半徑 12（比壁厚大）：背面有點跟著動（殼才不會被拉薄）', inner(12) > 0);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

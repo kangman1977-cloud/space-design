@@ -1164,9 +1164,21 @@ export class SceneView {
    *
    * ⚠ **只在網格或選取變動時呼叫**，⛔ 不要放進每幀迴圈（坑第 22 條）。
    *
+   * ── 🔴 `weights`：比例編輯的影響範圍就畫在這裡（2026-09-02）──────
+   * 給了權重就**逐點上色**：0 ＝ 原本的白（完全不會跟著動），
+   * 1 ＝ 滿的橘（就是被拉的那些）。中間照權重混色，
+   * 所以**顏色的濃淡直接就是「這個點會跟著動多少」**。
+   *
+   * ⚠ **⛔ 不改點的大小**，只改顏色 —— 大小是「這裡有一個點」的訊息，
+   * 混進第二個意思會讓兩件事都看不清楚。
+   *
+   * ⭐ 一樣是**整批一個 `Points`**：加一條 color attribute 而已，
+   * ⛔ 沒有多出任何一個物件，效能跟原本一樣。
+   *
    * @param {THREE.Vector3[]} worldPts 世界座標的點，空陣列 ＝ 清掉
+   * @param {number[]} [weights] 對應 `worldPts` 的權重 0～1。⛔ 不給 ＝ 全白
    */
-  setVertexDots(worldPts) {
+  setVertexDots(worldPts, weights = null) {
     this.clearVertexDots();
     if (!worldPts || !worldPts.length) return;
 
@@ -1175,8 +1187,26 @@ export class SceneView {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 
+    /**
+     * ⚠ 長度對不上就當作沒給。**寧可全白，也不要讓一半的點染到別人的權重**
+     * —— 誤報比漏報更糟（鐵律三）。
+     */
+    const useW = Array.isArray(weights) && weights.length === worldPts.length;
+    if (useW) {
+      const col = new Float32Array(worldPts.length * 3);
+      for (let i = 0; i < worldPts.length; i++) {
+        const w = Math.max(0, Math.min(1, Number(weights[i]) || 0));
+        // 白 (1,1,1) → 橘 (1, 0.42, 0.13)：R 不動，G/B 隨權重降下去
+        col[i * 3]     = 1;
+        col[i * 3 + 1] = 1 - 0.58 * w;
+        col[i * 3 + 2] = 1 - 0.87 * w;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    }
+
     const pts = new THREE.Points(geo, new THREE.PointsMaterial({
       color: 0xffffff,
+      vertexColors: useW,
       size: 7,
       sizeAttenuation: false,     // ★ 固定螢幕大小
       depthTest: false            // 被面擋住的點也要看得到，否則背面的點找不到

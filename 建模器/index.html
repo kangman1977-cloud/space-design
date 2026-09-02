@@ -1010,6 +1010,17 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="editNum" type="number" step="0.1" hidden
              title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
       <span id="editNumUnit" class="unit">—</span>
+      <!--
+        🔴 **比例編輯的影響半徑**（kang 2026-09-02 拍板要做，三顆裡的第一顆）。
+        ⭐ **做成欄位⛔ 不做成滾輪**：Blender 是拖曳中滾滾輪即時改，
+        而**平板沒有滾輪** —— 那會讓一半的驗收環境用不了這個功能。
+        ⚠ **0 ＝ 關掉**，行為跟沒有這個功能時一模一樣（那是保命線）。
+      -->
+      <span class="lbl" id="propRLbl"
+            title="拉一個點的時候，周圍多大範圍要跟著動。填 0 ＝ 關掉，只動選到的那些點（會拉出一個尖角）。填了之後，越靠近的點動越多、越遠的越少，到這個距離就完全不動">影響半徑</span>
+      <input id="propR" type="number" step="1" min="0" value="0"
+             title="單位公分。⚠ 拉得越猛，這裡就要開得越大 —— 順不順看的是「拉多遠 ÷ 這個半徑」。填完畫面上的點會依「跟著動多少」由白轉橘，橘的就是會動的">
+      <span class="unit">公分</span>
     </div>
 
     <div class="grp" id="gUnfold">

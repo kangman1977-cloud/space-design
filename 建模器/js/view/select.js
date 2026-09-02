@@ -27,7 +27,7 @@ import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
-         remapElements }
+         remapElements, proportionalVerts, PROP_DEFAULT_RADIUS }
   from '../core/edit.js';
 import { measureLabels } from '../core/measure.js';
 
@@ -438,6 +438,20 @@ export class Selection {
      * ⚠ 而開關本身就是效能的保險 —— 覺得卡就關掉，不必等人修。
      */
     this.showVertexDots = true;
+
+    /**
+     * 🔴 **比例編輯的影響半徑（cm）。0 ＝ 關掉。**
+     *
+     * ⭐ **它是一個【數字欄】，⛔ 不是滾輪**（kang 2026-09-02 拍板題一選乙）——
+     * Blender 是拖曳中滾滾輪即時改，而**平板沒有滾輪**，
+     * 那會讓一半的驗收環境用不了這個功能。
+     *
+     * ⚠ 值由上方那排的欄位寫進來（`main.js`），⛔ 這裡只存不管介面。
+     * ⚠ **拖曳開始的那一刻才會被讀**（`_beginEditDrag`）——
+     * 拖到一半改欄位不會影響正在進行的這一次，那是刻意的：
+     * 一次拖曳的初始狀態要固定，跟「軸也要在開始時記下來」同一條。
+     */
+    this.propRadius = PROP_DEFAULT_RADIUS;
 
     /**
      * 🔴 **標尺寸：把量到的數字畫在 3D 畫面上**（量測第 2 步）。
@@ -3152,8 +3166,69 @@ export class Selection {
     }
 
     node.updateMatrixWorld(true);
-    this.view.setVertexDots(mesh.verts.map(v => node.localToWorld(v.p.clone())));
+    this.view.setVertexDots(
+      mesh.verts.map(v => node.localToWorld(v.p.clone())),
+      this._propWeightsForDots(mesh)
+    );
     return { shown: total, total, tooMany: false };
+  }
+
+  /**
+   * 🔴 **比例編輯的視覺回饋：每個點「會跟著動多少」。**（題三，kang 拍板選乙）
+   *
+   * ⭐ **為什麼是幫點上色，⛔ 不是畫一個圈**（Blender 畫的是圈）：
+   * ① 上色畫的**就是真的會動的那些點**，圈只是個近似 ——
+   * 　薄殼背面的點也會被影響（見 `proportionalVerts()` 的說明），
+   * 　而那件事**一個平面的圈畫不出來**；
+   * ② 編輯模式本來就開著「顯示點」，⛔ 不必多疊一層東西；
+   * ③ 平板上手指會遮住畫面，一片顏色的濃淡比一條細圈好認。
+   *
+   * ⚠ **跟著 `refreshVertexDots()` 走，⛔ 不進每幀迴圈** ——
+   * 它只在選取、過濾器、半徑變動時被呼叫。
+   *
+   * @returns {number[]|null} 對應 `mesh.verts` 的權重；半徑 0 或沒選東西時 `null`
+   */
+  _propWeightsForDots(mesh) {
+    if (!(this.propRadius > 0) || !this.editSel || !this.editSels) return null;
+    let core;
+    try { core = elementVerts(mesh, this.editSels); } catch { return null; }
+    if (!core.length) return null;
+
+    const prop = proportionalVerts(mesh, core, this.propRadius);
+    const w = new Map();
+    prop.verts.forEach((v, i) => w.set(v, prop.weights[i]));
+    return mesh.verts.map(v => w.get(v) ?? 0);
+  }
+
+  /**
+   * 改影響半徑（cm）。⛔ 負數與非數字一律當 0（＝關掉）。
+   *
+   * ⚠ **改完要重畫點**，否則欄位改了顏色還停在舊半徑上 ——
+   * 那是「兩端只改一端」的老毛病（鐵律二）。
+   *
+   * @returns {{radius:number, affected:number}} 現在的半徑，以及**這個半徑下
+   *          會動到幾個點**（含選到的那些）。0 ＝ 沒選東西或半徑是 0。
+   */
+  setPropRadius(cm) {
+    const v = Number(cm);
+    this.propRadius = Number.isFinite(v) && v > 0 ? v : 0;
+    this.refreshVertexDots();
+    return { radius: this.propRadius, affected: this.propAffectedCount() };
+  }
+
+  /**
+   * 目前的選取 ＋ 目前的半徑下，**會動到幾個點**。
+   * ⭐ 這個數字要跟畫面上變色的點對得起來（鐵律三：讓兩個數字互相對得起來）。
+   */
+  propAffectedCount() {
+    const el = this.editSel;
+    if (!el || !(this.propRadius > 0)) return 0;
+    const mesh = el.obj && el.obj.mesh();
+    if (!mesh) return 0;
+    let core;
+    try { core = elementVerts(mesh, this.editSels); } catch { return 0; }
+    if (!core.length) return 0;
+    return proportionalVerts(mesh, core, this.propRadius).verts.length;
   }
 
   /**
@@ -3352,9 +3427,21 @@ export class Selection {
   _beginEditDrag() {
     const el = this.editSel;
     if (!el) { this._drag = null; return; }
-    const verts = elementVerts(el.obj.mesh(), this.editSels);
+    /**
+     * 🔴 **比例編輯就接在這一行後面。**
+     * 選到的那些點是**核心**（權重 1），影響半徑內的其餘點跟著進來，
+     * 各自帶一個 0～1 的權重。半徑 0 時 `proportionalVerts()` 原封不動
+     * 把核心退回來、權重全 1 ⇒ **底下一行都不必分支**。
+     */
+    const core = elementVerts(el.obj.mesh(), this.editSels);
+    const prop = proportionalVerts(el.obj.mesh(), core, this.propRadius);
+    const verts = prop.verts;
     this._drag = {
       verts,
+      /** ⚠ 對應 `verts` 的權重。⛔ 拖曳中不重算 —— 它是初始狀態的一部分。 */
+      weights: prop.weights,
+      /** 選到的那幾個點（權重 1 的那些）。給「動到幾個點」的提示與上色用。 */
+      coreCount: core.length,
       base: snapshotVerts(verts),
       start: {
         pos: this._proxy.position.clone(),
@@ -3413,7 +3500,7 @@ export class Selection {
       pos: this._proxy.position,
       quat: this._proxy.quaternion,
       scale: this._proxy.scale
-    });
+    }, d.weights);
     this.view.markGeomDirty();        // 沒有這行，畫面不會更新（見 scene.js）
 
     if (committing) {
@@ -3530,7 +3617,7 @@ export class Selection {
       pos: this._proxy.position,
       quat: this._proxy.quaternion,
       scale: this._proxy.scale
-    });
+    }, d.weights);
     this.view.markGeomDirty();
     this._drawEditMark();
     if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel);
