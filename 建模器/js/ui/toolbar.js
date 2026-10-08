@@ -22,6 +22,7 @@ import { unfoldObject } from '../unfold/part.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 import { fetchLatest } from '../core/appver.js';
+import { meshGearPair } from '../core/gearPair.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -203,6 +204,7 @@ export class Panel {
 
     if (many) {
       this.form.appendChild(note(`已選 ${this.app.sel.count} 個，以下編輯最後選的「${obj.name}」`));
+      this._gearPairBox();
       this._alignBox();
     }
 
@@ -647,6 +649,35 @@ export class Panel {
    * align.js 的函式一律不改動任何東西，只回傳新位置 —— 套用這一步
    * 刻意留在這裡，因為只有這裡知道要記一步 Undo、要重畫、要講一句話。
    */
+  /**
+   * 齒輪「咬上去」（2026-10-08）。**剛好選兩個齒輪才出現。**
+   * 🔴 **先選的動、後選的不動**（跟「貼合」一樣，kang 拍板）——
+   * 按鈕上**把兩個名字寫出來**，⛔ 不讓人猜誰會動。計算在 `core/gearPair.js`。
+   */
+  _gearPairBox() {
+    const objs = this.app.sel.objects;
+    if (objs.length !== 2 || !objs.every(o => o.src && o.src.type === 'gear')) return;
+    const [mover, anchor] = objs;
+    this.form.appendChild(head('齒輪'));
+    this._rowBtn(`咬上去：把「${mover.name}」移過去咬住「${anchor.name}」`,
+      '維持它現在在哪一邊，只調距離與角度；模數不一樣會改成一樣', () => {
+        const r = meshGearPair(mover, anchor);
+        /** ⛔ 擋下來時不可以沒反應 —— 講原因（坑第 21 條：按下去沒反應的按鈕） */
+        if (!r.ok) { if (this.app.toast) this.app.toast('⚠ ' + r.reason); return; }
+        if (r.module != null) mover.src.module = r.module;
+        mover.pos.set(r.pos.x, r.pos.y, r.pos.z);
+        mover.rot.set(0, r.rotY, 0);
+        mover.invalidate();
+        this.analysisCache.delete(mover.id);
+        this._edit('咬上去');
+        if (this.app.toast) {
+          this.app.toast([`咬上去：中心距離 ${+r.dist.toFixed(3)} cm`, ...r.notes].join('；'));
+        }
+      });
+    this.form.appendChild(note('先選的那個會動、後選的不動（跟「貼合」一樣）。'
+      + '要換過來：重新選，先選要動的那個'));
+  }
+
   _applyPositions(list, label) {
     const objs = this.app.sel.objects;
     if (list.length !== objs.length) return;

@@ -14084,6 +14084,141 @@ section('齒輪（2026-10-08 第二輪）：真的要能轉');
   }
 }
 
+section('齒輪「咬上去」（2026-10-08）：先選的動、維持方向、模數跟著改');
+
+{
+  /**
+   * 🔴 **⛔ 不信公式，信世界座標**：兩個齒形都用 `ModelObject.matrix()` 真的擺到世界裡
+   * （齒形的 (x, y) 放在世界的 (x, z) —— `extrude.js`），再查有沒有任何一點跑進對方。
+   * 角度的正負號（2D 角度 ↔ 旋轉 Y）就是靠這一項對答案的。
+   */
+  const { meshGearPair } = await import('../js/core/gearPair.js');
+  const { gearProfile } = await import('../js/build/prim.js');
+  const gear = (name, p, x, z, rotYdeg = 0) => {
+    const o = new io.ModelObject({ name, kind: io.KIND.SOLID, src: { type: 'gear', module: 0.3, teeth: 20, t: 0.5, hole: 0.6, gapMm: 0.2, ...p } });
+    o.pos.set(x, 3, z);
+    o.rot.set(0, rotYdeg * Math.PI / 180, 0);
+    return o;
+  };
+  const world = o => {
+    const m = o.matrix();
+    return gearProfile(o.src).map(q => new THREE.Vector3(q.x, 0, q.y).applyMatrix4(m)).map(v => ({ x: v.x, y: v.z }));
+  };
+  const inPoly = (P, x, y) => {
+    let c = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      if ((P[i].y > y) !== (P[j].y > y) && x < (P[j].x - P[i].x) * (y - P[i].y) / (P[j].y - P[i].y) + P[i].x) c = !c;
+    }
+    return c;
+  };
+  const clash = (a, b) => { const A = world(a), B = world(b); return A.filter(q => inPoly(B, q.x, q.y)).length + B.filter(q => inPoly(A, q.x, q.y)).length; };
+  const apply = (mover, r) => {
+    if (r.module != null) mover.src.module = r.module;
+    mover.pos.set(r.pos.x, r.pos.y, r.pos.z);
+    mover.rot.set(0, r.rotY, 0);
+    mover.invalidate();
+  };
+
+  // ── 各種方向、齒數、不動的那個先轉過 —— 按下去都要咬得上 ──
+  let all = 0, bad = [];
+  /**
+   * ⚠ ⛔ 不放 8 齒配大齒輪 —— 那一組本來就會卡一點點（下面「已知限制」那一項盯著），
+   * 跟「咬上去」的公式無關。【實證 2026-10-08】第一版放了 8/60，48 種裡只有那 4 種各卡 1 個點，
+   * 量出來最深 0.028 mm；10～18 齒配任何齒數都是 0。
+   */
+  for (const [zA, zB] of [[20, 40], [20, 20], [13, 31], [10, 60]]) {
+    for (const rotA of [0, 7, 33]) {
+      for (const dirDeg of [0, 50, 135, 250]) {
+        const A = gear('A', { teeth: zA }, 10, -4, rotA);
+        const d = dirDeg * Math.PI / 180;
+        const B = gear('B', { teeth: zB }, 10 + 30 * Math.cos(d), -4 + 30 * Math.sin(d), 12);
+        const r = meshGearPair(B, A);
+        apply(B, r);
+        all++;
+        const h = clash(B, A);
+        const dirNow = Math.atan2(B.pos.z - A.pos.z, B.pos.x - A.pos.x) * 180 / Math.PI;
+        const want = 0.3 * (zA + zB) / 2;
+        if (h || Math.abs(Math.hypot(B.pos.x - A.pos.x, B.pos.z - A.pos.z) - want) > 1e-9
+            || Math.abs(((dirNow - dirDeg) % 360 + 540) % 360 - 180) > 1e-6) bad.push(`${zA}/${zB} A轉${rotA} 方向${dirDeg}：卡${h}`);
+      }
+    }
+  }
+  eq(`★★★ ${all} 種擺法（齒數 × A 先轉的角度 × 方向）按下去都咬得上、距離對、方向沒變`, bad.join(' / '), '');
+
+  /**
+   * 🔴 **已知限制：8 齒配大齒輪會卡一點點**（⛔ 不是「咬上去」的錯，是 8 齒齒輪本身）。
+   * 標準齒輪少於 17 齒時，大齒輪的齒尖會掃進小齒輪的齒根 —— 真的加工會把那裡削掉（根切），
+   * 而 `gearOutline()` 在基圓以下用**直線**補（多了一點料）。
+   * 量出來最深不到 0.05 mm，比雷射的切縫（0.1～0.2 mm）小 ⇒ 實際切出來吃得掉。
+   * ⭐ 這一項盯的是「**不可以變得更深**」—— 以後改齒形，這個數字變大就會被抓到。
+   */
+  {
+    const segD = (p, a, b) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+    };
+    let worst = 0;
+    for (const rotA of [0, 3, 7, 11, 19, 33]) {
+      const A = gear('A', { teeth: 8 }, 0, 0, rotA), B = gear('B', { teeth: 120 }, 30, 0);
+      apply(B, meshGearPair(B, A));
+      const PA = world(A), PB = world(B);
+      for (const q of PB) if (inPoly(PA, q.x, q.y)) {
+        let d = Infinity;
+        for (let i = 0; i < PA.length; i++) d = Math.min(d, segD(q, PA[i], PA[(i + 1) % PA.length]));
+        worst = Math.max(worst, d);
+      }
+    }
+    ok('★★ 已知限制：8 齒配 120 齒最多卡進 0.05 mm（比雷射切縫小）', worst < 0.005, `${(worst * 10).toFixed(3)} mm`);
+  }
+
+  // ── 對照組：角度故意差半齒 → 一定卡住（證明上面⛔ 不是空轉）──
+  {
+    const A = gear('A', { teeth: 20 }, 0, 0, 7), B = gear('B', { teeth: 40 }, 20, 5);
+    const r = meshGearPair(B, A);
+    apply(B, { ...r, rotY: r.rotY + Math.PI / 40 });
+    ok('★★★ 對照組：B 的角度故意多轉半個齒 → 一定卡住', clash(B, A) > 0);
+  }
+
+  // ── 先選的動、後選的不動；高度跟不動的那個一樣 ──
+  {
+    const A = gear('A', {}, 5, 5), B = gear('B', { teeth: 30 }, 40, 5);
+    B.pos.y = 99;
+    const a0 = A.pos.clone();
+    const r = meshGearPair(B, A);
+    ok('★★ 不動的那個（後選的）⛔ 沒有被算進要改的東西', r.ok && A.pos.equals(a0));
+    near('★★ 動的那個高度 ＝ 不動的那個（同一個平面）', r.pos.y, A.pos.y, 1e-12);
+  }
+
+  // ── 模數不同 → 改成跟不動的一樣，而且說出來 ──
+  {
+    const A = gear('A', { module: 0.3 }, 0, 0), B = gear('B', { module: 0.5, teeth: 30 }, 10, 0);
+    const r = meshGearPair(B, A);
+    eq('★★★ 模數不同 → 動的那個改成跟不動的一樣', r.module, 0.3);
+    ok('★★★ 而且【說出來】改了什麼（⛔ 不默默改）', r.notes.some(s => s.includes('從 0.5 改成 0.3')), r.notes.join('|'));
+    near('★★ 距離照新的模數算 ＝ 0.3 × (20 ＋ 30) ÷ 2', r.dist, 7.5, 1e-12);
+    apply(B, r);
+    eq('★★ 改完照樣咬得上', clash(B, A), 0);
+    eq('★ 模數一樣 → ⛔ 不改、⛔ 沒有那句', meshGearPair(gear('C', {}, 9, 0), A).module, null);
+  }
+
+  // ── 擋下來的情況：要講原因 ──
+  {
+    const A = gear('A', {}, 0, 0), B = gear('B', {}, 10, 0);
+    const box = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', w: 1, h: 1, d: 1 } });
+    ok('★★ 選到不是齒輪的 → 擋下來，講原因', !meshGearPair(box, A).ok && meshGearPair(box, A).reason.includes('兩個齒輪'));
+    B.scale.set(2, 2, 2);
+    const rs = meshGearPair(B, A);
+    ok('★★ 縮放過 → 擋下來，叫人改回 1、改模數', !rs.ok && rs.reason.includes('縮放') && rs.reason.includes('模數'), rs.reason);
+    B.scale.set(1, 1, 1); B.rot.set(0.3, 0, 0);
+    const rt = meshGearPair(B, A);
+    ok('★★ 沒有平躺（旋轉 X 不是 0）→ 擋下來', !rt.ok && rt.reason.includes('平躺'), rt.reason);
+    B.rot.set(0, 0, 0); B.pos.set(0, 3, 0);
+    const rsame = meshGearPair(B, A);
+    ok('★ 疊在同一個位置 → 擺到右邊（+X），而且說出來', rsame.ok && rsame.pos.x > A.pos.x && rsame.notes.some(s => s.includes('+X')));
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
