@@ -129,8 +129,15 @@ export function boardProgram(board, opt = {}) {
     const T = (x, y) => (it.rot
       ? { x: it.x + (p.height - y), y: it.y + x }
       : { x: it.x + x, y: it.y + y });
-    for (const e of prog.items) {
+    /**
+     * ⚠ 圓弧折彎的參考線（`bend`）在 `drawProgram()` 裡上下各多畫 1 cm（單片圖上好看）——
+     * 排在板子上就會畫進隔壁那片或板邊外（間距 0 時一定會）。⇒ 夾回這一片的高度以內。
+     * 【實證 2026-10-09】AI 在線上排版預覽看到藍線伸出片外才發現。
+     */
+    const clampY = y => Math.max(0, Math.min(p.height, y));
+    for (let e of prog.items) {
       if (e.t === 'line') {
+        if (e.style === 'bend') e = { ...e, y1: clampY(e.y1), y2: clampY(e.y2) };
         const a = T(e.x1, e.y1), b = T(e.x2, e.y2);
         items.push({ ...e, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
       } else {

@@ -14462,6 +14462,20 @@ section('排版：把很多片擺進一張一張板子（2026-10-09）');
     ok(`★ ${name}：每片都有片號`, nest.boards[0].items.every(it => prog.items.some(i => i.style === 'num' && i.s === it.piece.no)));
   }
 
+  /**
+   * ⚠ 圓弧折彎的參考線在單片圖上會上下多畫 1 cm —— 排在板子上要夾回片內，
+   * 否則間距 0 時會畫進隔壁那片（2026-10-09 AI 線上看到藍線伸出片外）。
+   */
+  {
+    const r = cut(isTube);                      // 西瓜皮有圓弧折彎
+    const one = packBoards([{ ...r.pieces[0], qty: 1 }], { w: 240, h: 120, gap: 0 });
+    const it = one.boards[0].items[0];
+    const bends = boardProgram(one.boards[0], { rule: r.rule }).items.filter(i => i.t === 'line' && i.style === 'bend');
+    ok('★ 對照：西瓜皮真的有圓弧折彎的參考線', bends.length > 0, String(bends.length));
+    ok('★★ 圓弧折彎的參考線⛔ 伸出那一片（間距 0 也⛔ 畫進隔壁）',
+       bends.every(i => Math.min(i.y1, i.y2) >= it.y - 1e-9 && Math.max(i.y1, i.y2) <= it.y + it.h + 1e-9));
+  }
+
   // ── 比板子大的：單獨一張、標出來 ──
   {
     const r = cut(isRing);

@@ -282,9 +282,12 @@ export class UnfoldPanel {
     const N = this.opt.nest;
     const sheets = this._boardSheets();
     const big = sheets.filter(x => x.board.oversize).length;
+    const normal = sheets.length - big;
+    /** ⚠ 全部都比板子大時⛔ 寫「需要 0 張」（數字對、意思怪 —— 2026-10-09 AI 線上看到的）*/
     const head = box(big ? 'uwWarn' : 'uwSkip',
-      `排版：需要 ${sheets.length - big} 張 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`
-      + (big ? `　⚠ 另有 ${big} 片比板子還大，各自單獨一張（要換大板或再切小）` : '')
+      (normal ? `排版：需要 ${normal} 張 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`
+              : `排版：沒有一片擺得進 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`)
+      + (big ? `　⚠ ${normal ? '另有 ' : ''}${big} 片比板子還大，各自單獨一張（要換大板或再切小）` : '')
       + '　存 SVG／DXF 時一張板一個檔');
     this.body.appendChild(head);
     for (const sh of sheets) {
