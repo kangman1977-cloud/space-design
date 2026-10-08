@@ -19,6 +19,7 @@ import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { unfoldObject } from '../unfold/part.js';
+import { landPositions, lowestY } from '../core/align.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 import { fetchLatest } from '../core/appver.js';
@@ -418,6 +419,19 @@ export class Panel {
     this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'), false, pathEditing);
 
     /**
+     * 🔴 **落地**（2026-10-09，kang 拍板做按鈕、⛔ 不做自動往上長 —— 理由在 `core/align.js` 的 `landPositions()`）。
+     * 只在**單選**時放這裡；多選時是「整組落地」，放在對齊那一塊（⛔ 同一顆按鈕兩種意思會讓人猜）。
+     * ⭐ 沉在地板下才多一行 ⚠（kang 拍板要主動提醒）；浮起來⛔ 不提醒 —— 疊在別的東西上面常常是故意的。
+     */
+    if (!many && !pathEditing) {
+      const low = lowestY([obj]);
+      if (low < -1e-3) this.form.appendChild(note(`⚠ 底部在地板下 ${+(-low).toFixed(2)} cm —— 按「落地」貼回地板`));
+      this._rowBtn('落地（底部貼到地板）',
+        '只動高度（Y），X、Z 不變。改了尺寸、縮放、旋轉之後沉下去或浮起來都能用',
+        () => this._applyPositions(landPositions(this.app.sel.objects), '落地'));
+    }
+
+    /**
      * 🔴 **原點置中：把箭頭的那個點搬到物件正中間，⛔ 而東西一格都不動。**
      *
      * ── 為什麼放在這裡，⛔ 不放工具列 ────────────────────
@@ -596,6 +610,13 @@ export class Panel {
       }
       this.form.appendChild(r);
     }
+
+    /** 🔴 **整組落地**（kang 2026-10-09 拍板：整組一起落，彼此的上下關係不變）。理由在 `landPositions()` */
+    const low = lowestY(objs);
+    if (low < -1e-3) this.form.appendChild(note(`⚠ 這一組最低的地方在地板下 ${+(-low).toFixed(2)} cm`));
+    this._rowBtn('整組落地（最低的那一點貼到地板）',
+      '整組一起上下搬，彼此的上下關係不變；只動高度（Y）',
+      () => this._applyPositions(landPositions(this.app.sel.objects), '整組落地'));
 
     /**
      * 均分要三個以上才有意義 —— 兩個的話頭尾就是全部，動不了誰。

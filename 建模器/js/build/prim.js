@@ -223,7 +223,8 @@ export const PRIM_SPECS = {
       { key: 'rInner', label: '內半徑', min: 0, step: 1 },
       { key: 'h',      label: '高',     min: 0.1, step: 1 },
       { key: 'seg',    label: '分段',   min: 3, max: 128, step: 1, int: true }
-    ]
+    ],
+    noteOf: src => innerTooBig(src, PRIM_DEFAULTS.tube, '管壁')
   },
   roundBox: {
     label: '圓角方塊',
@@ -271,7 +272,8 @@ export const PRIM_SPECS = {
         hint: '一定要比外半徑小。管粗 ＝ 外半徑 − 內半徑' },
       { key: 'seg',    label: '繞一圈分段', min: 3, max: 128, step: 1, int: true },
       { key: 'segT',   label: '管分段',     min: 3, max: 64,  step: 1, int: true }
-    ]
+    ],
+    noteOf: src => innerTooBig(src, PRIM_DEFAULTS.torus, '環')
   },
   /** 楔形：後面（−Z）高、前面（+Z）低。要換方向用旋轉（kang 2026-10-08 同意） */
   wedge: {
@@ -331,6 +333,19 @@ export const PRIM_SPECS = {
     noteOf: (src, obj) => gearNotes(src, obj)
   }
 };
+
+/**
+ * 🔴 **內半徑填得不比外半徑小 ⇒ 說出來**（2026-10-09，kang 實測新增形狀時發現）。
+ * 管與圓環都會**默默夾到外半徑以內**（做得出來、⛔ 不會壞），但做出來的是薄到看不見的東西，
+ * 而格子上還寫著填的數字 —— 兩個數字對不上又⛔ 沒有任何提示（鐵律三：讓兩個數字對得起來）。
+ * ⭐ 跟齒輪「中心孔太大」同一個做法：照樣做、**在面板上講出來**。
+ */
+function innerTooBig(src, D, what) {
+  const ro = Number.isFinite(+src.rOuter) ? +src.rOuter : D.rOuter;
+  const ri = Number.isFinite(+src.rInner) ? +src.rInner : D.rInner;
+  if (ri < ro) return [];
+  return [`⚠ 內半徑（${ri}）不比外半徑（${ro}）小 —— ${what}薄到幾乎看不見。把內半徑改得比外半徑小`];
+}
 
 /**
  * 齒輪的尺寸（給面板的說明與測試用；`BUILDERS.gear` 也從這裡拿，⛔ 不各算一份）。

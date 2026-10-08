@@ -179,6 +179,57 @@ export function alignPositions(objs, ax, mode) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  落地（2026-10-09）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **落地：把選到的東西往上或往下搬，讓最低的那一點剛好貼在地板（Y ＝ 0）。只動 Y。**
+ *
+ * kang 2026-10-08 實測新增形狀時發現：改格子（例如方塊加高）之後中心不動 ⇒ 沉到地板下。
+ * ⭐ **⛔ 不做成「改格子時自動往上長」**（kang 2026-10-09 自己問到的）——
+ * 自動調整會**偷偷改掉位置**：對齊過、貼合過、咬上去擺好的東西，改個尺寸就跑掉，而且不會注意到。
+ * 按鈕是按了才動，而且改格子、縮放、旋轉之後都能用。
+ *
+ * 🔴 **選好幾個 ＝ 整組一起落**（kang 拍板）：整組最低的那一點貼地，彼此的上下關係不變
+ * —— 疊在桌子上的東西跟桌子一起選，按下去照樣疊著。
+ *
+ * 🔴🔴 **最低點要用【真的頂點】算，⛔ 不可以用 `worldBounds()`。**
+ * `worldBounds()` 是「沒轉之前的外框盒子整個轉過去再取外框」—— 對齊要的就是那個外接盒（跟 Illustrator 一樣），
+ * ⚠ 但物件斜放時，盒子的角會比物件真正最低的點更低 ⇒ 用它落地，**東西會浮在地板上方一點點**。
+ * 【實證 2026-10-09】第一版就是用它，而測試也拿 `worldBounds()` 檢查 ⇒ **自己對自己，一定過**；
+ * 改成看真的頂點才照出來。
+ *
+ * @returns {THREE.Vector3[]} 每個物件的新位置，順序同輸入。不改動輸入。
+ */
+export function landPositions(objs) {
+  const out = objs.map(o => o.pos.clone());
+  const low = lowestOf(objs);
+  if (low === null) return out;
+  for (const p of out) p.y -= low;
+  return out;
+}
+
+/** 整組最低的那一點在哪個高度（cm）。< 0 ＝ 有一部分沉在地板下；沒有東西時回 0 */
+export function lowestY(objs) {
+  const low = lowestOf(objs);
+  return low === null ? 0 : low;
+}
+
+/** 世界座標裡**真的頂點**最低在哪；一個頂點都沒有回 null */
+function lowestOf(objs) {
+  let low = Infinity;
+  const v = new THREE.Vector3();
+  for (const o of objs) {
+    const m = o.matrix();
+    for (const vert of o.mesh().verts) {
+      const y = v.copy(vert.p).applyMatrix4(m).y;
+      if (y < low) low = y;
+    }
+  }
+  return Number.isFinite(low) ? low : null;
+}
+
+// ═══════════════════════════════════════════════════════
 //  均分
 // ═══════════════════════════════════════════════════════
 

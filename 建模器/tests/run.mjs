@@ -14219,6 +14219,80 @@ section('齒輪「咬上去」（2026-10-08）：先選的動、維持方向、�
   }
 }
 
+section('落地 ＋ 內半徑太大要說出來（2026-10-09）');
+
+{
+  /**
+   * kang 2026-10-08 實測新增形狀時發現兩件：改尺寸會沉到地板下；圓環／管的內半徑填太大默默夾住。
+   * 2026-10-09 拍板：⛔ 不做「改格子自動往上長」，改做「落地」按鈕；多選 ＝ 整組一起落；沉下去要主動提醒。
+   */
+  const { landPositions, lowestY, worldBounds } = await import('../js/core/align.js');
+  const { PRIM_SPECS } = await import('../js/build/prim.js');
+  const mk = (src, x, y, z) => {
+    const o = new io.ModelObject({ name: src.type, kind: io.KIND.SOLID, src });
+    o.pos.set(x, y, z);
+    return o;
+  };
+  const put = (objs, ps) => objs.forEach((o, i) => o.pos.copy(ps[i]));
+  /**
+   * 🔴 **檢查用【真的頂點】，⛔ 不用 `worldBounds()`** —— 第一版拿 `worldBounds()` 檢查，
+   * 而落地也是用它算的 ⇒ 自己對自己，斜放的楔形浮起來也照樣「通過」（2026-10-09 實撞）。
+   */
+  const lowV = o => Math.min(...o.mesh().verts.map(v => v.p.clone().applyMatrix4(o.matrix()).y));
+
+  // ── kang 撞到的那個：方塊 45 → 90，中心不動 ⇒ 沉 22.5 ──
+  {
+    const b = mk({ type: 'box', w: 60, h: 45, d: 40 }, 3, 22.5, -7);
+    b.src.h = 90; b.invalidate();
+    near('★★★ 方塊加高到 90、中心不動 → 底部在地板下 22.5（kang 撞到的）', lowestY([b]), -22.5, 1e-9);
+    put([b], landPositions([b]));
+    near('★★★ 按落地 → 底部剛好貼地', lowV(b), 0, 1e-9);
+    ok('★★ 只動高度：X、Z 不變', b.pos.x === 3 && b.pos.z === -7);
+  }
+
+  // ── 浮起來的也會落下來 ──
+  {
+    const s = mk({ type: 'dome', r: 30 }, 0, 80, 0);
+    put([s], landPositions([s]));
+    near('★★ 浮在半空的 → 也落到地板', lowV(s), 0, 1e-9);
+  }
+
+  // ── 旋轉過的：照外接盒落地 ──
+  {
+    const w = mk({ type: 'wedge', w: 60, h: 30, d: 40 }, 0, 0, 0);
+    /** ⚠ 角度要挑「楔形缺掉的那兩個角朝下」—— 第一次挑的 (0.7, 0.3, −0.4) 剛好有真的角在最低處，看不出差別 */
+    w.rot.set(2.6, 0.2, 0);
+    ok('★ 對照組：斜放時「外接盒」比真的最低點還低（所以⛔ 不能拿它落地）', worldBounds(w).min.y < lowV(w) - 0.1,
+       `${worldBounds(w).min.y.toFixed(3)} vs ${lowV(w).toFixed(3)}`);
+    put([w], landPositions([w]));
+    near('★★★ 斜放的楔形 → 真的最低那一點貼地（⛔ 不是浮著）', lowV(w), 0, 1e-9);
+  }
+
+  // ── 整組一起落：疊著的照樣疊著 ──
+  {
+    const table = mk({ type: 'box', w: 100, h: 40, d: 60 }, 0, 20 - 15, 0);   // 桌子沉了 15
+    const cup = mk({ type: 'cylinder', r: 5, h: 10 }, 0, 45 - 15, 0);         // 杯子坐在桌面上
+    const gap0 = worldBounds(cup).min.y - worldBounds(table).max.y;
+    put([table, cup], landPositions([table, cup]));
+    near('★★★ 整組落地：最低的（桌子）貼地', lowV(table), 0, 1e-9);
+    near('★★★ 整組落地：杯子照樣坐在桌面上（上下關係不變）',
+         worldBounds(cup).min.y - worldBounds(table).max.y, gap0, 1e-9);
+    eq('★ 已經貼地 → 再按一次⛔ 不動', landPositions([table, cup]).every((p, i) => p.equals([table, cup][i].pos)), true);
+  }
+
+  // ── 內半徑太大要說出來 ──
+  {
+    for (const [type, ro, ri] of [['torus', 30, 15], ['tube', 25, 20]]) {
+      const lab = PRIM_SPECS[type].label;
+      eq(`★ ${lab}：內半徑比外半徑小 → ⛔ 沒有提醒`, PRIM_SPECS[type].noteOf({ rOuter: ro, rInner: ri }).length, 0);
+      const n = PRIM_SPECS[type].noteOf({ rOuter: ro, rInner: ro + 10 });
+      ok(`★★★ ${lab}：內半徑填得比外半徑大 → 面板寫出兩個數字、叫人改小（⛔ 不默默夾住）`,
+         n.length === 1 && n[0].includes(`內半徑（${ro + 10}）`) && n[0].includes(`外半徑（${ro}）`), n.join('|'));
+      ok(`★ ${lab}：內半徑 ＝ 外半徑 → 也提醒`, PRIM_SPECS[type].noteOf({ rOuter: ro, rInner: ro }).length === 1);
+    }
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
