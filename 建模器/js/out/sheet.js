@@ -228,8 +228,9 @@ export function drawProgram(piece, opt = {}) {
   // ── 折彎標註（角度、內側 R、往哪折）──
   // 折彎多的件（例如四角都倒圓的護罩）標註會互相重疊，
   // 所以跟下方的分段尺寸一樣錯開成兩排，兩排都塞不下才略過。
+  // ⭐ 「相同的折線合成一行」開著、而且這片的折線全部一樣 → 圖上只畫線，角度寫在卡片上（`sameFolds()`）
   let topUsed = 0;
-  if (opt.showBendMarks !== false) {
+  if (opt.showBendMarks !== false && !(opt.foldSummary && sameFolds(piece))) {
     const rows = [H + 2.2, H + 7.0];
     const rowEnd = [-Infinity, -Infinity];
 
@@ -405,6 +406,31 @@ function dim(items, x1, y1, x2, y2, label, kind) {
  * 標題欄的文字。展開圖沒有這幾行就不能下料 ——
  * 「這是哪一片、幾片、什麼材料、多厚、K 多少」缺一不可。
  */
+/**
+ * 🔴 **這一片的折線是不是「全部一樣」**（2026-10-09，kang 拍板「相同的折線合成一行」）。
+ *
+ * 起因：打版（圓環切成 32 條西瓜皮）每條約 11 道折線，每道都印「↑ 上折 30°　尖角」，字擠滿圖。
+ * kang：只畫線，角度改成一行總表。
+ *
+ * 🔴🔴 **⛔ 只在「全部一樣」時才合成一行** —— 上折與下折畫的是**同一種紅線**（`STYLE.fold`），
+ * 往哪折只寫在字裡。一片裡有上有下（例如齒輪側邊那條帶子）還合成一行，
+ * 就分不出哪條往哪折 ⇒ 資訊不見了。所以那種照樣每道標字（kang 同意）。
+ *
+ * 全部一樣 ＝ ① 兩道以上 ② 全是尖角（⛔ 圓弧折彎、曲線帶 —— 那些要給師傅看 R 與段數）
+ *          ③ 同一個方向 ④ 角度差不到 0.05°。
+ * @returns {{dir:string, angle:number, n:number}|null}
+ */
+export function sameFolds(piece) {
+  const bs = piece && piece.bends;
+  if (!bs || bs.length < 2) return null;
+  if (bs.some(b => b.isArc || b.isCurve)) return null;
+  const a0 = bs[0].angle;
+  const same = b => Math.sign(b.angle) === Math.sign(a0)
+    && Math.abs(Math.abs(b.angle) - Math.abs(a0)) < 0.05;
+  if (!bs.every(same)) return null;
+  return { dir: a0 > 0 ? '↑ 上折' : '↓ 下折', angle: Math.abs(a0), n: bs.length };
+}
+
 export function titleLines(piece, opt = {}) {
   /** ⚠ 這一片自己的規則優先 —— 多個物件一起展開時板厚可能不一樣（2026-10-08）*/
   const rule = piece.rule || opt.rule || {};
@@ -461,6 +487,9 @@ export function titleLines(piece, opt = {}) {
             .reduce((n, b) => n + b.segs, 0)} 小段，圖上不畫`
         : ''));
   }
+  /** ⭐ 「相同的折線合成一行」：圖上的每道角度拿掉了，所以這一行⛔ 不可以省 */
+  const same = opt.foldSummary ? sameFolds(piece) : null;
+  if (same) out.push(`折線全部一樣：${same.dir} ${fmt(same.angle)}°（${same.n} 道）—— 圖上只畫線`);
   if (rule.margin && rule.margin() > 0) {
     out.push(`⚠ 圖上未含${rule.marginLabel()} ${fmt(rule.margin())} cm，下料時另加`);
   }

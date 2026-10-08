@@ -39,7 +39,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -307,6 +307,9 @@ const app = {
   onEditPenPath: obj => editPenPath(obj),
   /** 這個物件是不是正在「編輯路徑」（暫時攤平中）—— 右側面板據此鎖住位置／旋轉／縮放（E4）*/
   isPenEditing: obj => !!penEditing && !!obj && penEditing.id === obj.id,
+  /** 分片模式「點一條線時標多少」（2026-10-09）：'edge' 只標那一條（原本的用法、預設）／'loop' 一整圈／'all' 連同方向全部 */
+  getSeamLineMode: () => seamLineMode,
+  setSeamLineMode: m => { seamLineMode = m; },
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
 };
@@ -4194,6 +4197,12 @@ function toggleSeamMode() {
 }
 
 /**
+ * 🔴 **分片模式「點一條線時標多少」**（2026-10-09，kang 拍板「兩種都要」，原本的用法照舊留著）。
+ * ⭐ 預設 `'edge'` ＝ 原本的行為一格都沒變；切換在右側面板「分片」那一塊。
+ */
+let seamLineMode = 'edge';
+
+/**
  * 分片模式下點了畫面。實際的幾何判斷在 seam.js（測得到），
  * 這裡只負責「改了文件之後要做什麼」——記一步 Undo、更新畫面、講一句話。
  */
@@ -4207,8 +4216,21 @@ function seamPick(hit) {
 
   if (hit.kind === 'edge') {
     const on = !isSeam(hit.he);
-    setSeam(mesh, hit.he, on);
-    commitSeam(hit.obj, on ? '標記切割線' : '取消切割線');
+    if (seamLineMode === 'edge') {
+      setSeam(mesh, hit.he, on);
+      commitSeam(hit.obj, on ? '標記切割線' : '取消切割線');
+      return;
+    }
+    /**
+     * 一整圈／同方向全部：**照點到的那條現在是不是切線，整批一起切換**
+     * （點到的是切線 ⇒ 整批取消；不是 ⇒ 整批標上）—— 跟「點面整圈切開」同一個規矩。
+     */
+    const hes = seamLoopEdges(mesh, hit.he, seamLineMode);
+    let n = 0;
+    for (const h of hes) if (isSeam(h) !== on) { setSeam(mesh, h, on); n++; }
+    if (!n) { toast('這一圈已經是' + (on ? '切割線' : '沒有標記') + '了', true); return; }
+    const what = seamLineMode === 'all' ? '同方向的全部' : '一整圈';
+    commitSeam(hit.obj, `${on ? '標記' : '取消'}${what}（${n} 條邊）`);
     return;
   }
 

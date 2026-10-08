@@ -14293,6 +14293,111 @@ section('落地 ＋ 內半徑太大要說出來（2026-10-09）');
   }
 }
 
+section('打版（展開模式一：精確分片）：一次標一整圈 ＋ 相同的折線合成一行（2026-10-09）');
+
+{
+  /**
+   * kang 2026-10-09：要像衣服打版、布娃娃、造型氣球那樣把圓環攤成幾片。
+   * 圓環照管子截面切 32 條西瓜皮、或照大圓切 12 條環帶，每片都 0 失真 —— 卡在要標 384 條邊。
+   * 拍板：分片模式「點一條線」可以選 只標那一條／一整圈／同方向的全部；
+   * 相同的折線合成一行（開關、打版預設開；上折下折混在一起的照樣每道標字）。
+   */
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const { setSeam, isSeam } = await import('../js/unfold/seam.js');
+  const { sameFolds } = await import('../js/out/sheet.js');
+  const torus = () => buildPrim('torus', { rOuter: 30, rInner: 15, seg: 32, segT: 12 });
+  /** 管子方向的邊（落在同一個子午面上）／大圓方向的邊（同一個管子位置） */
+  const isTube = he => Math.abs(Math.atan2(he.v.p.z, he.v.p.x) - Math.atan2(he.to.p.z, he.to.p.x)) < 1e-6;
+  const isRing = he => Math.abs(he.v.p.y - he.to.p.y) < 1e-6
+    && Math.abs(Math.hypot(he.v.p.x, he.v.p.z) - Math.hypot(he.to.p.x, he.to.p.z)) < 1e-6;
+
+  // ── 標多少 ──
+  {
+    const m = torus();
+    const tube = [...m.edges()].find(isTube), ring = [...m.edges()].find(isRing);
+    eq('★★★ 管子方向的線「標一整圈」＝ 繞管子一圈 12 條', seamLoopEdges(m, tube, 'loop').length, 12);
+    eq('★★★ 大圓方向的線「標一整圈」＝ 繞大圓一圈 32 條', seamLoopEdges(m, ring, 'loop').length, 32);
+    const allT = seamLoopEdges(m, tube, 'all');
+    eq('★★★ 管子方向「同方向的全部」＝ 32 圈 × 12 ＝ 384 條', allT.length, 384);
+    ok('★★ 　 而且全部都是管子方向的（⛔ 混進另一個方向）', allT.every(isTube));
+    const allR = seamLoopEdges(m, ring, 'all');
+    eq('★★★ 大圓方向「同方向的全部」＝ 12 圈 × 32 ＝ 384 條', allR.length, 384);
+    ok('★★ 　 而且全部都是大圓方向的', allR.every(isRing));
+    /**
+     * ⚠ 「新增 → 球」全是三角形（每格斜切兩半），「一整圈」只走得了四邊形的格子。
+     * 而標切線本來就要先「轉成可編輯網格」—— 轉了之後是 72 格四邊形 ＋ 兩極 24 個三角形。
+     * 【實證 2026-10-09】第一版測試直接拿參數球，只標到 1 條；⇒ 照使用者真的會走的路先 bake。
+     */
+    const so = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 8 } });
+    so.bake();
+    const sph = so.mesh();
+    const mer = [...sph.edges()].find(he => Math.abs(he.v.p.x * he.to.p.z - he.v.p.z * he.to.p.x) < 1e-9
+      && Math.abs(he.v.p.y - he.to.p.y) > 1e-6 && Math.abs(he.v.p.y) < 29 && Math.abs(he.to.p.y) < 29);
+    eq('★★ 球：經線「同方向的全部」＝ 12 條經線 × 8 段（停在極點，那是對的）', seamLoopEdges(sph, mer, 'all').length, 12 * 8);
+  }
+
+  // ── 標完展開：32 條西瓜皮／12 條環帶，0 重疊、面積對 ──
+  const cutAll = pick => {
+    const m = torus();
+    for (const h of seamLoopEdges(m, [...m.edges()].find(pick), 'all')) setSeam(m, h, true);
+    return { m, r: unfoldMesh(m, makeRule('paper', 0.05)) };
+  };
+  for (const [name, pick, want] of [['西瓜皮', isTube, 32], ['環帶', isRing, 12]]) {
+    const { m, r } = cutAll(pick);
+    eq(`★★★ 圓環切成${name}：${want} 片`, r.stats.total, want);
+    eq(`★★★ 圓環切成${name}：0 片重疊`, r.pieces.filter(p => p.overlap).length, 0);
+    near(`★★ 圓環切成${name}：展開面積 ＝ 表面積`, r.stats.area, m.area(), 1e-6);
+  }
+
+  /**
+   * ⭐ 西瓜皮：管子方向的邊本來就標成「平滑的曲面」（`revolve()`）⇒ 展開時併成**圓弧折彎**（標 R 與段數），
+   * 加頭尾兩道尖角 —— 每片只有 5 個標註，⛔ 不擠；而圓弧要給人看 R，所以⛔ 不合成一行（`sameFolds()` 的規則）。
+   * 【實證 2026-10-09】AI 原本以為西瓜皮也會「全部一樣」，量了才知道是這樣 —— 字真正擠的是環帶。
+   */
+  {
+    const { r } = cutAll(isTube);
+    eq('★★ 西瓜皮：有圓弧折彎 ⇒ ⛔ 不合成一行（R 與段數要留給人看）', r.pieces.filter(p => sameFolds(p)).length, 0);
+    ok('★★ 西瓜皮：每片標註 ≤ 5 個（⛔ 擠）', r.pieces.every(p => p.bends.length <= 5), r.pieces.map(p => p.bends.length).join(','));
+  }
+
+  for (const [name, pick, want] of [['環帶', isRing, 12]]) {
+    const { r } = cutAll(pick);
+    eq(`★★★ 圓環切成${name}：每一片的折線都「全部一樣」（31 道）→ 可以合成一行`,
+       r.pieces.filter(p => sameFolds(p) && sameFolds(p).n === 31).length, want);
+
+    // 卡片、圖、DXF：開著才合成，關著照舊
+    const p = r.pieces[0], same = sameFolds(p);
+    const off = titleLines(p, { rule: r.rule }), on = titleLines(p, { rule: r.rule, foldSummary: true });
+    ok(`★★ ${name}：關著 → 卡片⛔ 沒有那一行（原本的樣子）`, !off.some(s => s.includes('折線全部一樣')));
+    ok(`★★★ ${name}：開著 → 卡片多一行「折線全部一樣：${same.dir} …（${same.n} 道）」`,
+       on.some(s => s.includes('折線全部一樣') && s.includes(`（${same.n} 道）`)), on.join('|'));
+    const bendText = o => drawProgram(p, { rule: r.rule, ...o }).items.filter(i => i.t === 'text' && /上折|下折/.test(i.s)).length;
+    ok(`★★ ${name}：關著 → 圖上每道都有字`, bendText({}) > 0, String(bendText({})));
+    eq(`★★★ ${name}：開著 → 圖上⛔ 沒有每道的字（只畫線）`, bendText({ foldSummary: true }), 0);
+    const dxfOn = toDXF(r.pieces, { unit: 'mm', rule: r.rule, foldSummary: true });
+    const dxfOff = toDXF(r.pieces, { unit: 'mm', rule: r.rule });
+    eq(`★★ ${name}：DXF 開著 → 每片一行「ALL n FOLDS」`, (dxfOn.match(/ALL \d+ FOLDS/g) || []).length, want);
+    eq(`★ ${name}：DXF 關著 → ⛔ 沒有那一行（原本的樣子）`, (dxfOff.match(/ALL \d+ FOLDS/g) || []).length, 0);
+  }
+
+  // ── ⛔ 上折下折混在一起的，開著也照樣每道標字 ──
+  {
+    const r = unfoldMesh(buildPrim('gear', { module: 0.3, teeth: 12, t: 0.5, hole: 0 }), makeRule('foamboard', 0.2));
+    const strip = r.pieces.find(p => p.bends.some(b => b.angle > 0) && p.bends.some(b => b.angle < 0));
+    ok('★ 對照：齒輪側邊的帶子有上折也有下折', !!strip);
+    eq('★★★ 上下混在一起 → ⛔ 不合成（不然分不出哪條往哪折）', strip ? sameFolds(strip) : 'x', null);
+  }
+
+  // ── 方塊：原本的展開圖預設⛔ 不變 ──
+  {
+    const r = unfoldMesh(buildPrim('box', { w: 60, h: 45, d: 40 }), makeRule('foamboard', 0.2));
+    const p = r.pieces.find(q => q.bends.length >= 2);
+    ok('★★ 方塊沒標過切線：預設（關著）卡片與圖都跟原本一樣',
+       !titleLines(p, { rule: r.rule }).some(s => s.includes('折線全部一樣'))
+       && drawProgram(p, { rule: r.rule }).items.some(i => i.t === 'text' && /上折|下折/.test(i.s)));
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

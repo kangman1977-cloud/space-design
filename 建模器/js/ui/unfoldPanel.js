@@ -15,7 +15,8 @@
 
 import { MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
-import { drawProgram, renderCanvas, titleLines, toSVG, printPieces } from '../out/sheet.js';
+import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds } from '../out/sheet.js';
+import { seamCount } from '../unfold/seam.js';
 import { toDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
@@ -62,6 +63,7 @@ export class UnfoldPanel {
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="uwUnit"></select>
           <label class="uwCk"><input type="checkbox" id="uwAsk"> 指定存放位置</label>
+          <label class="uwCk" title="一片上的折線全部一樣（同方向、同角度）時，圖上只畫線，角度寫成卡片上的一行。上折下折混在一起的那片照樣每道標字"><input type="checkbox" id="uwFold"> 相同的折線合成一行</label>
           <span class="sp"></span>
           <button id="uwPrint">列印</button>
           <button id="uwSvg">存 SVG</button>
@@ -118,6 +120,14 @@ export class UnfoldPanel {
       saveOpt(this.opt);
     };
 
+    /**
+     * 🔴 **相同的折線合成一行**（2026-10-09，kang 拍板：做開關、整個視窗共用）。
+     * 預設在 `open()` 決定：有自己標過切線的物件（打版）→ 勾；都沒有 → 不勾（原本的展開圖一個字都不變）。
+     * ⚠ ⛔ 不存進 localStorage —— 每次打開照「這次展開的是什麼」重新決定。
+     */
+    this.foldIn = $('uwFold');
+    this.foldIn.onchange = () => { if (this.result) this._render(this.result, this.objs); };
+
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
 
@@ -138,7 +148,22 @@ export class UnfoldPanel {
 
   open() {
     this.el.hidden = false;
+    this.foldIn.checked = this._targets().some(hasSeams);
     this.run();
+  }
+
+  /** 這次要展開的物件：沒選東西就整份文件 —— 一個案子通常就是要全部出圖 */
+  _targets() {
+    const picked = this.app.sel.objects;
+    return picked.length ? picked : this.app.doc.objects;
+  }
+
+  /** 卡片、SVG、列印、DXF 共用的選項 —— ⛔ 不要各組一份 */
+  _drawOpt(extra = {}) {
+    return {
+      rule: this.result && this.result.rule, head: this.app.head,
+      foldSummary: this.foldIn.checked, ...extra
+    };
   }
 
   close() { this.el.hidden = true; }
@@ -149,11 +174,10 @@ export class UnfoldPanel {
 
   run() {
     saveOpt(this.opt);
-    // 沒選東西就展開整份文件 —— 一個案子通常就是要全部出圖
-    const picked = this.app.sel.objects;
-    const objs = picked.length ? picked : this.app.doc.objects;
+    const objs = this._targets();
     const r = unfoldMany(objs, { material: this.opt.material });
     this.result = r;
+    this.objs = objs;
     this._render(r, objs);
   }
 
@@ -168,6 +192,17 @@ export class UnfoldPanel {
 
     for (const msg of r.skipped) this.body.appendChild(box('uwSkip', msg));
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
+
+    /**
+     * 🔴 **打版的東西把「相同的折線合成一行」關掉 → 講一句**
+     * （kang 2026-10-09：「如果要關閉...就如實作一個提醒告知」）。
+     * ⚠ 只在「有自己標過切線的物件、而且真的有片會被合成」時講 —— 方塊那種原本就不勾，⛔ 不要天天跳提醒。
+     */
+    const could = r.pieces.filter(p => sameFolds(p)).length;
+    if (!this.foldIn.checked && could && (objs || []).some(hasSeams)) {
+      this.body.appendChild(box('uwWarn',
+        `⚠ 已關閉「相同的折線合成一行」：有 ${could} 種片的折線全部一樣，每道都會標角度，長條上的字會很多`));
+    }
 
     if (!r.pieces.length) {
       if (!r.skipped.length) {
@@ -200,7 +235,7 @@ export class UnfoldPanel {
     const card = document.createElement('div');
     card.className = 'uwCard';
 
-    const lines = titleLines(piece, { rule, head: this.app.head });
+    const lines = titleLines(piece, this._drawOpt({ rule }));
     const h = document.createElement('div');
     h.className = 'uwTitle';
     h.innerHTML = lines.map((s, i) =>
@@ -208,7 +243,7 @@ export class UnfoldPanel {
     ).join('');
     card.appendChild(h);
 
-    const prog = drawProgram(piece, { rule });
+    const prog = drawProgram(piece, this._drawOpt({ rule }));
     const maxW = Math.min(1100, Math.max(360, this.body.clientWidth - 56));
     const px = Math.max(1.5, Math.min(maxW / prog.box.w, 420 / prog.box.h));
 
@@ -233,7 +268,7 @@ export class UnfoldPanel {
 
   _print() {
     if (!this._has()) return;
-    printPieces(this.result.pieces, { rule: this.result.rule, head: this.app.head });
+    printPieces(this.result.pieces, this._drawOpt());
   }
 
   /**
@@ -243,7 +278,7 @@ export class UnfoldPanel {
    */
   async _saveSVG() {
     if (!this._has()) return;
-    const opt = { rule: this.result.rule, head: this.app.head };
+    const opt = this._drawOpt();
     // 多片時每片一個檔，檔名帶編號與片名，現場才對得起來
     const jobs = this.result.pieces.map((p, i) => ({
       name: `${this._base()}_${String(i + 1).padStart(2, '0')}_`
@@ -257,9 +292,8 @@ export class UnfoldPanel {
   async _saveDXF() {
     if (!this._has()) return;
     // 一個 DXF 裝全部的片、沿 X 排開 —— 雷切廠要的是一張料上排好版
-    const blob = textBlob(toDXF(this.result.pieces, {
-      unit: this.opt.unit, rule: this.result.rule, head: this.app.head
-    }), 'application/dxf');
+    const blob = textBlob(toDXF(this.result.pieces, this._drawOpt({ unit: this.opt.unit })),
+      'application/dxf');
     await saveBlob(blob, `${this._base()}.dxf`, TYPES.dxf, this.opt.askPath);
   }
 
@@ -281,6 +315,12 @@ export class UnfoldPanel {
   _say(msg) { this.sum.textContent = msg + '　' + this.sum.textContent; }
 
   _has() { return !!(this.result && this.result.pieces.length); }
+}
+
+/** 這個物件有沒有自己標過切線（＝ 打版那一類）。參數物件標不了，網格算不出來也當沒有 */
+function hasSeams(o) {
+  if (!o || o.isParametric) return false;
+  try { return seamCount(o.mesh()) > 0; } catch (e) { return false; }
 }
 
 function box(cls, msg) {

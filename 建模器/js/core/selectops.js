@@ -175,6 +175,40 @@ export function edgeLoop(mesh, he0, opt = {}) {
 }
 
 /**
+ * 🔴 **分片模式「一次標一整圈」：從點到的那條邊，找出要一起標的邊**（2026-10-09，kang 拍板）。
+ *
+ * 起因：kang 要做「打版」（圓環、球這類彎曲造型攤成幾片可以縫起來的布或紙）。
+ * 圓環照管子截面切成 32 條西瓜皮、或照大圓切成 12 條環帶，每片都 0 失真、0 重疊 ——
+ * ⚠ 但要標 384 條邊，而分片模式一次只能點一條（`edgeLoop()` 只有編輯模式在用）。
+ *
+ * | mode | 標哪些 |
+ * |---|---|
+ * | `'loop'` | 點到的那條邊所在的**一整條線**（`edgeLoop()`）|
+ * | `'all'`  | **跟它平行的每一條線**：先用 `edgeRing()` 橫著穿過一排格子，每一格再走 `edgeLoop()` |
+ *
+ * ⭐ **⛔ 不寫新的走訪** —— 兩支現成的組起來（「面迴圈跟邊環是同一條路徑的兩種讀法」那一則同一個精神）。
+ * ⚠ 只回答「哪幾條」，⛔ 不改東西；標不標由呼叫端決定（照點到的那條現在是不是切線，整批一起切換）。
+ *
+ * @returns {HalfEdge[]} 每條邊只出現一次
+ */
+export function seamLoopEdges(mesh, he, mode = 'loop', opt = {}) {
+  if (mode !== 'all') return edgeLoop(mesh, he, opt).hes;
+  const ring = edgeRing(mesh, he);
+  const seeds = ring.hes.length ? ring.hes : [he];
+  const seen = new Set();
+  const out = [];
+  for (const s of seeds) {
+    const L = edgeLoop(mesh, s, opt);
+    L.hes.forEach((h, i) => {
+      if (seen.has(L.keys[i])) return;
+      seen.add(L.keys[i]);
+      out.push(h);
+    });
+  }
+  return out;
+}
+
+/**
  * 🔴 **破洞在哪裡：找出模型上所有「只有一邊有面」的邊，並分成幾個洞。**
  *
  * ── 它拿來做什麼（＝ 對照表的「依特徵全選」，標 ⭐⭐）────────

@@ -49,6 +49,7 @@
  */
 
 import { pieceNo } from '../unfold/part.js';
+import { sameFolds } from './sheet.js';
 
 const COLOR = { CUT: 7, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
 
@@ -147,10 +148,18 @@ export function toDXF(pieces, opt = {}) {
         ? `CURVE ${round(Math.abs(b.angle))}deg ${b.segs}seg`
         : `${round(b.angle)}deg R${round(b.r)}`);
     }
-    for (const b of p.bends) {
-      if (b.isArc) continue;
-      out.text('BEND', ox + b.x0 * s, y1 + 1.2 * s, 0.8 * s,
-        `${round(b.angle)}deg R0`);
+    /** ⭐ 「相同的折線合成一行」開著、而且這片的折線全部一樣 → 一行（判斷跟展開圖同一支 `sameFolds()`） */
+    const same = opt.foldSummary ? sameFolds(p) : null;
+    if (same) {
+      const b0 = p.bends[0];
+      out.text('BEND', ox + b0.x0 * s, y1 + 1.2 * s, 0.8 * s,
+        `ALL ${same.n} FOLDS ${round(b0.angle)}deg R0`);
+    } else {
+      for (const b of p.bends) {
+        if (b.isArc) continue;
+        out.text('BEND', ox + b.x0 * s, y1 + 1.2 * s, 0.8 * s,
+          `${round(b.angle)}deg R0`);
+      }
     }
 
     /**
