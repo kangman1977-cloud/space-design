@@ -22,7 +22,7 @@ import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
-import { Panel, fillPrimMenu } from './ui/toolbar.js';
+import { Panel, fillPrimMenu, fieldNum } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
   from './unfold/seam.js';
@@ -2918,7 +2918,7 @@ function bisectSelected() {
     return;
   }
   const axis = $('bisectAxis').value;
-  const at = +$('bisectAt').value;
+  const at = fieldNum($('bisectAt').value);   // ⚠ 留空 ⛔ 不是 0（`fieldNum` 那則）
   if (!Number.isFinite(at)) { toast('切割位置要打一個數字', true); return; }
 
   const oldMesh = obj.mesh();
@@ -3360,7 +3360,7 @@ function splitFaceSelected() {
     return;
   }
 
-  const t = +$('splitFaceT').value;
+  const t = fieldNum($('splitFaceT').value);   // ⚠ 留空 ⛔ 不是 0（`fieldNum` 那則）
   if (!Number.isFinite(t)) { toast('位置要打一個數字（0.5 ＝ 正中間）', true); return; }
 
   const obj = els[0].obj;
@@ -3467,7 +3467,7 @@ function updateBisectRange() {
 function updateCutPreview() {
   const obj = sel.editMode ? sel.active : null;
   if (!obj) { view.clearCutPreview(); return; }
-  const at = +$('bisectAt').value;
+  const at = fieldNum($('bisectAt').value);   // ⚠ 留空 ⛔ 不是 0（`fieldNum` 那則）
   if (!Number.isFinite(at)) { view.clearCutPreview(); return; }
 
   const m4 = obj.matrix();

@@ -1249,7 +1249,15 @@ export class Panel {
     // 用 change 而不是 input：逐字觸發會讓每打一個字就重建一次網格
     i.onchange = () => {
       const v = parseFloat(i.value);
-      if (Number.isFinite(v)) on(v);
+      if (!Number.isFinite(v)) return;
+      /** ⚠ 範圍只有箭頭會守 —— 打字進來的要自己擋，而且要講（`clampNum` 那則）*/
+      const c = clampNum(v, opt);
+      if (c.clamped) {
+        i.value = round(c.v);
+        this.app.toast(`「${label}」${c.v === opt.min ? '最小' : '最大'}是 ${round(c.v)}，`
+          + `打的 ${round(v)} 已經改成 ${round(c.v)}`, true);
+      }
+      on(c.v);
     };
     r.appendChild(i);
   }
@@ -1616,4 +1624,31 @@ function round(v) {
 
 function fmt(v) {
   return Number(v).toLocaleString('en-US', { maximumFractionDigits: 1 });
+}
+
+/**
+ * 🔴 **讀一個數字欄位：留空就是「沒打」，⛔ 不是 0**（2026-10-08 查 bug 加的）。
+ * `+欄位值` 會把空字串變成 0 —— 「切一刀」的位置留空，直接切在 0，
+ * 而緊接著的「要打一個數字」檢查永遠不會觸發（0 是正常的數字）。
+ * @param {string} s 欄位的 `value`
+ * @returns {number} 讀不出數字一律回 NaN
+ */
+export function fieldNum(s) {
+  const t = String(s ?? '').trim();
+  return t === '' ? NaN : Number(t);
+}
+
+/**
+ * 🔴 **把打進來的數字限制在欄位的範圍內**（2026-10-08 查 bug 加的）。
+ * `<input min max>` 只管上下箭頭，⛔ 直接打字不管 —— 方塊寬打 −50 會得到翻過來的方塊。
+ * ⭐ 回傳 `clamped` 讓介面**講出來**（跟比例編輯「打 −5 當場變回 0 並講」同一條）。
+ * @param {number} v
+ * @param {{min?:number, max?:number}} opt
+ * @returns {{v:number, clamped:boolean}}
+ */
+export function clampNum(v, opt = {}) {
+  let out = v;
+  if (opt.min !== undefined && out < opt.min) out = opt.min;
+  if (opt.max !== undefined && out > opt.max) out = opt.max;
+  return { v: out, clamped: out !== v };
 }

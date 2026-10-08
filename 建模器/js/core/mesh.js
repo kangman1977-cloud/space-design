@@ -310,7 +310,32 @@ export class Mesh {
       for (let i = 2; i < vs.length; i++) out.push([vs[0], vs[i - 1], vs[i]]);
       return out;
     };
-    if (vs.length === 4 || isConvexLoop(vs, this.computeFaceNormal(face))) return fan();
+    /**
+     * 🔴 **四邊形也要問凹不凹**（2026-10-08 查 bug 改的）。
+     * 以前四邊形一律扇形（從第 1 點拉對角線 0–2）—— 凹角在第 2 或第 4 點時，
+     * 那條對角線跑到外面，**面積算成兩倍、其中一個三角形翻過來**
+     * （拉點把方塊一個面的角拉過對角線就會出現）。
+     * ⭐ 四邊形不必耳切：凹角最多一個，**改走另一條對角線（1–3）就對了**。
+     * ⚠ 法向用 Newell 現算，⛔ 不寫回 `face.normal`（以前這條路不碰它，維持原樣）。
+     */
+    if (vs.length === 4) {
+      const n = new THREE.Vector3();
+      for (let i = 0; i < 4; i++) {
+        const a = vs[i].p, b = vs[(i + 1) % 4].p;
+        n.x += (a.y - b.y) * (a.z + b.z);
+        n.y += (a.z - b.z) * (a.x + b.x);
+        n.z += (a.x - b.x) * (a.y + b.y);
+      }
+      const reflex = i => {
+        const a = vs[(i + 3) % 4].p, b = vs[i].p, c = vs[(i + 1) % 4].p;
+        return new THREE.Vector3().crossVectors(
+          new THREE.Vector3().subVectors(b, a),
+          new THREE.Vector3().subVectors(c, b)).dot(n) < -1e-9;
+      };
+      if (reflex(1) || reflex(3)) return [[vs[1], vs[2], vs[3]], [vs[1], vs[3], vs[0]]];
+      return fan();
+    }
+    if (isConvexLoop(vs, this.computeFaceNormal(face))) return fan();
 
     /**
      * 非凸 → 投影到面自己的平面，用耳切。

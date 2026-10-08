@@ -106,9 +106,42 @@ function bridgeHole(ring, r, pts) {
   }
   if (best < 0) return null;
 
-  // 取那條邊上 x 較大的端點當橋墩 —— 它一定看得到 M
+  // 先取那條邊上 x 較大的端點當橋墩
   const ia = ring[best], ib = ring[(best + 1) % ring.length];
-  const bridge = pts[ia].x >= pts[ib].x ? best : (best + 1) % ring.length;
+  let bridge = pts[ia].x >= pts[ib].x ? best : (best + 1) % ring.length;
+
+  /**
+   * 🔴 **那個端點⛔ 不一定看得到 M**（2026-10-08 查 bug 改的）。
+   * 舊的註解寫「它一定看得到 M」—— 外框有一個缺口剛好擋在中間時就不成立：
+   * 橋穿過外框，耳切中途停下，**蓋子缺一塊，而且沒有任何警告**
+   * （實測：蓋子 75 只切出 47、擠出來不封閉）。
+   *
+   * ⭐ 課本做法（Eberly）：射線打到的點 I、端點 P、M 圍成一個三角形。
+   * 外框上的**凹角**落在這個三角形裡，才擋得住視線 ——
+   * 有的話改接「跟 +x 方向夾角最小」的那一個凹角（一樣小就挑近的）。
+   */
+  const I = { x: bestX, y: M.y };
+  const P = pts[ring[bridge]];
+  const inTri = (q, a, b, c) => {
+    const d1 = cross(a, b, q), d2 = cross(b, c, q), d3 = cross(c, a, q);
+    const neg = d1 < -1e-12 || d2 < -1e-12 || d3 < -1e-12;
+    const pos = d1 > 1e-12 || d2 > 1e-12 || d3 > 1e-12;
+    return !(neg && pos);
+  };
+  let bestAng = Infinity, bestDist = Infinity;
+  for (let j = 0; j < ring.length; j++) {
+    if (j === bridge) continue;
+    const q = pts[ring[j]];
+    const prev = pts[ring[(j - 1 + ring.length) % ring.length]];
+    const next = pts[ring[(j + 1) % ring.length]];
+    if (cross(prev, q, next) > 0) continue;                 // 不是凹角 ⇒ 擋不到
+    if (q.x < M.x || !inTri(q, M, I, P)) continue;
+    const ang = Math.atan2(Math.abs(q.y - M.y), q.x - M.x);
+    const dist = Math.hypot(q.x - M.x, q.y - M.y);
+    if (ang < bestAng - 1e-12 || (Math.abs(ang - bestAng) <= 1e-12 && dist < bestDist)) {
+      bestAng = ang; bestDist = dist; bridge = j;
+    }
+  }
 
   const out = [];
   for (let i = 0; i <= bridge; i++) out.push(ring[i]);

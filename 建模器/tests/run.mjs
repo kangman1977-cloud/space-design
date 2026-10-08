@@ -43,7 +43,7 @@ const ROOT = join(HERE, '..');
 })();
 
 const { Mesh, EDGE_ROLE } = await import('../js/core/mesh.js');
-const { summarize, SURFACE } = await import('../js/core/region.js');
+const { summarize, SURFACE, planarRegions } = await import('../js/core/region.js');
 const { buildPrim, bendDevelopedLength, isSheetPrim, defaultSrc }
   = await import('../js/build/prim.js');
 const { initCSG, csgError, BOOL_OPS } = await import('../js/build/bool.js');
@@ -52,7 +52,7 @@ const io = await import('../js/core/io.js');
 const THREE = await import('three');
 // toolbar.js 只在 Panel 的建構子裡碰 DOM，模組層級沒有，所以匯入得進來。
 // topologyCheck 是刻意抽出來的純函式，就是為了能在這裡測。
-const { topologyCheck } = await import('../js/ui/toolbar.js');
+const { topologyCheck, fieldNum, clampNum } = await import('../js/ui/toolbar.js');
 // 第 3 期。展開核心與規則同樣不碰 DOM，畫圖也刻意拆成
 // 「決定畫什麼」與「怎麼畫出來」，前者是純資料，測得到。
 const { neutralRadius, bendAllowance } = await import('../js/build/prim.js');
@@ -13404,6 +13404,195 @@ section('B 組 bug：合併網格要搬全部標記');
   const two = Mesh.merge([m, m.transformed(new THREE.Matrix4().makeTranslation(200, 0, 0))]);
   eq('★★★ 平滑邊 × 2', count(two, h => h.smooth), 2 * sm);
   eq('★★ 硬邊 × 2', count(two, h => h.hard), 2 * hd);
+}
+
+// ═══════════════════════════════════════════════════════
+//  C 組 bug（2026-10-08 全專案查 bug 找到的，數字或形狀算錯）
+// ═══════════════════════════════════════════════════════
+
+/** 正方形 100×100、正中間一個 32 邊形的圓孔（半徑 20），擠出 10 */
+function squareWithHole() {
+  const P = (x, y) => ({ x, y, corner: true });
+  const outer = [P(-50, -50), P(50, -50), P(50, 50), P(-50, 50)];
+  const hole = [];
+  for (let i = 0; i < 32; i++) {
+    const a = 2 * Math.PI * i / 32;
+    hole.push({ x: 20 * Math.cos(a), y: 20 * Math.sin(a), corner: false });
+  }
+  return extr.extrudeProfile({ pts: outer, holes: [{ pts: hole }] }, 10);
+}
+
+section('C 組 bug：有孔的面，外輪廓要挑面積最大的');
+
+{
+  /**
+   * 🔴 **圓孔有 32 個點、外框只有 4 個 → 圓孔被當成外輪廓**（修之前）。
+   * 舊的排序是「點最多的當外輪廓」⇒ 周長量出 62.7（圓孔的周長），應該是 400。
+   * ⭐ 展開那邊（`flatten.js`）早就照面積排了，只有這裡照點數。
+   */
+  const m = squareWithHole();
+  const top = planarRegions(m).find(r => r.normal.y > 0.99);
+  ok('前提：找得到頂面', !!top);
+  eq('★★★ 外輪廓是那 4 個角（⛔ 不是圓孔的 32 點）', top.outer.length, 4);
+  eq('★ 圓孔算成內孔', top.holes.length, 1);
+  const measure0 = await import('../js/core/measure.js');
+  const mm = measure0.regionMeasure(m, top, new THREE.Matrix4());
+  near('★★★ 周長 ＝ 100×4 ＝ 400', mm.perimeter, 400, 1e-6);
+}
+
+section('C 組 bug：凹進去的四邊形要切對對角線');
+
+{
+  /**
+   * 🔴 **四邊形一律從第一個角切 → 凹角在第 2 或第 4 點時，切出去的三角形跑到外面**（修之前）。
+   * 箭頭形 (0,0)→(2,−1)→(4,0)→(2,−3)，凹角在第 2 個點：
+   * 真面積 4，舊的切法算出 8，而且有一個三角形是翻過來的。
+   */
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const pts = [V(0, 0, 0), V(2, 0, -1), V(4, 0, 0), V(2, 0, -3)];
+  const m = Mesh.fromFaceList(pts, [[0, 1, 2, 3]]);
+  near('★★★ 面積 ＝ 4（⛔ 不是 8）', m.area(), 4, 1e-9);
+  const n = m.computeFaceNormal(m.faces[0]).clone();
+  let flipped = 0;
+  for (const [a, b, c] of m.faceTriangles(m.faces[0])) {
+    const cr = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(b.p, a.p), new THREE.Vector3().subVectors(c.p, a.p));
+    if (cr.dot(n) < 0) flipped++;
+  }
+  eq('★★ 一個翻過來的三角形都沒有', flipped, 0);
+
+  // 對照組：凹角在第 1 個點，舊的切法本來就對 —— ⛔ 不可以被改壞
+  const m2 = Mesh.fromFaceList([V(2, 0, -1), V(4, 0, 0), V(2, 0, -3), V(0, 0, 0)], [[0, 1, 2, 3]]);
+  near('對照組：凹角換到第 1 個點，面積一樣是 4', m2.area(), 4, 1e-9);
+  // 對照組：凸的四邊形照舊
+  const sq = Mesh.fromFaceList([V(0, 0, 0), V(0, 0, 2), V(2, 0, 2), V(2, 0, 0)], [[0, 1, 2, 3]]);
+  near('對照組：凸的正方形面積 4', sq.area(), 4, 1e-9);
+}
+
+section('C 組 bug：外框有缺口又帶孔，蓋子⛔ 不可以缺一塊');
+
+{
+  /**
+   * 🔴 **接孔的橋穿過了外框的缺口 → 耳切中途停下，蓋子缺一塊，而且⛔ 沒有警告**（修之前）。
+   * 舊做法假設「交點那條邊上 x 較大的端點一定看得到孔」—— 缺口剛好擋在中間就不成立。
+   * ⭐ 課本做法：那個三角形裡有凹角擋著，就改接「角度最小」的那個凹角。
+   */
+  const P = (x, y) => ({ x, y, corner: true });
+  const outer = [P(0, 0), P(4, 0), P(12, 10), P(8, 10), P(7, 7), P(6, 10), P(0, 10)];
+  const hole = [P(1, 4), P(1, 6), P(2, 5)];
+  // 外框面積（鞋帶公式）(0+40+40−14+28+60+0)÷2 ＝ 77，孔 1 ⇒ 蓋子應該是 76
+  // 〔第一版這裡寫 76−1＝75 —— 把「淨面積 76」當成外框面積，是我算錯，⛔ 不是程式錯〕
+  const t = extr.triangulateWithHoles(outer, [hole]);
+  eq('★★★ 三角形數 ＝ 點數 ＋ 2×孔數 − 2 ＝ 10 ＋ 2 − 2', t.tris.length, 10);
+  near('★★★ 蓋子面積 ＝ 77 − 1 ＝ 76', extr.trisArea(t.tris, t.pts), 76, 1e-9);
+
+  const m = extr.extrudeProfile({ pts: outer, holes: [{ pts: hole }] }, 5);
+  ok('★★ 擠出來是封閉的', m.isClosed());
+  near('★★ 體積 ＝ 76 × 5', m.volume(), 380, 1e-6);
+
+  // 對照組：同一個孔、沒有缺口的外框照舊
+  const plain = extr.triangulateWithHoles([P(0, 0), P(12, 0), P(12, 10), P(0, 10)], [hole]);
+  near('對照組：沒有缺口的外框照舊', extr.trisArea(plain.tris, plain.pts), 119, 1e-9);
+}
+
+section('C 組 bug：點連成面，順序反了也要繞對方向');
+
+{
+  /**
+   * 🔴 **照「點的順序」直接建面，⛔ 沒對照旁邊的面 → 順序反了就是壞網格**（修之前）。
+   * 順時針或逆時針點本來就是隨意的，等於一半的人會踩到。
+   * ⭐ 新的面跟旁邊共用的每一條邊，方向一定要跟鄰面相反 —— 不對就整圈反過來。
+   * 順便：原本是邊界的那幾條邊身上有自動標的「切開」，補上之後是假的，要清掉。
+   */
+  const b2 = baked('box', { w: 60, d: 45, h: 40 });
+  const ty = b2.verts.reduce((mx, v) => Math.max(mx, v.p.y), -1e9);
+  const topFace = b2.faces.find(f => b2.faceVerts(f).every(v => Math.abs(v.p.y - ty) < 1e-9));
+  const m2 = edit.deleteFaces(b2, [{ kind: 'face', face: topFace }]).mesh;
+  const naked = m2.halfEdges.filter(he => !he.face);
+  const loop = [];
+  let c = naked[0], guard = 0;
+  do { loop.push(c.v); c = c.next; } while (c && c !== naked[0] && guard++ < 100);
+
+  const r = edit.faceFromVerts(m2, loop.slice().reverse());
+  ok('★★★ 反著點也建得起來', r.ok, r.reason);
+  ok('★★★ 　　而且是封閉的（⛔ 不是壞網格）', r.ok && r.mesh.isClosed());
+  ok('★★ 　　結構檢查通過', r.ok && r.mesh.validate().ok);
+  rel('★★ 　　體積回到 108000', r.ok ? r.mesh.volume() : NaN, 108000);
+  // 〔假的「切開」⛔ 在這裡驗不到（方塊的邊緣是摺線）—— 見下一組的平面格子〕
+
+  const ok2 = edit.faceFromVerts(m2, loop);
+  ok('對照組：照邊界的順序點，照舊建得起來而且封閉', ok2.ok && ok2.mesh.isClosed());
+}
+
+{
+  /**
+   * 🔴 **假的「切開」要用【平的】洞驗，⛔ 不能用方塊** ——
+   * 方塊頂面的邊緣本來就是 90° 的摺線，刪掉頂面之後它們還是「摺線」，
+   * ⛔ 不會自動變成「切開」⇒ 用方塊驗，修之前也是 0 條，**碰巧通過**（第一、二版都被騙了）。
+   * ⭐ 平面格子中間挖一格：洞的四條邊兩側共平面，原本沒有標記，
+   * 變成邊界時才被自動標成「切開」—— 補回去之後那 4 條就是假的。
+   */
+  const pts = [];
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) pts.push(new THREE.Vector3(i * 10, 0, j * 10));
+  const id = (i, j) => j * 4 + i;
+  const faces = [];
+  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+    if (!(i === 1 && j === 1)) faces.push([id(i, j), id(i, j + 1), id(i + 1, j + 1), id(i + 1, j)]);
+  }
+  const g = Mesh.fromFaceList(pts, faces);
+  g.computeNormals();
+  const gi = g._vertIndex();
+  const rimIds = [id(1, 1), id(2, 1), id(2, 2), id(1, 2)];
+  const rim = g.halfEdges.filter(he => !he.face
+    && rimIds.includes(gi.get(he.v.id)) && rimIds.includes(gi.get(he.to.id)));
+  ok('前提：洞的那一圈原本被自動標成「切開」', rim.length === 4 && rim.every(h => h.role === EDGE_ROLE.CUT));
+  const ring = [];
+  let c = rim[0], guard = 0;
+  do { ring.push(c.v); c = c.next; } while (c && c !== rim[0] && guard++ < 20);
+
+  for (const [name, order] of [['照順序', ring], ['反著點', ring.slice().reverse()]]) {
+    const r = edit.faceFromVerts(g, order);
+    let fake = 0;
+    if (r.ok) for (const he of r.mesh.edges()) {
+      if (he.face && he.twin && he.twin.face && he.role === EDGE_ROLE.CUT) fake++;
+    }
+    ok(`★★ ${name}：補得起來而且結構沒問題`, r.ok && r.mesh.validate().ok);
+    eq(`★★★ ${name}：補上之後，內部的邊一條「切開」都沒有`, fake, 0);
+  }
+}
+
+section('C 組 bug：欄位留空⛔ 不可以當成 0');
+
+{
+  /**
+   * 🔴 **`+欄位值`：空字串會變成 0** —— 「切一刀」位置留空，直接切在 0（修之前）。
+   * 而緊接著的「要打一個數字」檢查永遠不會觸發，因為 0 是正常的數字。
+   */
+  ok('★★★ 留空 → 不是數字', Number.isNaN(fieldNum('')));
+  ok('★★ 只有空白 → 不是數字', Number.isNaN(fieldNum('   ')));
+  ok('★ 亂打 → 不是數字', Number.isNaN(fieldNum('abc')));
+  eq('對照組：打 0 就是 0', fieldNum('0'), 0);
+  eq('對照組：前後有空白照樣讀', fieldNum(' 3.5 '), 3.5);
+  eq('對照組：負數照樣讀', fieldNum('-12'), -12);
+}
+
+section('C 組 bug：右側面板的數字要守住範圍');
+
+{
+  /**
+   * 🔴 **欄位的最小／最大值只管上下箭頭，⛔ 直接打字不管**（修之前）。
+   * 方塊寬打 −50 → 翻過來的方塊；板厚打 −1 照收。
+   * ⭐ 超出範圍就改回邊界，**而且要講**（跟比例編輯「打 −5 當場變回 0 並講」同一條）。
+   */
+  const a = clampNum(-50, { min: 0.1 });
+  eq('★★★ 低於最小值 → 改成最小值', a.v, 0.1);
+  ok('★★ 　　而且回報「改過了」（介面要講出來）', a.clamped);
+  const b = clampNum(20, { max: 10 });
+  eq('★★ 高於最大值 → 改成最大值', b.v, 10);
+  const c = clampNum(5, { min: 0.1, max: 10 });
+  eq('對照組：範圍內照收', c.v, 5);
+  ok('對照組：範圍內⛔ 不回報', !c.clamped);
+  eq('對照組：沒設範圍的欄位（例如位置）照收負數', clampNum(-30, {}).v, -30);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

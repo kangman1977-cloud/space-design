@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from '../core/mesh.js';
-import { triangulateWithHoles } from '../core/triangulate.js';
+import { triangulateWithHoles, trisArea } from '../core/triangulate.js';
 
 /**
  * 擠出。
@@ -58,6 +58,28 @@ export function extrudeMany(profiles, h, opt = {}) {
     // ── 頂面與底面的三角化 ──
     const flat = triangulateWithHoles(outer, holes);
     if (!flat.tris.length) continue;
+    /**
+     * 🔴 **三角化的面積要等於輪廓的面積，⛔ 對不上就報錯**（2026-10-08 查 bug 加的）。
+     * 耳切卡住時會**中途停下、少切幾塊**，以前照樣收下 ⇒ 蓋子缺一塊、模型不封閉，
+     * 而且**畫面上沒有任何提示**。破的蓋子比報錯更糟：要到 STL 才會被發現。
+     * ⭐ 報錯會被 `ModelObject.mesh()` 接住，物件顯示替身並記下原因，⛔ 不會整頁掛掉。
+     */
+    {
+      const ring2 = q => {
+        let s = 0;
+        for (let i = 0; i < q.length; i++) {
+          const a = q[i], b = q[(i + 1) % q.length];
+          s += a.x * b.y - b.x * a.y;
+        }
+        return Math.abs(s) / 2;
+      };
+      const want = ring2(outer) - holes.reduce((s, hh) => s + ring2(hh), 0);
+      const got = trisArea(flat.tris, flat.pts);
+      if (Math.abs(got - want) > Math.max(1e-9, want * 1e-6)) {
+        throw new Error(`這個輪廓切不完整（蓋子只切出 ${got.toFixed(2)}，應該是 ${want.toFixed(2)}）`
+          + ' —— 多半是外框自己交叉，或孔跑到外框外面了');
+      }
+    }
 
     const ring = flat.pts;                        // 三角化用的完整點集（含孔）
     const n = ring.length;

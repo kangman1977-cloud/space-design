@@ -3906,7 +3906,36 @@ export function faceFromVerts(mesh, verts) {
     };
   }
 
-  faces.push(idx);
+  /**
+   * 🔴 **繞向要跟旁邊的面對得起來，⛔ 不是照點的順序**（2026-10-08 查 bug 改的）。
+   * 新的面跟既有的面共用一條邊時，兩邊走那條邊的方向**一定要相反**
+   * （半邊才配得起來）。順時針或逆時針點本來就是隨意的 ⇒ 以前**一半的人會做出壞網格**
+   * （實測：方塊刪掉頂面、反著點回去 → 不封閉、體積 72000，應該 108000）。
+   * ⭐ 數一數共用的邊裡「方向撞到」的有幾條：反過來撞得比較少就整圈反過來；
+   * 反過來之後還有撞到的 ⇒ 這幾個點繞不成一致的一圈，講清楚、⛔ 不硬建。
+   */
+  const dirEdges = new Set();
+  for (const f of faces) {
+    for (let i = 0; i < f.length; i++) dirEdges.add(`${f[i]}>${f[(i + 1) % f.length]}`);
+  }
+  const clash = order => {
+    let n = 0;
+    for (let i = 0; i < order.length; i++) {
+      if (dirEdges.has(`${order[i]}>${order[(i + 1) % order.length]}`)) n++;
+    }
+    return n;
+  };
+  const rev = idx.slice().reverse();
+  const order = clash(rev) < clash(idx) ? rev : idx;
+  if (clash(order)) {
+    return {
+      ok: false,
+      reason: '這幾個點的順序繞不成一致的一圈（跟旁邊的面方向對不起來）'
+            + ' —— 請照著洞的邊緣，一個接一個點過去'
+    };
+  }
+
+  faces.push(order);
 
   const pre = preflightRebuild(points, faces);
   if (!pre.ok) return { ok: false, reason: `建出壞掉的網格：${pre.fatal[0]}` };
@@ -3922,6 +3951,11 @@ export function faceFromVerts(mesh, verts) {
   const out = Mesh.fromFaceList(clean.points, clean.faces);
   out.computeNormals();
   copyMarksThroughRemap(mesh, out, clean.remap);
+  /**
+   * 🔴 補上之後，原本是洞的邊緣那幾條**變回內部邊**，它們身上自動標的「切開」是假的
+   * （2026-10-08 查 bug 加的，跟 `fillHoles()`／`extrudeBoundaryEdges()` 同一件事）。
+   */
+  clearBoundaryOnlySeams(mesh, out, clean.remap);
 
   /** ⚠ 不平就講出來，⛔ 不擋（想弄平接著按 `壓平`）*/
   const flatness = fitPlane(verts.map(v => v.p)).dev;

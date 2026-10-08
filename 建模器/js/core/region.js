@@ -41,7 +41,7 @@ export class Region {
     this.loops = [];            // 邊界迴圈，每個是頂點陣列（已去掉共線點）
     this.area = 0;
   }
-  /** 外輪廓 ＝ 最長的那個迴圈；其餘是內孔 */
+  /** 外輪廓 ＝ 圍出面積最大的那個迴圈（`finishRegion` 排好了）；其餘是內孔 */
   get outer() { return this.loops[0] || []; }
   get holes() { return this.loops.slice(1); }
 }
@@ -139,7 +139,22 @@ function finishRegion(mesh, r) {
   r.d = n.dot(centroid);
 
   r.loops = regionLoops(mesh, r).map(loop => simplifyCollinear(loop));
-  r.loops.sort((a, b) => b.length - a.length);   // 最長的當外輪廓
+  /**
+   * 🔴 **外輪廓 ＝ 圍出面積最大的那一圈，⛔ 不是點最多的那一圈**（2026-10-08 查 bug 改的）。
+   * 舊的排序是「點最多的當外輪廓」—— 方形板上挖一個 32 邊形的圓孔，
+   * 圓孔 32 點、外框 4 點 ⇒ **圓孔被當成外框**，周長量出圓孔的 125.5，應該是 400。
+   * ⭐ 展開（`flatten.js`）早就照面積排了，這裡跟它對齊。
+   */
+  const areaOf = loop => {
+    const s = new THREE.Vector3();
+    for (let i = 0; i < loop.length; i++) {
+      s.add(new THREE.Vector3().crossVectors(loop[i].p, loop[(i + 1) % loop.length].p));
+    }
+    return Math.abs(s.dot(r.normal)) / 2;
+  };
+  /** ⚠ ⛔ 不要叫 `area` —— 這一支上面已經有 `let area`（重複宣告 ＝ 整個模組載入失敗，2026-10-08 實撞）*/
+  const loopArea = new Map(r.loops.map(l => [l, areaOf(l)]));
+  r.loops.sort((a, b) => loopArea.get(b) - loopArea.get(a));
 }
 
 /**
