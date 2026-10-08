@@ -57,10 +57,21 @@ export function readSVG(text, opt = {}) {
   const errors = [];
 
   if (!doc.svg) return { ok: false, reason: '這不是一個 SVG 檔（找不到 <svg> 標籤）。' };
+  /**
+   * ⚠ 讀不到的東西（引用、文字、點陣圖）要講出來 —— 以前是安靜地不見（2026-10-08）。
+   * 文字與引用在 Illustrator 裡都有「轉成路徑」的做法，講得出怎麼辦。
+   */
+  const unreadKeys = Object.keys(doc.unread || {});
+  const unreadMsg = unreadKeys.length
+    ? `有 ${unreadKeys.map(k => `${doc.unread[k]} 個 <${k}>`).join('、')} 讀不到，已略過`
+      + '（文字請先「建立外框」、引用的符號請先「解除連結」再匯出）。'
+    : '';
   if (!doc.paths.length) {
-    return { ok: false, reason: '這個 SVG 裡沒有任何路徑（<path>）。'
-      + '如果圖上是文字，請先在 Illustrator 裡「建立外框」再匯出。' };
+    return { ok: false, reason: '這個 SVG 裡沒有任何讀得到的形狀（路徑、矩形、圓形、多邊形）。'
+      + (unreadMsg || '如果圖上是文字，請先在 Illustrator 裡「建立外框」再匯出。') };
   }
+
+  if (unreadMsg) notes.push('⚠ ' + unreadMsg);
 
   // ── 一、比例 ──
   const scale = resolveScale(doc.svg, opt, notes);
@@ -188,8 +199,24 @@ function resolveScale(svg, opt, notes) {
     };
   }
 
-  if (w && !vb) {
-    return { cmPerUnit: UNIT_CM[w.unit], from: 'declared', label: `檔案宣告單位 ${w.unit}` };
+  /**
+   * 🔴 **只寫寬或只寫高，配上 viewBox 照樣算得出比例**（2026-10-08 查 bug 改的）。
+   * 以前要寬、高、viewBox 三個都有才算，少一個就去猜 px ——
+   * `width="100mm"` ＋ `viewBox="0 0 100 50"` 的 10 cm 圖被算成 2.65 cm，
+   * **還說「這個檔沒有寫實際尺寸」**，而它明明寫了。
+   */
+  if (vb && (w && vb.w > 0 || h && vb.h > 0)) {
+    const useW = w && vb.w > 0;
+    return {
+      cmPerUnit: useW ? w.cm / vb.w : h.cm / vb.h,
+      from: 'declared',
+      label: `檔案宣告${useW ? `寬 ${svg.width}` : `高 ${svg.height}`}（另一邊照 viewBox 等比）`
+    };
+  }
+
+  if ((w || h) && !vb) {
+    const u = (w || h).unit;
+    return { cmPerUnit: UNIT_CM[u], from: 'declared', label: `檔案宣告單位 ${u}` };
   }
 
   notes.push('⚠ 這個檔沒有寫實際尺寸（只有 viewBox），'
@@ -312,6 +339,7 @@ const SKIP = new Set(['defs', 'clippath', 'mask', 'symbol', 'pattern', 'marker']
 export function scanSVG(src) {
   const text = src.replace(/<!--[\s\S]*?-->/g, '');
   const paths = [];
+  const unread = {};                      // 讀不到的標籤各幾個（`UNREAD` 那幾種）
   let svg = null;
   const stack = [];                       // 巢狀狀態：{ tag, matrix, name, skip }
   let top = { tag: '', matrix: IDENT, name: '', skip: false };
@@ -338,19 +366,69 @@ export function scanSVG(src) {
       skip: top.skip || SKIP.has(tag)
     };
 
-    if (tag === 'path' && !next.skip && attrs.d) {
+    /**
+     * 🔴 **基本圖形先換成等價的路徑，再走同一條路**（2026-10-08 查 bug 改的）。
+     * 以前只收 `<path>` ⇒ Illustrator 存出來的 `<rect>`、`<circle>`、`<polygon>`
+     * **全部安靜地不見**，只有一個矩形的檔案甚至被說成「沒有任何路徑」。
+     * ⭐ ⛔ 不另寫一套解析：換成 `d` 之後轉角、取樣、transform 全部跟路徑一樣。
+     */
+    const d = next.skip ? null : (tag === 'path' ? attrs.d : shapeToD(tag, attrs));
+    if (d) {
       paths.push({
-        d: attrs.d,
+        d,
         matrix: next.matrix,
         name: attrs['data-name'] || attrs.id || top.name || '',
         layer: top.name || ''
       });
+    } else if (!next.skip && UNREAD.has(tag)) {
+      /** ⚠ 讀不到的要數起來講出來，⛔ 不可以沉默（`readSVG()` 會寫進提示）*/
+      unread[tag] = (unread[tag] || 0) + 1;
     }
 
     if (!selfClose) { stack.push(top); top = next; }
   }
 
-  return { svg, paths };
+  return { svg, paths, unread };
+}
+
+/** 看得到、但這裡畫不出形狀的標籤 —— 碰到要講，⛔ 不沉默 */
+const UNREAD = new Set(['use', 'text', 'image']);   // ⚠ tspan 不算：它包在 text 裡，會重複數
+
+/**
+ * 基本圖形 → 等價的 path `d`。讀不出來（缺尺寸、尺寸是 0）回 null。
+ * 規格照 SVG 1.1 第 9 章：圓角矩形只給一個 rx／ry 時另一個跟著它，而且不超過邊長一半。
+ */
+function shapeToD(tag, a) {
+  const N = v => { const x = parseFloat(v); return Number.isFinite(x) ? x : 0; };
+  const pts = s => (String(s || '').match(/[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) || []).map(Number);
+  if (tag === 'rect') {
+    const x = N(a.x), y = N(a.y), w = N(a.width), h = N(a.height);
+    if (!(w > 0 && h > 0)) return null;
+    let rx = a.rx !== undefined ? N(a.rx) : NaN, ry = a.ry !== undefined ? N(a.ry) : NaN;
+    if (Number.isNaN(rx)) rx = Number.isNaN(ry) ? 0 : ry;
+    if (Number.isNaN(ry)) ry = rx;
+    rx = Math.min(Math.max(rx, 0), w / 2); ry = Math.min(Math.max(ry, 0), h / 2);
+    if (!(rx > 0 && ry > 0)) return `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
+    return `M${x + rx} ${y}H${x + w - rx}A${rx} ${ry} 0 0 1 ${x + w} ${y + ry}`
+      + `V${y + h - ry}A${rx} ${ry} 0 0 1 ${x + w - rx} ${y + h}`
+      + `H${x + rx}A${rx} ${ry} 0 0 1 ${x} ${y + h - ry}`
+      + `V${y + ry}A${rx} ${ry} 0 0 1 ${x + rx} ${y}Z`;
+  }
+  if (tag === 'circle' || tag === 'ellipse') {
+    const cx = N(a.cx), cy = N(a.cy);
+    const rx = tag === 'circle' ? N(a.r) : N(a.rx), ry = tag === 'circle' ? N(a.r) : N(a.ry);
+    if (!(rx > 0 && ry > 0)) return null;
+    return `M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`;
+  }
+  if (tag === 'polygon' || tag === 'polyline') {
+    const p = pts(a.points);
+    if (p.length < 4) return null;
+    let d = `M${p[0]} ${p[1]}`;
+    for (let i = 2; i + 1 < p.length; i += 2) d += `L${p[i]} ${p[i + 1]}`;
+    return tag === 'polygon' ? d + 'Z' : d;
+  }
+  if (tag === 'line') return `M${N(a.x1)} ${N(a.y1)}L${N(a.x2)} ${N(a.y2)}`;
+  return null;
 }
 
 function parseAttrs(s) {
@@ -401,7 +479,13 @@ export function parseTransform(s) {
   const re = /([a-zA-Z]+)\s*\(([^)]*)\)/g;
   let t;
   while ((t = re.exec(s)) !== null) {
-    const n = t[2].trim().split(/[\s,]+/).map(Number).filter(Number.isFinite);
+    /**
+     * 🔴 **數字要照 SVG 的寫法抓，⛔ 不可以用空白切**（2026-10-08 查 bug 改的）。
+     * `translate(10-20)`、`matrix(1 0 0 1 100-50)` 是合法的（負號本身就是分隔）——
+     * 用空白切會得到「10-20」這一個讀不出來的數，被濾掉之後**整個 transform 安靜地失效**，
+     * 形狀跑到別的位置。跟 `svgPath.js` 的切字同一條規則。
+     */
+    const n = (t[2].match(/[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) || []).map(Number);
     const k = t[1].toLowerCase();
     if (k === 'translate') m = mul(m, [1, 0, 0, 1, n[0] || 0, n[1] || 0]);
     else if (k === 'scale') m = mul(m, [n[0] ?? 1, 0, 0, n[1] ?? n[0] ?? 1, 0, 0]);

@@ -13595,6 +13595,124 @@ section('C 組 bug：右側面板的數字要守住範圍');
   eq('對照組：沒設範圍的欄位（例如位置）照收負數', clampNum(-30, {}).v, -30);
 }
 
+// ═══════════════════════════════════════════════════════
+//  D 組 bug（2026-10-08 全專案查 bug 找到的，SVG 匯入）
+// ═══════════════════════════════════════════════════════
+
+section('D 組 bug：圓弧的兩個旗標黏在一起');
+
+{
+  /**
+   * 🔴 **`a50 50 0 01100 0` → 整條路徑消失**（修之前）。
+   * 圓弧的兩個旗標各只有一個字元（0 或 1），可以黏在一起寫 ——
+   * SVGO 之類的壓縮工具一定會這樣寫。舊的切字把 `01100` 讀成一個數，
+   * 後面的參數全部錯位，最後報「數字不夠」，**而且報錯的指令名字還是錯的**（寫成 M）。
+   */
+  const spaced = svgp.parsePath('M0 0a50 50 0 0 1 100 0');
+  const packed = svgp.parsePath('M0 0a50 50 0 01100 0');
+  eq('★★★ 黏在一起：一個錯誤都沒有', packed.errors.length, 0);
+  eq('★★★ 黏在一起：點數跟分開寫的一樣', packed.subpaths[0] && packed.subpaths[0].pts.length,
+     spaced.subpaths[0].pts.length);
+  const last = packed.subpaths[0] && packed.subpaths[0].pts.slice(-1)[0];
+  ok('★★ 終點在 (100, 0)', last && Math.abs(last.x - 100) < 1e-9 && Math.abs(last.y) < 1e-9);
+
+  const both = svgp.parsePath('M0 0a50 50 0 1150 50');
+  ok('★ 兩個旗標都是 1 也讀得對（終點 50, 50）', both.errors.length === 0
+     && Math.abs(both.subpaths[0].pts.slice(-1)[0].x - 50) < 1e-9);
+
+  const bad = svgp.parsePath('M0 0L10');
+  ok('★★ 數字不夠時，報錯講的是「L」（⛔ 不是上一個指令）', bad.errors.some(e => e.includes('「L」')),
+     bad.errors.join('／'));
+}
+
+section('D 組 bug：transform 裡的數字黏在一起');
+
+{
+  /**
+   * 🔴 **`translate(10-20)` → 整個被忽略，形狀跑到別的位置，⛔ 沒有任何提示**（修之前）。
+   * 舊做法用「空白或逗號」切 —— 正是 `svgPath.js` 切字那則警告過的寫法。
+   */
+  const t = prof.parseTransform('translate(10-20)');
+  eq('★★★ translate(10-20)：往右 10', t[4], 10);
+  eq('★★★ 　　往上 20（−20）', t[5], -20);
+  const m = prof.parseTransform('matrix(1 0 0 1 100-50)');
+  eq('★★ matrix 黏在一起：6 個數都讀到（位移 100）', m[4], 100);
+  eq('★★ 　　位移 −50', m[5], -50);
+  const s = prof.parseTransform('scale(.5.5)');
+  eq('★ scale(.5.5) ＝ 0.5 與 0.5', s[0] + s[3], 1);
+  const ok2 = prof.parseTransform('translate(10, -20)');
+  eq('對照組：照規矩寫的照舊', ok2[5], -20);
+}
+
+section('D 組 bug：只寫寬度的 SVG 也要換算得出尺寸');
+
+{
+  /**
+   * 🔴 **`width="100mm"` ＋ viewBox、沒寫 height → 被當成「沒寫尺寸」去猜，10 cm 變 2.65 cm**（修之前）。
+   * 有寬度 ＋ viewBox 就算得出比例（100mm ÷ 100 單位），⛔ 不需要高度。
+   */
+  const sq = 'M0 0H100V50H0Z';
+  const onlyW = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" width="100mm" viewBox="0 0 100 50"><path d="${sq}"/></svg>`);
+  near('★★★ 只寫寬度：寬 10 cm', onlyW.size.w, 10, 1e-9);
+  eq('★★ 　　比例是「檔案宣告」的，⛔ 不是猜的', onlyW.scale.from, 'declared');
+  ok('★★ 　　⛔ 不可以說「這個檔沒有寫實際尺寸」', !onlyW.notes.some(n => n.includes('沒有寫實際尺寸')));
+
+  const onlyH = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" height="50mm" viewBox="0 0 100 50"><path d="${sq}"/></svg>`);
+  near('★★ 只寫高度：寬一樣是 10 cm', onlyH.size.w, 10, 1e-9);
+
+  const none = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><path d="${sq}"/></svg>`);
+  eq('對照組：真的沒寫尺寸，照舊用猜的並講出來', none.scale.from, 'guess');
+}
+
+section('D 組 bug：矩形、圓形這些基本圖形⛔ 不可以消失');
+
+{
+  /**
+   * 🔴 **只收 `<path>` → `<rect>`、`<circle>`、`<polygon>` 全部安靜地不見**（修之前）。
+   * Illustrator 匯出時，基本圖形就是寫成這些標籤。
+   * ⭐ 先換成等價的路徑，再走原本那一條路 —— ⛔ 不另寫一套。
+   * 讀不到的（`<use>`、`<text>`、`<image>`）要講出來，⛔ 不可以沉默。
+   */
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+    <rect id="方框" x="0" y="0" width="40" height="20"/>
+    <circle id="圓" cx="70" cy="70" r="10"/>
+    <polygon id="三角" points="0,60 30,60 0,90"/>
+    <ellipse id="橢圓" cx="70" cy="20" rx="20" ry="10"/>
+    <rect id="圓角" x="0" y="30" width="40" height="20" rx="5"/>
+    <use href="#方框" x="50"/>
+    <text x="0" y="99">字</text>
+  </svg>`;
+  const r = prof.readSVG(svg, { tolMm: 0.05 });
+  const by = n => r.shapes.find(s => s.name === n);
+  ok('★★★ 矩形讀得到', !!by('方框'));
+  ok('★★★ 圓形讀得到', !!by('圓'));
+  ok('★★ 多邊形讀得到', !!by('三角'));
+  ok('★★ 橢圓讀得到', !!by('橢圓'));
+  ok('★★ 圓角矩形讀得到', !!by('圓角'));
+  // 1 個 SVG 單位 ＝ 1 mm ＝ 0.1 cm
+  near('★★ 矩形面積 ＝ 4 × 2 cm', by('方框') && Math.abs(by('方框').area), 8, 1e-9);
+  /**
+   * 圓切成直線段，弦高誤差 ≤ 0.05 mm ＝ 0.005 cm ⇒ 內接多邊形的面積
+   * 落在 π(1 − 2×0.005÷1) 到 π 之間。
+   * 〔第一版寫「跟 π 差 0.01 以內」—— 實際 3.1214，差 0.02，**是我的容許值沒照取樣精度推**〕
+   */
+  const ca = by('圓') ? Math.abs(by('圓').area) : NaN;
+  ok('★ 圓的面積落在取樣誤差的範圍內（π×0.99 ～ π）', ca <= Math.PI && ca >= Math.PI * (1 - 2 * 0.005),
+     String(ca));
+  near('★ 三角形面積 ＝ 3 × 3 ÷ 2', by('三角') && Math.abs(by('三角').area), 4.5, 1e-9);
+  eq('★★ 矩形 4 個真轉角', by('方框') && by('方框').pts.filter(p => p.corner).length, 4);
+  eq('★★ 圓形一個真轉角都沒有（⛔ 起點不可以變成一道假的折）',
+     by('圓') && by('圓').pts.filter(p => p.corner).length, 0);
+  ok('★★★ 讀不到的 <use>、<text> 要講出來', r.notes.some(n => n.includes('use') && n.includes('text')),
+     r.notes.join('／'));
+
+  const onlyRect = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100"><rect width="50" height="50"/></svg>`);
+  ok('★★ 只有一個矩形的檔案 ⛔ 不再說「沒有任何路徑」', onlyRect.ok, onlyRect.reason);
+
+  const open = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100"><polyline points="0,0 50,0 50,50"/></svg>`);
+  ok('對照組：折線（開放的）照規矩報「沒有封閉」', open.errors.some(e => e.includes('沒有封閉')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

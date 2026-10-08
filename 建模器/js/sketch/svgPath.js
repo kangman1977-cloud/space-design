@@ -103,9 +103,16 @@ export function parsePath(d, opt = {}) {
   };
 
   let i = 0;
+  /**
+   * ⚠ 報錯要講**現在這個**指令（`curCmd`），⛔ 不是上一個（2026-10-08 查 bug 改的）——
+   * `lastCmd` 要到這一段讀完才更新，以前「L 的數字不夠」會被講成「M 的數字不夠」。
+   * ⚠ 讀到的不是數字就⛔ 不吃掉它：那多半是下一個指令，吃掉了後面就整段錯位。
+   */
+  let curCmd = '';
   const num = () => {
-    const v = tokens[i++];
-    if (typeof v !== 'number') { errors.push(`「${lastCmd}」後面的數字不夠`); return 0; }
+    const v = tokens[i];
+    if (typeof v !== 'number') { errors.push(`「${curCmd}」後面的數字不夠`); return 0; }
+    i++;
     return v;
   };
 
@@ -134,6 +141,7 @@ export function parsePath(d, opt = {}) {
       i++;
     }
     used.add(cmd);
+    curCmd = cmd;
     const rel = cmd >= 'a' && cmd <= 'z';
     const C = cmd.toUpperCase();
 
@@ -325,12 +333,25 @@ function pick(...v) {
  * 用 `split(/[\s,]/)` 那種切法會靜靜地少掉一半的數字。
  */
 function tokenize(d) {
+  /**
+   * 🔴 **圓弧的兩個旗標各只有一個字元，可以黏在一起寫**（2026-10-08 查 bug 改的）。
+   * `a50 50 0 01100 0` ＝ 旗標 0、旗標 1、終點 (100, 0)。SVGO 這類壓縮工具一定這樣寫。
+   * 舊的切字不分場合，把 `01100` 讀成一個數 ⇒ 後面全部錯位、**整條路徑消失**。
+   * ⭐ 所以要記得「現在是哪個指令的第幾個參數」：圓弧每 7 個一組，第 4、5 個只拿一個字元。
+   */
   const out = [];
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)/g;
-  let m;
-  while ((m = re.exec(d)) !== null) {
-    if (m[1]) out.push(m[1]);
-    else out.push(parseFloat(m[2]));
+  const num = /[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/y;
+  let i = 0, cmd = '', argi = 0;
+  while (i < d.length) {
+    const ch = d[i];
+    if (/[MmLlHhVvCcSsQqTtAaZz]/.test(ch)) { out.push(ch); cmd = ch; argi = 0; i++; continue; }
+    if (cmd && 'Aa'.includes(cmd) && (argi % 7 === 3 || argi % 7 === 4) && (ch === '0' || ch === '1')) {
+      out.push(ch === '1' ? 1 : 0); argi++; i++; continue;
+    }
+    num.lastIndex = i;
+    const m = num.exec(d);
+    if (m && m[0].length) { out.push(parseFloat(m[0])); argi++; i = num.lastIndex; continue; }
+    i++;                                           // 空白、逗號、看不懂的字元
   }
   return out;
 }
