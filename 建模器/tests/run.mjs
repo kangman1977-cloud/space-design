@@ -14070,6 +14070,10 @@ section('齒輪（2026-10-08 第二輪）：真的要能轉');
     // kang 2026-10-08 實測：用縮放放大 5 倍、走了展開圖 —— 兩件都要在面板上講出來
     ok('★★ 面板說明：大小改「模數」、⛔ 不要用縮放', notes.some(s => s.includes('改「模數」') && s.includes('不要用縮放')));
     ok('★★ 面板說明：雷射切⛔ 不要用展開圖', notes.some(s => s.includes('不要用展開圖')));
+    // kang 2026-10-08：照舊說明把齒輪的中心孔直徑改成 0 —— 「孔徑」要講明是剖面分切視窗那一格
+    ok('★★★ 面板說明：「孔徑」寫明是定位孔、⛔ 不是這裡的中心孔直徑',
+       notes.some(s => s.includes('視窗上方的「孔徑」') && s.includes('不是這裡的「中心孔直徑」')));
+    ok('★★ 面板說明：Illustrator 用 Ctrl＋J 合併成封閉線（kang 驗過）', notes.some(s => s.includes('Ctrl＋J')));
     eq('★ 沒縮放 → ⛔ 沒有縮放的 ⚠', PRIM_SPECS.gear.noteOf(D, { scale: { x: 1, y: 1, z: 1 } }).filter(s => s.includes('縮放過')).length, 0);
     const sc = PRIM_SPECS.gear.noteOf(D, { scale: { x: 5, y: 5, z: 5 } });
     ok('★★★ 縮放過 → 多一行 ⚠，寫出倍數、叫人改回 1 用模數', sc.some(s => s.includes('縮放過（5 × 5 × 5 倍）') && s.includes('改用「模數」')));
