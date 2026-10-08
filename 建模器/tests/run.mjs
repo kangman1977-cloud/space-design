@@ -14398,6 +14398,103 @@ section('打版（展開模式一：精確分片）：一次標一整圈 ＋ 相
   }
 }
 
+section('排版：把很多片擺進一張一張板子（2026-10-09）');
+
+{
+  /**
+   * kang 實測打版：DXF 全部排成一長條（577 cm）、SVG 一片一個檔 ——「數量很多時...很難做後續的安排」。
+   * 拍板：板子預設 240 × 120（橫放、可自由輸入）、每張板一個檔、轉 90° 開關預設關、排版預設開。
+   */
+  const { packBoards, boardProgram, NEST_DEFAULTS } = await import('../js/out/nest.js');
+  const { boardDXF } = await import('../js/out/dxf.js');
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const isRing = he => Math.abs(he.v.p.y - he.to.p.y) < 1e-6
+    && Math.abs(Math.hypot(he.v.p.x, he.v.p.z) - Math.hypot(he.to.p.x, he.to.p.z)) < 1e-6;
+  const isTube = he => Math.abs(Math.atan2(he.v.p.z, he.v.p.x) - Math.atan2(he.to.p.z, he.to.p.x)) < 1e-6;
+  const cut = pick => {
+    const m = buildPrim('torus', { rOuter: 30, rInner: 15, seg: 32, segT: 12 });
+    for (const h of seamLoopEdges(m, [...m.edges()].find(pick), 'all')) setSeam(m, h, true);
+    const r = unfoldMesh(m, makeRule('paper', 0.05));
+    r.pieces.forEach((p, i) => { p.no = 'P' + String(i + 1).padStart(2, '0'); });
+    return r;
+  };
+  /** 全部片都在板子裡、彼此⛔ 重疊（含間距）、一片都沒少 */
+  const check = (nest, pieces, g) => {
+    const bad = [];
+    let n = 0;
+    nest.boards.forEach((b, bi) => {
+      b.items.forEach((it, i) => {
+        n++;
+        if (it.x < g - 1e-9 || it.y < g - 1e-9 || it.x + it.w > b.w - g + 1e-9 || it.y + it.h > b.h - g + 1e-9) bad.push(`板${bi + 1}#${i} 出界`);
+        b.items.forEach((o, j) => {
+          if (j <= i) return;
+          const sep = it.x + it.w + g <= o.x + 1e-9 || o.x + o.w + g <= it.x + 1e-9
+            || it.y + it.h + g <= o.y + 1e-9 || o.y + o.h + g <= it.y + 1e-9;
+          if (!sep) bad.push(`板${bi + 1}#${i}×#${j} 重疊`);
+        });
+      });
+    });
+    const want = pieces.reduce((s, p) => s + (p.qty || 1), 0);
+    return { bad, n, want };
+  };
+
+  eq('★★ 預設：開、240 × 120（橫放）、間距 1、⛔ 不轉（kang 拍板）',
+     JSON.stringify(NEST_DEFAULTS), JSON.stringify({ on: true, w: 240, h: 120, gap: 1, rotate: false }));
+
+  for (const [name, pick] of [['環帶', isRing], ['西瓜皮', isTube]]) {
+    const r = cut(pick);
+    const nest = packBoards(r.pieces, NEST_DEFAULTS);
+    const c = check(nest, r.pieces, 1);
+    eq(`★★★ ${name}：每一片都在板子裡、彼此⛔ 重疊`, c.bad.join(' / '), '');
+    eq(`★★★ ${name}：一片都沒少（${c.want} 片）`, c.n, c.want);
+    ok(`★★ ${name}：比排成一長條省（板子數 ＜ 片數）`, nest.boards.length < c.want, `${nest.boards.length} 張`);
+
+    // 同一份「畫什麼」→ DXF：切割線條數一樣、板子外框在 SHEET 層
+    const prog = boardProgram(nest.boards[0], { rule: r.rule, label: p => p.no });
+    const cutN = prog.items.filter(i => i.t === 'line' && i.style === 'cut').length;
+    const dxf = boardDXF(prog, { unit: 'mm', title: 'SHEET 1' });
+    eq(`★★ ${name}：DXF 的切割線條數 ＝ 畫面上的`, (dxf.match(/\r\nLINE\r\n8\r\nCUT\r\n/g) || []).length, cutN);
+    eq(`★★ ${name}：板子外框 4 條在 SHEET 層（⛔ 不是切割線）`, (dxf.match(/\r\nLINE\r\n8\r\nSHEET\r\n/g) || []).length, 4);
+    const out = prog.items.filter(i => i.t === 'line' && [i.x1, i.x2].some(x => x < -1e-6 || x > prog.box.w + 1e-6)
+      || i.t === 'line' && [i.y1, i.y2].some(y => y < -1e-6 || y > prog.box.h + 1e-6)).length;
+    eq(`★★ ${name}：畫出來的線全部在板子裡`, out, 0);
+    ok(`★ ${name}：每片都有片號`, nest.boards[0].items.every(it => prog.items.some(i => i.style === 'num' && i.s === it.piece.no)));
+  }
+
+  // ── 比板子大的：單獨一張、標出來 ──
+  {
+    const r = cut(isRing);
+    const nest = packBoards(r.pieces, { w: 100, h: 60, gap: 1, rotate: false });
+    const big = nest.boards.filter(b => b.oversize);
+    ok('★★★ 板子 100 × 60：164.8 長的環帶擺不下 → 單獨一張、標成比板子大（⛔ 默默丟掉）',
+       big.length >= 1 && big.every(b => b.items.length === 1 && b.w >= b.items[0].piece.width));
+    eq('★★ 　 片數照樣一片都沒少', check(nest, r.pieces, 1).n, r.pieces.length);
+  }
+
+  // ── 轉 90°：開關 ──
+  {
+    const r = cut(isTube);                      // 西瓜皮 46.5 × 5.9
+    const narrow = { w: 12, h: 60, gap: 1 };
+    const off = packBoards(r.pieces, { ...narrow, rotate: false });
+    const on = packBoards(r.pieces, { ...narrow, rotate: true });
+    ok('★★★ ⛔ 不轉（預設）：46.5 長的西瓜皮放不進 12 寬的板 → 全部單獨一張', off.boards.every(b => b.oversize));
+    ok('★★★ 可以轉 90°：轉直就放得進去', on.boards.every(b => !b.oversize) && on.boards[0].items[0].rot === 90);
+    eq('★★ 　 轉過的也⛔ 重疊、⛔ 出界', check(on, r.pieces, 1).bad.join(' / '), '');
+    /** 只擺一片轉過的 —— 它的每一條切割線都要落在自己的格子裡（四邊都查，⛔ 只查左下）*/
+    const one = packBoards([{ ...r.pieces[0], qty: 1 }], { ...narrow, rotate: true });
+    const it = one.boards[0].items[0];
+    const cutLines = boardProgram(one.boards[0], { rule: r.rule }).items.filter(i => i.t === 'line' && i.style === 'cut');
+    const xs = cutLines.flatMap(i => [i.x1, i.x2]), ys = cutLines.flatMap(i => [i.y1, i.y2]);
+    ok('★★★ 轉過的那片畫在它自己的格子裡（四邊都⛔ 超出）',
+       it.rot === 90 && Math.min(...xs) >= it.x - 1e-6 && Math.max(...xs) <= it.x + it.w + 1e-6
+       && Math.min(...ys) >= it.y - 1e-6 && Math.max(...ys) <= it.y + it.h + 1e-6,
+       `x ${Math.min(...xs).toFixed(2)}～${Math.max(...xs).toFixed(2)} / 格子 ${it.x}～${(it.x + it.w).toFixed(2)}；`
+       + `y ${Math.min(...ys).toFixed(2)}～${Math.max(...ys).toFixed(2)} / 格子 ${it.y.toFixed(2)}～${(it.y + it.h).toFixed(2)}`);
+    near('★★ 　 轉過的格子寬 ＝ 片的高', it.w, it.piece.height, 1e-12);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

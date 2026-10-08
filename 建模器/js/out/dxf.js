@@ -210,6 +210,52 @@ export function toDXF(pieces, opt = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  排版：一張板子一個檔（2026-10-09）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **一張排好的板子 → DXF**（kang 2026-10-09：每張板一個檔）。
+ *
+ * ⭐ 吃的是 `out/nest.js` 的 `boardProgram()` —— **跟 SVG、畫面是同一份「畫什麼」**，⛔ 不另外排一次。
+ * 圖層跟展開圖 DXF 一樣（CUT／FOLD／BEND／JOIN／TEXT），另外加一層 **SHEET** 放板子外框：
+ * ⚠ 板子外框⛔ 不是切割線 —— 機器只開 CUT 層就不會去切它。
+ * ⚠ 文字一律只留英數（R12，`ascii()`）：板子上只有片號與接合編號，本來就是英數。
+ *
+ * @param {{box, items}} prog `boardProgram()` 的產物（cm，Y 朝上）
+ * @param {object} opt `{ unit, title }`（title 會寫在板子下方，英數）
+ */
+export function boardDXF(prog, opt = {}) {
+  const U = UNITS[opt.unit] || UNITS.mm;
+  const s = U.scale;
+  const LAYER = { cut: 'CUT', hole: 'CUT', fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
+    num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM' };
+  const out = new Writer();
+  const { w, h } = prog.box;
+  out.header(0, -4 * s, w * s, h * s);
+  out.tables([...Object.keys(COLOR).map(n => [n, COLOR[n]]), ['SHEET', 8]]);
+  out.blocks();
+  out.beginEntities();
+  for (const it of prog.items) {
+    const layer = LAYER[it.style] || 'TEXT';
+    if (it.t === 'line') {
+      out.line(layer, it.x1 * s, it.y1 * s, it.x2 * s, it.y2 * s);
+    } else if (it.t === 'circle') {
+      out.circle(layer, it.x * s, it.y * s, it.r * s);
+    } else {
+      const str = ascii(it.s);
+      const hh = (it.size || 1.2) * s;
+      // R12 的 TEXT 從左下角起寫：置中的字往左挪大約半個字串寬、往下挪三分之一個字高
+      const dx = it.anchor === 'middle' ? -str.length * hh * 0.3 : 0;
+      out.text(layer, it.x * s + dx, it.y * s - hh * 0.35, hh, str);
+    }
+  }
+  if (opt.title) out.text('TEXT', 0, -2.5 * s, 1.2 * s, ascii(opt.title));
+  out.text('TEXT', 0, -4 * s, 0.7 * s, `unit=${U.label}`);
+  out.end();
+  return out.text_;
+}
+
+// ═══════════════════════════════════════════════════════
 //  剖面分切
 // ═══════════════════════════════════════════════════════
 

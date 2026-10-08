@@ -15,9 +15,10 @@
 
 import { MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
-import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds } from '../out/sheet.js';
+import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs } from '../out/sheet.js';
+import { packBoards, boardProgram, boardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { seamCount } from '../unfold/seam.js';
-import { toDXF, UNITS } from '../out/dxf.js';
+import { toDXF, boardDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
 
@@ -39,6 +40,11 @@ export class UnfoldPanel {
        */
       material: DEFAULT_MATERIAL, unit: 'mm', askPath: true, ...loadOpt()
     };
+    /**
+     * 🔴 **排版設定**（2026-10-09，kang 拍板）—— 記在瀏覽器裡，下次打開照上次的板子大小。
+     * ⚠ 舊的偏好設定裡沒有這一項 ⇒ 用 `NEST_DEFAULTS` 補齊（預設開、240 × 120、間距 1、⛔ 不轉）。
+     */
+    this.opt.nest = { ...NEST_DEFAULTS, ...(this.opt.nest || {}) };
     this.result = null;
     this._build();
   }
@@ -69,6 +75,14 @@ export class UnfoldPanel {
           <button id="uwSvg">存 SVG</button>
           <button id="uwDxf">存 DXF</button>
           <button id="uwCsv">備料 CSV</button>
+        </div>
+        <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
+          <label class="uwCk"><input type="checkbox" id="uwNest"> 排版到板子上</label>
+          <span class="lbl">板寬</span><input type="number" id="uwNW" min="1" step="1" style="width:64px">
+          <span class="lbl">板高</span><input type="number" id="uwNH" min="1" step="1" style="width:64px">
+          <span class="lbl">間距</span><input type="number" id="uwNG" min="0" step="0.5" style="width:52px">
+          <span class="lbl">cm</span>
+          <label class="uwCk" title="布、木皮有紋路（布紋、木紋），轉了方向會不一樣 —— 所以預設關，需要時才打開"><input type="checkbox" id="uwNR"> 可以轉 90°</label>
         </div>
         <div class="uwBody" id="uwBody"></div>
       </div>`;
@@ -125,6 +139,21 @@ export class UnfoldPanel {
      * 預設在 `open()` 決定：有自己標過切線的物件（打版）→ 勾；都沒有 → 不勾（原本的展開圖一個字都不變）。
      * ⚠ ⛔ 不存進 localStorage —— 每次打開照「這次展開的是什麼」重新決定。
      */
+    // ── 排版 ──
+    const N = this.opt.nest;
+    const nestIn = { on: $('uwNest'), w: $('uwNW'), h: $('uwNH'), gap: $('uwNG'), rotate: $('uwNR') };
+    nestIn.on.checked = !!N.on; nestIn.rotate.checked = !!N.rotate;
+    nestIn.w.value = N.w; nestIn.h.value = N.h; nestIn.gap.value = N.gap;
+    const nestChanged = () => {
+      N.on = nestIn.on.checked; N.rotate = nestIn.rotate.checked;
+      /** 填錯（空白、0、負數）就退回上一個能用的值 —— ⛔ 不讓排版算出一個不存在的板子 */
+      for (const k of ['w', 'h']) { const v = +nestIn[k].value; if (v > 0) N[k] = v; else nestIn[k].value = N[k]; }
+      const gv = +nestIn.gap.value; if (gv >= 0) N.gap = gv; else nestIn.gap.value = N.gap;
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
+    for (const k of Object.keys(nestIn)) nestIn[k].onchange = nestChanged;
+
     this.foldIn = $('uwFold');
     this.foldIn.onchange = () => { if (this.result) this._render(this.result, this.objs); };
 
@@ -213,6 +242,7 @@ export class UnfoldPanel {
       return;
     }
 
+    if (this.opt.nest.on) this._renderBoards(r);
     for (const p of r.pieces) this.body.appendChild(this._card(p, r.rule));
 
     // ── 備料明細 ──
@@ -228,6 +258,64 @@ export class UnfoldPanel {
     wrap.innerHTML = '<h3>備料明細</h3>';
     wrap.appendChild(tb);
     this.body.appendChild(wrap);
+  }
+
+  /** 排版：照目前的設定把這次的片擺進板子裡（⛔ 不存結果 —— 設定一改就重排）*/
+  _nest() {
+    const N = this.opt.nest;
+    return packBoards(this.result.pieces, { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate });
+  }
+
+  /** 每張板的「畫什麼」與標題 —— 畫面、SVG、DXF、列印共用，⛔ 不各排一次 */
+  _boardSheets() {
+    const nest = this._nest();
+    const opt = this._drawOpt({ label: p => p.no });
+    const n = nest.boards.length;
+    return nest.boards.map((b, i) => ({
+      board: b, prog: boardProgram(b, opt), title: boardTitle(b, i, n, opt)
+    }));
+  }
+
+  /** 🔴 排版預覽：放在每片卡片的上面 —— 先看要幾張板、每張擺了哪幾片 */
+  _renderBoards(r) {
+    if (!r.pieces.length) return;
+    const N = this.opt.nest;
+    const sheets = this._boardSheets();
+    const big = sheets.filter(x => x.board.oversize).length;
+    const head = box(big ? 'uwWarn' : 'uwSkip',
+      `排版：需要 ${sheets.length - big} 張 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`
+      + (big ? `　⚠ 另有 ${big} 片比板子還大，各自單獨一張（要換大板或再切小）` : '')
+      + '　存 SVG／DXF 時一張板一個檔');
+    this.body.appendChild(head);
+    for (const sh of sheets) {
+      const card = document.createElement('div');
+      card.className = 'uwCard';
+      const h = document.createElement('div');
+      h.className = 'uwTitle';
+      h.innerHTML = sh.title.map((s, i) =>
+        `<div class="${s.startsWith('⚠') ? 'bad' : (i === 0 ? 'nm' : 'dim')}">${esc(s)}</div>`).join('');
+      card.appendChild(h);
+      card.appendChild(this._canvas(sh.prog, 300));
+      this.body.appendChild(card);
+    }
+  }
+
+  /** 一份「畫什麼」畫成 canvas（卡片與排版預覽共用）*/
+  _canvas(prog, maxH) {
+    const maxW = Math.min(1100, Math.max(360, this.body.clientWidth - 56));
+    const px = Math.max(1, Math.min(maxW / prog.box.w, maxH / prog.box.h));
+    const cv = document.createElement('canvas');
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.ceil(prog.box.w * px * dpr);
+    cv.height = Math.ceil(prog.box.h * px * dpr);
+    cv.style.width = Math.ceil(prog.box.w * px) + 'px';
+    cv.style.height = Math.ceil(prog.box.h * px) + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    renderCanvas(ctx, prog, px);
+    return cv;
   }
 
   /** 一片一張卡：上面是圖，下面是這一片的重點數字 */
@@ -268,6 +356,10 @@ export class UnfoldPanel {
 
   _print() {
     if (!this._has()) return;
+    if (this.opt.nest.on) {
+      printSVGs(this._boardSheets().map(sh => progSVG(sh.prog, sh.title)), '排版');
+      return;
+    }
     printPieces(this.result.pieces, this._drawOpt());
   }
 
@@ -278,6 +370,16 @@ export class UnfoldPanel {
    */
   async _saveSVG() {
     if (!this._has()) return;
+    if (this.opt.nest.on) {
+      // 🔴 排版開著：一張板一個檔（kang 2026-10-09）
+      const jobs = this._boardSheets().map((sh, i) => ({
+        name: `${this._base()}_板${String(i + 1).padStart(2, '0')}.svg`,
+        blob: textBlob(progSVG(sh.prog, sh.title), 'image/svg+xml')
+      }));
+      const n = await saveMany(jobs, this.opt.askPath);
+      if (n > 1) this._say(`已存 ${n} 個 SVG（一張板一個檔）。`);
+      return;
+    }
     const opt = this._drawOpt();
     // 多片時每片一個檔，檔名帶編號與片名，現場才對得起來
     const jobs = this.result.pieces.map((p, i) => ({
@@ -291,6 +393,22 @@ export class UnfoldPanel {
 
   async _saveDXF() {
     if (!this._has()) return;
+    if (this.opt.nest.on) {
+      // 🔴 排版開著：一張板一個檔（kang 2026-10-09）。標題只能英數（R12）
+      const sheets = this._boardSheets();
+      const jobs = sheets.map((sh, i) => ({
+        name: `${this._base()}_板${String(i + 1).padStart(2, '0')}.dxf`,
+        blob: textBlob(boardDXF(sh.prog, {
+          unit: this.opt.unit,
+          title: `SHEET ${i + 1}/${sheets.length}  ${fmt(sh.board.w)}x${fmt(sh.board.h)}cm`
+            + (sh.board.oversize ? '  OVERSIZE' : '')
+            + '  ' + sh.board.items.map(it => it.piece.no).join(' ')
+        }), 'application/dxf')
+      }));
+      const n = await saveMany(jobs, this.opt.askPath);
+      if (n > 1) this._say(`已存 ${n} 個 DXF（一張板一個檔）。`);
+      return;
+    }
     // 一個 DXF 裝全部的片、沿 X 排開 —— 雷切廠要的是一張料上排好版
     const blob = textBlob(toDXF(this.result.pieces, this._drawOpt({ unit: this.opt.unit })),
       'application/dxf');
