@@ -2250,7 +2250,12 @@ section('STL：體積交叉驗證');
     ['球', 'sphere', { r: 30, segW: 32, segH: 16 }],
     ['角柱', 'prism', { sides: 6, r: 30, h: 60 }],
     ['管', 'tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }],
-    ['圓角方塊', 'roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 4 }]
+    ['圓角方塊', 'roundBox', { w: 60, h: 45, d: 40, r: 6, segR: 4 }],
+    // 2026-10-08 加的四種。⭐ 階梯的側面是【凹的】多邊形 —— 扇形三角化在這裡會錯
+    ['圓環', 'torus', { rOuter: 30, rInner: 15, seg: 32, segT: 12 }],
+    ['楔形', 'wedge', { w: 60, h: 30, d: 40 }],
+    ['半球', 'dome', { r: 30, seg: 32, segH: 8 }],
+    ['階梯', 'stairs', { steps: 4, stepH: 15, stepD: 25, w: 60 }]
   ];
 
   for (const [name, type, p] of shapes) {
@@ -13817,6 +13822,132 @@ section('E 組 bug：DXF 檔頭的圖面範圍要包住所有文字');
   for (const unit of ['mm', 'cm']) {
     const eb = dxfBounds(toDXF(r.pieces, { unit, rule: r.rule }));
     ok(`★★★ 展開 DXF（${unit}）：檔頭範圍包得住所有線與文字`, eb.inside, eb.why);
+  }
+}
+
+section('新增四種基本體：圓環、楔形、半球、階梯（2026-10-08）');
+
+{
+  /**
+   * kang 2026-10-08 看過互動圖、拍板：圓環用外／內半徑、半球實心平底、階梯下面填滿。
+   * ⭐ 體積一律拿**多邊形的公式**對（⛔ 不是真圓的 πr²），而且要是【正】的 ——
+   * 負的 ＝ 整個模型法向朝內，畫面上看不出來，只有 STL 列印前檢查抓得到。
+   */
+  const { PRIM_TYPES, PRIM_SPECS, defaultSrc } = await import('../js/build/prim.js');
+  const size = m => m.bounds().getSize(new THREE.Vector3());
+  /**
+   * 繞 Y 轉 s 格的實體，體積 ＝ s·sin(2π/s) × ∬ r dA（斷面多邊形對中心線的一次矩）。
+   * ⭐ 每一格都是平面梯形圍起來的，所以這條是【精確】的，⛔ 不是近似。
+   * 管：s·sin(2π/s)·(ro²−ri²)/2·h ＝ 兩個多邊形面積差 × 高，跟「管 體積」那項同一個答案。
+   */
+  const spinVol = (sec, s) => {
+    let q = 0;
+    for (let i = 0; i < sec.length; i++) {
+      const [x0, y0] = sec[i], [x1, y1] = sec[(i + 1) % sec.length];
+      q += (x0 + x1) * (x0 * y1 - x1 * y0);
+    }
+    return s * Math.sin(2 * Math.PI / s) * q / 6;
+  };
+
+  eq('★★ 下拉多了四種，排在折板後面', PRIM_TYPES.slice(-4).join(' '), 'torus wedge dome stairs');
+  eq('★★ 下拉顯示的名字', PRIM_TYPES.slice(-4).map(t => PRIM_SPECS[t].label).join(' '), '圓環 楔形 半球 階梯');
+  for (const t of ['torus', 'wedge', 'dome', 'stairs']) {
+    ok(`★ ${PRIM_SPECS[t].label}：面板的每一格都有預設值`,
+       PRIM_SPECS[t].fields.every(f => Number.isFinite(defaultSrc(t)[f.key])));
+  }
+
+  // ── 圓環 ──
+  {
+    const ro = 30, ri = 15, seg = 32, segT = 12;
+    const m = buildPrim('torus', { rOuter: ro, rInner: ri, seg, segT });
+    const v = m.validate();
+    const R = (ro + ri) / 2, a = (ro - ri) / 2;
+    const sec = [...Array(segT).keys()].map(i =>
+      [R + a * Math.cos(i / segT * 2 * Math.PI), a * Math.sin(i / segT * 2 * Math.PI)]);
+    near('★★★ 圓環 體積 ＝ 多邊形旋轉體公式（正的）', m.volume(), spinVol(sec, seg), 1e-6);
+    ok('★★ 圓環 封閉、結構無誤', v.closed && v.ok, v.errors[0] || '');
+    eq('★★ 圓環 尤拉數 0（中間通了）', v.euler, 0);
+    eq('★★ 圓環 頂點數 ＝ 繞一圈分段 × 管分段（⛔ 首尾那點沒有重複）', v.V, seg * segT);
+    const sz = size(m);
+    near('★★ 圓環 外徑 ＝ 外半徑 × 2', sz.x, 2 * ro, 1e-9);
+    near('★★ 圓環 高 ＝ 管粗 ＝ 外半徑 − 內半徑', sz.y, ro - ri, 1e-9);
+    const bad = buildPrim('torus', { rOuter: 20, rInner: 25 });
+    ok('★ 內半徑填得比外半徑大 → 夾在外半徑以內照樣做得出來，⛔ 不會壞掉',
+       bad.validate().ok && bad.volume() > 0);
+  }
+
+  // ── 楔形 ──
+  {
+    const w = 60, h = 30, d = 40;
+    const m = buildPrim('wedge', { w, h, d });
+    const v = m.validate();
+    near('★★★ 楔形 體積 ＝ 寬 × 高 × 深 ÷ 2（正的）', m.volume(), w * h * d / 2, 1e-9);
+    ok('★★ 楔形 封閉、結構無誤', v.closed && v.ok, v.errors[0] || '');
+    eq('★★ 楔形 尤拉數 2', v.euler, 2);
+    eq('★ 楔形 5 片（底、後、斜面、兩側）', summarize(m).regions, 5);
+    const top = m.verts.filter(q => Math.abs(q.p.y - h / 2) < 1e-9);
+    ok('★★★ 楔形 後面（−Z）高、前面低：最高的兩點都在後面',
+       top.length === 2 && top.every(q => Math.abs(q.p.z + d / 2) < 1e-9));
+  }
+
+  // ── 半球 ──
+  {
+    const r = 30, seg = 32, segH = 8;
+    const m = buildPrim('dome', { r, seg, segH });
+    const v = m.validate();
+    const sec = [[0, 0]];
+    for (let j = 0; j <= segH; j++) {
+      const a = j / segH * Math.PI / 2;
+      sec.push([j === segH ? 0 : r * Math.cos(a), r * Math.sin(a)]);
+    }
+    near('★★★ 半球 體積 ＝ 多邊形旋轉體公式（正的）', m.volume(), spinVol(sec, seg), 1e-6);
+    const sphereHalf = 2 / 3 * Math.PI * r ** 3;
+    ok('★ 半球 體積比真半球小一點點（多邊形近似，98% 以上）',
+       m.volume() / sphereHalf > 0.98 && m.volume() < sphereHalf, String(m.volume() / sphereHalf));
+    ok('★★ 半球 封閉、結構無誤（實心）', v.closed && v.ok, v.errors[0] || '');
+    eq('★★ 半球 尤拉數 2', v.euler, 2);
+    eq('★★★ 半球 頂點數 ＝ 底心 ＋ 頂點 ＋ 繞一圈分段 × 高度分段（⛔ 極點不疊一圈）',
+       v.V, 2 + seg * segH);
+    const sz = size(m);
+    near('★★ 半球 高 ＝ 半徑', sz.y, r, 1e-9);
+    near('★★ 半球 底面直徑 ＝ 半徑 × 2', sz.x, 2 * r, 1e-9);
+    const yMin = m.bounds().min.y;
+    eq('★★ 半球 底是平的：貼地的點 ＝ 底心 ＋ 一圈',
+       m.verts.filter(q => Math.abs(q.p.y - yMin) < 1e-9).length, 1 + seg);
+  }
+
+  // ── 階梯 ──
+  {
+    const n = 4, sh = 15, sd = 25, w = 60;
+    const m = buildPrim('stairs', { steps: n, stepH: sh, stepD: sd, w });
+    const v = m.validate();
+    near('★★★ 階梯 體積 ＝ 寬 × 每階深 × 每階高 × (1＋2＋…＋階數)（正的）',
+         m.volume(), w * sd * sh * n * (n + 1) / 2, 1e-9);
+    ok('★★ 階梯 封閉、結構無誤', v.closed && v.ok, v.errors[0] || '');
+    eq('★★ 階梯 尤拉數 2', v.euler, 2);
+    const sz = size(m);
+    near('★★ 階梯 總高 ＝ 階數 × 每階高', sz.y, n * sh, 1e-9);
+    near('★★ 階梯 總深 ＝ 階數 × 每階深', sz.z, n * sd, 1e-9);
+    eq('★ 階梯 片數 ＝ 兩側 ＋ 底 ＋ 後牆 ＋ 踢面 × 階數 ＋ 踏面 × 階數', summarize(m).regions, 4 + 2 * n);
+    const zMax = m.bounds().max.z, yMin = m.bounds().min.y;
+    ok('★★★ 階梯 前面（＋Z）低：最前面的點都不高過第一階',
+       m.verts.filter(q => Math.abs(q.p.z - zMax) < 1e-9).every(q => q.p.y <= yMin + sh + 1e-9));
+    near('★ 1 階的階梯 ＝ 一塊方塊',
+         buildPrim('stairs', { steps: 1, stepH: 10, stepD: 20, w: 30 }).volume(), 30 * 20 * 10, 1e-9);
+  }
+
+  /**
+   * ⭐ 楔形與階梯全是平面 ⇒ 展開圖的面積一定 ＝ 模型的表面積，而且⛔ 不可以重疊。
+   * 發泡板（會折）與壓克力（每條稜線都切開）兩種都走一次。
+   */
+  for (const [name, type] of [['楔形', 'wedge'], ['階梯', 'stairs']]) {
+    const m = buildPrim(type, {}, 0.2);
+    for (const mat of ['foamboard', 'acrylic']) {
+      const r = unfoldMesh(m, makeRule(mat, 0.2));
+      near(`★★ ${name} 展開（${mat}）面積總和 ＝ 表面積`, r.stats.area, m.area(), 1e-6);
+      ok(`★★ ${name} 展開（${mat}）沒有重疊`, r.pieces.every(p => !p.overlap),
+         r.pieces.filter(p => p.overlap).length + ' 片重疊');
+    }
   }
 }
 

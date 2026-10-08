@@ -39,6 +39,11 @@ import { classify } from '../sketch/profile.js';
  * `不封口` 的鋼筆走的是「沿線掃出一片單層的帶」那一支（2026-08-31）。
  */
 import { ribbonFromPaths } from './ribbon.js';
+/**
+ * ⭐ **圓環與半球走旋轉成形那一支**（2026-10-08）：一條輪廓繞 Y 轉一圈。
+ * 極點只放一個頂點、封閉輪廓轉成環、平滑邊、繞向 —— 那一支都量過了，⛔ 不在這裡重寫。
+ */
+import { revolve } from './revolve.js';
 
 /** 每種基本體的預設參數，介面直接拿這個當表單初值 */
 export const PRIM_DEFAULTS = {
@@ -56,7 +61,12 @@ export const PRIM_DEFAULTS = {
     arcSeg: 4,       // 每個折彎圓弧分幾段
     k: 0.4,          // K 因子（中性層位置比例，見 neutralRadius）
     bends: [{ angle: 90, ri: 2, len: 30 }]   // 一道折彎 ＝ L 型
-  }
+  },
+  // ── 2026-10-08 加的四種（kang 看過互動圖、拍板）──
+  torus:    { rOuter: 30, rInner: 15, seg: 32, segT: 12 },
+  wedge:    { w: 60, h: 30, d: 40 },
+  dome:     { r: 30, seg: 32, segH: 8 },
+  stairs:   { steps: 4, stepH: 15, stepD: 25, w: 60 }
 };
 
 /**
@@ -246,6 +256,54 @@ export const PRIM_SPECS = {
             + '下料長度就是照這個算出來的' }
     ],
     hasBends: true
+  },
+  /**
+   * 🔴 **圓環用「外半徑＋內半徑」**（kang 2026-10-08 拍板）——
+   * 拿尺量得到，跟「管」同一種填法；⛔ 不用 Blender 的「環半徑＋管半徑」。
+   */
+  torus: {
+    label: '圓環',
+    fields: [
+      { key: 'rOuter', label: '外半徑',     min: 0.1, step: 1 },
+      { key: 'rInner', label: '內半徑',     min: 0.1, step: 1,
+        hint: '一定要比外半徑小。管粗 ＝ 外半徑 − 內半徑' },
+      { key: 'seg',    label: '繞一圈分段', min: 3, max: 128, step: 1, int: true },
+      { key: 'segT',   label: '管分段',     min: 3, max: 64,  step: 1, int: true }
+    ]
+  },
+  /** 楔形：後面（−Z）高、前面（+Z）低。要換方向用旋轉（kang 2026-10-08 同意） */
+  wedge: {
+    label: '楔形',
+    fields: [
+      { key: 'w', label: '寬 X', min: 0.1, step: 1 },
+      { key: 'h', label: '高 Y', min: 0.1, step: 1 },
+      { key: 'd', label: '深 Z', min: 0.1, step: 1 }
+    ]
+  },
+  /**
+   * 🔴 **半球只做實心、底是平的**（kang 2026-10-08 拍板）。
+   * 要空心殼 ＝ 大半球減小半球（布林），⛔ 不另開「厚度」欄。
+   */
+  dome: {
+    label: '半球',
+    fields: [
+      { key: 'r',    label: '半徑',       min: 0.1, step: 1 },
+      { key: 'seg',  label: '繞一圈分段', min: 3, max: 128, step: 1, int: true },
+      { key: 'segH', label: '高度分段',   min: 1, max: 64,  step: 1, int: true }
+    ]
+  },
+  /**
+   * 🔴 **階梯下面實心填到地**（kang 2026-10-08 拍板），側面是一階一階的鋸齒。
+   * 前面（+Z）低、後面（−Z）高，跟楔形同一個方向。
+   */
+  stairs: {
+    label: '階梯',
+    fields: [
+      { key: 'steps', label: '階數',   min: 1, max: 100, step: 1, int: true },
+      { key: 'stepH', label: '每階高', min: 0.1, step: 1 },
+      { key: 'stepD', label: '每階深', min: 0.1, step: 1 },
+      { key: 'w',     label: '寬',     min: 0.1, step: 1 }
+    ]
   }
 };
 
@@ -717,6 +775,17 @@ function toMesh(geometry) {
   return m;
 }
 
+/**
+ * 旋轉成形的出口：一條輪廓繞 Y 轉一圈 → 半邊網格。
+ * ⚠ 跟 `toMesh()` 一樣補 `autoMarkFolds()` —— `revolve()` 只標平滑邊，⛔ 不標折線。
+ */
+function fromRevolve(pts, seg) {
+  const r = revolve(pts, { axis: 'y', a: 0, b: 0, seg });
+  if (!r.ok) throw new Error(r.reason);
+  r.mesh.autoMarkFolds();
+  return r.mesh;
+}
+
 const num = (v, dflt) => (Number.isFinite(+v) ? +v : dflt);
 const int = (v, dflt, min = 3) => Math.max(min, Math.round(num(v, dflt)));
 
@@ -949,6 +1018,100 @@ const BUILDERS = {
     const r = Math.max(0, Math.min(num(p.r, D.r), Math.min(w, d) / 2 - 1e-6));
 
     return extrudeProfile(roundRectProfile(w, d, r, segR), h);
+  },
+
+  /**
+   * 圓環 ＝ 一個圓（管的斷面）繞 Y 轉一圈。
+   * ⭐ **幾何一行新的都沒有**：首尾同一點的輪廓交給 `revolve()`，它就轉成環。
+   * ⚠ 圓照**逆時針**走（往外、往上）—— 那是 `revolve()` 量過體積為正的方向。
+   */
+  torus(p) {
+    const D = PRIM_DEFAULTS.torus;
+    const ro = num(p.rOuter, D.rOuter);
+    // 內半徑要在 (0, 外半徑) 之間：等於 0 會碰到中心線，等於外半徑就沒有管了
+    const ri = Math.max(ro * 1e-3, Math.min(num(p.rInner, D.rInner), ro * (1 - 1e-3)));
+    const R = (ro + ri) / 2, a = (ro - ri) / 2;
+    const n = int(p.segT, D.segT);
+    const pts = [];
+    for (let i = 0; i <= n; i++) {          // i ＝ n 回到起點 ⇒ revolve 認得是封閉的
+      const t = (i % n) / n * Math.PI * 2;
+      pts.push(new THREE.Vector3(R + a * Math.cos(t), a * Math.sin(t), 0));
+    }
+    return fromRevolve(pts, int(p.seg, D.seg));
+  },
+
+  /**
+   * 楔形（斜坡）：直角三角形的柱。後面（−Z）高、前面（+Z）低。
+   * ⚠ 每個面的頂點順序都照右手定則朝外排 —— 測試盯「體積 ＝ 寬×高×深÷2，而且是正的」。
+   */
+  wedge(p) {
+    const D = PRIM_DEFAULTS.wedge;
+    const w = num(p.w, D.w) / 2, h = num(p.h, D.h) / 2, d = num(p.d, D.d) / 2;
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    const pts = [V(-w, -h, -d), V(w, -h, -d), V(w, -h, d), V(-w, -h, d),   // 底
+                 V(-w, h, -d), V(w, h, -d)];                                // 後面頂端那條邊
+    const m = Mesh.fromFaceList(pts, [
+      [0, 1, 2, 3],      // 底
+      [0, 4, 5, 1],      // 後面（直立的那一面）
+      [3, 2, 5, 4],      // 斜面
+      [0, 3, 4],         // 左側三角形
+      [1, 5, 2]          // 右側三角形
+    ]);
+    m.autoMarkFolds();
+    return m;
+  },
+
+  /**
+   * 半球（圓頂）：實心、底是平的。輪廓 ＝ 底心 → 底邊 → 四分之一圓弧 → 頂點，繞 Y 轉一圈。
+   * ⭐ 底心與頂點落在中心線上，`revolve()` 會各只放一個頂點（⛔ 不是一圈疊在一起的點）。
+   */
+  dome(p) {
+    const D = PRIM_DEFAULTS.dome;
+    const r = num(p.r, D.r);
+    const n = int(p.segH, D.segH, 1);
+    const y0 = -r / 2;                       // 外框中心放在原點，跟其他基本體一樣
+    const pts = [new THREE.Vector3(0, y0, 0)];
+    for (let j = 0; j <= n; j++) {
+      const a = j / n * Math.PI / 2;
+      // 最後一點的 cos(90°) 不是剛好 0 —— 直接放 0，免得頂點差一點點沒落在中心線上
+      pts.push(new THREE.Vector3(j === n ? 0 : r * Math.cos(a), y0 + r * Math.sin(a), 0));
+    }
+    return fromRevolve(pts, int(p.seg, D.seg));
+  },
+
+  /**
+   * 階梯：下面實心填到地，側面是鋸齒形。前面（+Z）低、後面（−Z）高。
+   * 側面是**凹的多邊形**，一整片放（⛔ 不切成三角形）—— 畫面與 STL 走 `faceTriangles` 的耳切。
+   */
+  stairs(p) {
+    const D = PRIM_DEFAULTS.stairs;
+    const n = int(p.steps, D.steps, 1);
+    const sh = num(p.stepH, D.stepH), sd = num(p.stepD, D.stepD);
+    const w = num(p.w, D.w) / 2;
+    const H = n * sh, L = n * sd;
+    // 側面輪廓（z 由後 0 到前 L，y 由地 0 往上）：底 → 前面第一階 → 一階一階往後上，
+    // 最後一階的後緣剛好是 (0, H)，從那裡回到 (0, 0) 就是後牆
+    const prof = [[0, 0], [L, 0]];
+    for (let k = 0; k < n; k++) {
+      const z = L - k * sd;
+      prof.push([z, (k + 1) * sh], [z - sd, (k + 1) * sh]);
+    }
+    const m = prof.length;
+    const pts = [];
+    for (const x of [-w, w]) {
+      for (const [z, y] of prof) pts.push(new THREE.Vector3(x, y - H / 2, z - L / 2));
+    }
+    const faces = [
+      [...Array(m).keys()],                          // 左側（−X）
+      [...Array(m).keys()].map(i => m + i).reverse() // 右側（+X）
+    ];
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % m;
+      faces.push([i, m + i, m + j, j]);              // 底、踢面、踏面、後牆
+    }
+    const mesh = Mesh.fromFaceList(pts, faces);
+    mesh.autoMarkFolds();
+    return mesh;
   },
 
   /**
