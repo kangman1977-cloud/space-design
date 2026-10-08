@@ -13171,6 +13171,76 @@ section('比例編輯：拉一個點，周圍照影響半徑跟著動');
   ok('半徑 12（比壁厚大）：背面有點跟著動（殼才不會被拉薄）', inner(12) > 0);
 }
 
+// ═══════════════════════════════════════════════════════
+//  A 組 bug（2026-10-08 全專案查 bug 找到的，會丟東西／卡死）
+// ═══════════════════════════════════════════════════════
+
+section('A 組 bug：SVG 的 Z 後面接數字');
+
+{
+  /**
+   * 🔴 **`Z` 後面多一串數字 ＝ 整個分頁卡死**（修之前）。
+   * 數字直接接在後面會被當成「重複上一個指令」，而 `Z` 一個數字都不讀，
+   * 於是讀取位置永遠不前進。⛔ 修之前這一項不會失敗，是**整支測試停住**。
+   */
+  const r = svgp.parsePath('M0 0L10 0L10 10Z 5 5');
+  ok('★★★ 跑得完（⛔ 不卡死）', !!r);
+  eq('那一圈照樣讀到', r.subpaths.length, 1);
+  ok('★ 有報錯，⛔ 不是悄悄吞掉', r.errors.some(e => e.includes('Z')), r.errors.join('／'));
+
+  const g = svgp.parsePath('M0 0L10 0L10 10Z M20 0L30 0L30 10z');
+  eq('對照組：Z 後面接 M 照樣讀兩圈', g.subpaths.length, 2);
+  eq('對照組：一個錯誤都沒有', g.errors.length, 0);
+}
+
+section('A 組 bug：剖面分切的片數上限');
+
+{
+  /**
+   * 🔴 **板厚打成 0.001（把 mm 當 cm 打）→ 要切兩萬七千片，視窗卡死**（修之前）。
+   * 而且設定在計算之前就存起來了，之後每次打開都會再卡 ——
+   * ⇒ 擋關要在核心，⛔ 不能只在介面。
+   */
+  const p = sect.planSlabs(27, [{ t: 0.001, n: 'rest' }]);
+  eq('★★★ 一片都不切', p.slabs.length, 0);
+  ok('★ 那一段標成壞的', !!p.bands[0].bad, p.bands[0].bad || '');
+  ok('★ 訊息有提到單位', (p.bands[0].bad || '').includes('cm'));
+
+  const big = sect.planSlabs(27, [{ t: 1, n: 100000 }]);
+  eq('片數直接打很大也擋', big.slabs.length, 0);
+
+  const fine = sect.planSlabs(27, [{ t: 1, n: 'rest' }]);
+  eq('對照組：正常的照切', fine.slabs.length, 27);
+  ok('對照組：⛔ 沒有被誤擋', !fine.bands[0].bad);
+
+  // ⚠ 擋下來之後畫面上要看得到原因 —— 以前 `bad` 只寫進資料、一個字都不印
+  const r = sect.sliceMesh(buildPrim('box', { w: 60, h: 27, d: 40 }, 0.2),
+    { axis: 'y', bands: [{ t: 0.001, n: 'rest' }] });
+  ok('★ 分切視窗的警告裡講得出原因', r.warnings.some(w => w.includes('超過上限')),
+    r.warnings.join('／'));
+}
+
+section('A 組 bug：實體物件存檔要留板厚');
+
+{
+  /**
+   * 🔴 **種類改成「實體」的折板，存檔不存板厚 → 讀回來變 0.2，形狀跟著變**。
+   * 折板的網格本身就吃板厚（`buildSrc(src, thickness)`），跟種類無關；
+   * 而復原／重做走的也是同一份 `toJSON()`。
+   */
+  const obj = new io.ModelObject({
+    name: '改成實體的折板', kind: io.KIND.SOLID, thickness: 1,
+    src: { type: 'bend', w: 40, first: 30, arcSeg: 4, k: 0.4,
+           bends: [{ angle: 90, ri: 2, len: 30 }] }
+  });
+  const box0 = new THREE.Box3().setFromPoints(obj.mesh().verts.map(v => v.p));
+  const back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(obj.toJSON())));
+  eq('★★★ 讀回來板厚還是 1', back.thickness, 1);
+  const box1 = new THREE.Box3().setFromPoints(back.mesh().verts.map(v => v.p));
+  near('★ 外框寬度不變', box1.max.x - box1.min.x, box0.max.x - box0.min.x, 1e-9);
+  near('★ 外框高度不變', box1.max.y - box1.min.y, box0.max.y - box0.min.y, 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

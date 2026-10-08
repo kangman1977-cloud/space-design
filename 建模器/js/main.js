@@ -370,6 +370,21 @@ function deleteSelected() {
       : '編輯模式下不能用 Delete（它刪的是整個物件）。要刪物件請先離開編輯模式', true);
     return;
   }
+  /**
+   * 🔴 **點選類的模式（刀具／鋼筆／貼合／縫線／參考線／原點）也一律擋**
+   * （2026-10-08 查 bug 找到的）。
+   * 刀具點了三個點，按 Backspace 想退一點 ⇒ **整個物件被刪掉**，刀具還開著、
+   * 手上拿著已經不在的物件。⚠ 刀具只能在選了物件時進入，而點切點⛔ 不改選取，
+   * 所以「正在切的那個物件」一定還是選取中的 —— 這不是巧合，是必然。
+   *
+   * ⭐ 鋼筆正在畫的時候，Backspace 就是「退一點」—— 那才是他要的；
+   * 直接走 `penUndo` 那顆按鈕的處理，⛔ 不另寫第二份。
+   */
+  if (sel.inPickMode) {
+    if (sel.penMode && !sel.penEdit && sel.penCount > 0) { $('penUndo').onclick(); return; }
+    toast('這個模式下 Delete 不會刪物件 —— 要刪物件請先離開目前的模式', true);
+    return;
+  }
   const list = sel.objects;
   if (!list.length) return;
   for (const o of list) doc.remove(o);
@@ -500,7 +515,13 @@ function explodeSelected(obj) {
   toast(`已打散成 ${made.length} 個獨立物件`);
 }
 
+/**
+ * ⚠ 新建與開檔都會**整批換掉物件**（2026-10-08 查 bug 找到的兩件事）：
+ * ① 先 `exitOtherModes()` —— 刀具／貼合／編輯路徑手上拿的是舊物件；
+ * ② 最後 `autosave(doc)` —— 不存的話，重新整理會跳回換掉之前的那一份。
+ */
 function newDoc() {
+  exitOtherModes();
   doc.clear();
   doc.head.name = '未命名';
   sel.clear();
@@ -510,11 +531,13 @@ function newDoc() {
   panel.refresh();
   updateBar();
   view.frameAll(doc);
+  autosave(doc);
 }
 
 async function loadFile() {
   try {
     const data = await openFile();
+    exitOtherModes();
     doc.loadJSON(data);
     sel.clear();
     view.sync(doc);
@@ -523,6 +546,7 @@ async function loadFile() {
     panel.refresh();
     view.frameAll(doc);
     updateBar();
+    autosave(doc);
     toast(`已讀入 ${doc.objects.length} 個物件`);
   } catch (e) {
     toast('讀檔失敗：' + e.message, true);
@@ -805,8 +829,8 @@ $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
 $('export3d').onclick = () => exportWin.open();
 
-$('undo').onclick = () => { const l = hist.undo(); if (l) toast('復原：' + l); updateBar(); };
-$('redo').onclick = () => { const l = hist.redo(); if (l) toast('重做：' + l); updateBar(); };
+$('undo').onclick = () => jumpHistory(false);
+$('redo').onclick = () => jumpHistory(true);
 
 $('mMove').onclick = () => setMode('translate');
 $('mRot').onclick = () => setMode('rotate');
@@ -1068,6 +1092,48 @@ function exitOtherModes(keep) {
    * **真正的病因是 `gEditXf`（外層容器）從來不在 `updateBar()` 的管轄內**，
    * 而它只有 `toggleEditMode()` 會設。〔鐵律一：推論⛔ 不是權威事實〕
    */
+}
+
+/**
+ * 🔴 **清掉「點到一半」的東西，⛔ 不關模式**（2026-10-08 查 bug 找到的）。
+ *
+ * 復原／重做會用 `doc.loadJSON()` **整批換掉物件** —— 而刀具的切點、
+ * 貼合的第一點手上拿的是**舊的那個物件**。不清的話：
+ * 再點同一個物件會說「一次只能切一個物件」，按切下去會說「已切開」
+ * 而文件裡的模型根本沒動（切到的是已經不在文件裡的那一份）。
+ *
+ * ⚠ 寫法照抄 `exitOtherModes()` 裡刀具與貼合那兩段，只差在⛔ 不關模式。
+ * @returns {boolean} 有沒有清到東西（要不要在提示裡講一聲）
+ */
+function dropPendingPicks() {
+  let dropped = false;
+  if (sel.knifeMode && (knifePicks.length || knifeDeleted.length || knifeMoving)) {
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; hideKnifeLine();
+    dropped = true;
+  }
+  if (sel.mateMode && matePick1) {
+    matePick1 = null; view.clearPickMarks();
+    dropped = true;
+  }
+  return dropped;
+}
+
+/**
+ * 🔴 **復原／重做只有這一支**（按鈕與 Ctrl+Z 以前各寫一份）。
+ *
+ * ⚠ **一定要 `autosave(doc)`**（2026-10-08 查 bug 找到的）——
+ * 以前只有 `commit()` 會暫存，於是「刪掉 → Ctrl+Z 救回來 → 重新整理」
+ * 物件又不見了：暫存裡還是刪掉之後的那一份。
+ */
+function jumpHistory(redo) {
+  const dropped = dropPendingPicks();
+  const l = redo ? hist.redo() : hist.undo();
+  if (l) {
+    autosave(doc);
+    toast((redo ? '重做：' : '復原：') + l
+      + (dropped ? '（點到一半的位置已清掉，請重新點）' : ''));
+  }
+  updateBar();
 }
 
 /**
@@ -1398,6 +1464,17 @@ function editPenPath(obj) {
   if (Math.abs(obj.scale.x) < 1e-9 || Math.abs(obj.scale.z) < 1e-9) {
     toast('這個物件有一軸的縮放是 0，路徑攤不開 —— 先把縮放改回來', true);
     return;
+  }
+  /**
+   * 🔴 **已經在編輯路徑時再按一次 ⛔ 不可以重新存一份**（2026-10-08 查 bug 找到的）。
+   * 進來時物件已經被攤平（轉回 0°、放到地上），這時候再存一份
+   * ⇒ 存到的是**攤平之後**的角度與高度，按完成就躺在地上回不去了；
+   * 取消也救不回來（原本的路徑也被蓋掉）。
+   * ⚠ `exitOtherModes('pen')` 管不到這件事 —— 它對鋼筆模式本身是「保留」。
+   */
+  if (penEditing) {
+    if (penEditing.id === obj.id) { toast('已經在編輯這條路徑了'); return; }
+    endPenEdit(true);   // 換一個物件：先把上一個轉回原樣並存好
   }
   exitOtherModes('pen');
   penEditing = {
@@ -4678,9 +4755,7 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === 'z') {
     e.preventDefault();
-    const l = e.shiftKey ? hist.redo() : hist.undo();
-    if (l) toast((e.shiftKey ? '重做：' : '復原：') + l);
-    updateBar();
+    jumpHistory(e.shiftKey);
     return;
   }
   if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); duplicateSelected(); return; }

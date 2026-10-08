@@ -318,7 +318,13 @@ export class ModelObject {
       color: this.color,
       lockScale: this.lockScale
     };
-    if (this.kind === KIND.SHEET) o.thickness = this.thickness;
+    /**
+     * 🔴 **板厚一律存，⛔ 不看種類**（2026-10-08 查 bug 找到的）。
+     * 折板的網格本身就吃板厚（`buildSrc(src, thickness)`），跟種類無關；
+     * 而種類使用者改得動。只在板件才存 ⇒ 改成實體的折板讀回來變 0.2、形狀跟著變，
+     * 而**復原／重做走的也是這一支**。
+     */
+    o.thickness = this.thickness;
     // 只有回不去參數的物件才需要把網格整包存下來
     if (!this.isParametric) o.mesh = this.mesh().toJSON();
     return o;

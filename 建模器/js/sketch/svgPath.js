@@ -120,6 +120,16 @@ export function parsePath(d, opt = {}) {
        */
       cmd = lastCmd === 'M' ? 'L' : (lastCmd === 'm' ? 'l' : lastCmd);
       if (!cmd) { errors.push('路徑不是以指令開頭'); break; }
+      /**
+       * 🔴 **`Z` 後面接數字 ⛔ 不可以當成「重複 Z」**（2026-10-08 查 bug 找到的）。
+       * `Z` 一個數字都不讀，讀取位置因此永遠不前進 ⇒ **整個分頁卡死**。
+       * SVG 規格上這本來就是錯的檔案：報錯、跳過那串數字，其餘照讀。
+       */
+      if (cmd === 'Z' || cmd === 'z') {
+        errors.push('「Z」後面不能直接接數字（那串數字已略過）');
+        while (i < tokens.length && typeof tokens[i] === 'number') i++;
+        continue;
+      }
     } else {
       i++;
     }

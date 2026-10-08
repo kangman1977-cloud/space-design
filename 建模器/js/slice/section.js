@@ -65,6 +65,12 @@ const ON_PLANE = 1e-9;
  */
 export const FIT_TOL = 0.01;
 
+/**
+ * 一次最多切幾片。2 公尺高、0.1cm 的紙一片一片疊也才 2000 片，
+ * 超過這個數幾乎一定是單位打錯（把 mm 當 cm），⛔ 不是真的要切那麼多。
+ */
+export const MAX_SLABS = 2000;
+
 /** 串接輪廓時判斷「同一個點」的量化格線 */
 const SNAP = 1e6;
 
@@ -107,6 +113,17 @@ export function planSlabs(height, bands) {
       n = Math.max(0, Math.floor((height - used + FIT_TOL) / t));
     }
     n = Math.max(0, Math.floor(+n) || 0);
+    /**
+     * 🔴 **片數要有上限**（2026-10-08 查 bug 找到的）。
+     * 板厚打成 0.001（把 mm 當 cm 打）＝ 要切兩萬多片，每一片都要切一刀 ⇒ 視窗卡死。
+     * ⚠ 而介面在計算**之前**就把設定存起來了，所以⛔ 擋在介面不夠 ——
+     * 下次打開又會用同一個壞值再卡一次。擋在這裡，兩條路都過不去。
+     */
+    if (slabs.length + n > MAX_SLABS) {
+      info.push({ t, n: 0, from: 0, to: 0,
+        bad: `會切出 ${slabs.length + n} 片，超過上限 ${MAX_SLABS} 片 —— 板厚的單位是 cm，是不是打成 mm 了？` });
+      continue;
+    }
 
     const from = slabs.length + 1;
     for (let i = 0; i < n; i++) {
@@ -384,6 +401,14 @@ export function sliceMany(meshes, opt = {}) {
   }
 
   const plan = planSlabs(height, opt.bands);
+  /**
+   * 🔴 **被擋下來的那一段一定要講出來**（2026-10-08）。
+   * `bad` 以前只寫進 `plan.bands`、畫面上一個字都不印 ——
+   * 結果是「片數變 0、沒有任何說明」，跟壞掉看起來一模一樣。
+   */
+  plan.bands.forEach((b, i) => {
+    if (b.bad) warnings.push(`第 ${i + 1} 段：${b.bad}`);
+  });
   const slices = [];
   let openTotal = 0;
 
