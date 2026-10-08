@@ -328,7 +328,7 @@ export const PRIM_SPECS = {
       { key: 'gapMm',  label: '間隙 mm',    min: 0, max: 2, step: 0.05,
         hint: '齒和齒之間留的空隙。雷射切木頭建議 0.1～0.2；轉不動就加大，晃太多就減小' }
     ],
-    noteOf: src => gearNotes(src)
+    noteOf: (src, obj) => gearNotes(src, obj)
   }
 };
 
@@ -358,19 +358,31 @@ export function gearProfile(p) {
   return gearOutline(gearDims(p)).map(([rho, a]) => ({ x: rho * Math.cos(a), y: rho * Math.sin(a) }));
 }
 
-/** 面板上**看得到**的用法說明（一句一行）。數字一律照這個齒輪自己的格子算 */
-function gearNotes(src) {
+/**
+ * 面板上**看得到**的用法說明（一句一行）。數字一律照這個齒輪自己的格子算。
+ * `obj` 是物件本身（拿它的縮放）；巢狀裡面傳的是外層那個物件。
+ */
+function gearNotes(src, obj) {
   const g = gearDims(src);
   const f = v => +v.toFixed(2);
   const out = [
     `大小：分度圓直徑 ＝ 模數 × 齒數 ＝ ${f(g.r * 2)} cm，最外圈直徑 ${f(g.ra * 2)} cm`,
+    // kang 2026-10-08 實測時用縮放把齒輪放大 5 倍 —— 中心距與厚度就都對不上格子了
+    '要變大變小：改「模數」（例：0.3 改成 0.6 就是兩倍大）。⛔ 不要用縮放 —— 會跟別的齒輪咬不上，厚度也會跟著變',
     `要跟另一個齒輪咬合：兩個的「模數」填一樣，中心距離 ＝ 模數 × (這個的齒數 ＋ 對方的齒數) ÷ 2`
       + ` ＝ ${f(g.m / 2)} × (${g.z} ＋ 對方齒數)`,
     // ⚠ 對方齒數是偶數時，兩個都沒轉 ⇒ 齒尖正對齒尖（測試的咬合就是靠轉這半齒才咬上）
     '擺好之後如果齒尖頂著齒尖：把其中一個繞 Y 轉「180 ÷ 它的齒數」度（半個齒）',
     // ⚠ 格子名稱照 `ui/slicePanel.js` 抄：分段表的「板厚 cm」、上方的「孔徑 cm」
-    '雷射切：選這個齒輪按「剖面分切」，分段的「板厚」填這個齒輪的厚度、上方的「孔徑」填 0，存 DXF'
+    // ⛔ 展開圖：中間有洞的平板會多一條從孔到外緣的切開線（kang 2026-10-08 實測撞到，截圖 P01、P02）
+    '雷射切：選這個齒輪按「剖面分切」，分段的「板厚」填這個齒輪的厚度、上方的「孔徑」填 0，存 DXF。'
+      + '⛔ 不要用展開圖（會從中心孔到外緣多畫一條切開線）'
   ];
+  const sc = obj && obj.scale;
+  if (sc && [sc.x, sc.y, sc.z].some(v => Math.abs(v - 1) > 1e-6)) {
+    out.push(`⚠ 這個齒輪被縮放過（${[sc.x, sc.y, sc.z].map(f).join(' × ')} 倍）：`
+      + '實際大小、厚度都跟上面的格子對不上，跟別的齒輪也可能咬不上。把縮放改回 1，改用「模數」調大小');
+  }
   if (g.z < 17) out.push(`⚠ 齒數 ${g.z} 少於 17：齒根比較薄，比較容易斷`);
   if (g.holeClamped) out.push(`⚠ 中心孔太大會吃到齒根，已經縮成直徑 ${f(g.holeR * 2)} cm`);
   return out;

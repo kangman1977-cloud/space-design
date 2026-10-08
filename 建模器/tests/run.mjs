@@ -14062,10 +14062,17 @@ section('齒輪（2026-10-08 第二輪）：真的要能轉');
   // ── 面板：看得到的用法說明 ──
   {
     const notes = PRIM_SPECS.gear.noteOf(D);
-    ok('★★ 面板說明：寫出分度圓直徑 6 cm（＝ 0.3 × 20）', notes[0].includes('6 cm'), notes[0]);
-    ok('★★ 面板說明：寫出咬合的中心距離算法', notes[1].includes('0.15 × (20 ＋ 對方齒數)'), notes[1]);
+    ok('★★ 面板說明：寫出分度圓直徑 6 cm（＝ 0.3 × 20）', notes.some(s => s.includes('分度圓直徑') && s.includes('6 cm')));
+    // ⚠ 用「有沒有一行寫到」找，⛔ 不寫死第幾行 —— 多插一行說明就會錯位（2026-10-08 實撞）
+    ok('★★ 面板說明：寫出咬合的中心距離算法', notes.some(s => s.includes('0.15 × (20 ＋ 對方齒數)')));
     ok('★★ 面板說明：寫出雷射切怎麼做', notes.some(s => s.includes('剖面分切') && s.includes('「孔徑」填 0')));
     ok('★★ 面板說明：齒尖頂齒尖時怎麼辦（轉半個齒）', notes.some(s => s.includes('180 ÷ 它的齒數')));
+    // kang 2026-10-08 實測：用縮放放大 5 倍、走了展開圖 —— 兩件都要在面板上講出來
+    ok('★★ 面板說明：大小改「模數」、⛔ 不要用縮放', notes.some(s => s.includes('改「模數」') && s.includes('不要用縮放')));
+    ok('★★ 面板說明：雷射切⛔ 不要用展開圖', notes.some(s => s.includes('不要用展開圖')));
+    eq('★ 沒縮放 → ⛔ 沒有縮放的 ⚠', PRIM_SPECS.gear.noteOf(D, { scale: { x: 1, y: 1, z: 1 } }).filter(s => s.includes('縮放過')).length, 0);
+    const sc = PRIM_SPECS.gear.noteOf(D, { scale: { x: 5, y: 5, z: 5 } });
+    ok('★★★ 縮放過 → 多一行 ⚠，寫出倍數、叫人改回 1 用模數', sc.some(s => s.includes('縮放過（5 × 5 × 5 倍）') && s.includes('改用「模數」')));
     ok('★ 齒數少於 17 → 多一句提醒', PRIM_SPECS.gear.noteOf({ ...D, teeth: 10 }).some(s => s.includes('少於 17')));
     const big = PRIM_SPECS.gear.noteOf({ ...D, hole: 9 });
     ok('★★ 中心孔太大 → 照樣做得出來，而且【說出來】縮成多少（⛔ 不默默夾住）',
