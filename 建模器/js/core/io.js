@@ -28,6 +28,7 @@ import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
   from '../build/bool.js';
 import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
+import { saveBlob, textBlob, safeName, TYPES } from '../out/save.js';
 
 export const DOC_TYPE = 'model-doc';
 export const DOC_VERSION = 4;
@@ -1005,16 +1006,16 @@ export function migrate(d) {
 //  檔案讀寫
 // ═══════════════════════════════════════════════════════
 
+/**
+ * 🔴 **存檔一律走 `save.js`，⛔ 不自己 `<a download>`**（2026-10-08 查 bug E5）。
+ * 以前這裡自己寫了一份：連結⛔ 沒掛進網頁、1 秒就回收 —— 正是 `save.js` 檔頭
+ * 記的地雷 1、2（Chrome 不理檔名、大檔存到一半中斷）。檔名也沒清掉 `/ : *` 這些字。
+ * ⭐ 跟 DXF／STL／CSV 走同一條路，存檔行為就只有一種。
+ */
 export function download(doc, filename) {
-  const name = filename || `${doc.head.name || '未命名'}.json`;
-  const blob = new Blob([JSON.stringify(doc.toJSON(), null, 1)],
-    { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const name = filename || `${safeName(doc.head.name || '未命名')}.json`;
+  return saveBlob(textBlob(JSON.stringify(doc.toJSON(), null, 1), 'application/json'),
+    name, TYPES.json, false);
 }
 
 export function openFile() {

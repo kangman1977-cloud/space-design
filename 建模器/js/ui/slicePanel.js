@@ -144,7 +144,8 @@ export class SlicePanel {
     $('slDxf').onclick = () => this._saveDXF();
 
     window.addEventListener('keydown', e => {
-      if (!this.el.hidden && e.key === 'Escape') this.close();
+      // ⚠ 關掉之後⛔ 不再往下傳 —— 不然主畫面的 Esc 會接著清掉選取（2026-10-08 E2）
+      if (!this.el.hidden && e.key === 'Escape') { e.stopImmediatePropagation(); this.close(); }
     });
   }
 
@@ -212,11 +213,24 @@ export class SlicePanel {
      * 誤報一次，整個警告欄就不值得信了（坑第 18 條）。
      */
     if (Math.abs(st.diff) > FIT_TOL) {
+      /**
+       * ⚠ **建議要照情況講，⛔ 不是永遠叫人「設成剩下」**（2026-10-08 查 bug E7）。
+       * 板厚被擋下來時（片數超過上限），那一段**本來就是「剩下」**，
+       * 這句建議會讓人以為自己哪裡沒設好。
+       */
+      const bands = (r.plan && r.plan.bands) || [];
+      const last = this.opt.bands[this.opt.bands.length - 1];
+      const lastRest = !!last && (last.n === '' || last.n === null || last.n === undefined || last.n === 'rest');
+      const why = bands.some(b => b.bad)
+        ? '有一段被擋下來了，原因看下面那一行 ⚠。'
+        : lastRest
+          ? `最後一段已經是「剩下」—— 差的是不到一片（${f(last.t)} cm）的零頭：`
+            + '換一個整除得了的板厚，或接受矮一點。'
+          : '把某一段的片數加上去，或把最後一段設成「剩下」。';
       this.body.appendChild(box('uwWarn',
         st.diff > 0
           ? `⚠ 還差 ${f(st.diff)} cm 沒疊到（模型 ${f(st.height)}、`
-            + `目前只疊到 ${f(st.used)}）。做出來會矮一截 ——`
-            + '把某一段的片數加上去，或把最後一段設成「剩下」。'
+            + `目前只疊到 ${f(st.used)}）。做出來會矮一截 —— ${why}`
           : `⚠ 疊過頭 ${f(-st.diff)} cm（模型只有 ${f(st.height)}）。`
             + '超出的那幾片會切到空的地方。'));
     }

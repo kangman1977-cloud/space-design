@@ -305,6 +305,8 @@ const app = {
   onExplode: obj => explodeSelected(obj),
   /** 🔴 右側面板的 `編輯路徑` —— 回頭改鋼筆物件那一串錨點（第 2 階段） */
   onEditPenPath: obj => editPenPath(obj),
+  /** 這個物件是不是正在「編輯路徑」（暫時攤平中）—— 右側面板據此鎖住位置／旋轉／縮放（E4）*/
+  isPenEditing: obj => !!penEditing && !!obj && penEditing.id === obj.id,
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
 };
@@ -4725,9 +4727,11 @@ $('marquee').onclick = function () {
 };
 
 $('multi').onclick = function () {
-  sel.multi = !sel.multi;
+  sel.setMulti(!sel.multi);   // ⚠ 走 setMulti：拉點線面裡開加選要把箭頭收起來（E11）
   this.classList.toggle('on', sel.multi);
-  toast(sel.multi ? '加選開啟' : '加選關閉');
+  toast(sel.multi
+    ? (sel.editMode ? '加選開啟 —— 箭頭先收起來，挑完點再關掉加選' : '加選開啟')
+    : '加選關閉');
 };
 
 $('wire').onclick = function () {
@@ -4751,6 +4755,16 @@ $('newDoc').onclick = () => {
 window.addEventListener('keydown', e => {
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  /**
+   * 🔴 **有視窗開著時，快速鍵⛔ 不碰後面的模型**（2026-10-08 查 bug E2）。
+   * 以前展開圖開著按 Delete，後面的物件被刪掉、展開圖跟著變空；
+   * Ctrl+Z、W／E／R 也一樣穿透過去。視窗是「看結果」的地方，⛔ 不是編輯的地方。
+   */
+  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen) {
+    /** ⚠ Ctrl+S／Ctrl+D ⛔ 不可以掉回瀏覽器（另存網頁、加入書籤）*/
+    if ((e.ctrlKey || e.metaKey) && 'sd'.includes(e.key.toLowerCase())) e.preventDefault();
+    return;
+  }
 
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === 'z') {

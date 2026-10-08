@@ -113,6 +113,13 @@ export function unfoldMany(objs, opt = {}) {
     for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);
   }
 
+  /**
+   * 🔴 **片號 P01、P02…：DXF、CSV、畫面卡片用同一個號碼**（2026-10-08 查 bug E9，kang 決定）。
+   * DXF 用的是舊版格式（R12），標題只能放英文數字 —— 中文名稱會變成「-」，
+   * 師傅拿到圖分不出哪片是哪片。⭐ 圖上寫片號，CSV 第一欄也寫片號、旁邊是中文名稱，一對就知道。
+   */
+  pieces.forEach((p, i) => { p.no = pieceNo(i + 1); });
+
   return {
     pieces, warnings, skipped, rule,
     stats: {
@@ -129,8 +136,12 @@ export function unfoldMany(objs, opt = {}) {
  * 備料明細：一片一列。可直接匯出 CSV，
  * 欄位刻意跟「組裝系統結構說明表」的備料表對齊，日後好合併。
  */
+/** 片號的寫法只有這一個家：P01、P02 … P100 */
+export function pieceNo(n) { return 'P' + String(n).padStart(2, '0'); }
+
 export function billOfMaterials(pieces, rule) {
-  return pieces.map(p => ({
+  return pieces.map((p, i) => ({
+    片號: p.no || pieceNo(i + 1),
     名稱: p.name,
     數量: p.qty,
     材質: (p.rule || rule) ? (p.rule || rule).label : '',

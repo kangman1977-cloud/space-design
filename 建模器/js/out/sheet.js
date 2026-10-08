@@ -411,7 +411,8 @@ export function titleLines(piece, opt = {}) {
   const head = opt.head || {};
   const out = [];
 
-  out.push(`${piece.name}　×${piece.qty} 片`);
+  /** ⚠ 片號放最前面 —— 跟 DXF 標題、CSV 第一欄是同一個號碼（2026-10-08 E9）*/
+  out.push(`${piece.no ? piece.no + '　' : ''}${piece.name}　×${piece.qty} 片`);
   const spec = [];
   /**
    * ⚠ 〔2026-08-23 拿掉 `K ${rule.k}`〕

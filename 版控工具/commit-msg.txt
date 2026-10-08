@@ -1,48 +1,65 @@
-查 bug D 組結案 —— 測試檔 ＋ Illustrator 存的矩形都過，經過逐字搬進 HISTORY.md
+修查 bug 找到的 E 組 11 項 —— 小問題一起收（E9 片號、E11 收箭頭照 kang 的決定）
 
-⛔ 程式一行都沒改。動到 4 個檔：
-  M  HISTORY.md              新增一節「查 bug D 組 四項全過」＋ 目次重產
-  M  查bug-2026-10-08.md     D 組：記 AI 線上走一遍與 kang 實測結果，然後換成一行指標
-  M  STATUS.md               ⏳ 待實測 清空；刪掉 6 行「已結案」指標（kang 決定，見最下面）
+動到 17 個檔：
+  M  建模器/js/view/select.js      E1 最後一點快點兩下收工；E11 新增 gizmoHidden／setMulti，
+                                  7 處判斷 ＋ 2 處 attach() 之後都改看它
+  M  建模器/js/main.js             E2 有視窗開著時不處理快速鍵（Ctrl+S／D 攔住）；
+                                  E4 新增 isPenEditing；E11 加選改走 setMulti
+  M  建模器/js/ui/exportPanel.js   E2 Esc 關視窗後⛔ 不再往下傳
+  M  建模器/js/ui/importPanel.js   E2 同上
+  M  建模器/js/ui/slicePanel.js    E2 同上；E7 差額提醒照情況講
+  M  建模器/js/ui/unfoldPanel.js   E2 同上
+  M  建模器/js/ui/toolbar.js       E4 編輯路徑時位置／旋轉／縮放鎖住並說明；E8 只剩一份時的文字
+  M  建模器/js/core/history.js     E3 undo() 回報被撤銷的那一步
+  M  建模器/js/core/io.js          E5 download() 改走 save.js 的 saveBlob()
+  M  建模器/js/unfold/part.js      E9 每片編片號 P01…；CSV 第一欄「片號」；新增 pieceNo()
+  M  建模器/js/out/dxf.js          E9 標題寫片號、材質寫代號；E10 兩支 header() 照實際文字位置算
+  M  建模器/js/out/sheet.js        E9 卡片第一行加片號
+  M  建模器/tests/run.mjs          新增「E 組 bug」三節 ＋ 剖面 DXF 一項；改正 B 組 CSV 那項（照欄名找）
+  M  版控工具/平板伺服器.py        E6 不分享「.」開頭的、存檔／XXX／版控工具／node_modules；類型寫死
+  M  查bug-2026-10-08.md           E 組改成已修 ＋ 實測清單
+  M  STATUS.md                     ⏳ 加 E 組；真待辦只剩 E11 的另一半
   M  版控工具/commit-msg.txt
-
-  （kang 用 Illustrator 存的 XXX/D組AI測試.svg 也在 XXX/ 裡，⛔ 不進版控）
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  D 組結案：逐字搬進 HISTORY.md，STATUS 只留名字
+  修 E 組 11 項（kang：「一起處理完善」；E9、E11 照 kang 選的做法）
 
 【依賴哪些事實】
-  1. ① 通過 【已查證 · kang 截圖：5 個形狀、18 × 8 cm、檔案宣告寬 200mm、⚠ 1 個 <use>】
-  2. ② 通過 【已查證 · AI 讀 kang 存的 D組AI測試.svg 是 <rect>；kang 截圖 1 個形狀、30 × 30 cm】
-  3. 「沒反應」是選錯檔 【已查證 · kang 回報；AI 線上用同一份內容重現為正常】
-
-【會動到哪幾個檔】三份文件，⛔ 沒有程式
+  1. E1 轉尖角那條路直接 return，⛔ 沒判斷快點兩下
+                     【已查證 · select.js pointerup 的 _penConvert 分支】
+  2. E2 視窗的 Esc 先跑、主畫面的 Esc 接著跑（同一個 window，先註冊的先跑）
+                     【已查證 · 四個視窗在 main.js:313 建構，主畫面的 keydown 在後面】
+  3. E3 undo() 先退一格再回報   【已查證 · history.js】
+  4. E4 endPenEdit 把 rot／posY 放回進來前的值   【已查證 · main.js endPenEdit】
+  5. E5 io.js 自己 <a download>、⛔ 沒掛進網頁、1 秒回收   【已查證 · 對照 save.js 地雷 1、2】
+  6. E6 整個資料夾都分享   【已查證 · .bat 在專案根目錄跑 SimpleHTTPRequestHandler】
+  7. E10 標題在 −7s、檔頭從 0 起；剖面說明 7 行超出 12s   【已查證 · dxf.js】
+  8. E11 three.js 的 attach() 會把箭頭設回看得見   【已查證 · TransformControls.js attach()】
 
 【怎麼知道做對了】
-  · 搬移：搬出去的 30 行與 HISTORY.md 末 30 行 md5 相同
-    （e5d82a0d67e642a378ea3029b6633a4b）；檔尾只有一個換行
-  · 目次產生器：「自我否決通過：正文逐字未變」
-  · node 文件工具/狀態行數.js：✅ 在線內（90 → 刪 6 行後 83）
+  · 測試：E3／E9／E10 新測試全過（⚠ 這一輪是先改再寫，見下）
+  · E6：本機實跑伺服器，10 個路徑：建模器 200、.git／%2Egit／../.git／存檔／XXX／版控工具 全 404；
+        .js → text/javascript、.wasm → application/wasm、仍是 no-store
+  · 其餘是畫面操作 → 實測清單
 
 ════════════════════════════════════════════════
-【🔴 這一輪最該記的：實測檔自己做】
-
-  D1／D3 那種寫法 Illustrator 做不出來 ⇒ AI 自己寫一份測試檔（四種寫法放一起），
-  本機讀過、線上走過，才請 kang 匯入；只有「Illustrator 實際怎麼存」才請 kang 存一份，
-  而且 AI 先直接讀他存的檔再帶他匯入。
-  完整經過 → HISTORY.md「查 bug D 組 四項全過」
+【機械檢查】
+  測試           通過 2813　失敗 0（原 2797 ＋ 新 16）
+  模組圖載入     沒有 SyntaxError（照舊停在 OrbitControls 那個 import）
+  兩端檢查       全部通過
+  UI／DXF 模組   Node 單獨載入成功（toolbar／slice／export／import／unfold／dxf）
+  ⭐ 新：完整解析 用 vm.SourceTextModule 解析 8 個改過的模組（含 select.js、main.js）全過；
+        故意做一個重複宣告驗過，抓得到 —— 這一道比「模組圖載入」完整，要不要列進四道請 kang 決定
+  目次產生器     ⛔ 沒有改到 ## 節的目次檔
 
 ════════════════════════════════════════════════
-【⚠ STATUS 警報線】
+【⚠ 這一輪的老實話】
 
-  「⏳ 待實測 ＋ 真待辦」合計 90 行，警報線 90 —— 剛好在線上，下一輪一定會超過。
-  AI 報告（⛔ 沒有自己動手）：⏳ 那一節開頭寫「一個已結案的名字都不列」，
-  節裡卻有 6 行「⚠ … 已結案」—— 其中 4 行是 AI 今天照「比例編輯」那一行的寫法加的，
-  等於跟那一節自己的規則打架。
-  ⇒ kang 決定：這一輪就刪。刪之前逐一確認指向的地方都在：
-     HISTORY.md「查 bug A／B／C／D 組 …全過」「比例編輯 九項全過」各 1 節；
-     旋轉成形 → 真待辦那一條 ＋ 規格\建模器-旋轉成形.md
-  ⇒ 90 → 83 行。
+  · E3／E9／E10 是先改程式、再寫測試 —— 順序反了，沒看到新測試在修之前失敗。
+    改用讀舊程式確認（舊的寫法都在這一輪差異的「刪掉的行」裡）。
+  · 我寫的測試錯了兩處：E3 漏了先 reset('開始')；B 組 CSV 那項寫死「第一欄是名稱」，
+    E9 加了片號就壞了 —— 改成照欄名找。
+  · E11 只做了箭頭那一半；「工具列多一排、模型往下移」kang 還沒決定，⛔ 沒動。

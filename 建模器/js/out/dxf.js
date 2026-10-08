@@ -48,6 +48,8 @@
  * 所以輸出時換算，並寫進 $INSUNITS 讓對方軟體自己認。
  */
 
+import { pieceNo } from '../unfold/part.js';
+
 const COLOR = { CUT: 7, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
 
 /** 剖面分切用的圖層顏色。切割層依板厚各一層，名字由 cutLayer() 產生。 */
@@ -86,7 +88,12 @@ export function toDXF(pieces, opt = {}) {
     maxY = Math.max(maxY, p.height * s);
   }
 
-  out.header(0, 0, x, maxY);
+  /**
+   * ⚠ 圖面範圍要包住**所有**文字，⛔ 不是只包外框（2026-10-08 查 bug E10）。
+   * 標題與單位畫在下面（到 −7s）、直的尺寸線在左邊（到 −3s）、折彎標示在上面（到 maxY ＋ 2s）——
+   * 以前寫 (0, 0) ～ (x, maxY)，照檔頭縮放畫面的軟體會把那幾行裁在外面。
+   */
+  out.header(-3 * s, -7 * s, x, maxY + 2 * s);
   out.tables(Object.keys(COLOR).map(n => [n, COLOR[n]]));
   out.blocks();
   out.beginEntities();
@@ -176,8 +183,13 @@ export function toDXF(pieces, opt = {}) {
 
     // 標題：這一片是什麼、要做幾片、什麼材料
     const th = (ruleOf(p) && ruleOf(p).thickness) || 0;
-    const mat = (ruleOf(p) && ruleOf(p).label) || '';
-    const title = `${p.name} x${p.qty}`
+    const mat = (ruleOf(p) && ruleOf(p).key) || '';   // ⚠ 代號（英文），⛔ 不是中文名稱
+    /**
+     * ⚠ 標題寫**片號**，⛔ 不寫名稱（2026-10-08 查 bug E9，kang 決定）——
+     * 名稱多半是中文，R12 只收英數，以前會變成「A-B」「-」這種分不出來的字。
+     * 材質也一樣：寫材質代號（paper、acrylic…），⛔ 不寫中文名稱。
+     */
+    const title = `${p.no || pieceNo(laid.findIndex(l => l.p === p) + 1)} x${p.qty}`
       + (mat ? `  ${mat}` : '')
       + (th ? ` t${round(th)}` : '');
     out.text('TEXT', ox, oy - 5 * s, 1.0 * s, ascii(title));
@@ -284,7 +296,13 @@ export function sliceDXF(slices, opt = {}) {
   layers.push(['NUM', SLICE_COLOR.NUM], ['TEXT', SLICE_COLOR.TEXT]);
 
   const out = new Writer();
-  out.header(0, 0, maxX, maxY + 12 * s);   // 上面還要放幾行說明文字
+  /**
+   * 上面還要放幾行說明文字：每行間隔 2s、字高 1.2s。
+   * ⚠ 行數要照實際算（2026-10-08 查 bug E10）—— 以前寫死 12s，
+   * 有案件名稱時是 7 行、最上面那行到 maxY ＋ 15.2s，超出檔頭範圍。
+   */
+  const noteLines = 6 + ((opt.head && opt.head.name) ? 1 : 0);   // ⚠ 跟底下 `note` 的行數對得上
+  out.header(0, 0, maxX, maxY + (noteLines * 2 + 1.2) * s);
   out.tables(layers);
   out.blocks();
   out.beginEntities();

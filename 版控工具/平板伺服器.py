@@ -53,10 +53,32 @@
 import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlsplit
+
+
+# 🔴 **這幾個資料夾⛔ 不分享**（2026-10-08 查 bug E6）。
+#   以前整個專案資料夾都在區網上：`.git/`（含遠端網址）、`存檔/`（kang 的模型檔）、
+#   `XXX/`（測試檔）、`版控工具/` 的紀錄 —— 這些⛔ 都不在線上版（GitHub Pages）裡，
+#   ⛔ 也不該被同一個網路上的人讀到。建模器本身用不到它們任何一個。
+#   ⭐ 另外：路徑裡任何一段是「.」開頭的（`.git`、`.claude`…）一律擋。
+HIDDEN_DIRS = {'存檔', 'XXX', '版控工具', 'node_modules'}
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
-    """跟內建的一樣，只多做一件事：每個回應都貼上「不准存」。"""
+    """跟內建的一樣，只多做兩件事：每個回應都貼上「不准存」；不分享不該分享的資料夾。"""
+
+    # ⚠ 類型寫死，⛔ 不靠 Windows 登錄檔猜（2026-10-08 E6 順手）——
+    #   某些電腦的登錄檔把 .js 記成 text/plain，ES 模組就會整個載不起來。
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        '.js': 'text/javascript', '.mjs': 'text/javascript',
+        '.wasm': 'application/wasm', '.json': 'application/json',
+        '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml',
+    }
+
+    def _hidden(self):
+        parts = [p for p in unquote(urlsplit(self.path).path).split('/') if p]
+        return any(p.startswith('.') or p in HIDDEN_DIRS for p in parts)
 
     def end_headers(self):
         # no-store：連存都不要存（比 no-cache 更強，no-cache 是「存了但每次要問」）
@@ -74,6 +96,9 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         「**你手上那份還能用**」，那就是我們要消滅的行為。
         ⇒ 先把條件式請求的標頭拔掉，內建的實作就只會回完整的 200。
         """
+        if self._hidden():
+            self.send_error(404, 'Not Found')      # ⚠ 回「找不到」，⛔ 不回「禁止」—— 不透露它存在
+            return None
         for h in ('If-Modified-Since', 'If-None-Match'):
             while h in self.headers:
                 del self.headers[h]
@@ -89,6 +114,7 @@ def main():
     print()
     print("  分享的資料夾：%s" % os.getcwd())
     print("  連接埠：%d　【已關閉快取：平板一定拿得到最新的檔】" % port)
+    print("  ⛔ 不分享：「.」開頭的資料夾（.git 等）、%s" % "、".join(sorted(HIDDEN_DIRS)))
     print()
     ThreadingHTTPServer(('0.0.0.0', port), NoCacheHandler).serve_forever()
 

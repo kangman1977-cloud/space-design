@@ -391,9 +391,23 @@ export class Panel {
         });
     }
 
+    /**
+     * 🔴 **編輯路徑時，位置／旋轉／縮放先鎖住**（2026-10-08 查 bug E4）。
+     * 那時物件被暫時攤平（轉回 0°、放到地上），在這裡改的是**攤平後**的值；
+     * 按「完成」時程式把進來前的角度與高度放回去 ⇒ 剛改的值被蓋掉，
+     * 而且歷史紀錄裡留下一份攤平的樣子（完成之後按復原會看到它躺在地上）。
+     */
+    const pathEditing = !!(this.app.isPenEditing && this.app.isPenEditing(obj));
+    if (pathEditing) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = '正在編輯路徑：位置、旋轉、縮放先鎖住 —— 按「完成」之後再改';
+      this.form.appendChild(note);
+    }
+
     // ── 位置 ──
     this.form.appendChild(head('位置 cm'));
-    this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'));
+    this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'), false, pathEditing);
 
     /**
      * 🔴 **原點置中：把箭頭的那個點搬到物件正中間，⛔ 而東西一格都不動。**
@@ -515,11 +529,11 @@ export class Panel {
     }
 
     this.form.appendChild(head('旋轉 度'));
-    this._rowVec3(obj.rot, ['X', 'Y', 'Z'], () => this._edit('改旋轉'), true);
+    this._rowVec3(obj.rot, ['X', 'Y', 'Z'], () => this._edit('改旋轉'), true, pathEditing);
 
     this.form.appendChild(head('縮放 倍'));
     this._rowVec3(obj.scale, ['X', 'Y', 'Z'], () => this._edit('改縮放'), false,
-      obj.lockScale);
+      obj.lockScale || pathEditing);
 
     this._rowCheck('鎖定縮放', obj.lockScale, v => {
       obj.lockScale = v;
@@ -1030,8 +1044,11 @@ export class Panel {
     // ── 總份數 ──
     const total = document.createElement('div');
     total.className = 'note';
+    /** ⚠ 鏡射不保留原件時只剩 1 份 ——「其中一份是鏡像」就不通了（2026-10-08 查 bug E8）*/
     total.textContent = `總共 ${obj.copies} 份`
-      + (src.mode === ARRAY_MODES.MIRROR ? '（其中一份是鏡像，展開圖要翻面）' : '');
+      + (src.mode !== ARRAY_MODES.MIRROR ? ''
+        : obj.copies === 1 ? '（只留鏡像那一份，展開圖要翻面）'
+        : '（其中一份是鏡像，展開圖要翻面）');
     wrap.appendChild(total);
 
     // ── 各模式的參數 ──

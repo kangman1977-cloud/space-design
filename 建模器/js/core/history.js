@@ -57,10 +57,17 @@ export class History {
     this._fire();
   }
 
+  /**
+   * ⚠ **回傳「被撤銷的那一步」的名字**，⛔ 不是退回去之後那一步（2026-10-08 查 bug 改的）。
+   * 以前先退一格再回報 ⇒ 做了 A、B 之後按復原，提示寫「復原：A」（實際撤銷的是 B），
+   * 退到最前面還會寫「復原：開始」。重做本來就對（前進一格，那一格就是被重做的）。
+   */
   undo() {
     if (!this.canUndo) return null;
+    const undone = this.stack[this.index].label;
     this.index--;
-    return this._apply();
+    this._apply();
+    return undone;
   }
 
   redo() {

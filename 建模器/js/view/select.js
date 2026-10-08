@@ -1576,6 +1576,20 @@ export class Selection {
             if (this.hooks.onPenConvert) this.hooks.onPenConvert(had, true);
             return;
           }
+          /**
+           * 🔴 **在最後一點上快點兩下 ＝ 收工**（2026-10-08 查 bug E1）。
+           * 第一下放了點，第二下剛好落在那個點上 ⇒ 走進這一條「轉尖角」的路，
+           * 以前就在這裡結束了 —— 按鈕說「最後一點快點兩下完成」，實際上只跳出
+           * 「這個點本來就是尖角」。⭐ 這一條路⛔ 沒有放新點，所以⛔ 不必退一點。
+           */
+          const now = performance.now();
+          const lt = this._lastPenTap;
+          this._lastPenTap = { x: e.clientX, y: e.clientY, t: now };
+          if (lt && (now - lt.t) < DOUBLE_TAP_MS
+              && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE) {
+            if (this.hooks.onPenFinish) this.hooks.onPenFinish();
+            return;
+          }
           this._pen.ho[ci * 2] = 0;
           this._pen.ho[ci * 2 + 1] = 0;
           this._drawPenPreview();
@@ -2683,9 +2697,9 @@ export class Selection {
   setEditMode(on) {
     this.editMode = !!on;
     if (!this.editMode) this.clearEditSel();
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.editMode;
   }
 
@@ -2985,6 +2999,12 @@ export class Selection {
     if (this._proxy.parent !== node) node.add(this._proxy);
     this._rebaseProxy();
     this.tc.attach(this._proxy);
+    /**
+     * ⚠ `attach()` 會自己把箭頭設成看得見（three.js 的 `_root.visible = true`）——
+     * 拉點線面每選一個點都會重掛一次，⛔ 不在這裡補收的話，「加選時收起箭頭」（E11）
+     * 只撐到選第一個點為止。
+     */
+    if (this.gizmoHidden && this.helper) this.helper.visible = false;
     this._applyModeLimit();
   }
 
@@ -3023,6 +3043,7 @@ export class Selection {
     p.updateMatrixWorld(true);
 
     this.tc.attach(p);
+    if (this.gizmoHidden && this.helper) this.helper.visible = false;   // ⚠ 同上一支：attach 會把箭頭打開
     this.tc.showX = this.tc.showY = this.tc.showZ = true;
   }
 
@@ -3682,6 +3703,25 @@ export class Selection {
   }
 
   /**
+   * 🔴 **箭頭（gizmo）要不要收起來 —— 只有這一個判斷**（2026-10-08 查 bug E11，kang 決定）。
+   * 除了點選類的模式，**拉點線面裡開著「加選」也收**：那時候是在「挑點」⛔ 不是在「拖」，
+   * 而箭頭的把手會蓋住旁邊的點 —— 點下去選到的是把手，那個點怎麼點都選不到
+   * （AI 在線上照截圖點方塊頂面四個角，第四個角就是這樣點不到）。挑完關掉加選，箭頭就回來。
+   * ⚠ ⛔ 只在拉點線面裡收 —— 一般模式下開加選多半就是要一起拖，那時需要箭頭。
+   */
+  get gizmoHidden() {
+    return this.inPickMode || (this.multi && this.editMode);
+  }
+
+  /** 開關「加選」—— 箭頭的顯示跟著重算（`gizmoHidden` 那則）*/
+  setMulti(on) {
+    this.multi = !!on;
+    this.tc.enabled = !this.gizmoHidden;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
+    return this.multi;
+  }
+
+  /**
    * 🔴 **參考線模式**（2026-08-31 第 1 階段）。
    *
    * ── 為什麼它也算 `inPickMode` ────────────────────────
@@ -3698,17 +3738,17 @@ export class Selection {
    */
   setGuideMode(on) {
     this.guideMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.guideMode;
   }
 
   setMateMode(on) {
     this.mateMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.mateMode;
   }
 
@@ -3719,9 +3759,9 @@ export class Selection {
    */
   setOriginMode(on) {
     this.originMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.originMode;
   }
 
@@ -3733,10 +3773,10 @@ export class Selection {
    */
   setKnifeMode(on) {
     this.knifeMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
     if (this.helper) {
-      this.helper.visible = !this.inPickMode;
+      this.helper.visible = !this.gizmoHidden;
     }
     /**
      * 🔴 **「按住拖」在刀具模式下要讓給一筆畫，轉視角換到右鍵／兩指。**
@@ -3767,9 +3807,9 @@ export class Selection {
    */
   setPenMode(on) {
     this.penMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     if (this.view && this.view.setDrawInput) this.view.setDrawInput(this.penMode);
     if (!this.penMode && this.view && this.view.clearPenPreview) {
       this.view.clearPenPreview();
@@ -4559,14 +4599,14 @@ export class Selection {
 
   setSeamMode(on) {
     this.seamMode = !!on;
-    this.tc.enabled = !this.inPickMode;
+    this.tc.enabled = !this.gizmoHidden;
     /**
      * 一定要重跑 _refresh()，它才會依照新的模式決定掛不掛 gizmo。
      * 少了這一行，離開分片模式後 gizmo 不會回來 —— 要等下次點選才復原，
      * 而使用者只會覺得「東西不能拖了」。
      */
     this._refresh();
-    if (this.helper) this.helper.visible = !this.inPickMode;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.seamMode;
   }
 }

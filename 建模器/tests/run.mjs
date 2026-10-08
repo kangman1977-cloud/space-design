@@ -3585,6 +3585,11 @@ section('剖面分切：出圖與 DXF');
     unit: 'mm', origin: popt.origin, frame: popt.frame,
     pegsOf, pegD: 0.5, axis: 'y', head: { name: '測試' }
   });
+  {
+    /** 〔2026-10-08 查 bug E10〕有案件名稱 ＝ 說明文字 7 行，以前檔頭只留 12s、最上面那行超出去 */
+    const eb = dxfBounds(dxf);
+    ok('★★ E10：剖面 DXF 的檔頭範圍包得住所有線與文字（有案件名稱、7 行說明）', eb.inside, eb.why);
+  }
 
   const sections = [...dxf.matchAll(/(?:^|\r\n)0\r\nSECTION\r\n2\r\n(\w+)\r\n/g)]
     .map(x => x[1]);
@@ -13294,7 +13299,9 @@ section('B 組 bug：多個物件一起展開，板厚要各自標');
   /** ⚠ 要對「板厚cm」那一欄 —— 整列找 `1` 會被「數量 1」騙過（第一版就被騙了）*/
   const csv = bomCSV(r.pieces, r.rule).split('\r\n').map(l => l.split(','));
   const col = csv[0].indexOf('板厚cm');
-  const rowOf = name => csv.find(c => c[0].startsWith(name));
+  /** ⚠ 照欄位名稱找，⛔ 不寫死第幾欄 —— 2026-10-08 E9 在最前面加了「片號」，寫死 0 就壞了 */
+  const nameCol = csv[0].indexOf('名稱');
+  const rowOf = name => csv.find(c => (c[nameCol] || '').startsWith(name));
   eq('★★ CSV 厚板那一列的板厚', rowOf('厚板')[col], '1');
   eq('　 CSV 薄板那一列的板厚', rowOf('薄板')[col], '0.5');
   const dxf = toDXF(r.pieces, { unit: 'mm', rule: r.rule });
@@ -13711,6 +13718,106 @@ section('D 組 bug：矩形、圓形這些基本圖形⛔ 不可以消失');
 
   const open = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100"><polyline points="0,0 50,0 50,50"/></svg>`);
   ok('對照組：折線（開放的）照規矩報「沒有封閉」', open.errors.some(e => e.includes('沒有封閉')));
+}
+
+// ═══════════════════════════════════════════════════════
+//  E 組 bug（2026-10-08 全專案查 bug 找到的，小問題 —— 測得到的那幾項）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * DXF 檔頭的 $EXTMIN／$EXTMAX 有沒有包住 ENTITIES 裡的每一個座標（文字加上字高）。
+ * ⚠ 文字只看插入點與字高，⛔ 不估字寬 —— 字寬要看字型，估了就是猜。
+ */
+function dxfBounds(dxf) {
+  const L = dxf.split(/\r?\n/);
+  const hv = name => {
+    const i = L.indexOf(name);
+    return { x: +L[i + 2], y: +L[i + 4] };
+  };
+  const mn = hv('$EXTMIN'), mx = hv('$EXTMAX');
+  const start = L.indexOf('ENTITIES');
+  let minX = Infinity, minY = Infinity, maxY = -Infinity, maxX = -Infinity;
+  let kind = '', y = 0;
+  for (let i = start; i + 1 < L.length; i += 2) {
+    const code = L[i].trim(), val = L[i + 1];
+    if (code === '0') kind = val;
+    if (code === '10' || code === '11') { minX = Math.min(minX, +val); maxX = Math.max(maxX, +val); }
+    if (code === '20' || code === '21') { y = +val; minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    if (code === '40' && kind === 'TEXT') maxY = Math.max(maxY, y + +val);
+  }
+  const e = 1e-6;
+  const inside = minX >= mn.x - e && minY >= mn.y - e && maxX <= mx.x + e && maxY <= mx.y + e;
+  return { inside, why: `內容 x ${minX}~${maxX}、y ${minY}~${maxY}；檔頭 (${mn.x}, ${mn.y})~(${mx.x}, ${mx.y})` };
+}
+
+section('E 組 bug：復原的提示要講「撤銷了哪一步」');
+
+{
+  /**
+   * 🔴 **做了 A、B 之後按復原，提示寫「復原：A」**（修之前）——
+   * 實際撤銷的是 B。先退一格再回報，回報的就變成退回去之後那一格；
+   * 退到最前面還會寫「復原：開始」。
+   */
+  const { History } = await import('../js/core/history.js');
+  let state = 0;
+  const h = new History({ get: () => state, set: v => { state = v; } });
+  /** ⚠ 介面一開始一定先 `reset('開始')`（main.js 的 boot／新建／開檔）—— 第一版漏了這一步，測試自己錯 */
+  h.reset('開始');
+  state = 1; h.commit('A');
+  state = 2; h.commit('B');
+  eq('★★★ 第一次復原：撤銷的是 B', h.undo(), 'B');
+  eq('　 狀態真的回到 A 之後', state, 1);
+  eq('★★ 第二次復原：撤銷的是 A（⛔ 不是「開始」）', h.undo(), 'A');
+  eq('對照組：重做回報的是被重做的那一步', h.redo(), 'A');
+  eq('對照組：沒得復原時回 null', (h.undo(), h.undo()), null);
+}
+
+section('E 組 bug：DXF 標題改寫片號，CSV 第一欄也是片號');
+
+{
+  /**
+   * 🔴 **DXF 標題的中文全部變成「-」**（修之前）—— 物件名「A匯入線稿測試－B」→「A-B」、材質 →「-」，
+   * 師傅拿到圖分不出哪片是哪片。kang 2026-10-08 決定：圖上寫片號 P01、P02…，
+   * CSV 第一欄也寫片號、旁邊是中文名稱；畫面卡片的第一行也加片號。
+   */
+  const a = new io.ModelObject({ name: '左側板', kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'plate', w: 100, d: 60 } });
+  const b = new io.ModelObject({ name: '右側板', kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'plate', w: 80, d: 40 } });
+  const r = unfoldMany([a, b]);
+  eq('★★ 第一片的片號 P01', r.pieces[0].no, 'P01');
+  eq('★★ 第二片的片號 P02', r.pieces[1].no, 'P02');
+
+  const dxf = toDXF(r.pieces, { unit: 'mm', rule: r.rule });
+  const texts = [];
+  const L = dxf.split(/\r?\n/);
+  for (let i = 0; i + 1 < L.length; i++) if (L[i].trim() === '1' && L[i - 1] && L[i - 1].trim() !== '') texts.push(L[i + 1]);
+  ok('★★★ DXF 標題寫 P01、P02', dxf.includes('P01 x1') && dxf.includes('P02 x1'));
+  ok('★★★ DXF 裡⛔ 沒有只剩「-」的名稱', !texts.some(t => /^-|\s-\s|\s-$/.test(t)), texts.join(' | '));
+  ok('★ 材質寫代號（英文），⛔ 不是變成「-」', /P01 x1\s+\w+ t0\.5/.test(dxf));
+
+  const csv = bomCSV(r.pieces, r.rule).split('\r\n').map(l => l.split(','));
+  eq('★★★ CSV 第一欄叫「片號」', csv[0][0], '片號');
+  eq('★★ CSV 第一列是 P01、旁邊是中文名稱', `${csv[1][0]} ${csv[1][1]}`, 'P01 左側板－展開片 1');
+
+  const tl = titleLines(r.pieces[1], { rule: r.rule });
+  ok('★★ 畫面卡片第一行也有片號（跟 DXF、CSV 對得起來）', tl[0].startsWith('P02'), tl[0]);
+}
+
+section('E 組 bug：DXF 檔頭的圖面範圍要包住所有文字');
+
+{
+  /**
+   * 🔴 **檔頭寫 (0, 0) 起，但標題畫在 −7s、尺寸線在 −3s**（修之前）——
+   * 照檔頭縮放畫面的軟體會把標題與尺寸裁在外面。
+   */
+  const a = new io.ModelObject({ name: 'L', kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'bend', w: 40, first: 30, arcSeg: 4, k: 0.4, bends: [{ angle: 90, ri: 2, len: 30 }] } });
+  const r = unfoldMany([a]);
+  for (const unit of ['mm', 'cm']) {
+    const eb = dxfBounds(toDXF(r.pieces, { unit, rule: r.rule }));
+    ok(`★★★ 展開 DXF（${unit}）：檔頭範圍包得住所有線與文字`, eb.inside, eb.why);
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

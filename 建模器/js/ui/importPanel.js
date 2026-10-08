@@ -123,7 +123,8 @@ export class ImportPanel {
     this.goBtn.onclick = () => this._import();
 
     window.addEventListener('keydown', e => {
-      if (!this.el.hidden && e.key === 'Escape') this.close();
+      // ⚠ 關掉之後⛔ 不再往下傳 —— 不然主畫面的 Esc 會接著清掉選取（2026-10-08 E2）
+      if (!this.el.hidden && e.key === 'Escape') { e.stopImmediatePropagation(); this.close(); }
     });
   }
 
