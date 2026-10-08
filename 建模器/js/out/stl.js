@@ -138,6 +138,25 @@ export function trisBounds(tris) {
   return box;
 }
 
+/**
+ * 🔴 **存檔那一刻才落到平台，⛔ 不要先落再合併**（2026-10-08 查 bug 找到的）。
+ *
+ * 舊做法是每個物件先各自 `dropToBed()`，合成一個檔時再落一次 ——
+ * 第二次已經沒有作用（每個都已經貼在 0），**疊著的物件全部擠在最底下**。
+ *
+ * ⭐ 這一支**回傳新的一份**，⛔ 不動傳進來的那些三角形：
+ * 匯出面板的列印前檢查還要用它們，而使用者可能換個選項再存一次。
+ *
+ * @param {Array[]} lists    每個物件一串三角形（世界座標，⛔ 還沒落過）
+ * @param {boolean} together true ＝ 合成一個檔（整組一起落，相對位置保留）
+ * @returns {Array[]} together 時只有一串；否則一個物件一串、各自落
+ */
+export function bedLayout(lists, together) {
+  const copy = tris => tris.map(t => ({ a: t.a.clone(), b: t.b.clone(), c: t.c.clone(), n: t.n }));
+  if (together) return [dropToBed(lists.flatMap(copy))];
+  return lists.map(l => dropToBed(copy(l)));
+}
+
 /** 整批往下平移，讓最低點貼在 Z=0 的列印平台上 */
 export function dropToBed(tris) {
   if (!tris.length) return tris;

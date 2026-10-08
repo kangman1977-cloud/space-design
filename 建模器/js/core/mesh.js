@@ -832,7 +832,7 @@ export class Mesh {
   static merge(meshes) {
     const points = [];
     const faces = [];
-    const roles = [];
+    const marks = [];
     let off = 0;
 
     for (const m of meshes) {
@@ -840,26 +840,33 @@ export class Mesh {
       for (const v of m.verts) points.push(v.p.clone());
       for (const f of m.faces) faces.push(m.faceVerts(f).map(v => vi.get(v.id) + off));
       for (const he of m.edges()) {
-        if (he.role === EDGE_ROLE.FREE) continue;
-        roles.push([vi.get(he.v.id) + off, vi.get(he.to.id) + off, he.role]);
+        const mk = m.marksOf(he);
+        if (Mesh.marksEmpty(mk)) continue;
+        marks.push([vi.get(he.v.id) + off, vi.get(he.to.id) + off, mk]);
       }
       off += m.verts.length;
     }
 
     const out = Mesh.fromFaceList(points, faces);
 
-    // 把折線／切割線的標記搬過來。邊界的 cut 是建構時自動補的，
-    // 這裡主要是為了保住折線 —— 折板陣列如果掉了折線，第 3 期就展不開。
-    if (roles.length) {
+    /**
+     * 把邊上的標記搬過來。邊界的 cut 是建構時自動補的，
+     * 這裡主要是為了保住折線 —— 折板陣列如果掉了折線，第 3 期就展不開。
+     *
+     * 🔴 **一律走 `marksOf()`／`applyMarks()`，⛔ 不自己挑欄位**（2026-10-08 查 bug 找到的）。
+     * 以前這裡只搬 `role`，`smooth` 與 `hard` 安靜地不見 —— 開放的形狀做陣列後，
+     * 展開圖每一個切面都變成一道折彎。這正是 `marksOf()` 檔頭記的那個病，第三次發作。
+     */
+    if (marks.length) {
       const byPair = new Map();
       const dst = out._vertIndex();
       for (const he of out.edges()) {
         const a = dst.get(he.v.id), b = dst.get(he.to.id);
         byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
       }
-      for (const [a, b, role] of roles) {
+      for (const [a, b, mk] of marks) {
         const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
-        if (he) out.setRole(he, role);
+        if (he) out.applyMarks(he, mk);
       }
     }
     return out;

@@ -5819,6 +5819,13 @@ export function extrudeBoundaryEdges(mesh, hes, dist) {
       out.applyMarks(he, want.get(kOf2(di.get(he.v.id), di.get(he.to.id))));
     }
   }
+  /**
+   * 🔴 **被擠出的那條外緣，現在變成內部的摺線了 —— 它身上的「切開」是假的**
+   * （2026-10-08 查 bug 找到的）。外緣天生自動標 CUT（`_buildBoundaryLoops()`），
+   * 上面又把舊標記整包搬了過來 ⇒ 展開時翻邊會被切下來變成另一片。
+   * ⭐ `fillHoles()`／`bridgeLoops()` 早就這樣清了，這一支漏了。
+   */
+  clearBoundaryOnlySeams(mesh, out, clean.remap);
 
   /**
    * ⚠ **回報「新長出來的那幾片」的邊，讓介面接著把它們選起來** ——

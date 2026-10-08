@@ -182,7 +182,20 @@ export function revolve(pts, opt = {}) {
    * 側牆。
    * ⚠ **繞向是量出來的，⛔ 不是推的** —— 見檔頭那則與測試裡的體積斷言。
    */
-  const ringPairs = [];      // 繞的方向那些邊（圓被切成折線的產物）→ 要標 smooth
+  /**
+   * 🔴 **要標 smooth 的是「沿著輪廓走」的那些邊**（2026-10-08 查 bug 改正）。
+   *
+   * 圓被切成 `seg` 段 ⇒ 相鄰兩格的面在**沿著輪廓的那條邊**上折一個
+   * 360°÷seg 的小角 —— 那才是「切圓的產物」，要標平滑。
+   * ⚠ **以前標的是繞圈方向的邊**（同一個輪廓點、相鄰兩格）——
+   * 那條邊兩側是輪廓上**相鄰的兩段**，折角就是輪廓本身的轉角
+   * （圓柱上下緣 90°），⛔ 那是真的轉角。結果剛好標反：
+   * 展開時上下緣不摺、側面摺 32 道。
+   * ⭐ 對照 `extrude.js`：平滑的也是**沿著掃掠方向**的那些邊。
+   *
+   * ⚠ 跟中心線垂直的那一段（平的底／蓋）兩側的面共平面，⛔ 沒有折痕，不標。
+   */
+  const sweepPairs = [];
   /** 封閉的輪廓要多接一段（`m−1` 回到 `0`）—— 那一段正是「環」的內圈 */
   const segsAlong = closedProfile ? m : m - 1;
   for (let k = 0; k < seg; k++) {
@@ -204,11 +217,8 @@ export function revolve(pts, opt = {}) {
       else if (pole[i2]) faces.push([d, b, a]);      // 另一端收成一個尖
       else faces.push([d, c, b, a]);
 
-      if (!pole[i]) ringPairs.push([a, d]);
-    }
-    /** 開放的輪廓：最後一個點那一圈⛔ 還沒被上面標到（它不是任何一段的起點）*/
-    if (!closedProfile && !pole[m - 1]) {
-      ringPairs.push([idx[k][m - 1], idx[k2][m - 1]]);
+      /** 每一格只標自己這一側（`a→b`）；下一格會標到 `d→c`，⛔ 不必重複 */
+      if (Math.abs(parts[i].t - parts[i2].t) > ON_AXIS_TOL) sweepPairs.push([a, b]);
     }
   }
 
@@ -218,21 +228,22 @@ export function revolve(pts, opt = {}) {
   mesh.computeNormals();
 
   /**
-   * 🔴 **繞的方向那些邊一律標 `smooth`。**
+   * 🔴 **切圓產生的折痕（沿著輪廓走的那些邊）一律標 `smooth`。**
+   * 〔2026-10-08 改正：以前寫「繞的方向那些邊」，⛔ 而那正好標反了 —— 見 `sweepPairs`〕
    *
    * ⚠ **⛔ 不標的話展開圖會把一個平滑的轉面標成幾百道折彎**
    * —— `extrude.js` 的 `smoothPairs` 是同一件事，而這個專案
    * **2026-08-23 為了它付過一次代價**（展開圖從 5 處折彎變成 45 處）。
    * ⭐ 找邊的方式照 `extrude.js` 抄：**頂點索引配對**，⛔ 不靠半邊的順序。
    */
-  if (ringPairs.length) {
+  if (sweepPairs.length) {
     const vidx = new Map(mesh.verts.map((v, i) => [v.id, i]));
     const byPair = new Map();
     for (const he of mesh.edges()) {
       const a = vidx.get(he.v.id), b = vidx.get(he.to.id);
       byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
     }
-    for (const [a, b] of ringPairs) {
+    for (const [a, b] of sweepPairs) {
       const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
       if (he) mesh.setSmooth(he, true);
     }

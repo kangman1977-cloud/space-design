@@ -208,7 +208,16 @@ export function evalArrayTree(node, buildChild) {
   // 只算一次原件，其餘都是同一份網格套不同矩陣
   const base = buildChild(node.child.src).transformed(itemMatrix(node.child));
 
-  if (mats.length === 1) return base;
+  /**
+   * ⚠ 只剩一份時，⛔ 不可以假設那一份就是「不動」（2026-10-08 查 bug 找到的）——
+   * 鏡射不勾「保留原件」時，唯一那個矩陣是**鏡射本身**，
+   * 以前直接回原件 ⇒ 拿到的是沒鏡射過的那一個。
+   * ⭐ 一份就⛔ 不必走聯集，直接套那個矩陣；繞向由 `transformed()` 處理
+   * （行列式為負時翻回來 —— 測試用「體積是正的」守著）。
+   */
+  if (mats.length === 1) {
+    return mats[0].equals(new THREE.Matrix4()) ? base : base.transformed(mats[0]);
+  }
 
   const label = node.child.name || '原件';
   const copies = mats.map(m => base.transformed(m));

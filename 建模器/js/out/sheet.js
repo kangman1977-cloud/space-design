@@ -406,7 +406,8 @@ function dim(items, x1, y1, x2, y2, label, kind) {
  * 「這是哪一片、幾片、什麼材料、多厚、K 多少」缺一不可。
  */
 export function titleLines(piece, opt = {}) {
-  const rule = opt.rule || {};
+  /** ⚠ 這一片自己的規則優先 —— 多個物件一起展開時板厚可能不一樣（2026-10-08）*/
+  const rule = piece.rule || opt.rule || {};
   const head = opt.head || {};
   const out = [];
 

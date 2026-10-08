@@ -60,7 +60,7 @@ const { makeRule, MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL }
   = await import('../js/unfold/rules.js');
 const { unfoldMesh } = await import('../js/unfold/flatten.js');
 // part.js 是文件物件與展開引擎之間的轉接層，不碰 DOM，所以測得到
-const { unfoldObject } = await import('../js/unfold/part.js');
+const { unfoldObject, unfoldMany, bomCSV } = await import('../js/unfold/part.js');
 const seam = await import('../js/unfold/seam.js');
 const { drawProgram, toSVG, titleLines, labelWidth, pointInPoly } = await import('../js/out/sheet.js');
 const { sliceProgram, sliceTitleLines, progSVG } = await import('../js/out/sheet.js');
@@ -79,7 +79,7 @@ const euler = m => m.verts.length - [...m.edges()].length + m.faces.length;
 // save.js 在模組層級只做 typeof window 判斷，不碰 DOM，所以 Node 也載得進來
 const { safeName, TYPES, canChoosePath } = await import('../js/out/save.js');
 const { triangles, stlVolume, trisBounds, dropToBed, toSTLBinary, toSTLAscii,
-        printCheck, STL_UNITS } = await import('../js/out/stl.js');
+        printCheck, STL_UNITS, bedLayout } = await import('../js/out/stl.js');
 // 第 6 期第一刀。移動頂點與改完之後的連帶重算，全部是純幾何、不碰 DOM。
 const edit = await import('../js/core/edit.js');
 
@@ -12939,15 +12939,18 @@ section('旋轉成形（Spin／車床）—— 2026-09-02');
   }
 
   /**
-   * 🔴 **繞的方向那些邊要標 `smooth`。**
+   * 🔴 **切圓產生的折痕（沿著輪廓走的邊）要標 `smooth`。**
    * ⚠ ⛔ 不標的話展開圖會把一個平滑的轉面標成幾百道折彎
    * 〔2026-08-23 為它付過一次代價：展開圖從 5 處折彎變成 45 處〕。
+   * 🔴 〔2026-10-08 改正：這一項原本驗「＝ 非極點的 2 圈 × 32 格 ＝ 64」——
+   * 　**把標反的結果寫成了答案**。那 64 條是上下緣 90° 的真轉角。
+   * 　⚠ 只驗數量驗不出標在哪；標在哪由「B 組 bug：旋轉成形」那一節驗折角〕
    */
   {
     const r = revolve([V(0,0,0), V(R,0,0), V(R,H,0), V(0,H,0)], { axis:'y', a:0, b:0, seg:SEG });
     let n = 0;
     for (const he of r.mesh.edges()) if (he.smooth) n++;
-    eq('★★★ smooth 邊 ＝ 非極點的 2 圈 × 32 格', n, 2 * SEG);
+    eq('★★★ smooth 邊 ＝ 側面 32 道（上下蓋是平的、⛔ 不標）', n, SEG);
   }
 
   /**
@@ -13239,6 +13242,168 @@ section('A 組 bug：實體物件存檔要留板厚');
   const box1 = new THREE.Box3().setFromPoints(back.mesh().verts.map(v => v.p));
   near('★ 外框寬度不變', box1.max.x - box1.min.x, box0.max.x - box0.min.x, 1e-9);
   near('★ 外框高度不變', box1.max.y - box1.min.y, box0.max.y - box0.min.y, 1e-9);
+}
+
+// ═══════════════════════════════════════════════════════
+//  B 組 bug（2026-10-08 全專案查 bug 找到的，給製作的檔案會錯）
+// ═══════════════════════════════════════════════════════
+
+section('B 組 bug：STL 合成一個檔要保留相對高度');
+
+{
+  /**
+   * 🔴 **兩個疊著的方塊匯成「一個檔」→ 兩個都擠在最底下**（修之前）。
+   * 每個物件先各自落到平台，合併後再落一次已經沒有作用。
+   * ⭐ 正解：位置照世界座標排好，⛔ 存檔那一刻才落，而且只落一次。
+   */
+  const box = buildPrim('box', { w: 10, h: 10, d: 10 });
+  const at = y => triangles(box, { matrix: new THREE.Matrix4().makeTranslation(0, y, 0), scale: 10 });
+  const lower = at(5), upper = at(15);          // 方塊中心在原點 → 0~10 與 10~20 cm
+  const keep = trisBounds(upper).min.z;
+
+  const [one] = bedLayout([lower, upper], true);
+  near('★★★ 合成一個檔：總高 ＝ 20cm ＝ 200mm（⛔ 不是兩個都 100）', trisBounds(one).max.z, 200, 1e-6);
+  near('合成一個檔：最低點貼平台', trisBounds(one).min.z, 0, 1e-9);
+
+  const each = bedLayout([lower, upper], false);
+  near('分開存：上面那個也落到平台', trisBounds(each[1]).min.z, 0, 1e-9);
+  near('分開存：高度各自 100mm', trisBounds(each[1]).max.z, 100, 1e-6);
+
+  near('★ 原本那一份⛔ 沒被動到（檢查表還要用、而且可以存第二次）',
+    trisBounds(upper).min.z, keep, 1e-12);
+}
+
+section('B 組 bug：多個物件一起展開，板厚要各自標');
+
+{
+  /**
+   * 🔴 **0.5 與 1.0 兩種板一起展開 → DXF、CSV、標題欄全部寫 0.5**（修之前）。
+   * 程式只記一份規則（第一個物件的）。DXF 與 CSV 是要交給師傅的。
+   */
+  const thin = new io.ModelObject({ name: '薄板', kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'plate', w: 100, d: 60 } });
+  const thick = new io.ModelObject({ name: '厚板', kind: io.KIND.SHEET, thickness: 1,
+    src: { type: 'plate', w: 80, d: 40 } });
+  const r = unfoldMany([thin, thick]);
+  const pThick = r.pieces.find(p => p.owner === '厚板');
+  ok('前提：兩片都展開了', r.pieces.length === 2 && !!pThick);
+
+  eq('★★★ 厚板那一片帶著自己的板厚', pThick.rule && pThick.rule.thickness, 1);
+  ok('★★ 標題欄寫 板厚 1', titleLines(pThick, { rule: r.rule }).join('|').includes('板厚 1 cm'),
+    titleLines(pThick, { rule: r.rule }).join('|'));
+  /** ⚠ 要對「板厚cm」那一欄 —— 整列找 `1` 會被「數量 1」騙過（第一版就被騙了）*/
+  const csv = bomCSV(r.pieces, r.rule).split('\r\n').map(l => l.split(','));
+  const col = csv[0].indexOf('板厚cm');
+  const rowOf = name => csv.find(c => c[0].startsWith(name));
+  eq('★★ CSV 厚板那一列的板厚', rowOf('厚板')[col], '1');
+  eq('　 CSV 薄板那一列的板厚', rowOf('薄板')[col], '0.5');
+  const dxf = toDXF(r.pieces, { unit: 'mm', rule: r.rule });
+  ok('★★ DXF 兩種板厚都標得出來', dxf.includes(' t0.5') && dxf.includes(' t1'));
+}
+
+section('B 組 bug：DXF 的曲線帶⛔ 不標 R0');
+
+{
+  /**
+   * 🔴 **曲線帶在 DXF 裡被標成「180deg R0」**（修之前）——
+   * 看起來像一道銳角摺線。展開圖（`sheet.js`）早就分開標了，DXF 沒有。
+   */
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" `
+    + `viewBox="0 0 100 100"><path d="M20,50 A30,30 0 0 1 80,50 L20,50 Z"/></svg>`;
+  const loop = prof.readSVG(svg, { tolMm: 0.2 }).loops[0];
+  const u = unfoldMesh(extr.extrudeProfile({ pts: loop.pts, holes: [] }, 2), makeRule('paper', 0.2));
+  const bends = u.pieces.flatMap(p => p.bends);
+  ok('前提：有曲線帶', bends.some(b => b.isCurve));
+  const sharp = bends.filter(b => !b.isArc).length;
+  const dxf = toDXF(u.pieces, { unit: 'mm' });
+  eq('★★★ 「R0」只出現在真的尖角折線上', (dxf.match(/deg R0\r?\n/g) || []).length, sharp);
+  ok('★ 曲線帶標成 CURVE', dxf.includes('CURVE'));
+}
+
+section('B 組 bug：鏡射不保留原件');
+
+{
+  /**
+   * 🔴 **鏡射時不勾「保留原件」→ 拿到的是沒鏡射過的原件**（修之前）。
+   * 只剩一個矩陣時程式直接回原件，以為那個矩陣一定是「不動」。
+   */
+  const m = io.buildSrc({ type: 'array', mode: 'mirror', axis: 'x', offset: 30, keepOriginal: false,
+    child: { src: { type: 'box', w: 10, h: 10, d: 10 }, pos: [0, 0, 0], rot: [0, 0, 0],
+             scale: [1, 1, 1], name: 'box' } });
+  const b = m.bounds();
+  near('★★★ 只剩鏡射那一份：最小 X ＝ 2×30−5', b.min.x, 55, 1e-6);
+  near('★★★ 最大 X ＝ 2×30+5', b.max.x, 65, 1e-6);
+  near('★ 體積還是正的', m.volume(), 1000, 1e-4);
+}
+
+section('B 組 bug：旋轉成形的平滑邊要標在「切圓」的折痕上');
+
+{
+  /**
+   * 🔴 **標反了**（修之前）：真的轉角（圓柱上下那兩圈 90°）被標成平滑，
+   * 圓被切成 32 段多出來的小折痕（每道 360°÷32 ＝ 11.25°）反而沒標。
+   * 展開時平滑邊⛔ 不當折線 ⇒ 上下緣不摺、側面摺 32 道。
+   * ⭐ 對照 `extrude.js`：平滑的是**沿著掃掠方向**的那些邊。
+   */
+  const { revolve } = await import('../js/build/revolve.js');
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const SEG = 32;
+  const r = revolve([V(0,0,0), V(25,0,0), V(25,70,0), V(0,70,0)], { axis:'y', a:0, b:0, seg:SEG });
+  const m = r.mesh;
+  const deg = he => m.computeFaceNormal(he.face).angleTo(m.computeFaceNormal(he.twin.face)) * 180 / Math.PI;
+  let smoothBig = 0, smoothSide = 0, creaseMissed = 0;
+  for (const he of m.edges()) {
+    if (!he.twin || !he.twin.face) continue;
+    const d = deg(he);
+    if (he.smooth && d > 45) smoothBig++;
+    if (he.smooth && Math.abs(d - 360 / SEG) < 1e-6) smoothSide++;
+    if (!he.smooth && Math.abs(d - 360 / SEG) < 1e-6) creaseMissed++;
+  }
+  eq('★★★ 90° 的真轉角一條都⛔ 不是平滑', smoothBig, 0);
+  eq('★★★ 側面 32 道切圓的折痕全部標平滑', smoothSide, SEG);
+  eq('★ 切圓的折痕一條都沒漏', creaseMissed, 0);
+}
+
+section('B 組 bug：擠出邊之後新的摺線⛔ 不帶「切開」');
+
+{
+  /**
+   * 🔴 **平板擠出一條外緣 → 那條邊變成內部的摺線，卻還帶著「切開」**（修之前）。
+   * 外緣天生自動標「切開」；它變成內部之後那個標記是假的，
+   * 展開時翻邊會被切下來變成另一片。`補洞` 那幾支早就會清，這一支漏了。
+   */
+  const sh = buildPrim('plate', { w: 60, d: 40, segW: 1, segD: 1 });
+  const bnd = [...sh.edges()].filter(h => !h.face || !h.twin || !h.twin.face);
+  const out = edit.extrudeBoundaryEdges(sh, [bnd[0]], 5).mesh;
+  let fakeCut = 0;
+  for (const he of out.edges()) {
+    if (he.face && he.twin && he.twin.face && he.role === EDGE_ROLE.CUT) fakeCut++;
+  }
+  eq('★★★ 內部的邊一條「切開」都沒有', fakeCut, 0);
+  const u = unfoldMesh(out, makeRule('paper', 0.2));
+  eq('★★ 展開成 1 片（翻邊沒有被切下來）', u.pieces.length, 1);
+}
+
+section('B 組 bug：合併網格要搬全部標記');
+
+{
+  /**
+   * 🔴 **陣列（`Mesh.merge`）只搬「切開／摺線」，平滑與硬邊安靜地不見**（修之前）。
+   * 〔`marksOf()` 檔頭記著：同一個病已經發作過兩次，兩次都是「東西安靜地不見了」〕
+   */
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" `
+    + `viewBox="0 0 100 100"><path d="M20,50 A30,30 0 0 1 80,50 L20,50 Z"/></svg>`;
+  const loop = prof.readSVG(svg, { tolMm: 0.2 }).loops[0];
+  const m = extr.extrudeProfile({ pts: loop.pts, holes: [] }, 2);
+  const someEdge = [...m.edges()].find(h => !h.smooth && h.role === EDGE_ROLE.FREE);
+  m.setHard(someEdge, true);
+  const count = (mm, f) => [...mm.edges()].filter(f).length;
+  const sm = count(m, h => h.smooth), hd = count(m, h => h.hard);
+  ok('前提：有平滑邊也有硬邊', sm > 0 && hd === 1);
+
+  const two = Mesh.merge([m, m.transformed(new THREE.Matrix4().makeTranslation(200, 0, 0))]);
+  eq('★★★ 平滑邊 × 2', count(two, h => h.smooth), 2 * sm);
+  eq('★★ 硬邊 × 2', count(two, h => h.hard), 2 * hd);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -74,7 +74,13 @@ export function unfoldObject(obj, opt = {}) {
   const copies = obj.copies || 1;
   if (copies > 1) for (const p of r.pieces) p.qty *= copies;
 
-  for (const p of r.pieces) p.owner = obj.name;
+  /**
+   * 🔴 **每一片帶著自己的規則（材質＋板厚）**（2026-10-08 查 bug 找到的）。
+   * 多個物件一起展開時，整份結果只有一個 `rule`（第一個物件的）——
+   * 0.5 與 1.0 的板一起展開，DXF／CSV／標題欄**全部寫 0.5**，而那是要交給師傅的。
+   * ⭐ 出圖的地方一律先看 `p.rule`，沒有才用整份的。
+   */
+  for (const p of r.pieces) { p.owner = obj.name; p.rule = rule; }
 
   return {
     ok: true,
@@ -127,8 +133,8 @@ export function billOfMaterials(pieces, rule) {
   return pieces.map(p => ({
     名稱: p.name,
     數量: p.qty,
-    材質: rule ? rule.label : '',
-    板厚cm: rule ? rule.thickness : '',
+    材質: (p.rule || rule) ? (p.rule || rule).label : '',
+    板厚cm: (p.rule || rule) ? (p.rule || rule).thickness : '',
     展開長cm: round(p.width),
     展開寬cm: round(p.height),
     單片面積cm2: round(p.area),

@@ -13,7 +13,7 @@
  * 使用者不必再學一次怎麼操作。
  */
 
-import { triangles, dropToBed, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
+import { triangles, bedLayout, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
@@ -146,7 +146,12 @@ export class ExportPanel {
         try { mesh = mesh.shell(o.thickness); shelled = true; }
         catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
       }
-      const tris = dropToBed(triangles(mesh, { matrix: o.matrix(), scale: s }));
+      /**
+       * ⚠ **這裡⛔ 不落平台** —— 存檔時才由 `bedLayout()` 決定怎麼落
+       * （合成一個檔要整組一起落，才保得住疊在一起的相對高度）。
+       * 列印前檢查只看形狀與體積，跟高度無關。
+       */
+      const tris = triangles(mesh, { matrix: o.matrix(), scale: s });
       return { obj: o, mesh, tris, shelled, check: printCheck(mesh, tris) };
     });
 
@@ -357,13 +362,12 @@ export class ExportPanel {
       ? binaryBlob(toSTLBinary(tris, { header: head }), 'model/stl')
       : textBlob(toSTLAscii(tris, { name }), 'model/stl');
 
-    if (this.opt.group === 'one' || this.items.length === 1) {
-      // 合成一個檔：各物件的三角形直接接在一起（它們已經帶著世界座標），
-      // 再整組落到平台上，相對位置因此完全保留
-      const all = [];
-      for (const it of this.items) for (const t of it.tris) all.push(t);
-      dropToBed(all);
-      await saveBlob(mk(all, this._base()), `${this._base()}_${u}.stl`,
+    const together = this.opt.group === 'one' || this.items.length === 1;
+    // 各物件的三角形帶著世界座標；合成一個檔時整組一起落，相對位置因此完全保留
+    const laid = bedLayout(this.items.map(it => it.tris), together);
+
+    if (together) {
+      await saveBlob(mk(laid[0], this._base()), `${this._base()}_${u}.stl`,
         TYPES.stl, this.opt.askPath);
       return;
     }
@@ -371,7 +375,7 @@ export class ExportPanel {
     const jobs = this.items.map((it, i) => ({
       name: `${this._base()}_${String(i + 1).padStart(2, '0')}_`
           + `${safeName(it.obj.name, '物件')}_${u}.stl`,
-      blob: mk(it.tris, it.obj.name)
+      blob: mk(laid[i], it.obj.name)
     }));
     const n = await saveMany(jobs, this.opt.askPath);
     if (n > 1) this.sum.textContent = `已存 ${n} 個 STL。　` + this.sum.textContent;

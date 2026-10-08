@@ -91,8 +91,11 @@ export function toDXF(pieces, opt = {}) {
   out.blocks();
   out.beginEntities();
 
-  const th = (opt.rule && opt.rule.thickness) || 0;
-  const mat = (opt.rule && opt.rule.label) || '';
+  /**
+   * ⚠ 材質與板厚**每一片自己算**（`p.rule` 優先）—— 多個物件一起展開時
+   * 板厚可能不一樣，用整份的 `opt.rule` 會全部寫成第一個物件的（2026-10-08）。
+   */
+  const ruleOf = p => p.rule || opt.rule || null;
   /**
    * ⚠ 〔2026-08-23 拿掉 K 因子〕原本這裡有 `const kf = opt.rule.k`，
    * DXF 標題會印 ` K0.5`。K 是金屬中性層的模型，主力材料用不到，
@@ -126,9 +129,16 @@ export function toDXF(pieces, opt = {}) {
       out.line('BEND', ox + b.x0 * s, y0, ox + b.x0 * s, y1);
       out.line('BEND', ox + b.x1 * s, y0, ox + b.x1 * s, y1);
       const cx = ox + (b.x0 + b.x1) / 2 * s;
+      /**
+       * 🔴 **曲線帶⛔ 不標 R**（2026-10-08 查 bug 找到的）。
+       * 自由曲線沒有單一半徑，`r` 是 0 —— 以前印成「180deg R0」，
+       * 看起來像一道銳角摺線。展開圖（`sheet.js`）早就分開標「曲線」了，
+       * 這裡照同一個判斷：標總轉角與段數（⛔ 不標長度：DXF 的文字不換單位）。
+       */
       // r ＝ 網格量出來的半徑。〔2026-08-23 從 b.ri（K 推的內側 R）改過來〕
-      out.text('BEND', cx, y1 + 1.2 * s, 0.8 * s,
-        `${round(b.angle)}deg R${round(b.r)}`);
+      out.text('BEND', cx, y1 + 1.2 * s, 0.8 * s, b.isCurve
+        ? `CURVE ${round(Math.abs(b.angle))}deg ${b.segs}seg`
+        : `${round(b.angle)}deg R${round(b.r)}`);
     }
     for (const b of p.bends) {
       if (b.isArc) continue;
@@ -165,6 +175,8 @@ export function toDXF(pieces, opt = {}) {
       `${round(p.height)}`, s);
 
     // 標題：這一片是什麼、要做幾片、什麼材料
+    const th = (ruleOf(p) && ruleOf(p).thickness) || 0;
+    const mat = (ruleOf(p) && ruleOf(p).label) || '';
     const title = `${p.name} x${p.qty}`
       + (mat ? `  ${mat}` : '')
       + (th ? ` t${round(th)}` : '');
