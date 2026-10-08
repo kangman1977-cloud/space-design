@@ -311,6 +311,12 @@ export class Panel {
             this._edit('改' + lab);
           }, f.hintOf ? f.hintOf(obj.src) : f.hint);
         }
+        /**
+         * ⭐ **看得到的用法說明**（2026-10-08 為齒輪加的）。
+         * ⚠ ⛔ 不可以只靠 `hint` —— 那是滑鼠移上去才出現的提示，平板上看不到。
+         * 改格子會走 `_edit()` → `refresh()` 重畫，所以這幾行永遠跟著格子的數字。
+         */
+        for (const s of spec.noteOf ? spec.noteOf(obj.src) : []) this.form.appendChild(note(s));
         if (spec.hasBends) this._bendList(obj);
         /**
          * ⚠ **鋼筆物件要多講一句** —— 它比別的參數物件多失去一樣東西：
@@ -1224,6 +1230,8 @@ export class Panel {
         this._rebuild(obj, '改' + lab);
       });
     }
+    /** ⚠ 巢狀裡面也要畫看得到的說明 —— 跟上面 `labelOf` 那則同一個理由 */
+    for (const s of spec.noteOf ? spec.noteOf(src) : []) container.appendChild(note(s));
   }
 
   /** 運算樹被改過 → 清掉快取重算，然後照一般編輯流程走 */

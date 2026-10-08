@@ -2255,7 +2255,8 @@ section('STL：體積交叉驗證');
     ['圓環', 'torus', { rOuter: 30, rInner: 15, seg: 32, segT: 12 }],
     ['楔形', 'wedge', { w: 60, h: 30, d: 40 }],
     ['半球', 'dome', { r: 30, seg: 32, segH: 8 }],
-    ['階梯', 'stairs', { steps: 4, stepH: 15, stepD: 25, w: 60 }]
+    ['階梯', 'stairs', { steps: 4, stepH: 15, stepD: 25, w: 60 }],
+    ['齒輪', 'gear', { module: 0.3, teeth: 20, t: 0.5, hole: 0.6, gapMm: 0.2 }]
   ];
 
   for (const [name, type, p] of shapes) {
@@ -13849,8 +13850,10 @@ section('新增四種基本體：圓環、楔形、半球、階梯（2026-10-08�
     return s * Math.sin(2 * Math.PI / s) * q / 6;
   };
 
-  eq('★★ 下拉多了四種，排在折板後面', PRIM_TYPES.slice(-4).join(' '), 'torus wedge dome stairs');
-  eq('★★ 下拉顯示的名字', PRIM_TYPES.slice(-4).map(t => PRIM_SPECS[t].label).join(' '), '圓環 楔形 半球 階梯');
+  /** ⚠ 用「折板後面那四個」找，⛔ 不用「最後四個」—— 第二輪的齒輪排在它們後面（2026-10-08 實撞） */
+  const after = PRIM_TYPES.slice(PRIM_TYPES.indexOf('bend') + 1, PRIM_TYPES.indexOf('bend') + 5);
+  eq('★★ 下拉多了四種，排在折板後面', after.join(' '), 'torus wedge dome stairs');
+  eq('★★ 下拉顯示的名字', after.map(t => PRIM_SPECS[t].label).join(' '), '圓環 楔形 半球 階梯');
   for (const t of ['torus', 'wedge', 'dome', 'stairs']) {
     ok(`★ ${PRIM_SPECS[t].label}：面板的每一格都有預設值`,
        PRIM_SPECS[t].fields.every(f => Number.isFinite(defaultSrc(t)[f.key])));
@@ -13948,6 +13951,125 @@ section('新增四種基本體：圓環、楔形、半球、階梯（2026-10-08�
       ok(`★★ ${name} 展開（${mat}）沒有重疊`, r.pieces.every(p => !p.overlap),
          r.pieces.filter(p => p.overlap).length + ' 片重疊');
     }
+  }
+}
+
+section('齒輪（2026-10-08 第二輪）：真的要能轉');
+
+{
+  /**
+   * kang：真的要能轉、預設照建議、「我只要知道要如何使用為主」。
+   * 🔴 **這一節最重要的是「咬合」那一項**：兩個齒輪擺在 中心距 ＝ 模數 × (z1 ＋ z2) ÷ 2，
+   * 一邊轉一邊查 —— **任何一個點跑進對方裡面 ＝ 會卡住**。
+   * ⭐ 齒面被切成折線，折線在真正的漸開線**裡面**（漸開線往外凸），所以只會偏薄、⛔ 不會誤判成卡住。
+   */
+  const { gearDims, gearProfile, PRIM_SPECS, defaultSrc } = await import('../js/build/prim.js');
+  const D = defaultSrc('gear');
+
+  // ── 形狀本身 ──
+  {
+    const m = buildPrim('gear', D);
+    const v = m.validate();
+    const g = gearDims(D);
+    ok('★★ 齒輪 封閉、結構無誤', v.closed && v.ok, v.errors[0] || '');
+    eq('★★ 齒輪 有中心孔 → 尤拉數 0', v.euler, 0);
+    eq('★ 齒輪 沒有中心孔 → 尤拉數 2', buildPrim('gear', { ...D, hole: 0 }).validate().euler, 2);
+    ok('★★ 齒輪 體積是正的', m.volume() > 0);
+    const sz = m.bounds().getSize(new THREE.Vector3());
+    near('★★ 齒輪 厚度 ＝ 「厚度」那一格', sz.y, D.t, 1e-9);
+    near('★★ 齒輪 最外圈直徑 ＝ 模數 × (齒數 ＋ 2)', sz.x, D.module * (D.teeth + 2), 1e-9);
+    near('★ 分度圓半徑 ＝ 模數 × 齒數 ÷ 2', g.r, D.module * D.teeth / 2, 1e-12);
+    for (const z of [8, 12, 17, 60, 120]) {
+      const mz = buildPrim('gear', { ...D, teeth: z });
+      ok(`★ ${z} 齒 做得出來（封閉、結構無誤）`, mz.validate().ok && mz.validate().closed && mz.volume() > 0);
+    }
+  }
+
+  // ── 咬合：兩個齒輪轉一整個齒距，⛔ 不可以卡住 ──
+  {
+    const inPoly = (P, x, y) => {
+      let c = false;
+      for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+        if ((P[i].y > y) !== (P[j].y > y) &&
+            x < (P[j].x - P[i].x) * (y - P[i].y) / (P[j].y - P[i].y) + P[i].x) c = !c;
+      }
+      return c;
+    };
+    const segDist = (p, a, b) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+    };
+    const place = (P, rot, cx) => P.map(q => ({
+      x: cx + q.x * Math.cos(rot) - q.y * Math.sin(rot), y: q.x * Math.sin(rot) + q.y * Math.cos(rot)
+    }));
+    /** 回 { 卡住的次數, 最近的距離 cm }。g1 的齒尖朝向 g2 時，g2 要剛好是齒縫朝回來 */
+    const mesh2 = (z1, z2, gapMm, m = 0.3, da = 0) => {
+      const P1 = gearProfile({ module: m, teeth: z1, gapMm }), P2 = gearProfile({ module: m, teeth: z2, gapMm });
+      const a = m * (z1 + z2) / 2 + da;
+      /**
+       * 🔴 **咬合的地方在「節點」＝ 小齒輪那一側的分度圓上（x ＝ m·z1/2），⛔ 不是兩個中心的正中間。**
+       * 【實證 2026-10-08】第一版用 a/2 —— 只有齒數一樣時才對；20 配 40 時根本沒看到咬合處，
+       * 「不會卡住」那項是**空轉通過**，是「最近距離 ＝ ∞」才照出來的。
+       */
+      const xp = m * z1 / 2;
+      let hits = 0, minD = Infinity;
+      const N = 24;
+      for (let k = 0; k < N; k++) {
+        const th = (2 * Math.PI / z1) * k / N;
+        const A = place(P1, th, 0), B = place(P2, Math.PI + Math.PI / z2 - th * z1 / z2, a);
+        // 只看咬合那一帶（兩個中心連線附近），其餘離得很遠
+        const near1 = A.filter(q => q.x > xp - 3 * m), near2 = B.filter(q => q.x < xp + 3 * m);
+        for (const q of near1) if (inPoly(B, q.x, q.y)) hits++;
+        for (const q of near2) if (inPoly(A, q.x, q.y)) hits++;
+        for (const q of near1) for (let i = 0; i < B.length; i++) {
+          const b0 = B[i], b1 = B[(i + 1) % B.length];
+          if (b0.x < xp + 3 * m) minD = Math.min(minD, segDist(q, b0, b1));
+        }
+      }
+      return { hits, minD };
+    };
+    for (const [z1, z2] of [[20, 40], [20, 20], [8, 8], [12, 60]]) {
+      const r = mesh2(z1, z2, 0.2);
+      eq(`★★★ ${z1} 齒配 ${z2} 齒、間隙 0.2 mm：轉一個齒距都⛔ 不會卡住`, r.hits, 0);
+      ok(`★★ ${z1} 配 ${z2}：最近的地方有留空隙，而且⛔ 超過間隙（齒⛔ 不是瘦到碰不到）`,
+         r.minD > 0 && r.minD < 0.02, `${(r.minD * 10).toFixed(3)} mm`);
+    }
+    /**
+     * 🔴 **對照組：這個測試真的抓得到卡住嗎？** —— 中心距離故意少 0.5 mm，一定要卡。
+     * ⛔ 沒有這一項的話，上面「0 次卡住」分不出是「真的沒卡」還是「根本沒看到」
+     * （第一版就是後者）。
+     */
+    ok('★★★ 對照組：中心距離故意少 0.5 mm → 一定卡住（證明上面那幾項⛔ 不是空轉）',
+       mesh2(20, 40, 0.2, 0.3, -0.05).hits > 0);
+    const tight = mesh2(20, 40, 0);
+    eq('★★★ 間隙 0：照樣⛔ 不會卡住（齒形本身是對的）', tight.hits, 0);
+    ok('★★★ 間隙 0：最近的地方幾乎貼在一起（< 0.05 mm）—— 齒⛔ 不是做得太瘦',
+       tight.minD < 0.005, `${(tight.minD * 10).toFixed(3)} mm`);
+  }
+
+  // ── 雷射切：剖面分切切成一片 ＝ 外形一圈 ＋ 孔一圈 ──
+  {
+    const m = buildPrim('gear', D);
+    const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: D.t, n: 'rest' }] });
+    eq('★★★ 剖面分切：厚度填板厚 → 切成 1 片', r.slices.length, 1);
+    const loops = r.slices[0].loops;
+    eq('★★★ 那一片是 2 圈：外形 ＋ 中心孔（⛔ 沒有展開圖那條切開線）', loops.length, 2);
+    eq('★★ 其中 1 圈是孔', loops.filter(l => l.isHole).length, 1);
+    near('★★ 切出來的面積 × 厚度 ＝ 齒輪體積', r.slices[0].area * D.t, m.volume(), 1e-6);
+  }
+
+  // ── 面板：看得到的用法說明 ──
+  {
+    const notes = PRIM_SPECS.gear.noteOf(D);
+    ok('★★ 面板說明：寫出分度圓直徑 6 cm（＝ 0.3 × 20）', notes[0].includes('6 cm'), notes[0]);
+    ok('★★ 面板說明：寫出咬合的中心距離算法', notes[1].includes('0.15 × (20 ＋ 對方齒數)'), notes[1]);
+    ok('★★ 面板說明：寫出雷射切怎麼做', notes.some(s => s.includes('剖面分切') && s.includes('「孔徑」填 0')));
+    ok('★★ 面板說明：齒尖頂齒尖時怎麼辦（轉半個齒）', notes.some(s => s.includes('180 ÷ 它的齒數')));
+    ok('★ 齒數少於 17 → 多一句提醒', PRIM_SPECS.gear.noteOf({ ...D, teeth: 10 }).some(s => s.includes('少於 17')));
+    const big = PRIM_SPECS.gear.noteOf({ ...D, hole: 9 });
+    ok('★★ 中心孔太大 → 照樣做得出來，而且【說出來】縮成多少（⛔ 不默默夾住）',
+       big.some(s => s.includes('已經縮成')) && buildPrim('gear', { ...D, hole: 9 }).validate().ok);
   }
 }
 

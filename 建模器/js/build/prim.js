@@ -66,7 +66,9 @@ export const PRIM_DEFAULTS = {
   torus:    { rOuter: 30, rInner: 15, seg: 32, segT: 12 },
   wedge:    { w: 60, h: 30, d: 40 },
   dome:     { r: 30, seg: 32, segH: 8 },
-  stairs:   { steps: 4, stepH: 15, stepD: 25, w: 60 }
+  stairs:   { steps: 4, stepH: 15, stepD: 25, w: 60 },
+  // 齒輪（2026-10-08 第二輪，kang：真的要能轉、預設照建議）。單位 cm，只有 gapMm 是 mm
+  gear:     { module: 0.3, teeth: 20, t: 0.5, hole: 0.6, gapMm: 0.2 }
 };
 
 /**
@@ -304,8 +306,75 @@ export const PRIM_SPECS = {
       { key: 'stepD', label: '每階深', min: 0.1, step: 1 },
       { key: 'w',     label: '寬',     min: 0.1, step: 1 }
     ]
+  },
+  /**
+   * 🔴 **齒輪：真的要能轉**（kang 2026-10-08）——標準漸開線齒形、壓力角固定 20°。
+   * ⭐ kang：「我只要知道要如何使用為主」⇒ 專業的部分寫成**看得到的用法**（`noteOf`），
+   * ⚠ ⛔ 不只寫在 `hint`：那是滑鼠移上去才出現的提示，**平板上看不到**。
+   * ⚠ 雷射切的檔案走「剖面分切」，⛔ 不走展開圖 —— 展開圖遇到中間有洞的平板，
+   * 會從外圈到孔畫一條切開線（`out/sheet.js` 檔頭「環形片沒有 holes 資料」那則）。
+   */
+  gear: {
+    label: '齒輪',
+    fields: [
+      { key: 'module', label: '模數（齒的大小）', min: 0.05, step: 0.05,
+        hint: '要互相咬合的齒輪，這一格一定要填一樣' },
+      { key: 'teeth',  label: '齒數',       min: 8, max: 300, step: 1, int: true,
+        hint: '齒輪大小 ＝ 模數 × 齒數。少於 17 齒的齒根比較薄、比較容易斷' },
+      { key: 't',      label: '厚度',       min: 0.05, step: 0.1,
+        hint: '填板子的厚度' },
+      { key: 'hole',   label: '中心孔直徑', min: 0, step: 0.1,
+        hint: '套軸或木棒用。0 ＝ 沒有孔' },
+      { key: 'gapMm',  label: '間隙 mm',    min: 0, max: 2, step: 0.05,
+        hint: '齒和齒之間留的空隙。雷射切木頭建議 0.1～0.2；轉不動就加大，晃太多就減小' }
+    ],
+    noteOf: src => gearNotes(src)
   }
 };
+
+/**
+ * 齒輪的尺寸（給面板的說明與測試用；`BUILDERS.gear` 也從這裡拿，⛔ 不各算一份）。
+ * 分度圓 ＝ 兩個齒輪咬合時「滾在一起」的那個圓；中心距 ＝ 兩個分度圓半徑相加。
+ */
+export function gearDims(p) {
+  const D = PRIM_DEFAULTS.gear;
+  const m = Math.max(num(p.module, D.module), 1e-3);
+  const z = int(p.teeth, D.teeth, 8);
+  const r = m * z / 2;
+  const rf = r - 1.25 * m;                 // 齒根圓
+  const holeWant = Math.max(0, num(p.hole, D.hole)) / 2;
+  const holeMax = rf * 0.8;                // 孔太大會吃到齒根 —— 夾住，⛔ 而且說出來
+  return {
+    m, z, r, rf, ra: r + m, rb: r * Math.cos(GEAR_PA),
+    t: Math.max(num(p.t, D.t), 1e-3),
+    gap: Math.max(0, num(p.gapMm, D.gapMm)) / 10,     // mm → cm
+    holeR: Math.min(holeWant, holeMax),
+    holeClamped: holeWant > holeMax
+  };
+}
+
+/** 齒輪外形的一圈點 [{x, y}]（躺在地上的 x、z）。⭐ 測試拿它驗「兩個齒輪咬合會不會卡住」 */
+export function gearProfile(p) {
+  return gearOutline(gearDims(p)).map(([rho, a]) => ({ x: rho * Math.cos(a), y: rho * Math.sin(a) }));
+}
+
+/** 面板上**看得到**的用法說明（一句一行）。數字一律照這個齒輪自己的格子算 */
+function gearNotes(src) {
+  const g = gearDims(src);
+  const f = v => +v.toFixed(2);
+  const out = [
+    `大小：分度圓直徑 ＝ 模數 × 齒數 ＝ ${f(g.r * 2)} cm，最外圈直徑 ${f(g.ra * 2)} cm`,
+    `要跟另一個齒輪咬合：兩個的「模數」填一樣，中心距離 ＝ 模數 × (這個的齒數 ＋ 對方的齒數) ÷ 2`
+      + ` ＝ ${f(g.m / 2)} × (${g.z} ＋ 對方齒數)`,
+    // ⚠ 對方齒數是偶數時，兩個都沒轉 ⇒ 齒尖正對齒尖（測試的咬合就是靠轉這半齒才咬上）
+    '擺好之後如果齒尖頂著齒尖：把其中一個繞 Y 轉「180 ÷ 它的齒數」度（半個齒）',
+    // ⚠ 格子名稱照 `ui/slicePanel.js` 抄：分段表的「板厚 cm」、上方的「孔徑 cm」
+    '雷射切：選這個齒輪按「剖面分切」，分段的「板厚」填這個齒輪的厚度、上方的「孔徑」填 0，存 DXF'
+  ];
+  if (g.z < 17) out.push(`⚠ 齒數 ${g.z} 少於 17：齒根比較薄，比較容易斷`);
+  if (g.holeClamped) out.push(`⚠ 中心孔太大會吃到齒根，已經縮成直徑 ${f(g.holeR * 2)} cm`);
+  return out;
+}
 
 /** 這個基本體天生就是板件（要展開的東西），新增時直接設成 sheet */
 export function isSheetPrim(type) {
@@ -775,6 +844,46 @@ function toMesh(geometry) {
   return m;
 }
 
+/** 齒輪的壓力角：固定標準的 20°（kang 2026-10-08 同意 ⛔ 不開成格子 —— 同一個角度才保證咬得上） */
+const GEAR_PA = 20 * Math.PI / 180;
+const involute = a => Math.tan(a) - a;
+
+/**
+ * 齒輪外形：一串 [半徑, 角度]（逆時針），`corner` 是「齒尖、齒根交界」那些點的索引。
+ *
+ * 每一齒：左齒面（齒根 → 齒尖）→ 齒尖圓弧 → 右齒面（齒尖 → 齒根）→ 齒根圓弧。
+ * 齒面上半徑 ρ 那一點，離齒中心線的角度 ＝ ψ ＋ inv(20°) − inv(α_ρ)，cos α_ρ ＝ 基圓半徑 ÷ ρ。
+ * ψ ＝ 分度圓上半個齒厚的角度 ＝ π/(2z) − 間隙/(4r) ——
+ * 兩個齒輪都用同一個間隙時，咬合處合起來留的空隙剛好就是這個數字。
+ */
+function gearOutline(g) {
+  const { z, r, rb, ra, rf, gap } = g;
+  const half = Math.PI / (2 * z) - gap / (4 * r) + involute(GEAR_PA);
+  const ang = rho => (rho <= rb ? half : half - involute(Math.acos(rb / rho)));
+  const N = 8;
+  const flank = [];                                   // 齒根 → 齒尖，[ρ, 離中心線的角度]
+  const r0 = Math.max(rf, rb);
+  if (rf < rb) flank.push([rf, ang(rb)]);             // 基圓以下：徑向直線
+  for (let i = 0; i <= N; i++) { const rho = r0 + (ra - r0) * i / N; flank.push([rho, ang(rho)]); }
+  const tipA = flank[flank.length - 1][1];
+  const out = [];
+  out.corner = new Set();
+  const ARC = 3;                                      // 齒尖、齒根圓弧中間各插幾個點
+  for (let k = 0; k < z; k++) {
+    const c = 2 * Math.PI * k / z;
+    out.corner.add(out.length);                       // 左齒面的齒根端
+    for (const [rho, a] of flank) out.push([rho, c - a]);
+    out.corner.add(out.length - 1);                   // 左齒面的齒尖端
+    for (let j = 1; j <= ARC; j++) out.push([ra, c - tipA + 2 * tipA * j / (ARC + 1)]);
+    out.corner.add(out.length);                       // 右齒面的齒尖端
+    for (let i = flank.length - 1; i >= 0; i--) out.push([flank[i][0], c + flank[i][1]]);
+    out.corner.add(out.length - 1);                   // 右齒面的齒根端
+    const a0 = c + flank[0][1], a1 = c + 2 * Math.PI / z - flank[0][1];
+    for (let j = 1; j <= ARC; j++) out.push([rf, a0 + (a1 - a0) * j / (ARC + 1)]);
+  }
+  return out;
+}
+
 /**
  * 旋轉成形的出口：一條輪廓繞 Y 轉一圈 → 半邊網格。
  * ⚠ 跟 `toMesh()` 一樣補 `autoMarkFolds()` —— `revolve()` 只標平滑邊，⛔ 不標折線。
@@ -1112,6 +1221,27 @@ const BUILDERS = {
     const mesh = Mesh.fromFaceList(pts, faces);
     mesh.autoMarkFolds();
     return mesh;
+  },
+
+  /**
+   * 齒輪：標準漸開線齒形（壓力角 20°）＋ 中心孔，躺在地上往上擠出厚度。
+   * ⭐ 擠出走 `extrudeMany()`（帶孔、耳切、平滑邊都是現成的）。
+   * ⚠ 齒根圓比基圓小時，基圓以下那一小段用**徑向直線**接到齒根
+   * （⛔ 不是真正的根切曲線 —— 雷射切的精度用不到）。
+   */
+  gear(p) {
+    const g = gearDims(p);
+    const pts = gearOutline(g).map(([rho, a], i, arr) => ({
+      x: rho * Math.cos(a), y: rho * Math.sin(a), corner: arr.corner.has(i)
+    }));
+    const holes = [];
+    if (g.holeR > 1e-6) {
+      const n = 32;
+      holes.push({ pts: [...Array(n).keys()].map(i => ({
+        x: g.holeR * Math.cos(i / n * 2 * Math.PI), y: g.holeR * Math.sin(i / n * 2 * Math.PI), corner: false
+      })) });
+    }
+    return extrudeMany([{ pts, holes }], g.t, { base: -g.t / 2 });   // 外框中心放在原點
   },
 
   /**
