@@ -37,6 +37,12 @@ const fmt = v => R2(v).toString();
  */
 export const STYLE = {
   cut:  { w: 0.050, minPx: 1.6, dash: null,        color: '#111', label: '切割線' },
+  /**
+   * 🔴 **程式自己加的切線**（2026-10-12，kang 同意）—— 照樣要切，線寬跟切割線一樣，
+   * 只是換成橘色，看得出「這條不是你標的」。理由見 `flatten.js` 的 `piece.autoCut`。
+   * DXF 放 `CUT_AUTO` 層（`dxf.js`）。
+   */
+  autoCut: { w: 0.050, minPx: 1.6, dash: null,      color: '#e67e22', label: '程式加的切線' },
   hole: { w: 0.040, minPx: 1.3, dash: null,        color: '#111', label: '內孔' },
   fold: { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '折線' },
   bend: { w: 0.025, minPx: 1.0, dash: [0.8, 0.5],  color: '#2980b9', label: '折彎區' },
@@ -98,9 +104,10 @@ export function drawProgram(piece, opt = {}) {
   const text = (style, x, y, s, size = 1.6, anchor = 'start') =>
     items.push({ t: 'text', style, x, y, s: String(s), size, anchor });
 
-  // ── 輪廓與內孔 ──
-  loop(items, piece.outline, 'cut');
-  for (const h of piece.holes) loop(items, h, 'hole');
+  // ── 輪廓與內孔（程式自己加的那幾段換成橘色，`piece.autoCut`）──
+  const ac = piece.autoCut || {};
+  loop(items, piece.outline, 'cut', ac.outline);
+  piece.holes.forEach((h, k) => loop(items, h, 'hole', ac.holes && ac.holes[k]));
 
   // ── 折線 ──
   // 圓弧折彎帶「裡面」那些線是網格切出來的，不是真的要折的地方，
@@ -131,10 +138,10 @@ export function drawProgram(piece, opt = {}) {
    * **66 個接合編號裡有 32 個落在內半徑 20 以內，也就是洞裡。**
    * 〔連帶的症狀才是他看到的「疊在一起」：內圈那一堆被擠進更小的圈裡〕
    *
-   * ⭐ **環形片沒有 `holes` 資料**（實測 `holes.length === 0`）——
-   * 它的 `outline` 是一條**從外圈穿過缺口繞到內圈再繞回來**的封閉線
-   * （66 點 ＝ 外圈 32 ＋ 內圈 32 ＋ 缺口 2）。
-   * **所以「在不在料上」直接問這條線就對了**，那條線本身已經把洞排除掉。
+   * ⭐ 「在不在料上」＝ 在 `outline` 裡、而且不在任何一個 `holes` 裡（下面的 `onMaterial`）。
+   * 〔2026-10-12 以前環形片**沒有** `holes`：它的 `outline` 是一條從外圈**穿過缺口**繞到內圈的線，
+   * 　那條缺口是程式自己剪、兩側其實貼在一起的一刀。那一刀⛔ 不剪了之後內圈才變成真正的洞，
+   * 　號碼也從 66 變 64。判準本來就連洞一起問，所以這裡一行都不用改。〕
    *
    * ⚠ 兩側都在料上（很窄的片）或兩側都不在時，**退回舊的重心規則** ——
    * ⛔ 不要在那種情況硬選一邊，那是拿隨機當答案（坑第 24 條）。
@@ -345,10 +352,11 @@ export function drawProgram(piece, opt = {}) {
   };
 }
 
-function loop(items, pts, style) {
+/** `auto[i]` 為真 ⇒ 第 i 段是程式自己加的切線，畫成 `autoCut` */
+function loop(items, pts, style, auto = null) {
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i], b = pts[(i + 1) % pts.length];
-    items.push({ t: 'line', style, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    items.push({ t: 'line', style: auto && auto[i] ? 'autoCut' : style, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
   }
 }
 
@@ -469,6 +477,20 @@ export function titleLines(piece, opt = {}) {
     const many = piece.joints.filter(j => (j.segs || 1) > 1).length;
     out.push(`接合編號 ${piece.joints.length} 段　同號碼的段接在一起`
       + (many ? `（有 ${many} 段是連續的曲線，整段一個號碼）` : ''));
+  }
+
+  /**
+   * 🔴 程式自己加的切線（2026-10-12，kang 同意）—— **⛔ 不打 ⚠**：
+   * 方塊的十字形本來就要程式剪 7 條邊，打警告就是誤報。只如實寫數字，
+   * 球那種一剪幾百條的（預設的球：93 條），數字本身就看得出不對勁。
+   * ⚠ 只有標過分片的物件圖上才是橘色（理由見 `flatten.js` 的 `piece.autoCut`），
+   * 所以兩種寫法 —— ⛔ 不可以在沒有橘色的圖上寫「圖上橘色」。
+   */
+  const ac = piece.autoCut || {};
+  if (ac.lines) {
+    out.push(ac.userSeams
+      ? `程式自己加的切線 ${ac.lines} 條（圖上橘色）—— 要攤平才剪開的，不是你標的`
+      : `程式自己加的切線 ${ac.lines} 條（沒標過分片的物件，圖上不另外上色）`);
   }
 
   const curves = piece.bends.filter(b => b.isCurve).length;

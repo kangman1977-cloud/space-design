@@ -2098,9 +2098,12 @@ section('第 3 期：展開圖與 DXF');
    * 2026-08-22 加 JOIN 層時這一項擋下來過一次 —— 加了圖層卻忘了改宣告，
    * 而 DXF 本身「看起來」完全正常。這就是這一項存在的理由。
    */
+  /** ⚠ 2026-10-12 加 CUT_AUTO（程式自己加的切線）—— 7 → 8，這一項當場擋下來（照它的存在理由）*/
   ok('DXF 表格數量宣告正確',
-    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n7\r\n'),
-    'CUT/FOLD/BEND/DIM/TEXT/JOIN 六個圖層 ＋ 圖層 0');
+    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n8\r\n'),
+    'CUT/CUT_AUTO/FOLD/BEND/DIM/TEXT/JOIN 七個圖層 ＋ 圖層 0');
+  eq('★★ 宣告的圖層數 ＝ 真的寫出來的 LAYER 數',
+    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 8);
 
   // ENDTAB / ENDSEC 要成對，少一個整個檔就打不開
   eq('DXF TABLE 與 ENDTAB 成對', (dxf.match(/\r\nENDTAB\r\n/g) || []).length, tbls.length);
@@ -8967,21 +8970,28 @@ section('接合編號：落在料上 ＋ 不互相壓');
   for (const ring of rings) {
     const prog = drawProgram(ring, { rule });
     const js = jointsOf(prog);
-    eq('前提：這一片有 66 個接合編號', js.length, 66);
+    /**
+     * ⚠ **2026-10-12 從 66 改成 64**：環形片以前有一條從外圈切到內圈的**缺口**（程式自己剪的，
+     * 兩側攤平後完全貼在一起 —— 照圖切就是把好好的圓環剪斷）。那條⛔ 不剪了之後，
+     * 缺口兩側那 2 個號碼跟著消失：外圈 32 ＋ 內圈 32 ＝ 64。
+     * ⭐ 而且內圈終於變成真正的**洞**（`holes` 一個），⛔ 不再是外框繞進去再繞出來的一條線。
+     */
+    eq('前提：這一片有 64 個接合編號（外圈 32 ＋ 內圈 32）', js.length, 64);
+    eq('★★★ 內圈是真正的洞（⛔ 不再是穿過缺口的一條線）', ring.holes.length, 1);
 
     /**
      * 🔴 **主斷言：一個號碼都不可以印在洞裡。**
      * ⚠ 修之前是 **32 個 / 66 個**掉在洞裡（實測）。
+     * ⚠ 洞現在是 `holes`，所以「在料上」要連洞一起問（跟 `drawProgram()` 的 `onMaterial` 同一個判準）。
      */
-    const off = js.filter(it => !pointInPoly(it.x, it.y, ring.outline));
+    const onMat = (x, y) => pointInPoly(x, y, ring.outline) && !ring.holes.some(h => pointInPoly(x, y, h));
+    const off = js.filter(it => !onMat(it.x, it.y));
     eq('★★★ 接合編號沒有一個落在料外（洞裡）', off.length, 0);
 
     /**
-     * ⚠ 缺口那裡**還會剩一對** —— 同一個號碼的兩端在缺口碰頭，
-     * 那是缺口本身的幾何，跟字大小無關。
-     * ⛔ 期望值寫 0 的話就是把一個做不到的目標釘進測試。
+     * ⭐ 以前寫「最多剩 1 對」—— 缺口那裡同一個號碼的兩端碰頭。缺口⛔ 不剪了，那一對也沒了。
      */
-    ok('★★ 靠太近的最多剩 1 對（修之前是 13 對）', clashes(js) <= 1, `${clashes(js)} 對`);
+    eq('★★ 完全不互相壓（修之前 13 對；缺口那一對隨缺口消失）', clashes(js), 0);
 
     /** ⭐ 這片料只有 5cm 寬要塞 66 個號碼 → 字一定得縮 */
     ok('★★ 塞不下的片，字有縮小（⛔ 不是硬塞 1.8）',
@@ -14506,6 +14516,126 @@ section('排版：把很多片擺進一張一張板子（2026-10-09）');
        `x ${Math.min(...xs).toFixed(2)}～${Math.max(...xs).toFixed(2)} / 格子 ${it.x}～${(it.x + it.w).toFixed(2)}；`
        + `y ${Math.min(...ys).toFixed(2)}～${Math.max(...ys).toFixed(2)} / 格子 ${it.y.toFixed(2)}～${(it.y + it.h).toFixed(2)}`);
     near('★★ 　 轉過的格子寬 ＝ 片的高', it.w, it.piece.height, 1e-12);
+  }
+}
+
+section('程式自己剪的邊：貼在一起的⛔ 剪、張開的講出來（2026-10-12）');
+
+/**
+ * 🔴 兩件事（kang 2026-10-12 同意，調查經過 → `外部參考-打版.md` 第 3 節）：
+ *
+ * ① **兩側攤平後完全貼在一起的邊⛔ 剪**。舊版「新增 → 圓柱」用紙直接展開，
+ *    上下蓋子各有一刀從圓心切到邊（圓錐、角柱、半球的蓋子、管的環形端面、圓環也有）——
+ *    兩側的料本來就連著，照圖切就是把好好的蓋子剪開。
+ *    ⭐ 用「輪廓上的尖刺」驗：一刀切進去又原路出來 ＝ 輪廓上某一點的前一點與後一點重合。
+ *
+ * ② **張開的那些：卡片寫幾條；標過分片的物件畫成橘色、DXF 放 CUT_AUTO 層**。
+ *    沒標過分片的⛔ 上色（整圈都是程式決定的，上色分不出任何東西，而且 DXF 整圈搬層會害切割廠漏切）。
+ */
+{
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const { packBoards, boardProgram } = await import('../js/out/nest.js');
+  const { boardDXF } = await import('../js/out/dxf.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const paper = makeRule('paper', 0.2);
+  /** 輪廓上「切進去又原路出來」的點有幾個 */
+  const spikes = loop => loop.filter((p, i) => {
+    const a = loop[(i - 1 + loop.length) % loop.length], b = loop[(i + 1) % loop.length];
+    return Math.hypot(a.x - b.x, a.y - b.y) < 1e-6;
+  }).length;
+  const allLoops = r => r.pieces.flatMap(p => [p.outline, ...p.holes]);
+  const orange = p => drawProgram(p, { rule: paper }).items.filter(i => i.t === 'line' && i.style === 'autoCut');
+
+  // ── ① 貼在一起的⛔ 剪 ──
+  for (const type of ['cylinder', 'cone', 'prism', 'dome', 'torus', 'tube']) {
+    const m = buildPrim(type, PRIM_DEFAULTS[type]);
+    const r = unfoldMesh(m, paper);
+    eq(`★★★ ${type}（預設、紙）：輪廓上沒有「切進去又原路出來」的刀（舊版蓋子上有）`,
+       allLoops(r).reduce((n, L) => n + spikes(L), 0), 0);
+    near(`★★ 　 ${type}：展開面積 ＝ 表面積（⛔ 少剪一刀不會多出或少掉料）`, r.stats.area, m.area(), 1e-6);
+  }
+  {
+    const r = unfoldMesh(buildPrim('tube', PRIM_DEFAULTS.tube), makeRule('acrylic', 0.3));
+    const ring = r.pieces.find(p => p.holes.length);
+    ok('★★★ 管的環形端面（壓克力）：內圈是真正的洞（舊版是外框穿過一刀繞進去）', !!ring && ring.holes.length === 1);
+  }
+
+  // ── ② 沒標過分片：照舊全黑、卡片寫條數 ──
+  {
+    const r = unfoldMesh(buildPrim('box', PRIM_DEFAULTS.box), paper);
+    const p = r.pieces[0];
+    ok('★★★ 方塊（沒標分片）：程式自己加的切線有算出來', p.autoCut.lines > 0, `${p.autoCut.lines} 條`);
+    eq('★★★ 　 但圖上⛔ 上色（整圈都是程式決定的）', orange(p).length, 0);
+    ok('★★ 　 卡片照實寫「圖上不另外上色」（⛔ 寫「圖上橘色」）',
+       titleLines(p).some(s => s.includes(`程式自己加的切線 ${p.autoCut.lines} 條`) && s.includes('不另外上色'))
+       && !titleLines(p).some(s => s.includes('圖上橘色')));
+    const dxf = toDXF(r.pieces, { unit: 'mm', rule: paper });
+    eq('★★★ 　 DXF：切割線照舊全在 CUT（⛔ 搬到 CUT_AUTO，切割廠只開 CUT 會漏切）',
+       (dxf.match(/\r\n0\r\nLINE\r\n8\r\nCUT_AUTO\r\n/g) || []).length, 0);
+  }
+  for (const type of ['plate']) {
+    const r = unfoldMesh(buildPrim(type, PRIM_DEFAULTS[type]), paper);
+    eq(`★★ ${type}：一條都不用剪 → 0 條、卡片⛔ 寫這一行`, r.pieces[0].autoCut.lines, 0);
+    ok(`★★ 　 ${type}：卡片沒有「程式自己加的切線」`, !titleLines(r.pieces[0]).some(s => s.includes('程式自己加的切線')));
+  }
+  {
+    const r = unfoldMesh(buildPrim('sphere', PRIM_DEFAULTS.sphere), paper);
+    ok('★★★ 預設的球直接展開：條數寫出來（舊版一則說明都沒有）', r.pieces[0].autoCut.lines >= 50, `${r.pieces[0].autoCut.lines} 條`);
+  }
+
+  // ── ② 標過分片：程式多剪的畫橘色 ──
+  const sphereCut = step => {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+    o.bake();
+    const m = o.mesh();
+    const isPole = v => Math.hypot(v.p.x, v.p.z) < 1e-6;
+    const ang = v => Math.atan2(v.p.z, v.p.x);
+    const mer = [...m.edges()].filter(he => !isPole(he.v) && !isPole(he.to) && Math.abs(ang(he.v) - ang(he.to)) < 1e-6);
+    const angs = [...new Set(mer.map(he => ang(he.v).toFixed(6)))].sort((a, b) => a - b);
+    for (const a of angs.filter((_, i) => i % step === 0)) {
+      for (const h of seamLoopEdges(m, mer.find(he => ang(he.v).toFixed(6) === a), 'loop')) setSeam(m, h, true);
+    }
+    return m;
+  };
+  {
+    const r = unfoldMesh(sphereCut(1), paper);
+    eq('★★★ 球 每條經線都切（模式一，12 片）：程式一條都⛔ 多剪', r.pieces.reduce((n, p) => n + p.autoCut.lines, 0), 0);
+    eq('★★ 　 圖上沒有橘色', r.pieces.reduce((n, p) => n + orange(p).length, 0), 0);
+  }
+  {
+    const r = unfoldMesh(sphereCut(2), paper);
+    eq('前提：球 每 2 條經線切一條 → 6 片', r.stats.total, 6);
+    ok('★★★ 　 每一片都有程式多剪的（中間那條經線攤不平，要裂開）',
+       r.pieces.every(p => p.autoCut.userSeams && p.autoCut.lines > 0));
+    ok('★★★ 　 圖上畫成橘色，卡片寫「圖上橘色」',
+       r.pieces.every(p => orange(p).length > 0 && titleLines(p).some(s => s.includes('（圖上橘色）'))));
+    /** 橘色的段 ＝ DXF 的 CUT_AUTO 線（同一份 `autoCut`，兩邊數得起來） */
+    const dxf = toDXF(r.pieces, { unit: 'mm', rule: paper });
+    eq('★★★ 　 DXF 的 CUT_AUTO 線 ＝ 圖上的橘色段',
+       (dxf.match(/\r\n0\r\nLINE\r\n8\r\nCUT_AUTO\r\n/g) || []).length,
+       r.pieces.reduce((n, p) => n + orange(p).length, 0));
+    /** 排版的板子：畫面與 DXF 同一份「畫什麼」，橘色一樣要跟過去 */
+    const nest = packBoards(r.pieces, { w: 240, h: 120, gap: 1, rotate: false });
+    const progs = nest.boards.map(b => boardProgram(b, { rule: paper }));
+    const nO = progs.reduce((n, pg) => n + pg.items.filter(i => i.t === 'line' && i.style === 'autoCut').length, 0);
+    eq('★★ 　 排版的板子上：橘色段 ＝ 各片的橘色段加總', nO, r.pieces.reduce((n, p) => n + orange(p).length, 0));
+    eq('★★ 　 排版的 DXF：橘色段全部在 CUT_AUTO 層',
+       progs.reduce((n, pg) => n + (boardDXF(pg).match(/\r\n0\r\nLINE\r\n8\r\nCUT_AUTO\r\n/g) || []).length, 0), nO);
+    /** 接合編號：每個號碼還是剛好出現兩次（少剪的那幾刀⛔ 留下落單的號碼）*/
+    const cnt = new Map();
+    for (const p of r.pieces) for (const j of p.joints) cnt.set(j.num, (cnt.get(j.num) || 0) + 1);
+    eq('★★ 　 接合編號每個都剛好出現兩次', [...cnt.values()].filter(n => n !== 2).length, 0);
+  }
+  {
+    /** 圓環切西瓜皮：每一條是繞管子一圈的環，要剪一刀才攤得開 ⇒ 每片剛好 1 條（「條」⛔ 是邊數）*/
+    const m = buildPrim('torus', PRIM_DEFAULTS.torus);
+    const isTube = he => Math.abs(Math.atan2(he.v.p.z, he.v.p.x) - Math.atan2(he.to.p.z, he.to.p.x)) < 1e-6;
+    for (const h of seamLoopEdges(m, [...m.edges()].find(isTube), 'all')) setSeam(m, h, true);
+    const r = unfoldMesh(m, makeRule('paper', 0.05));
+    eq('前提：西瓜皮 32 片', r.stats.total, 32);
+    ok('★★★ 　 每片程式多剪剛好 1 條（繞一圈的環要剪開一次；數的是「條」⛔ 是邊數）',
+       r.pieces.every(p => p.autoCut.lines === 1), r.pieces.map(p => p.autoCut.lines).join(','));
   }
 }
 

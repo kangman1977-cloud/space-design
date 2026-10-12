@@ -36,7 +36,10 @@
  *   DIM    尺寸線
  *   TEXT   文字說明
  *   JOIN   接合編號 —— 這條邊要跟哪一條接回去（同號碼配對）
+ *   CUT_AUTO 程式自己加的切線（2026-10-12）—— **⚠ 照樣要切**，只是不是使用者標的
  * 分層的意義：廠商可以只留 CUT 層丟給機器，其餘關掉。
+ * 🔴 **⚠ 有 CUT_AUTO 的檔，要切的是 CUT ＋ CUT_AUTO 兩層** —— 只留 CUT 會漏切，片會連在一起。
+ * 名字刻意用 `CUT_` 開頭，排在 CUT 旁邊；kang 2026-10-12 同意「放到另一個圖層」。
  * 全部畫在同一層的話，折線會被當成切割線切下去，整片報廢。
  *
  * JOIN 特別重要要獨立一層：它是**給組裝的人看的**，不是給機器的。
@@ -51,7 +54,8 @@
 import { pieceNo } from '../unfold/part.js';
 import { sameFolds } from './sheet.js';
 
-const COLOR = { CUT: 7, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
+/** CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）*/
+const COLOR = { CUT: 7, CUT_AUTO: 30, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
 
 /** 剖面分切用的圖層顏色。切割層依板厚各一層，名字由 cutLayer() 產生。 */
 const SLICE_COLOR = { NUM: 30, TEXT: 8 };
@@ -115,13 +119,15 @@ export function toDXF(pieces, opt = {}) {
     const X = pt => ox + pt.x * s;
     const Y = pt => oy + pt.y * s;
 
-    // 切割線：外輪廓與內孔
-    for (const loop of [p.outline, ...p.holes]) {
+    // 切割線：外輪廓與內孔（程式自己加的那幾段放 CUT_AUTO，`p.autoCut`）
+    const ac = p.autoCut || {};
+    [p.outline, ...p.holes].forEach((loop, k) => {
+      const auto = k === 0 ? ac.outline : (ac.holes && ac.holes[k - 1]);
       for (let i = 0; i < loop.length; i++) {
         const a = loop[i], b = loop[(i + 1) % loop.length];
-        out.line('CUT', X(a), Y(a), X(b), Y(b));
+        out.line(auto && auto[i] ? 'CUT_AUTO' : 'CUT', X(a), Y(a), X(b), Y(b));
       }
-    }
+    });
 
     // 折線。圓弧折彎帶內部那些線是網格切出來的，不是真的折線，
     // 畫出來只會讓師傅困惑，所以只畫折彎區的起訖線（下面那段）。
@@ -227,7 +233,7 @@ export function toDXF(pieces, opt = {}) {
 export function boardDXF(prog, opt = {}) {
   const U = UNITS[opt.unit] || UNITS.mm;
   const s = U.scale;
-  const LAYER = { cut: 'CUT', hole: 'CUT', fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
+  const LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
     num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM' };
   const out = new Writer();
   const { w, h } = prog.box;

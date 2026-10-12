@@ -66,6 +66,12 @@ const DEG = 180 / Math.PI;
 /** 共面容許角度。跟 region.js 一致。 */
 export const FLAT_TOL_DEG = 0.5;
 
+/**
+ * 程式自己剪開的邊，兩側攤平後相距不到這個值 ⇒ 其實沒張開，⛔ 不剪（cm，＝ 10 微米）。
+ * 理由見 `flattenPatch()` 裡「兩側攤平後完全貼在一起的」那一段。
+ */
+const SEAM_SHUT_TOL_CM = 0.001;
+
 // ═══════════════════════════════════════════════════════
 //  對外入口
 // ═══════════════════════════════════════════════════════
@@ -372,6 +378,33 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
     }
   }
 
+  /**
+   * 🔴 **兩側攤平後完全貼在一起的，⛔ 不剪**（2026-10-12，kang 同意）。
+   *
+   * 生成樹沒走到的邊**不一定張得開**：圓柱的蓋子是一圈三角形繞著圓心，
+   * 樹在那一圈裡一定漏掉一條，而圓心是平的（角虧 0）—— 那條邊兩側攤平後**落在同一個位置**。
+   * 舊版照樣把它當切割線 ⇒ **蓋子上多一刀，從圓心切到邊**（實測：圓柱、圓錐、角柱、半球的蓋子各一條，
+   * 圓環 27 條；照圖切就是把好好的蓋子剪開）。
+   *
+   * ⭐ 判準只問「兩端在圖上是不是同一點」—— 是 ⇒ 兩側的料本來就連著，這條邊照一般的邊處理
+   * （有轉折就是折線，平的就什麼都不畫）。⛔ 不問角虧：角虧是「為什麼」，貼不貼得上才是「結果」。
+   * 容許值 0.001 cm（10 微米）：比這更近的縫，刀子也切不出來。
+   * ⚠ 這時的座標還是**剛體攤平**的結果（圓弧修正、擺正都在 `buildPiece()` 裡，還沒做）。
+   */
+  for (const f of used) {
+    for (const he of mesh.faceLoop(f)) {
+      if (!implicit.has(he.id) || !he.twin) continue;
+      const t = he.twin;
+      const a1 = pt2.get(he.id), b1 = pt2.get(he.next.id);     // 這一側：a → b
+      const b2 = pt2.get(t.id), a2 = pt2.get(t.next.id);       // 另一側：b → a
+      if (!a1 || !b1 || !a2 || !b2) continue;
+      if (Math.hypot(a1.x - a2.x, a1.y - a2.y) < SEAM_SHUT_TOL_CM
+          && Math.hypot(b1.x - b2.x, b1.y - b2.y) < SEAM_SHUT_TOL_CM) {
+        implicit.delete(he.id); implicit.delete(t.id);
+      }
+    }
+  }
+
   const isCut = he => edgeIsCut(mesh, he, rule, tolDeg) || implicit.has(he.id);
 
   // 完全封閉、一條邊都不能切 → 展不開。封閉實體要先抽殼，
@@ -384,7 +417,7 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
 
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
     used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : [],
-    jointNo);
+    jointNo, he => implicit.has(he.id));
   return { piece };
 }
 
@@ -472,7 +505,7 @@ function placeFace(mesh, th, O2, T2, pt2) {
  * 全部就地改同一份 pt2，所以折線、輪廓、折彎帶三者永遠對得起來，
  * 不會出現「輪廓修正了、折線沒修正」這種畫面騙人的情況。
  */
-function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
+function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto = () => false) {
   const inPatch = new Set(faces.map(f => f.id));
 
   const folds = collectFolds(mesh, faces, inPatch, pt2, isCut);
@@ -488,7 +521,8 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
   const bands = arcCorrection(pt2, folds, dirGroups);
   orient(pt2, folds, mesh, faces, isCut);
 
-  const loops = traceLoops(mesh, faces, inPatch, pt2, isCut);
+  const traced = traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto);
+  const loops = traced.map(l => l.pts);
   const polys = faces.map(f => mesh.faceLoop(f).map(he => pt2.get(he.id)));
 
   // 整片在展開方向上的範圍。折彎帶要用它補回「外側沒有折線」的那幾格。
@@ -569,6 +603,29 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null) {
     qty: 1,
     outline: loops[0] || [],
     holes: loops.slice(1),
+    /**
+     * 🔴 **程式自己加的切線**（2026-10-12，kang 同意：橘色、DXF 另一層、卡片寫幾條、⛔ 不打 ⚠）。
+     *
+     * 生成樹沒走到、又真的張開的邊 —— 使用者沒標過，是程式為了攤平才剪的。
+     * 方塊的十字形（7 條邊）是正常的；但**球直接展開會剪 481 條邊、分 6 片還剪 90 條**，
+     * 而舊版圖上跟使用者標的長得一模一樣、一則說明都沒有（`外部參考-打版.md` 第 3 節）。
+     *
+     * `outline[i]`／`holes[k][i]` ＝ 從第 i 點到第 i＋1 點那一段是不是程式加的
+     * （跟 `outline`／`holes` 一一對應；`dropCollinear()` ⛔ 把兩種線併成一段）。
+     * `lines` ＝ 幾**條**線：連在一起的算一條，遇到分岔或端點才斷開（⛔ 不是幾段邊）。
+     *
+     * 🔴 **只有使用者標過分片的物件才上色**（`userSeams`，kang 2026-10-12 同意）：
+     * 沒標過的，切線本來**全部**是程式決定的 —— 方塊、圓柱整圈外框都會變橘色，分不出任何東西，
+     * 而且 DXF 整圈搬到 CUT_AUTO 層，切割廠只開 CUT 層就一刀都切不到。
+     * ⇒ 沒標過的：`outline`／`holes` 全是 false（照舊全黑、全在 CUT），只在卡片上寫條數。
+     * 判準跟接合編號同一個（`hasUserSeams()`）。
+     */
+    autoCut: {
+      userSeams: !!jointNo,
+      outline: jointNo ? ((traced[0] && traced[0].auto) || []) : [],
+      holes: jointNo ? traced.slice(1).map(l => l.auto) : traced.slice(1).map(() => []),
+      lines: autoCutLines(mesh, faces, isAuto)
+    },
     folds: folds.map(f => ({ a: f.a, b: f.b, angle: f.angle, isArcEdge: !!f.band })),
     /**
      * 接合處：這條邊在 2D 上是邊界，但在 3D 上有鄰居，要接回去。
@@ -1336,7 +1393,7 @@ function computeFlanges(bands, minX, maxX) {
  * 做法跟 region.js 的 regionLoops 相同：邊界半邊 ＝ 自己在片內、
  * 隔壁不在（或根本沒有隔壁）。
  */
-function traceLoops(mesh, faces, inPatch, pt2, isCut) {
+function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false) {
   const isBorder = he => he.face && inPatch.has(he.face.id) && isCut(he);
 
   const border = new Set();
@@ -1350,12 +1407,14 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut) {
   for (const start of border) {
     if (used.has(start)) continue;
     const loop = [];
+    /** 第 i 點出發的那一段是不是程式自己加的切線（跟 loop 一一對應）*/
+    const auto = [];
     let he = start, guard = 0;
 
     do {
       used.add(he);
       const p = pt2.get(he.id);
-      if (p) loop.push(p);
+      if (p) { loop.push(p); auto.push(!!isAuto(he)); }
 
       let c = he.next, spin = 0;
       while (c && !isBorder(c) && spin++ < 1e5) {
@@ -1366,11 +1425,11 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut) {
       he = c;
     } while (he !== start && guard++ < 1e6);
 
-    if (loop.length >= 3) loops.push(dropCollinear(loop));
+    if (loop.length >= 3) loops.push(dropCollinear(loop, auto));
   }
 
   // 面積最大的當外輪廓，其餘是孔
-  loops.sort((a, b) => Math.abs(signedArea(b)) - Math.abs(signedArea(a)));
+  loops.sort((a, b) => Math.abs(signedArea(b.pts)) - Math.abs(signedArea(a.pts)));
   return loops;
 }
 
@@ -1378,11 +1437,16 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut) {
  * 去掉直線中間的多餘點。
  * 攤平後的輪廓上會留下一堆三角化／分段的殘留點，
  * 標尺寸與出 DXF 之前一定要清掉，否則一條邊會變成十幾條線。
+ *
+ * ⚠ `auto[i]` ＝ 第 i 點出發那一段是不是程式自己加的切線（2026-10-12）。
+ * **兩側是不同種的線就⛔ 不併** —— 併了之後那一段只能有一種顏色，橘色就會吃掉黑色（或反過來）。
+ *
+ * @returns {{pts: object[], auto: boolean[]}}
  */
-function dropCollinear(loop, tolDeg = 0.1) {
-  if (loop.length < 3) return loop.slice();
+function dropCollinear(loop, auto = loop.map(() => false), tolDeg = 0.1) {
+  if (loop.length < 3) return { pts: loop.slice(), auto: auto.slice() };
   const cosTol = Math.cos((180 - tolDeg) / DEG);
-  const out = [];
+  const out = [], outAuto = [];
 
   for (let i = 0; i < loop.length; i++) {
     const a = loop[(i - 1 + loop.length) % loop.length];
@@ -1392,10 +1456,45 @@ function dropCollinear(loop, tolDeg = 0.1) {
     const bx = b.x - c.x, by = b.y - c.y;
     const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
     if (la < 1e-9 || lb < 1e-9) continue;
-    if ((ax * bx + ay * by) / (la * lb) <= cosTol) continue;
-    out.push(c);
+    const sameKind = auto[(i - 1 + loop.length) % loop.length] === auto[i];
+    if (sameKind && (ax * bx + ay * by) / (la * lb) <= cosTol) continue;
+    out.push(c); outAuto.push(auto[i]);
   }
-  return out.length >= 3 ? out : loop.slice();
+  return out.length >= 3 ? { pts: out, auto: outAuto } : { pts: loop.slice(), auto: auto.slice() };
+}
+
+/**
+ * 程式自己加的切線有幾**條**（⛔ 不是幾段邊）。
+ *
+ * 一條 ＝ 連在一起的一串邊，在「分岔」或「端點」斷開：
+ * 只算程式加的那些邊，每個頂點接幾條（度數）；度數 ≠ 2 的點是斷點。
+ * 條數 ＝（所有斷點的度數加總）÷ 2 ＋ 沒有任何斷點的整圈。
+ * 〔kang 2026-10-12 同意「數的是一條線，不是每一小段」〕
+ */
+function autoCutLines(mesh, faces, isAuto) {
+  const deg = new Map();
+  const par = new Map();
+  const find = v => { while (par.get(v) !== v) { par.set(v, par.get(par.get(v))); v = par.get(v); } return v; };
+  const seen = new Set();
+  for (const f of faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (!isAuto(he) || seen.has(he.id)) continue;
+      seen.add(he.id); if (he.twin) seen.add(he.twin.id);
+      for (const v of [he.v.id, he.to.id]) {
+        deg.set(v, (deg.get(v) || 0) + 1);
+        if (!par.has(v)) par.set(v, v);
+      }
+      const r1 = find(he.v.id), r2 = find(he.to.id);
+      if (r1 !== r2) par.set(r1, r2);
+    }
+  }
+  let ends = 0;
+  const brokenComp = new Set();
+  for (const [v, d] of deg) if (d !== 2) { ends += d; brokenComp.add(find(v)); }
+  const comps = new Set([...deg.keys()].map(find));
+  let loops = 0;
+  for (const c of comps) if (!brokenComp.has(c)) loops++;
+  return ends / 2 + loops;
 }
 
 function signedArea(loop) {
