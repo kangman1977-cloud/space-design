@@ -92,6 +92,16 @@ export class UnfoldPanel {
             <label class="uwCk" title="把每一格之間的折線畫出來（畫面、列印、SVG、DXF 都畫；DXF 在 FOLD 層）。布不需要；珍珠板、發泡板這類要折的材料打開。只畫線、不標角度 —— 片有拉伸，位置是參考"><input type="checkbox" id="uwDartFold"> 畫折線</label>
           </span>
         </div>
+        <div class="uwBar" title="沿著有接合編號的縫，每隔一段距離放一個記號，兩片拿起來接的時候記號對記號。只有標過分片的物件才有接合編號">
+          <label class="uwCk"><input type="checkbox" id="uwNotch"> 對位記號</label>
+          <span class="lbl">每隔</span><input type="number" id="uwNotchGap" min="1" step="0.5" style="width:56px"><span class="lbl">cm</span>
+          <span class="lbl">畫成</span>
+          <select id="uwNotchStyle" title="要切的（一小刀、小三角）：帆布、紙模這類圖上沒含縫份或黏合片的，往外切、畫在之後要加的那一圈裡；其他材質往內切 0.3 cm。只畫短線：一律往內 0.5 cm、不切">
+            <option value="slit">切一小刀</option>
+            <option value="v">剪掉小三角</option>
+            <option value="mark">只畫短線、不切</option>
+          </select>
+        </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
           <label class="uwCk"><input type="checkbox" id="uwNest"> 排版到板子上</label>
           <span class="lbl">板寬</span><input type="number" id="uwNW" min="1" step="1" style="width:64px">
@@ -214,6 +224,24 @@ export class UnfoldPanel {
       if (this.result) this._render(this.result, this.objs);
     };
 
+    /**
+     * 「對位記號」（2026-10-12，kang 拍板 → `規格\建模器-對位記號.md`）：預設關；
+     * 間距、形狀記在瀏覽器裡。間距填錯（空白、小於 1）就退回上一個能用的值 —— ⛔ 讓記號擠成一團。
+     */
+    const nOn = $('uwNotch'), nGap = $('uwNotchGap'), nSt = $('uwNotchStyle');
+    nOn.checked = !!this.opt.notchOn;
+    nGap.value = this.opt.notchGap > 0 ? this.opt.notchGap : (this.opt.notchGap = 10);
+    nSt.value = this.opt.notchStyle || (this.opt.notchStyle = 'slit');
+    const notchChanged = () => {
+      this.opt.notchOn = nOn.checked;
+      const v = +nGap.value;
+      if (v >= 1) this.opt.notchGap = v; else nGap.value = this.opt.notchGap;
+      this.opt.notchStyle = nSt.value;
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
+    nOn.onchange = nGap.onchange = nSt.onchange = notchChanged;
+
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
 
@@ -255,6 +283,7 @@ export class UnfoldPanel {
       foldSummary: this.foldIn.checked,
       dartStyle: this.opt.dartStyle || 'cut', limit: this.opt.limit ?? '', strainFill: true,
       dartFolds: !!this.opt.dartFolds,
+      notch: this.opt.notchOn ? { style: this.opt.notchStyle || 'slit', spacing: this.opt.notchGap || 10 } : null,
       ...extra
     };
   }
@@ -302,6 +331,12 @@ export class UnfoldPanel {
     if (!this.foldIn.checked && could && (objs || []).some(hasSeams)) {
       this.body.appendChild(box('uwWarn',
         `⚠ 已關閉「相同的折線合成一行」：有 ${could} 種片的折線全部一樣，每道都會標角度，長條上的字會很多`));
+    }
+
+    /** 對位記號打勾了、卻一個都畫不出來 → 講原因（⛔ 讓人以為開關壞了） */
+    if (this.opt.notchOn && r.pieces.length && !r.pieces.some(p => p.seamRuns && p.seamRuns.length)) {
+      this.body.appendChild(box('uwSkip',
+        '對位記號只畫在有接合編號的縫上 —— 這次展開的物件都沒有標過分片，所以一個都沒有'));
     }
 
     if (!r.pieces.length) {

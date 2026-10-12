@@ -37,6 +37,7 @@
  *   TEXT   文字說明
  *   JOIN   接合編號 —— 這條邊要跟哪一條接回去（同號碼配對）
  *   CUT_AUTO 程式自己加的切線（2026-10-12）—— **⚠ 照樣要切**，只是不是使用者標的
+ *   CUT_NOTCH 對位刻口（2026-10-12）—— **⚠ 照樣要切**；MARK 只畫的對位記號（⛔ 切）
  * 分層的意義：廠商可以只留 CUT 層丟給機器，其餘關掉。
  * 🔴 **⚠ 有 CUT_AUTO 的檔，要切的是 CUT ＋ CUT_AUTO 兩層** —— 只留 CUT 會漏切，片會連在一起。
  * 名字刻意用 `CUT_` 開頭，排在 CUT 旁邊；kang 2026-10-12 同意「放到另一個圖層」。
@@ -52,13 +53,20 @@
  */
 
 import { pieceNo } from '../unfold/part.js';
-import { sameFolds, outlineSegments } from './sheet.js';
+import { sameFolds, outlineSegments, notchMarks } from './sheet.js';
 
 /**
  * CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）。
  * SEW 6 ＝ 洋紅：省道打版「只畫縫線（不剪）」的開口縫線（2026-10-12）—— **⛔ 是切割線**，機器⛔ 開這一層。
  */
-const COLOR = { CUT: 7, CUT_AUTO: 30, SEW: 6, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
+const COLOR = { CUT: 7, CUT_AUTO: 30, SEW: 6, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3, CUT_NOTCH: 7, MARK: 4 };
+
+/**
+ * 對位記號（2026-10-12，`notchMarks()`）：要切的刻口 → `CUT_NOTCH`（**⚠ 照樣要切**，跟 CUT_AUTO 一樣用 `CUT_` 開頭排在 CUT 旁邊）；
+ * 只畫的 → `MARK`（4 ＝ 青色，⛔ 是切割線）。
+ * ⭐ 刻口獨立一層是業界的做法（一般 DXF 會把刻口變成普通短線）—— 要加縫份時先把 CUT_NOTCH 關掉，偏移完外框再開回來。
+ */
+const NOTCH_LAYER = { notchCut: 'CUT_NOTCH', notchMark: 'MARK' };
 
 /** 展開圖的線型 → DXF 圖層（`outlineSegments()` 的 style）。剪掉的開口照樣要切 ⇒ CUT */
 const OUTLINE_LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', dartCut: 'CUT', dartSew: 'SEW' };
@@ -132,6 +140,9 @@ export function toDXF(pieces, opt = {}) {
     for (const s of outlineSegments(p, opt).segs) {
       out.line(OUTLINE_LAYER[s.style] || 'CUT', X(s.a), Y(s.a), X(s.b), Y(s.b));
     }
+
+    /** 對位記號：「對位記號」打勾才有（跟展開圖同一支 `notchMarks()`） */
+    for (const l of notchMarks(p, opt).lines) out.line(NOTCH_LAYER[l.style], X(l.a), Y(l.a), X(l.b), Y(l.b));
 
     // 折線。圓弧折彎帶內部那些線是網格切出來的，不是真的折線，
     // 畫出來只會讓師傅困惑，所以只畫折彎區的起訖線（下面那段）。
@@ -248,7 +259,7 @@ export function toDXF(pieces, opt = {}) {
 export function boardDXF(prog, opt = {}) {
   const U = UNITS[opt.unit] || UNITS.mm;
   const s = U.scale;
-  const LAYER = { ...OUTLINE_LAYER, fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
+  const LAYER = { ...OUTLINE_LAYER, ...NOTCH_LAYER, fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
     num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM' };
   const out = new Writer();
   const { w, h } = prog.box;

@@ -2102,11 +2102,12 @@ section('第 3 期：展開圖與 DXF');
    * ⚠ 2026-10-12 加 CUT_AUTO（程式自己加的切線）—— 7 → 8，這一項當場擋下來（照它的存在理由）；
    * 同一天再加 SEW（省道打版「只畫縫線」的開口縫線）—— 8 → 9，又擋下來一次。
    */
+  /** 同一天再加 CUT_NOTCH／MARK（對位記號）—— 9 → 11，第三次擋下來。 */
   ok('DXF 表格數量宣告正確',
-    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n9\r\n'),
-    'CUT/CUT_AUTO/SEW/FOLD/BEND/DIM/TEXT/JOIN 八個圖層 ＋ 圖層 0');
+    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n11\r\n'),
+    'CUT/CUT_AUTO/SEW/FOLD/BEND/DIM/TEXT/JOIN/CUT_NOTCH/MARK 十個圖層 ＋ 圖層 0');
   eq('★★ 宣告的圖層數 ＝ 真的寫出來的 LAYER 數',
-    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 9);
+    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 11);
 
   // ENDTAB / ENDSEC 要成對，少一個整個檔就打不開
   eq('DXF TABLE 與 ENDTAB 成對', (dxf.match(/\r\nENDTAB\r\n/g) || []).length, tbls.length);
@@ -2122,8 +2123,13 @@ section('第 3 期：展開圖與 DXF');
   near('DXF 選 cm 時不換算', Math.max(...bodyX(cm)), p.width, 0.01);
 
   // LINE 一定要成對出現起訖點，不然某些軟體會整個檔打不開
-  eq('DXF LINE 數 ＝ 起點數', (dxf.match(/\r\nLINE\r\n/g) || []).length,
-    (dxf.match(/\r\n11\r\n/g) || []).length);
+  /**
+   * ⚠ 只數 ENTITIES 之後（2026-10-12）：圖層變成 11 個之後，檔頭的圖層數宣告「70 / 11」也長成 `\r\n11\r\n`，
+   * 整個檔一起數就多數一個 —— 是測試數錯，⛔ 是 DXF 錯。
+   */
+  const ents = dxf.slice(dxf.indexOf('ENTITIES'));
+  eq('DXF LINE 數 ＝ 起點數', (ents.match(/\r\nLINE\r\n/g) || []).length,
+    (ents.match(/\r\n11\r\n/g) || []).length);
 }
 
 {
@@ -14926,6 +14932,212 @@ section('省道打版 第三步：分片模式的即時預覽（2026-10-12）');
   ok('★★★ 多標一條切線 ⇒ 重算', seamPreviewKey(o, st) !== k1);
   setSeam(m, he, false);
   eq('★★ 　 再取消 ⇒ 回到原本那把（⛔ 白算一次）', seamPreviewKey(o, st), k1);
+}
+
+section('對位記號：沿縫每隔一段距離，兩側同一個位置（2026-10-12）');
+
+/**
+ * kang 拍板（→ `規格\建模器-對位記號.md`）：三種形狀做成選單、每隔固定距離、每條縫第一個是兩條、兩種展開方式都有、
+ * 「切」的方向跟著材質（有縫份／黏合片的往外，其他往內 0.3）；「只畫線」一律往內 0.5。預設關。
+ * ⭐ 最要緊的一條：**同一條縫的兩側，記號換回 3D 是同一個點** —— 那是「對得上」唯一的意思。
+ */
+{
+  const { notchMarks, NOTCH } = await import('../js/out/sheet.js');
+  const { boardProgram, packBoards } = await import('../js/out/nest.js');
+  const { boardDXF } = await import('../js/out/dxf.js');
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+
+  /** 球 r30、12×16，每 every 條經線標一條縫 */
+  const ball = every => {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+    o.bake();
+    const m = o.mesh();
+    const isPole = v => Math.hypot(v.p.x, v.p.z) < 1e-6, ang = v => Math.atan2(v.p.z, v.p.x);
+    const mer = [...m.edges()].filter(he => !isPole(he.v) && !isPole(he.to) && Math.abs(ang(he.v) - ang(he.to)) < 1e-6);
+    const angs = [...new Set(mer.map(he => ang(he.v).toFixed(6)))].sort((a, b) => a - b);
+    for (const a of angs.filter((_, i) => i % every === 0)) for (const h of seamLoopEdges(m, mer.find(he => ang(he.v).toFixed(6) === a), 'loop')) setSeam(m, h, true);
+    return m;
+  };
+  const N = (style, spacing = 10) => ({ notch: { style, spacing } });
+  const lenOf = run => run.segs.reduce((s, g) => s + g.len, 0);
+  const onMat = (p, q) => pointInPoly(q.x, q.y, p.outline) && !(p.holes || []).some(h => pointInPoly(q.x, q.y, h));
+
+  /** 2D 上的記號底點 → 3D（找它落在哪一條邊上，照比例內插那條邊的兩個 3D 頂點）*/
+  const to3D = (m, run, P) => {
+    const V = new Map(m.verts.map(v => [v.id, v.p]));
+    let best = null;
+    for (const g of run.segs) {
+      const dx = g.b.x - g.a.x, dy = g.b.y - g.a.y, L2 = dx * dx + dy * dy;
+      const t = Math.max(0, Math.min(1, ((P.x - g.a.x) * dx + (P.y - g.a.y) * dy) / L2));
+      const d = Math.hypot(g.a.x + dx * t - P.x, g.a.y + dy * t - P.y);
+      if (!best || d < best.d) best = { d, g, t };
+    }
+    return V.get(best.g.va).clone().lerp(V.get(best.g.vb), best.t);
+  };
+
+  /**
+   * 每一條縫找它的另一側（同一批頂點），比兩側：起點與方向一樣、記號數一樣、記號換回 3D 是同一個點。
+   * `worst` ＝ 兩側同一個記號在 3D 差最多多少 cm。
+   */
+  const pairUp = (m, pieces, spacing) => {
+    const runs = [];
+    for (const p of pieces) for (const run of p.seamRuns) runs.push({ p, run, key: run.segs.map(g => [g.va, g.vb].sort((a, b) => a - b).join('-')).sort().join('|') });
+    let pairs = 0, worst = 0, sameDir = true, sameCount = true;
+    const seen = new Set();
+    for (const A of runs) {
+      if (seen.has(A)) continue;
+      const B = runs.find(r => r !== A && !seen.has(r) && r.key === A.key);
+      if (!B) continue;
+      seen.add(A); seen.add(B); pairs++;
+      if (A.run.segs.map(g => g.va + '>' + g.vb).join() !== B.run.segs.map(g => g.va + '>' + g.vb).join()) sameDir = false;
+      const pts = X => notchMarks({ ...X.p, seamRuns: [X.run] }, N('mark', spacing)).lines.map(l => to3D(m, X.run, l.a));
+      const pa = pts(A), pb = pts(B);
+      if (pa.length !== pb.length) { sameCount = false; continue; }
+      // 兩側都是從起點往終點放的 ⇒ 第 i 個對第 i 個
+      for (let i = 0; i < pa.length; i++) worst = Math.max(worst, pa[i].distanceTo(pb[i]));
+    }
+    return { pairs, worst, sameDir, sameCount };
+  };
+
+  // ── 西瓜皮：12 片、精確分片 ──
+  const m12 = ball(1);
+  const canvas = unfoldMesh(m12, makeRule('canvas', 0.1));
+  const foam = unfoldMesh(m12, makeRule('foamboard', 0.3));
+  /** ⚠ `unfoldMesh()` 的結果⛔ 帶材質（`r.rule` 是 `unfoldMany()` 才補的）—— 不補的話「有沒有縫份」永遠是沒有（第一次跑就撞到）*/
+  canvas.rule = makeRule('canvas', 0.1); foam.rule = makeRule('foamboard', 0.3);
+  const cp = canvas.pieces[0], fp = foam.pieces[0];
+  const L = 16 * 60 * Math.sin(Math.PI / 32);                  // 半個經線圈的折線長（16 格的弦長和）
+  const per = 2 * Math.floor((L - NOTCH.endGap) / 10);          // 一片兩條縫，每條 floor((L−1)/10) 個
+  eq('前提：球分 12 片（精確分片）', canvas.stats.total, 12);
+  ok('★★★ 每片 2 條縫（從南極到北極一整條，⛔ 被緯線切成 16 段）', canvas.pieces.every(p => p.seamRuns.length === 2), cp.seamRuns.length);
+  near('★★ 　 每條縫的長度 ＝ 16 格弦長和', lenOf(cp.seamRuns[0]), L, 1e-6);
+  eq('★★★ 沒打勾（預設）：圖上 0 個記號（跟原本一樣）', drawProgram(cp, { rule: canvas.rule }).items.filter(i => /^notch/.test(i.style)).length, 0);
+  eq('★★★ 沒打勾：DXF 0 條 CUT_NOTCH／MARK', (toDXF(canvas.pieces, { unit: 'mm' }).match(/\r\n0\r\nLINE\r\n8\r\n(CUT_NOTCH|MARK)\r\n/g) || []).length, 0);
+
+  const nm = notchMarks(cp, { rule: canvas.rule, ...N('slit') });
+  eq(`★★★ 記號數 ＝ 2 ×〔(縫長 − ${NOTCH.endGap}) ÷ 10 取整〕`, nm.count, per);
+  eq('★★ 　 切一小刀：線數 ＝ 記號數 ＋ 2（每條縫第一個多一條）', nm.lines.length, per + 2);
+  eq('★★ 　 剪掉小三角：每個兩條線', notchMarks(cp, { rule: canvas.rule, ...N('v') }).lines.length, 2 * (per + 2));
+
+  const pr = pairUp(m12, canvas.pieces, 10);
+  eq('★★★ 12 條縫，每條都找到另一側', pr.pairs, 12);
+  ok('★★★ 兩側同一個起點、同一個方向', pr.sameDir);
+  ok('★★★ 兩側記號數一樣', pr.sameCount);
+  ok('★★★ 兩側同一個記號換回 3D 是同一個點（差 < 0.001 cm）', pr.worst < 1e-3, pr.worst);
+
+  // ── 方向與深度 ──
+  const len = l => Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y);
+  const cs = notchMarks(cp, { rule: canvas.rule, ...N('slit') });
+  eq('★★★ 帆布（有縫份 1.5）＋ 切：往外', cs.dir, 'out');
+  ok('★★★ 　 每條刻口兩端都在外框外面（畫在縫份那一圈裡）', cs.lines.every(l => !onMat(cp, l.a) && !onMat(cp, l.b)));
+  ok('★★ 　 深度 ＝ 縫份的一半 0.75', cs.lines.every(l => Math.abs(len(l) - 0.75) < 1e-9));
+  const fs = notchMarks(fp, { rule: foam.rule, ...N('slit') });
+  eq('★★★ 珍珠板（沒有縫份）＋ 切：往內', fs.dir, 'in');
+  ok('★★★ 　 刻口的另一端在料上', fs.lines.every(l => onMat(fp, l.b)));
+  ok(`★★ 　 深度 ${NOTCH.inDepth}`, fs.lines.every(l => Math.abs(len(l) - NOTCH.inDepth) < 1e-9));
+  const cm = notchMarks(cp, { rule: canvas.rule, ...N('mark') });
+  ok('★★★ 只畫線：帆布也往內（畫在料上才描得到）', cm.dir === 'in' && cm.lines.every(l => onMat(cp, l.b)));
+  ok(`★★ 　 長 ${NOTCH.markLen}`, cm.lines.every(l => Math.abs(len(l) - NOTCH.markLen) < 1e-9));
+
+  // ── 卡片、DXF、SVG ──
+  const tl = titleLines(cp, { rule: canvas.rule, ...N('slit') }).find(s => s.startsWith('對位記號'));
+  ok('★★ 卡片：「對位記號 N 個（每 10 cm…）往外切一小刀 0.75 cm（畫在縫份那一圈裡…）」',
+     tl && tl.startsWith(`對位記號 ${per} 個（每 10 cm`) && tl.includes('往外切一小刀 0.75 cm（畫在縫份那一圈裡'), tl);
+  ok('★★ 　 珍珠板：「往內切一小刀 0.3 cm」', titleLines(fp, { rule: foam.rule, ...N('slit') }).some(s => s.startsWith('對位記號') && s.endsWith('往內切一小刀 0.3 cm')));
+  ok('★★ 　 沒打勾 ⇒ 卡片⛔ 寫', !titleLines(cp, { rule: canvas.rule }).some(s => s.startsWith('對位記號')));
+  const D = (d, layer) => (d.match(new RegExp(`\\r\\n0\\r\\nLINE\\r\\n8\\r\\n${layer}\\r\\n`, 'g')) || []).length;
+  eq('★★★ DXF：切 ⇒ CUT_NOTCH 層 ＝ 12 片的線數', D(toDXF(canvas.pieces, { unit: 'mm', rule: canvas.rule, ...N('slit') }), 'CUT_NOTCH'), 12 * (per + 2));
+  const dm = toDXF(canvas.pieces, { unit: 'mm', rule: canvas.rule, ...N('mark') });
+  eq('★★★ DXF：只畫線 ⇒ MARK 層，CUT_NOTCH 0 條', `${D(dm, 'MARK')}/${D(dm, 'CUT_NOTCH')}`, `${12 * (per + 2)}/0`);
+  const nest = packBoards(canvas.pieces, { w: 240, h: 120, gap: 2, rotate: false });
+  const bd = nest.boards.map(b => boardDXF(boardProgram(b, { rule: canvas.rule, ...N('slit') }), { unit: 'mm' })).join('');
+  eq('★★ 排版存 DXF：CUT_NOTCH 一樣多', D(bd, 'CUT_NOTCH'), 12 * (per + 2));
+  ok('★★ SVG：只畫線 ⇒ 有青綠色的線；沒打勾 ⇒ 沒有', toSVG(cp, { rule: canvas.rule, ...N('mark') }).includes('#16a085') && !toSVG(cp, { rule: canvas.rule }).includes('#16a085'));
+
+  // ── 太短、沒標過 ──
+  const big = notchMarks(cp, { rule: canvas.rule, ...N('slit', 100) });
+  eq('★★ 間距比縫還長 ⇒ 0 個、兩條都算「太短」', `${big.count}/${big.short}`, '0/2');
+  ok('★★ 　 卡片講「0 個：每條縫都比 101 cm 短」', titleLines(cp, { rule: canvas.rule, ...N('slit', 100) }).includes('對位記號 0 個：每條縫都比 101 cm 短'));
+  const plain = unfoldMesh(buildPrim('box', PRIM_DEFAULTS.box), makeRule('foamboard', 0.3));
+  ok('★★ 沒標過分片 ⇒ 沒有縫可以放（seamRuns 空的）', plain.pieces.every(p => p.seamRuns.length === 0));
+
+  // ── 省道打版：球 4 片（縫邊拉回原長，2D 不是剛體）──
+  const m4 = ball(3);
+  const dart = unfoldMesh(m4, makeRule('canvas', 0.1), { mode: 'dart' });
+  eq('前提：球 4 片（省道打版）', dart.stats.total, 4);
+  const pd = pairUp(m4, dart.pieces, 10);
+  eq('★★★ 省道打版：4 條縫都找到另一側', pd.pairs, 4);
+  ok('★★★ 　 兩側記號數一樣、同一個方向', pd.sameCount && pd.sameDir);
+  ok('★★★ 　 換回 3D 是同一個點（差 < 0.001 cm）', pd.worst < 1e-3, pd.worst);
+
+  /**
+   * 開口（省道）也是切割線、也有接合編號 ⇒ 開口的兩條邊算一條縫的兩側，也有記號（縫開口時兩條邊對齊用）。
+   * 球 4 片、每片中間兩條經線從南北極各開 6 格 ⇒ 每片 4 道開口；開口的尖端只有一條切割邊、極點有很多條 ⇒ 一道開口一條。
+   */
+  const isPoleD = v => Math.hypot(v.p.x, v.p.z) < 1e-6, angD = v => Math.atan2(v.p.z, v.p.x);
+  const od = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+  od.bake();
+  const md = od.mesh();
+  const merD = [...md.edges()].filter(he => !(isPoleD(he.v) && isPoleD(he.to)) && Math.abs(he.v.p.y - he.to.p.y) > 1e-6
+    && (isPoleD(he.v) || isPoleD(he.to) || Math.abs(angD(he.v) - angD(he.to)) < 1e-6));
+  const angsD = [...new Set(merD.map(he => angD(isPoleD(he.v) ? he.to : he.v).toFixed(6)))].sort((a, b) => a - b);
+  angsD.forEach((a, j) => merD.filter(he => angD(isPoleD(he.v) ? he.to : he.v).toFixed(6) === a)
+    .sort((p, q) => Math.max(q.v.p.y, q.to.p.y) - Math.max(p.v.p.y, p.to.p.y))
+    .forEach((h, k) => { if (j % 3 === 0 || k < 6 || k >= 10) setSeam(md, h, true); }));
+  const darted = unfoldMesh(md, makeRule('paper', 0.05), { mode: 'dart' });
+  eq('前提：球 4 片、每片 4 道開口（省道打版）', darted.stats.total, 4);
+  eq('★★ 每片 10 條：2 條縫 ＋ 4 道開口 × 2 條邊', darted.pieces.map(p => p.seamRuns.length).join(','), '10,10,10,10');
+  const pdd = pairUp(md, darted.pieces, 10);
+  eq('★★★ 4 條縫 ＋ 16 道開口都找到另一側', pdd.pairs, 20);
+  ok('★★★ 　 開口的兩條邊也是同一個起點、同一個方向，換回 3D 同一個點', pdd.sameDir && pdd.sameCount && pdd.worst < 1e-3, pdd.worst);
+
+  /**
+   * ── 封閉的縫：球只切赤道一圈（省道打版 → 兩片，各一條整圈的縫）──
+   * ⚠ 第一版拿圓環切 8 段驗，結果每圈斷成兩條 —— 那是**對的**：筒狀的一段要攤平，程式沿長邊再剪一刀，
+   * 那一刀碰到縫的地方有三條切割邊交會 ⇒ 斷開（兩側一樣斷，對位照樣對得上）。整圈要找一條沒有別的切線碰到的。
+   */
+  const oe = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+  oe.bake();
+  const me = oe.mesh();
+  const eqE = [...me.edges()].find(h => Math.abs(h.v.p.y) < 1e-6 && Math.abs(h.to.p.y) < 1e-6);
+  for (const h of seamLoopEdges(me, eqE, 'loop')) setSeam(me, h, true);
+  const hemi = unfoldMesh(me, makeRule('canvas', 0.1), { mode: 'dart' });
+  const hp = hemi.pieces[0], hl = lenOf(hp.seamRuns[0]);
+  eq('前提：球切赤道 ⇒ 2 片（省道打版）', hemi.stats.total, 2);
+  ok('★★★ 每片 1 條縫、是一整圈（封閉）、12 條邊', hemi.pieces.every(p => p.seamRuns.length === 1 && p.seamRuns[0].closed && p.seamRuns[0].segs.length === 12));
+  near('★★ 　 圈長 ＝ 赤道 12 邊形周長（容許 0.0001：轉成可編輯網格時頂點有小數誤差）', hl, 12 * 60 * Math.sin(Math.PI / 12), 1e-4);
+  eq('★★ 　 記號數 ＝ (圈長 − 1) ÷ 10 取整', notchMarks(hp, N('slit', 10)).count, Math.floor((hl - NOTCH.endGap) / 10));
+  const pt = pairUp(me, hemi.pieces, 10);
+  eq('★★★ 赤道那一圈找到另一側', pt.pairs, 1);
+  ok('★★★ 　 一整圈也是同一個起點、同一個方向，換回 3D 同一個點', pt.sameDir && pt.sameCount && pt.worst < 1e-3, pt.worst);
+
+  /**
+   * ── 精確分片的圓柱：上下緣每一條邊 ＋ 一條直邊 ⇒ 3 片（側面、兩個蓋子）──
+   * 直縫的兩側都在側面那一片上；上下緣碰到直縫的那一點有三條切割邊，但那一圈自己首尾相接 ⇒ 仍是一整圈，
+   * 從整圈頂點 id 最小的那一點量起（在側面片上會跨過左右兩端，每條邊各自落 2D，照樣對得上）。
+   */
+  const oc = new io.ModelObject({ name: '圓柱', kind: io.KIND.SOLID, src: { type: 'cylinder', ...PRIM_DEFAULTS.cylinder } });
+  oc.bake();
+  const mc = oc.mesh();
+  let vDone = false;
+  for (const h of mc.edges()) {
+    if (!h.face || !h.twin || !h.twin.face) continue;
+    if (Math.abs(h.v.p.y - h.to.p.y) < 1e-6) setSeam(mc, h, true);
+    else if (!vDone) { setSeam(mc, h, true); vDone = true; }
+  }
+  const cyl = unfoldMesh(mc, makeRule('foamboard', 0.3));
+  const { r: cr, h: chh, seg: cs2 } = PRIM_DEFAULTS.cylinder;
+  const rim = cs2 * 2 * cr * Math.sin(Math.PI / cs2);
+  const side = cyl.pieces.find(p => p.seamRuns.length === 4);
+  eq('前提：圓柱 3 片（精確分片）', cyl.stats.total, 3);
+  ok('★★ 側面片：直縫兩側 ＋ 上下緣兩圈（封閉）', side && side.seamRuns.filter(r => r.closed).length === 2 && side.seamRuns.filter(r => !r.closed).length === 2);
+  eq('★★★ 側面片的記號數 ＝ 2×(高−1)÷10 ＋ 2×(緣長−1)÷10（各取整）', notchMarks(side, N('slit')).count,
+     2 * Math.floor((chh - NOTCH.endGap) / 10) + 2 * Math.floor((rim - NOTCH.endGap) / 10));
+  const pc = pairUp(mc, cyl.pieces, 10);
+  eq('★★★ 3 條縫（直縫、上緣、下緣）都找到另一側', pc.pairs, 3);
+  ok('★★★ 　 同一個起點、同一個方向，換回 3D 同一個點', pc.sameDir && pc.sameCount && pc.worst < 1e-3, pc.worst);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

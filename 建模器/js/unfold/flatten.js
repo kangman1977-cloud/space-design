@@ -942,6 +942,12 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      * 兩側的片會拿到同一個號碼。沒有分片標記的物件是空陣列。
      */
     joints: collectJoints(mesh, faces, pt2, isCut, jointNo),
+    /**
+     * 🔴 **對位記號要的「一整條縫」**（2026-10-12）：記的是整條的每一條邊
+     * （`segs[i]` ＝ `{a, b, len, va, vb}`：2D 起訖點、**3D 長度**、起訖頂點 id），而且**兩側同一個起點、同一個方向**。
+     * 只在三條以上切割邊交會處斷開（⛔ 跟接合編號一樣在折線斷開）。沒有接合編號的物件是空陣列。理由見 `collectSeamRuns()`。
+     */
+    seamRuns: collectSeamRuns(mesh, faces, pt2, isCut, jointNo),
     bends: bands,
     faces: polys,
     warnings: warn.slice(),
@@ -1188,6 +1194,132 @@ function collectJoints(mesh, faces, pt2, isCut, jointNo) {
   }
   void inPatch;
   return out;
+}
+
+/**
+ * ── 對位記號：把一段縫串成一條，兩側走同一個方向（2026-10-12）──────────
+ *
+ * kang 拍板：沿縫線每隔固定距離放一個記號，兩片的記號要對得上。
+ * 「對得上」只有一個辦法：**兩側從同一個 3D 頂點量起、量一樣的 3D 長度**。
+ * ⇒ 這裡把一段縫（跟接合編號同一個分段）串成一條有順序的邊，而且兩側的起點、方向一定一樣：
+ *
+ *   · 不封閉：從兩個端點裡**頂點 id 小的那一端**開始
+ *   · 封閉（一整圈都平滑）：從整圈 id 最小的頂點開始，往「下一個頂點 id 比較小」的那個方向走
+ *
+ * 兩側看到的是同一批頂點（一條邊和它的 twin 共用頂點），所以兩邊用同一條規則一定挑到同一端。
+ * 長度用 **3D** 的：兩種展開方式的縫邊 2D 長度都等於 3D（精確分片是剛體；省道打版把縫邊拉回原長），
+ * 用 3D 量就不受攤平的一點點誤差影響；畫的時候再照比例落到那條邊的 2D 上。
+ *
+ * 🔴 **分段⛔ 跟接合編號一樣**（2026-10-12 實測改的）：接合編號走到「真的折線」就換號碼，
+ * 而球（沒有平滑標記）每一圈緯線都算真的折線 —— 12×16 的球一片西瓜皮的縫被切成 32 段、每段 5.88 cm，
+ * 間距 10 cm 一個記號都放不下。⇒ 這裡**只在三條以上切割邊交會的地方斷開**（球的南北極、方塊的角），
+ * 經過折線照樣往下走（`runPartition()`）。這樣仍然兩側一致：兩側看到同一批切割邊，用同一條規則斷開；
+ * 長度也一樣：每一條邊的長度兩側都相同，跟中間有沒有折線無關。
+ *
+ * ⚠ **⛔ 照 `collectJoints()` 的「哪一側」分組**：那個 key 是拿半邊 id 大小決定的，
+ * 同一段縫上不保證每條邊都分到同一側 —— 拿它串會串成好幾截，記號就從錯的地方開始量。
+ * 這裡改成「同一段（`seamPartition`）、同一片」的切割邊全部放一起，再一條一條接：
+ * 一條邊後面接「從它的終點出發、而且不是它自己另一側」的那一條。
+ * 環狀片兩側都在同一片時（側牆繞回去接自己），兩側自然串成兩條。
+ */
+function collectSeamRuns(mesh, faces, pt2, isCut, jointNo) {
+  if (!jointNo) return [];
+  const part = runPartition(mesh, isCut, jointNo);
+
+  const byRoot = new Map();          // 段 → 這一片上屬於它的切割半邊
+  for (const f of faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (!isCut(he) || !he.twin || !he.twin.face) continue;
+      if (!pt2.get(he.id) || !pt2.get(he.next.id)) continue;
+      const k = String(part.find(edgeKey(he)));
+      if (!byRoot.has(k)) byRoot.set(k, []);
+      byRoot.get(k).push(he);
+    }
+  }
+
+  const runs = [];
+  for (const hes of byRoot.values()) {
+    const from = new Map(), into = new Map();
+    for (const he of hes) {
+      if (!from.has(he.v.id)) from.set(he.v.id, []);
+      from.get(he.v.id).push(he);
+      if (!into.has(he.to.id)) into.set(he.to.id, []);
+      into.get(he.to.id).push(he);
+    }
+    const nextOf = he => (from.get(he.to.id) || []).find(h => h !== he.twin) || null;
+    const prevOf = he => (into.get(he.v.id) || []).find(h => h !== he.twin) || null;
+
+    const used = new Set();
+    for (const he of hes) {
+      if (used.has(he)) continue;
+      let h0 = he;
+      for (let g = 0; g < hes.length; g++) {
+        const p = prevOf(h0);
+        if (!p || p === he || used.has(p)) break;
+        h0 = p;
+      }
+      const chain = [];
+      for (let h = h0; h && !used.has(h); h = nextOf(h)) { used.add(h); chain.push(h); }
+      const closed = chain.length > 1 && nextOf(chain[chain.length - 1]) === chain[0];
+      runs.push(orientRun(chain, closed, pt2));
+    }
+  }
+  return runs;
+}
+
+/**
+ * 對位記號的分段：兩條切割邊共用一個頂點、而且那個頂點上**剛好兩條**切割邊，就併成同一段 ——
+ * 跟 `seamPartition()` 一樣，只是⛔ 管那個頂點上有沒有折線（理由見 `collectSeamRuns()`）。
+ */
+function runPartition(mesh, isCut, jointNo) {
+  if (jointNo._runPart) return jointNo._runPart;
+  const parent = new Map();
+  const find = k => {
+    let r = k;
+    while (parent.get(r) !== r) r = parent.get(r);
+    for (let c = k; parent.get(c) !== r;) { const n = parent.get(c); parent.set(c, r); c = n; }
+    return r;
+  };
+  const cutAt = new Map();
+  for (const he of mesh.edges()) {
+    if (!he.twin || !he.twin.face || !he.face || !isCut(he)) continue;
+    const k = edgeKey(he);
+    if (parent.has(k)) continue;
+    parent.set(k, k);
+    for (const v of [he.v.id, he.to.id]) {
+      if (!cutAt.has(v)) cutAt.set(v, []);
+      cutAt.get(v).push(k);
+    }
+  }
+  for (const ks of cutAt.values()) {
+    if (ks.length !== 2) continue;
+    const a = find(ks[0]), b = find(ks[1]);
+    if (a !== b) parent.set(Math.max(a, b), Math.min(a, b));
+  }
+  jointNo._runPart = { find };
+  return jointNo._runPart;
+}
+
+/** 一串半邊 → `{closed, segs:[{a, b, len, va, vb}]}`，方向照 `collectSeamRuns()` 那條規則 */
+function orientRun(chain, closed, pt2) {
+  const fwd = chain.map(h => ({ a: pt2.get(h.id), b: pt2.get(h.next.id), len: h.v.p.distanceTo(h.to.p), va: h.v.id, vb: h.to.id }));
+  const rev = () => fwd.slice().reverse().map(s => ({ a: s.b, b: s.a, len: s.len, va: s.vb, vb: s.va }));
+  let segs = fwd;
+  if (!closed) {
+    if (fwd[0].va > fwd[fwd.length - 1].vb) segs = rev();
+  } else {
+    // 從 id 最小的頂點出發；往「下一個頂點 id 比較小」的方向
+    let i0 = 0;
+    for (let i = 1; i < fwd.length; i++) if (fwd[i].va < fwd[i0].va) i0 = i;
+    const n = fwd.length;
+    const nextV = fwd[i0].vb, prevV = fwd[(i0 - 1 + n) % n].va;
+    if (prevV < nextV) {
+      segs = rev();
+      i0 = segs.findIndex(s => s.va === fwd[i0].va);
+    }
+    segs = segs.slice(i0).concat(segs.slice(0, i0));
+  }
+  return { closed, segs: segs.map(s => ({ a: s.a, b: s.b, len: s.len, va: s.va, vb: s.vb })) };
 }
 
 const edgeKey = he => Math.min(he.id, he.twin ? he.twin.id : he.id);

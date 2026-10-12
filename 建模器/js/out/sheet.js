@@ -61,6 +61,13 @@ export const STYLE = {
    */
   joint: { w: 0.020, minPx: 0.9, dash: null,       color: '#1e8449', label: '接合編號' },
   /**
+   * 🔴 **對位記號**（2026-10-12，`notchMarks()`）。
+   * `notchCut` 要切（一小刀、小三角）—— 線寬、顏色跟切割線一樣（DXF 在 `CUT_NOTCH` 層）；
+   * `notchMark` 只畫、⛔ 切 —— 青綠色，跟接合編號的綠、折線的紅分得開（DXF 在 `MARK` 層）。
+   */
+  notchCut:  { w: 0.050, minPx: 1.6, dash: null,   color: '#111',    label: '對位刻口（切）' },
+  notchMark: { w: 0.030, minPx: 1.3, dash: null,   color: '#16a085', label: '對位記號（不切）' },
+  /**
    * 剖面分切用的兩個。
    *
    * peg 是定位孔 —— **它跟輪廓一樣是要被切掉的**，所以線寬比照切割線，
@@ -130,6 +137,9 @@ export function drawProgram(piece, opt = {}) {
   if (opt.dartFolds && piece.dartFolds) {
     for (const f of piece.dartFolds) line('fold', f.a.x, f.a.y, f.b.x, f.b.y);
   }
+
+  /** 對位記號：「對位記號」打勾才畫（2026-10-12，`notchMarks()`）*/
+  for (const l of notchMarks(piece, opt).lines) line(l.style, l.a.x, l.a.y, l.b.x, l.b.y);
 
   // ── 折線 ──
   // 圓弧折彎帶「裡面」那些線是網格切出來的，不是真的要折的地方，
@@ -430,6 +440,104 @@ export function outlineSegments(piece, opt = {}) {
 }
 
 /**
+ * 對位記號的幾個固定尺寸（cm）。
+ * `endGap` 離段尾不到這麼近的那一個⛔ 放（會跟端點的角疊在一起，端點本來就對得上）；
+ * `double` 雙刻口兩條的間隔（服裝業約 1/4 吋）；`inDepth` 往內切多深；`markLen` 只畫線時的長度。
+ */
+export const NOTCH = { endGap: 1, double: 0.5, inDepth: 0.3, markLen: 0.5 };
+
+/**
+ * 🔴 **對位記號**（2026-10-12，kang 拍板 → `規格\建模器-對位記號.md`）—— 畫面、列印、SVG、DXF 共用這一支。
+ *
+ * 每一條有接合編號的縫（`piece.seamRuns`，兩側同一個起點、同一個方向），從起點量起每隔 `spacing` cm 放一個；
+ * 每條第一個多畫一條（雙刻口），看得出哪一端對哪一端。
+ * ⚠ 「一條縫」⛔ 是「同一個接合編號的一段」：接合編號走到折線就換號碼（球一格一個號碼），
+ * 這裡只在三條以上切割邊交會處斷開 —— 理由見 `flatten.js` 的 `collectSeamRuns()`。距離用 **3D 長度**量、再照比例落到那條邊的 2D 上
+ * ⇒ 兩側的記號換回 3D 是同一個點。
+ *
+ * | `style` | 畫什麼 | 方向 |
+ * |---|---|---|
+ * | `slit` 往內／外切一小刀 | 一條要切的線 | 材質有縫份或黏合片（`rule.margin()`）⇒ **往外**：畫在之後要加的那一圈裡，從那一圈的外緣往內切一半；沒有 ⇒ 往內 0.3 |
+ * | `v` 剪掉小三角 | 兩條要切的線（三角形的兩邊；往內時底邊就是外框）| 同上 |
+ * | `mark` 只畫短線、不切 | 一條只畫的線 | 一律往內 0.5（畫在料上才描得到）|
+ *
+ * ⚠ 「往內」用的是「落在料上」那一側（在外框裡、⛔ 在洞裡），跟接合編號同一個判準；分不出來才退回朝重心。
+ *
+ * @param {object} opt `{ notch: {style, spacing}, rule }`；⛔ 給 `notch` ⇒ 一條都不畫
+ * @returns {{lines:{style,a,b}[], count:number, short:number, dir:'in'|'out', depth:number}}
+ *          `count` 記號幾個（雙刻口算一個）；`short` 幾條縫太短沒有放
+ */
+export function notchMarks(piece, opt = {}) {
+  const N = opt.notch;
+  const res = { lines: [], count: 0, short: 0, dir: 'in', depth: 0 };
+  if (!N || !(N.spacing > 0) || !piece.seamRuns || !piece.seamRuns.length) return res;
+
+  const rule = piece.rule || opt.rule || {};
+  const m = rule.margin ? rule.margin() : 0;
+  const cut = N.style !== 'mark';
+  const out = cut && m > 0;
+  res.dir = out ? 'out' : 'in';
+  res.depth = !cut ? NOTCH.markLen : out ? m / 2 : NOTCH.inDepth;
+  const style = cut ? 'notchCut' : 'notchMark';
+  const d = res.depth;
+
+  const cx = piece.outline.reduce((s, p) => s + p.x, 0) / (piece.outline.length || 1);
+  const cy = piece.outline.reduce((s, p) => s + p.y, 0) / (piece.outline.length || 1);
+  const onMaterial = (x, y) => {
+    if (!pointInPoly(x, y, piece.outline)) return false;
+    for (const h of (piece.holes || [])) if (pointInPoly(x, y, h)) return false;
+    return true;
+  };
+  const push = (a, b) => res.lines.push({ style, a, b });
+
+  /** 在這一段縫上、離起點 s（3D 長度）的地方放一個 */
+  const place = (run, s) => {
+    let acc = 0;
+    for (const g of run.segs) {
+      if (acc + g.len < s - 1e-9) { acc += g.len; continue; }
+      const t = g.len > 0 ? (s - acc) / g.len : 0;
+      const dx = g.b.x - g.a.x, dy = g.b.y - g.a.y, L = Math.hypot(dx, dy);
+      if (!(L > 1e-9)) return;
+      const P = { x: g.a.x + dx * t, y: g.a.y + dy * t };
+      const T = { x: dx / L, y: dy / L };
+      let n = { x: -T.y, y: T.x };
+      const e = 0.05;
+      const okA = onMaterial(P.x + n.x * e, P.y + n.y * e), okB = onMaterial(P.x - n.x * e, P.y - n.y * e);
+      const inward = okA !== okB ? okA : (cx - P.x) * n.x + (cy - P.y) * n.y >= 0;
+      if (!inward) n = { x: -n.x, y: -n.y };
+      const at = (k, w = 0) => ({ x: P.x + n.x * k + T.x * w, y: P.y + n.y * k + T.y * w });
+      if (!cut) push(at(0), at(d));
+      else if (!out && N.style === 'v') { push(at(0, d / 2), at(d)); push(at(0, -d / 2), at(d)); }
+      else if (!out) push(at(0), at(d));
+      /** 往外：之後要加的那一圈外緣在 −m，刻口從那裡往完成線切一半（−m → −m/2） */
+      else if (N.style === 'v') { push(at(-m, d / 2), at(-m + d)); push(at(-m, -d / 2), at(-m + d)); }
+      else push(at(-m), at(-m + d));
+      return;
+    }
+  };
+
+  for (const run of piece.seamRuns) {
+    const L = run.segs.reduce((s, g) => s + g.len, 0);
+    const at = [];
+    for (let k = 1; k * N.spacing <= L - NOTCH.endGap + 1e-9; k++) at.push(k * N.spacing);
+    if (!at.length) { res.short++; continue; }
+    res.count += at.length;
+    if (at[0] + NOTCH.double < L - 1e-9) at.push(at[0] + NOTCH.double);
+    for (const s of at) place(run, s);
+  }
+  return res;
+}
+
+/** 卡片上那一行的後半：刻口長什麼樣、往哪邊、多深 */
+function notchWords(style, r, rule) {
+  if (style === 'mark') return `只畫短線、不切（往內 ${fmt(r.depth)} cm）`;
+  const what = style === 'v' ? '剪掉小三角' : '切一小刀';
+  if (r.dir === 'in') return `往內${what} ${fmt(r.depth)} cm`;
+  const lb = rule.marginLabel ? rule.marginLabel() : '';
+  return `往外${what} ${fmt(r.depth)} cm（畫在${lb}那一圈裡，加上${lb}之後剛好從邊上剪進來）`;
+}
+
+/**
  * 一圈點 → 一圈同一種線。⚠ 剖面分切（`sliceProgram()`）還在用 —— 展開圖改走 `outlineSegments()` 時
  * 一度把它刪掉，**測試當場抓到**（2026-10-12；模組解析抓不到執行期才找不到的名字）。
  */
@@ -564,6 +672,15 @@ export function titleLines(piece, opt = {}) {
     const many = piece.joints.filter(j => (j.segs || 1) > 1).length;
     out.push(`接合編號 ${piece.joints.length} 段　同號碼的段接在一起`
       + (many ? `（有 ${many} 段是連續的曲線，整段一個號碼）` : ''));
+  }
+
+  /** 對位記號（2026-10-12）：打勾、而且這片有接合編號才講 —— 幾個、怎麼量、長什麼樣；太短沒放的也講 */
+  if (opt.notch && piece.seamRuns && piece.seamRuns.length) {
+    const nm = notchMarks(piece, opt), sp = opt.notch.spacing;
+    const short = nm.short ? `；${nm.short} 條縫比 ${fmt(sp + NOTCH.endGap)} cm 短，沒有放` : '';
+    out.push(nm.count
+      ? `對位記號 ${nm.count} 個（每 ${fmt(sp)} cm，一條縫的兩側從同一端量起，每條縫第一個是兩條）　${notchWords(opt.notch.style, nm, rule)}${short}`
+      : `對位記號 0 個：每條縫都比 ${fmt(sp + NOTCH.endGap)} cm 短`);
   }
 
   /**
