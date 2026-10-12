@@ -786,7 +786,8 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
    * 🔴 省道打版（`strain` 有值）：**⛔ 折線、⛔ 圓弧修正**（kang 2026-10-12「依照你的建議處理」）——
    * 布、皮不會沿著網格的稜線折；球一片會有幾百條折線，畫了只是雜訊。
    */
-  const folds = strain ? [] : collectFolds(mesh, faces, inPatch, pt2, isCut);
+  const found = collectFolds(mesh, faces, inPatch, pt2, isCut);
+  const folds = strain ? [] : found;
 
   /**
    * 折線的方向分組要在修正之前算好，而且要傳給 arcCorrection 共用一份。
@@ -928,6 +929,13 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      * 精確分片 ⇒ `null`。
      */
     strain,
+    /**
+     * 🔴 **省道打版的折線（只在要畫的時候畫）**（2026-10-12，kang：「可以有一個開/關可以讓 DXF 與 SVG 能夠出現『折線』」）。
+     * 起因：kang 用**珍珠板／發泡板**做省道打版的圓環 —— 板子要知道每一格在哪裡折。
+     * ⭐ `folds` 照舊是空的（布不折、⛔ 折彎標註、⛔ 圓弧修正），折線另外放這裡，展開圖視窗「畫折線」打勾才畫。
+     * 點是 `pt2` 裡的同一個物件 ⇒ 拉過、擺正之後的位置（⚠ 片有拉伸，位置是參考）。精確分片 ⇒ `null`。
+     */
+    dartFolds: strain ? found.map(f => ({ a: f.a, b: f.b, angle: f.angle })) : null,
     folds: folds.map(f => ({ a: f.a, b: f.b, angle: f.angle, isArcEdge: !!f.band })),
     /**
      * 接合處：這條邊在 2D 上是邊界，但在 3D 上有鄰居，要接回去。

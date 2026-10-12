@@ -126,6 +126,11 @@ export function drawProgram(piece, opt = {}) {
     items.push({ t: 'line', style: s.style, x1: s.a.x, y1: s.a.y, x2: s.b.x, y2: s.b.y });
   }
 
+  /** 省道打版：「畫折線」打勾才畫（2026-10-12，`piece.dartFolds`）—— 只畫線、⛔ 標角度，跟精確分片的折線同一種線（DXF 在 FOLD 層）*/
+  if (opt.dartFolds && piece.dartFolds) {
+    for (const f of piece.dartFolds) line('fold', f.a.x, f.a.y, f.b.x, f.b.y);
+  }
+
   // ── 折線 ──
   // 圓弧折彎帶「裡面」那些線是網格切出來的，不是真的要折的地方，
   // 畫出來只會讓師傅以為要折五道。只畫折彎區的起訖線。
@@ -577,6 +582,9 @@ export function titleLines(piece, opt = {}) {
     out.push(`省道打版：最多拉長 ${pc(s.max)}　最多壓縮 ${pc(-s.min)}　縫邊長度最多差 ${pc(s.seamErr)}`);
     const d = outlineSegments(piece, opt).darts;
     if (d) out.push(`開口 ${d} 道（${opt.dartStyle === 'sew' ? '只畫縫線、不剪' : '剪掉的 V 形缺口'}）`);
+    if (opt.dartFolds && piece.dartFolds && piece.dartFolds.length) {
+      out.push(`折線 ${piece.dartFolds.length} 道（只畫線、不標角度 —— 片有拉伸，位置是參考）`);
+    }
     const lim = +opt.limit;
     if (opt.limit !== undefined && opt.limit !== '' && Number.isFinite(lim)) {
       const worst = Math.max(s.max, -s.min) * 100;

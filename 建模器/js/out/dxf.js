@@ -139,6 +139,10 @@ export function toDXF(pieces, opt = {}) {
       if (f.isArcEdge) continue;
       out.line('FOLD', X(f.a), Y(f.a), X(f.b), Y(f.b));
     }
+    /** 省道打版：「畫折線」打勾才畫（2026-10-12）—— 跟展開圖同一個開關、同一份 `p.dartFolds` */
+    if (opt.dartFolds && p.dartFolds) {
+      for (const f of p.dartFolds) out.line('FOLD', X(f.a), Y(f.a), X(f.b), Y(f.b));
+    }
 
     // 折彎區：起線、訖線、中心線
     const y0 = oy, y1 = oy + p.height * s;

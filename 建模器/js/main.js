@@ -314,7 +314,7 @@ const app = {
    * 🔴 分片模式的即時預覽（2026-10-12，省道打版第三步）：**跟著展開圖視窗目前選的**展開方式、材料、開口畫法；
    * 「放大」＝ 打開展開圖視窗。⚠ `unfoldWin` 在下面才建 —— 這兩支只在點了之後才呼叫，⛔ 在建構時。
    */
-  getUnfoldSettings: () => ({ material: unfoldWin.opt.material, mode: unfoldWin.mode, dartStyle: unfoldWin.opt.dartStyle || 'cut' }),
+  getUnfoldSettings: () => ({ material: unfoldWin.opt.material, mode: unfoldWin.mode, dartStyle: unfoldWin.opt.dartStyle || 'cut', dartFolds: !!unfoldWin.opt.dartFolds }),
   openUnfold: () => unfoldWin.open(),
   onUnfoldClosed: () => panel.refresh(),
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）

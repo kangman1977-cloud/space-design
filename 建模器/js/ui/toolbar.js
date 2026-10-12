@@ -985,7 +985,7 @@ export class Panel {
     const modeLabel = st.mode === 'dart' ? '省道打版' : '精確分片';
     const draw = pv => {
       const r = pv.r;
-      const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true, dartStyle: st.dartStyle });
+      const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true, dartStyle: st.dartStyle, dartFolds: st.dartFolds });
       let txt = `預覽（${modeLabel}）：<b>${r.stats.total}</b> 片`;
       if (st.mode === 'dart' && r.pieces.length) {
         const mx = Math.max(...r.pieces.map(p => p.strain ? p.strain.max : 0));

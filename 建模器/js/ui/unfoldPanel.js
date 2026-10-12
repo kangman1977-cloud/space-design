@@ -89,6 +89,7 @@ export class UnfoldPanel {
               <option value="cut">剪掉的 V 形缺口</option>
               <option value="sew">只畫縫線（不剪）</option>
             </select>
+            <label class="uwCk" title="把每一格之間的折線畫出來（畫面、列印、SVG、DXF 都畫；DXF 在 FOLD 層）。布不需要；珍珠板、發泡板這類要折的材料打開。只畫線、不標角度 —— 片有拉伸，位置是參考"><input type="checkbox" id="uwDartFold"> 畫折線</label>
           </span>
         </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
@@ -201,6 +202,17 @@ export class UnfoldPanel {
       saveOpt(this.opt);
       if (this.result) this._render(this.result, this.objs);
     };
+    /**
+     * 「畫折線」（2026-10-12，kang：珍珠板／發泡板做省道打版要知道每一格在哪裡折）。
+     * 預設關（布不需要），記在瀏覽器裡；畫面、列印、SVG、DXF 一起 —— 「畫面看到什麼，存出去就是什麼」。
+     */
+    const dfd = $('uwDartFold');
+    dfd.checked = !!this.opt.dartFolds;
+    dfd.onchange = () => {
+      this.opt.dartFolds = dfd.checked;
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
 
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
@@ -242,6 +254,7 @@ export class UnfoldPanel {
       rule: this.result && this.result.rule, head: this.app.head,
       foldSummary: this.foldIn.checked,
       dartStyle: this.opt.dartStyle || 'cut', limit: this.opt.limit ?? '', strainFill: true,
+      dartFolds: !!this.opt.dartFolds,
       ...extra
     };
   }

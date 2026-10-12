@@ -14846,6 +14846,44 @@ section('省道打版 第二步：攤平（縫邊等長、變形在中間）＋ 
   }
 }
 
+section('省道打版：「畫折線」開關（2026-10-12）');
+
+/**
+ * kang：「可以有一個開/關可以讓 DXF 與 SVG 能夠出現『折線』」（用珍珠板做省道打版的圓環，板子要知道每一格在哪裡折）。
+ * 定案：預設關；打開時畫面、列印、SVG、DXF 都畫；只畫線、⛔ 標角度；DXF 在 FOLD 層。
+ */
+{
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const m = buildPrim('torus', PRIM_DEFAULTS.torus);
+  const ang = v => Math.atan2(v.p.z, v.p.x);
+  const isTube = he => Math.abs(ang(he.v) - ang(he.to)) < 1e-6;
+  const seen = new Set(), loops = [];
+  for (const he of m.edges()) if (isTube(he)) { const k = ang(he.v).toFixed(5); if (!seen.has(k)) { seen.add(k); loops.push(he); } }
+  loops.sort((p, q) => ang(p.v) - ang(q.v));
+  loops.forEach((he, i) => { if (i % 4 === 0) for (const h of seamLoopEdges(m, he, 'loop')) setSeam(m, h, true); });
+  const r = unfoldMesh(m, makeRule('foamboard', 0.3), { mode: 'dart' });
+  const p = r.pieces[0];
+  eq('前提：圓環切 8 段（省道打版、珍珠板）', r.stats.total, 8);
+  ok('★★★ 每片都記著折線（格子之間的邊）', r.pieces.every(q => q.dartFolds && q.dartFolds.length > 0), p.dartFolds.length);
+  eq('★★ 　 但 folds 照舊是空的（⛔ 折彎標註、⛔ 圓弧修正）', r.pieces.reduce((n, q) => n + q.folds.length + q.bends.length, 0), 0);
+  const folds = o => drawProgram(p, o).items.filter(i => i.t === 'line' && i.style === 'fold').length;
+  eq('★★★ 沒打勾（預設）：圖上 0 條折線（跟原本一樣）', folds({}), 0);
+  eq('★★★ 打勾：圖上折線 ＝ 這片的折線數', folds({ dartFolds: true }), p.dartFolds.length);
+  ok('★★ 　 卡片寫「折線 N 道（只畫線…）」', titleLines(p, { dartFolds: true }).some(s => s.startsWith(`折線 ${p.dartFolds.length} 道`)));
+  ok('★★ 　 沒打勾 ⇒ 卡片⛔ 寫', !titleLines(p, {}).some(s => s.startsWith('折線 ')));
+  const inside = r.pieces.every(q => q.dartFolds.every(f => [f.a, f.b].every(v =>
+    v.x >= -1e-6 && v.y >= -1e-6 && v.x <= q.width + 1e-6 && v.y <= q.height + 1e-6)));
+  ok('★★★ 折線都在片的外框裡（跟著拉過、擺正之後的位置）', inside);
+  const F = d => (d.match(/\r\n0\r\nLINE\r\n8\r\nFOLD\r\n/g) || []).length;
+  eq('★★★ DXF：沒打勾 FOLD 層 0 條', F(toDXF(r.pieces, { unit: 'mm' })), 0);
+  eq('★★★ DXF：打勾 FOLD 層 ＝ 8 片的折線總數', F(toDXF(r.pieces, { unit: 'mm', dartFolds: true })), r.pieces.reduce((n, q) => n + q.dartFolds.length, 0));
+  ok('★★ SVG：打勾才有折線的紅色點劃線', toSVG(p, { dartFolds: true }).includes('stroke-dasharray') && !toSVG(p, {}).includes('#c0392b'));
+  const ex = unfoldMesh(m, makeRule('foamboard', 0.3));
+  ok('★★ 精確分片 ⇒ dartFolds 是 null（⛔ 動到原本的圖）', ex.pieces.every(q => q.dartFolds === null));
+}
+
 section('省道打版 第三步：分片模式的即時預覽（2026-10-12）');
 
 /**
