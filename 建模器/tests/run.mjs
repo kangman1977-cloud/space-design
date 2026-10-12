@@ -14799,6 +14799,14 @@ section('省道打版 第二步：攤平（縫邊等長、變形在中間）＋ 
     ok('★★ 　 縫邊（含程式那一刀）長度 ＝ 真值', r.pieces.every(p => p.strain.seamErr < 1e-6));
   }
   {
+    /** 球只切兩條經線（不開口）：一定有面翻過來 ⇒ 每片只講一則（⛔ 再加一則「重疊」—— AI 線上先驗看到的）*/
+    const r = dart(ball(6, 0));
+    eq('前提：球切兩條正對面的經線 ⇒ 2 片', r.stats.total, 2);
+    ok('前提：有面翻過來', r.pieces.every(p => p.strain.flips > 0));
+    eq('★★ 每片只有「翻過來」那一則，⛔ 重複講「重疊」', r.warnings.filter(w => w.includes('有重疊')).length, 0);
+    eq('★★ 　「翻過來」每片一則', r.warnings.filter(w => w.includes('翻過來')).length, 2);
+  }
+  {
     const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
     o.bake();
     const r = dart(o.mesh());
