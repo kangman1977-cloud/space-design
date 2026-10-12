@@ -1,46 +1,31 @@
-省道打版：展開圖多一個「畫折線」開關 —— 板材（珍珠板、發泡板）做省道打版時，畫面／列印／SVG／DXF 都畫出格子之間的折線
+省道打版「畫折線」開關 結案 —— kang 驗收通過（「驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md
 
-kang 2026-10-12（圓環、珍珠板、省道打版）：「可以有一個開/關可以讓 DXF 與 SVG 能夠出現『折線』的功能嗎?」
-紅框是他畫的示意：「這裡應該要有一條折線，但現在沒有」。三個細節「依照你的建議」：
-預設關、畫面列印 SVG DXF 一起、只畫線不標角度、DXF 在 FOLD 層。
-
-動到 9 個檔：
-  M  建模器/js/unfold/flatten.js     buildPiece：照樣找折線，省道打版時放 piece.dartFolds（folds 照舊空）
-  M  建模器/js/out/sheet.js          drawProgram：opt.dartFolds 才畫（fold 線型）；卡片「折線 N 道（只畫線、不標角度…）」
-  M  建模器/js/out/dxf.js            toDXF：opt.dartFolds 才畫，FOLD 層（排版 DXF 本來就照線型分層）
-  M  建模器/js/ui/unfoldPanel.js     「畫折線」勾選（記在瀏覽器）；_drawOpt 帶 dartFolds
-  M  建模器/js/main.js               getUnfoldSettings 多帶 dartFolds（右側即時預覽跟著）
-  M  建模器/js/ui/toolbar.js         預覽傳 dartFolds
-  M  建模器/tests/run.mjs            新增一節 12 項（用 kang 的例子：圓環切 8 段、珍珠板）
-  M  規格/建模器-省道打版.md         追加一節 ＋ ⏳ 實測清單 8 項
-  M  STATUS.md                      ⏳ 一項
+⛔ 程式一行都沒改。動到 4 個檔：
+  M  HISTORY.md                 新增一節「省道打版「畫折線」開關 結案」（經過／老實話／逐字搬入的清單）＋ 目次重產
+  M  規格/建模器-省道打版.md     「⏳ 給 kang 的實測清單（畫折線）」＋ AI 線上先驗那張表 搬走，換成「實測：已結案」指標；
+                                「追加」那一節的標題改成「結案」
+  M  STATUS.md                  ⏳ 清空
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  省道打版也能畫折線（開關），給板材用
+  省道打版「畫折線」開關 結案
 
 【依賴哪些事實】
-  1. 折線由 collectFolds 找，點是 pt2 裡的同一個物件（擺正時跟著轉）   【已查證 · flatten.js collectFolds()、orient() 就地改 pt2】
-  2. 省道打版拉完才進 buildPiece（pt2 已經是拉過的位置）              【已查證 · flattenPatch：relaxDart 在 buildPiece 之前】
-  3. 展開圖、列印、SVG、排版都走 drawProgram；展開 DXF 自己畫          【已查證 · 第二步做 outlineSegments 時查過】
-  4. 排版 DXF 照線型分層，fold → FOLD                                 【已查證 · dxf.js boardDXF 的 LAYER】
+  1. kang：「驗收OK」                                       【已查證 · kang 原話】
+  2. 結案 ＝ 逐字搬 HISTORY ＋ 規格留指標 ＋ STATUS 只留名字  【已查證 · STATUS.md「日常流程」第 6 步、「落點規則」】
+  3. 清單與 AI 先驗表在規格檔的最後一段（到檔尾）              【已查證 · 搬移腳本斷言「起點唯一」＋ 檔尾換行】
 
 【會動到哪幾個檔】
-  上面 9 個。
+  上面 4 個。
 
 【怎麼知道做對了】
-  · node 建模器/tests/run.mjs：通過 3099　失敗 0（改之前 3087）
-    —— 預設關時圖上 0 條折線、DXF 0 條（跟原本一樣）；打勾時圖上 ＝ DXF FOLD 層 ＝ 片的折線數；折線都在片的外框裡
-  · node 文件工具/模組解析.js：全部接得上；node 文件工具/兩端檢查.js：全部通過
-  · 圓環一片畫出來看過（格子之間的紅色點劃線）
+  · 搬移：25 行，md5 ebd383f4eacd60952a1ca659b84fce7a，搬之前在規格檔、搬之後在 HISTORY.md 逐字相同；
+    HISTORY.md 原本的內容是新檔的開頭（⛔ 動到任何一個字）
+  · 目次產生器：「自我否決通過：正文逐字未變」，HISTORY.md 74 節
+  · 反斜線：`規格\建模器-省道打版.md` 都在
   · node 文件工具/狀態行數.js：在線內；換行 CRLF ＝ 0
-
-════════════════════════════════════════════════
-🔴 這一輪的老實話
-  · 卡片第一版寫成「只畫線、⛔ 標角度」—— 把文件慣用的 ⛔ 寫進畫面又少了「不」；看圖時發現改成「不標角度」
-  · 第二步時「省道打版⛔ 畫折線」是照布想的，沒想到板材也會用省道打版 —— kang 實際用了才照出來
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
