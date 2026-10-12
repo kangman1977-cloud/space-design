@@ -2098,12 +2098,15 @@ section('第 3 期：展開圖與 DXF');
    * 2026-08-22 加 JOIN 層時這一項擋下來過一次 —— 加了圖層卻忘了改宣告，
    * 而 DXF 本身「看起來」完全正常。這就是這一項存在的理由。
    */
-  /** ⚠ 2026-10-12 加 CUT_AUTO（程式自己加的切線）—— 7 → 8，這一項當場擋下來（照它的存在理由）*/
+  /**
+   * ⚠ 2026-10-12 加 CUT_AUTO（程式自己加的切線）—— 7 → 8，這一項當場擋下來（照它的存在理由）；
+   * 同一天再加 SEW（省道打版「只畫縫線」的開口縫線）—— 8 → 9，又擋下來一次。
+   */
   ok('DXF 表格數量宣告正確',
-    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n8\r\n'),
-    'CUT/CUT_AUTO/FOLD/BEND/DIM/TEXT/JOIN 七個圖層 ＋ 圖層 0');
+    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n9\r\n'),
+    'CUT/CUT_AUTO/SEW/FOLD/BEND/DIM/TEXT/JOIN 八個圖層 ＋ 圖層 0');
   eq('★★ 宣告的圖層數 ＝ 真的寫出來的 LAYER 數',
-    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 8);
+    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 9);
 
   // ENDTAB / ENDSEC 要成對，少一個整個檔就打不開
   eq('DXF TABLE 與 ENDTAB 成對', (dxf.match(/\r\nENDTAB\r\n/g) || []).length, tbls.length);
@@ -14723,6 +14726,115 @@ section('省道打版 第一步：「標一段」＋ 縫與開口分開認（202
     const k = seamKinds(m);
     eq('★★★ 球切 4 條經線（4 片）＋ 另一條經線從極往下標一段 6 條：縫 ＝ 4 × segH', k.seams.length, 4 * segH);
     eq('★★★ 　 開口 ＝ 那一段的 6 條', k.darts.length, 6);
+  }
+}
+
+section('省道打版 第二步：攤平（縫邊等長、變形在中間）＋ 出圖（2026-10-12）');
+
+/**
+ * kang 拍板（`規格\建模器-省道打版.md`「定案」與「2.2」）：容許變形、縫邊長度保持真值、每片印出拉／壓幾 %；
+ * ⛔ 畫折線；畫面與列印上色、SVG／DXF 只放線；⛔ 管材料折不折得動；程式為了攤開才剪的畫橘色。
+ */
+{
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const { outlineSegments } = await import('../js/out/sheet.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const isPole = v => Math.hypot(v.p.x, v.p.z) < 1e-6, ang = v => Math.atan2(v.p.z, v.p.x);
+  /** 球（12×16）：經線每 step 條切一條（縫）；其餘經線從兩極各往赤道開 dl 格（開口）*/
+  const ball = (step, dl) => {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+    o.bake(); const m = o.mesh();
+    const all = [...m.edges()].filter(he => !(isPole(he.v) && isPole(he.to)) && Math.abs(he.v.p.y - he.to.p.y) > 1e-6
+      && (isPole(he.v) || isPole(he.to) || Math.abs(ang(he.v) - ang(he.to)) < 1e-6));
+    const angs = [...new Set(all.map(he => ang(isPole(he.v) ? he.to : he.v).toFixed(6)))].sort((a, b) => a - b);
+    angs.forEach((a, j) => all.filter(he => ang(isPole(he.v) ? he.to : he.v).toFixed(6) === a)
+      .sort((p, q) => Math.max(q.v.p.y, q.to.p.y) - Math.max(p.v.p.y, p.to.p.y))
+      .forEach((h, k) => { if (j % step === 0 || k < dl || k >= 16 - dl) setSeam(m, h, true); }));
+    return m;
+  };
+  const paper = makeRule('paper', 0.05);
+  const dart = m => unfoldMesh(m, paper, { mode: 'dart' });
+  const L = (dxf, n) => (dxf.match(new RegExp(`\\r\\n0\\r\\nLINE\\r\\n8\\r\\n${n}\\r\\n`, 'g')) || []).length;
+
+  // ── 攤平本身 ──
+  {
+    const m = ball(3, 6);
+    const r = dart(m);
+    eq('前提：球 4 片（每 3 條經線切一條）＋ 其餘經線從兩極各開 6 格', r.stats.total, 4);
+    ok('★★★ 縫邊長度 ＝ 3D 真值（每片誤差 < 百萬分之一）', r.pieces.every(p => p.strain.seamErr < 1e-6),
+       r.pieces.map(p => p.strain.seamErr.toExponential(1)).join(' '));
+    ok('★★★ 有變形，而且拉、壓都有（球攤平一定要）', r.pieces.every(p => p.strain.max > 0.001 && p.strain.min < -0.001));
+    eq('★★★ 沒有面翻過來', r.pieces.reduce((n, p) => n + p.strain.flips, 0), 0);
+    ok('★★ 算到停下來了（⛔ 撞到上限）', r.pieces.every(p => p.strain.converged));
+    eq('★★★ ⛔ 畫折線（布不折）', r.pieces.reduce((n, p) => n + p.folds.length + p.bends.length, 0), 0);
+    ok('★★ 每個面都有自己的拉伸值（上色用）', r.pieces.every(p => p.strain.faces.length === p.faces.length));
+    const s3 = m.area(), s2 = r.stats.area;
+    ok('★★ 面積（攤平後）跟 3D 表面積差不到 5%（變形在幾 % 之內）', Math.abs(s2 / s3 - 1) < 0.05, `${(s2 / s3 * 100 - 100).toFixed(2)}%`);
+    eq('★★ 沒有任何警告', r.warnings.length, 0);
+  }
+  {
+    /** 開口開得越長、變形越小（樣板與沙箱量到的趨勢）*/
+    const worst = dl => Math.max(...dart(ball(3, dl)).pieces.map(p => Math.max(p.strain.max, -p.strain.min)));
+    const w0 = worst(0), w5 = worst(5), w7 = worst(7);
+    ok('★★★ 開口越長變形越小：不開口 > 開 5 格 > 開 7 格', w0 > w5 && w5 > w7, `${(w0 * 100).toFixed(1)}% > ${(w5 * 100).toFixed(1)}% > ${(w7 * 100).toFixed(1)}%`);
+  }
+  {
+    /** ⛔ 管材料：壓克力在精確分片會把每條折線切開；省道打版照你標的分片 */
+    const a = dart(ball(3, 6)).stats.total, b = unfoldMesh(ball(3, 6), makeRule('acrylic', 0.3), { mode: 'dart' }).stats.total;
+    eq('★★★ 省道打版 ⛔ 管材料折不折得動：壓克力也是 4 片（跟紙一樣）', b, a);
+  }
+  {
+    /** 拓撲上非剪不可的：圓環切成 4 段，每段是一個環 ⇒ 程式只剪一刀 */
+    const m = buildPrim('torus', PRIM_DEFAULTS.torus);
+    const isTube = he => Math.abs(ang(he.v) - ang(he.to)) < 1e-6;
+    const seen = new Set(), loops = [];
+    for (const he of m.edges()) if (isTube(he)) { const k = ang(he.v).toFixed(5); if (!seen.has(k)) { seen.add(k); loops.push(he); } }
+    loops.sort((p, q) => ang(p.v) - ang(q.v));
+    loops.forEach((he, i) => { if (i % 8 === 0) for (const h of seamLoopEdges(m, he, 'loop')) setSeam(m, h, true); });
+    const r = dart(m);
+    eq('前提：圓環切 4 段', r.stats.total, 4);
+    ok('★★★ 每段程式只加 1 條（環要剪開一次；⛔ 為了鼓多剪）', r.pieces.every(p => p.autoCut.lines === 1), r.pieces.map(p => p.autoCut.lines).join('/'));
+    eq('★★ 　 沒有面翻過來', r.pieces.reduce((n, p) => n + p.strain.flips, 0), 0);
+    ok('★★ 　 縫邊（含程式那一刀）長度 ＝ 真值', r.pieces.every(p => p.strain.seamErr < 1e-6));
+  }
+  {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+    o.bake();
+    const r = dart(o.mesh());
+    eq('★★ 一條都沒標的球（封閉）：省道打版攤不開 ⇒ 0 片', r.stats.total, 0);
+    ok('★★ 　 而且講出原因（⛔ 安靜地什麼都沒有）', r.warnings.some(w => w.includes('封閉')), r.warnings.join('|'));
+  }
+
+  // ── 出圖 ──
+  {
+    const r = dart(ball(3, 6));
+    const p = r.pieces[0];
+    const cutS = outlineSegments(p, { dartStyle: 'cut' }), sewS = outlineSegments(p, { dartStyle: 'sew' });
+    eq('★★★ 開口道數：每片中間 2 條經線 × 兩極 ＝ 4 道', cutS.darts, 4);
+    const n = (os, st) => os.segs.filter(s => s.style === st).length;
+    eq('★★ 剪掉的 V：開口段全是 dartCut', n(cutS, 'dartSew'), 0);
+    eq('★★★ 只畫縫線：開口段 ＝ 剪掉時的開口段（一段都沒少）', n(sewS, 'dartSew'), n(cutS, 'dartCut'));
+    eq('★★★ 只畫縫線：口子多 4 條切割線（每道一條）', n(sewS, 'cut') - n(cutS, 'cut'), 4);
+    ok('★★ 卡片：三個數字', titleLines(p, {}).some(s => s.startsWith('省道打版：最多拉長') && s.includes('最多壓縮') && s.includes('縫邊長度最多差')));
+    ok('★★ 卡片：開口道數與畫法', titleLines(p, { dartStyle: 'sew' }).some(s => s === '開口 4 道（只畫縫線、不剪）'));
+    const worst = Math.max(p.strain.max, -p.strain.min) * 100;
+    ok('★★★ 上限填得比這片小 ⇒ 紅字（⚠）', titleLines(p, { limit: worst / 2 }).some(s => s.startsWith('⚠ 超過你填的上限')));
+    ok('★★ 上限填得比這片大 ⇒「以內」', titleLines(p, { limit: worst * 2 }).some(s => s.startsWith('在你填的上限')));
+    ok('★★ 上限沒填 ⇒ 兩種都⛔ 寫（⛔ 自己編預設值）', !titleLines(p, { limit: '' }).some(s => s.includes('上限')));
+    ok('★★ 面積寫明「攤平後」', titleLines(p, {}).some(s => s.includes('（攤平後）')));
+    eq('★★★ 畫面（strainFill）：每個面一塊色', drawProgram(p, { strainFill: true }).items.filter(i => i.t === 'poly').length, p.faces.length);
+    ok('★★★ 存檔的 SVG（⛔ strainFill）⛔ 帶色塊', !toSVG(p, { strainFill: false }).includes('<polygon'));
+    const dxfCut = toDXF(r.pieces, { unit: 'mm', dartStyle: 'cut' }), dxfSew = toDXF(r.pieces, { unit: 'mm', dartStyle: 'sew' });
+    eq('★★★ DXF 剪掉的 V：SEW 層 0 條（開口在 CUT 層，要切）', L(dxfCut, 'SEW'), 0);
+    eq('★★★ DXF 只畫縫線：SEW 層 ＝ 4 片的開口段', L(dxfSew, 'SEW'), r.pieces.reduce((a, q) => a + outlineSegments(q, { dartStyle: 'sew' }).segs.filter(s => s.style === 'dartSew').length, 0));
+    ok('★★ DXF 標題帶三個數字（英數）', dxfCut.includes('STRETCH') && dxfCut.includes('SHRINK') && dxfCut.includes('SEAM'));
+  }
+  {
+    /** 精確分片：同一個模型的圖一個字都不變（開口照舊是一般切割線、⛔ 色塊、⛔ 三個數字）*/
+    const r = unfoldMesh(ball(3, 6), paper);
+    ok('★★★ 精確分片：⛔ strain、⛔ 開口線（原本的圖一個字都不變）', r.pieces.every(p => !p.strain && !p.dartCut));
+    ok('★★ 　 卡片沒有「省道打版」那一行', r.pieces.every(p => !titleLines(p, {}).some(s => s.startsWith('省道打版'))));
   }
 }
 

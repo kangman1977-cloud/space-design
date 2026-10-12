@@ -67,7 +67,8 @@ export function unfoldObject(obj, opt = {}) {
     }
   }
 
-  const r = unfoldMesh(mesh, rule, { flatTolDeg: opt.flatTolDeg });
+  /** `opt.mode`：`'dart'` ＝ 省道打版（2026-10-12）；沒給 ＝ 精確分片（原本的路）*/
+  const r = unfoldMesh(mesh, rule, { flatTolDeg: opt.flatTolDeg, mode: opt.mode });
 
   // 陣列的份數要乘上去：12 支一樣的橫料 ＝ 一張圖 ×12。
   // 這是第 2 期把陣列做成修飾器、而不是複製成 12 個物件的理由。

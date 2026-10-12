@@ -52,10 +52,16 @@
  */
 
 import { pieceNo } from '../unfold/part.js';
-import { sameFolds } from './sheet.js';
+import { sameFolds, outlineSegments } from './sheet.js';
 
-/** CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）*/
-const COLOR = { CUT: 7, CUT_AUTO: 30, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
+/**
+ * CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）。
+ * SEW 6 ＝ 洋紅：省道打版「只畫縫線（不剪）」的開口縫線（2026-10-12）—— **⛔ 是切割線**，機器⛔ 開這一層。
+ */
+const COLOR = { CUT: 7, CUT_AUTO: 30, SEW: 6, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3 };
+
+/** 展開圖的線型 → DXF 圖層（`outlineSegments()` 的 style）。剪掉的開口照樣要切 ⇒ CUT */
+const OUTLINE_LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', dartCut: 'CUT', dartSew: 'SEW' };
 
 /** 剖面分切用的圖層顏色。切割層依板厚各一層，名字由 cutLayer() 產生。 */
 const SLICE_COLOR = { NUM: 30, TEXT: 8 };
@@ -119,15 +125,13 @@ export function toDXF(pieces, opt = {}) {
     const X = pt => ox + pt.x * s;
     const Y = pt => oy + pt.y * s;
 
-    // 切割線：外輪廓與內孔（程式自己加的那幾段放 CUT_AUTO，`p.autoCut`）
-    const ac = p.autoCut || {};
-    [p.outline, ...p.holes].forEach((loop, k) => {
-      const auto = k === 0 ? ac.outline : (ac.holes && ac.holes[k - 1]);
-      for (let i = 0; i < loop.length; i++) {
-        const a = loop[i], b = loop[(i + 1) % loop.length];
-        out.line(auto && auto[i] ? 'CUT_AUTO' : 'CUT', X(a), Y(a), X(b), Y(b));
-      }
-    });
+    /**
+     * 切割線：外輪廓與內孔。哪一段放哪一層 ⇒ 跟展開圖同一支 `outlineSegments()`（⛔ 各判斷一次）：
+     * 程式自己加的 → CUT_AUTO；省道打版的開口 → 剪掉的在 CUT、只畫縫線的在 SEW（口子那一條在 CUT）。
+     */
+    for (const s of outlineSegments(p, opt).segs) {
+      out.line(OUTLINE_LAYER[s.style] || 'CUT', X(s.a), Y(s.a), X(s.b), Y(s.b));
+    }
 
     // 折線。圓弧折彎帶內部那些線是網格切出來的，不是真的折線，
     // 畫出來只會讓師傅困惑，所以只畫折彎區的起訖線（下面那段）。
@@ -207,7 +211,14 @@ export function toDXF(pieces, opt = {}) {
     const title = `${p.no || pieceNo(laid.findIndex(l => l.p === p) + 1)} x${p.qty}`
       + (mat ? `  ${mat}` : '')
       + (th ? ` t${round(th)}` : '');
-    out.text('TEXT', ox, oy - 5 * s, 1.0 * s, ascii(title));
+    /**
+     * 省道打版：每片的三個數字一起寫在標題（kang 2026-10-12：SVG／DXF「只放線 ＋ 每片的三個數字」）。
+     * ⚠ R12 只收英數 ⇒ 英文縮寫：STRETCH 最多拉長、SHRINK 最多壓縮、SEAM 縫邊長度最多差。
+     */
+    const st = p.strain
+      ? `  STRETCH ${round(p.strain.max * 100)}% SHRINK ${round(-p.strain.min * 100)}% SEAM ${round(p.strain.seamErr * 100)}%`
+      : '';
+    out.text('TEXT', ox, oy - 5 * s, 1.0 * s, ascii(title + st));
     out.text('TEXT', ox, oy - 7 * s, 0.7 * s, `unit=${U.label}`);
   }
 
@@ -233,7 +244,7 @@ export function toDXF(pieces, opt = {}) {
 export function boardDXF(prog, opt = {}) {
   const U = UNITS[opt.unit] || UNITS.mm;
   const s = U.scale;
-  const LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
+  const LAYER = { ...OUTLINE_LAYER, fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
     num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM' };
   const out = new Writer();
   const { w, h } = prog.box;
@@ -242,6 +253,8 @@ export function boardDXF(prog, opt = {}) {
   out.blocks();
   out.beginEntities();
   for (const it of prog.items) {
+    /** 拉伸色塊⛔ 進 DXF（kang 2026-10-12：送去切的檔只放線）—— 存檔本來就不傳色塊，這裡是保險 */
+    if (it.t === 'poly') continue;
     const layer = LAYER[it.style] || 'TEXT';
     if (it.t === 'line') {
       out.line(layer, it.x1 * s, it.y1 * s, it.x2 * s, it.y2 * s);

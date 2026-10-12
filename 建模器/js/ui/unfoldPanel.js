@@ -76,6 +76,21 @@ export class UnfoldPanel {
           <button id="uwDxf">存 DXF</button>
           <button id="uwCsv">備料 CSV</button>
         </div>
+        <div class="uwBar">
+          <span class="lbl">展開方式</span>
+          <select id="uwMode" title="精確分片：完全攤平、尺寸精確，攤不平的地方程式會自己剪開。省道打版：布、皮革這類能稍微伸縮的材料 —— 容許變形，縫邊長度保持真值，變形擠到片的中間，每片寫出最多拉長／壓縮幾 %">
+            <option value="exact">精確分片（不變形）</option>
+            <option value="dart">省道打版（容許變形）</option>
+          </select>
+          <span id="uwDartOpts" hidden>
+            <span class="lbl">這個材料最多能拉</span><input type="number" id="uwLimit" min="0" step="0.5" placeholder="不填" style="width:64px"><span class="lbl">%</span>
+            <span class="lbl">開口畫成</span>
+            <select id="uwDartStyle">
+              <option value="cut">剪掉的 V 形缺口</option>
+              <option value="sew">只畫縫線（不剪）</option>
+            </select>
+          </span>
+        </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
           <label class="uwCk"><input type="checkbox" id="uwNest"> 排版到板子上</label>
           <span class="lbl">板寬</span><input type="number" id="uwNW" min="1" step="1" style="width:64px">
@@ -157,6 +172,36 @@ export class UnfoldPanel {
     this.foldIn = $('uwFold');
     this.foldIn.onchange = () => { if (this.result) this._render(this.result, this.objs); };
 
+    /**
+     * 🔴 **展開方式**（2026-10-12，kang 拍板 → `規格\建模器-省道打版.md`「定案」3）。
+     * ⭐ **預設精確分片**（原本的圖一個字都不變）；⚠ 選了省道打版之後，這一頁開著的期間都記得（⛔ 存進 localStorage ——
+     * 下次打開照舊從精確分片開始，⛔ 讓人不知不覺拿到變形過的圖）。
+     * 「最多能拉 %」與「開口畫成」記在瀏覽器裡；上限⛔ 給預設值（業界沒有一家公開 —— `外部參考-打版.md`）。
+     */
+    this.mode = 'exact';
+    this.modeSel = $('uwMode');
+    this.dartOpts = $('uwDartOpts');
+    const lim = $('uwLimit'), dst = $('uwDartStyle');
+    lim.value = this.opt.limit ?? '';
+    dst.value = this.opt.dartStyle || 'cut';
+    this.modeSel.onchange = () => {
+      this.mode = this.modeSel.value;
+      this.dartOpts.hidden = this.mode !== 'dart';
+      this.run();
+    };
+    lim.onchange = () => {
+      const v = lim.value.trim();
+      this.opt.limit = v === '' || !(+v >= 0) ? '' : +v;
+      lim.value = this.opt.limit;
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
+    dst.onchange = () => {
+      this.opt.dartStyle = dst.value;
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
+
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
 
@@ -187,11 +232,17 @@ export class UnfoldPanel {
     return picked.length ? picked : this.app.doc.objects;
   }
 
-  /** 卡片、SVG、列印、DXF 共用的選項 —— ⛔ 不要各組一份 */
+  /**
+   * 卡片、SVG、列印、DXF 共用的選項 —— ⛔ 不要各組一份。
+   * ⚠ `strainFill`（省道打版的拉伸色塊）預設開 —— 畫面、列印要；**存 SVG／DXF 的地方明講 `strainFill: false`**
+   * （kang 2026-10-12：送去切的檔只放線）。
+   */
   _drawOpt(extra = {}) {
     return {
       rule: this.result && this.result.rule, head: this.app.head,
-      foldSummary: this.foldIn.checked, ...extra
+      foldSummary: this.foldIn.checked,
+      dartStyle: this.opt.dartStyle || 'cut', limit: this.opt.limit ?? '', strainFill: true,
+      ...extra
     };
   }
 
@@ -204,7 +255,7 @@ export class UnfoldPanel {
   run() {
     saveOpt(this.opt);
     const objs = this._targets();
-    const r = unfoldMany(objs, { material: this.opt.material });
+    const r = unfoldMany(objs, { material: this.opt.material, mode: this.mode });
     this.result = r;
     this.objs = objs;
     this._render(r, objs);
@@ -266,10 +317,10 @@ export class UnfoldPanel {
     return packBoards(this.result.pieces, { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate });
   }
 
-  /** 每張板的「畫什麼」與標題 —— 畫面、SVG、DXF、列印共用，⛔ 不各排一次 */
-  _boardSheets() {
+  /** 每張板的「畫什麼」與標題 —— 畫面、SVG、DXF、列印共用，⛔ 不各排一次（存檔時傳 `{ strainFill: false }`）*/
+  _boardSheets(extra = {}) {
     const nest = this._nest();
-    const opt = this._drawOpt({ label: p => p.no });
+    const opt = this._drawOpt({ label: p => p.no, ...extra });
     const n = nest.boards.length;
     return nest.boards.map((b, i) => ({
       board: b, prog: boardProgram(b, opt), title: boardTitle(b, i, n, opt)
@@ -375,7 +426,7 @@ export class UnfoldPanel {
     if (!this._has()) return;
     if (this.opt.nest.on) {
       // 🔴 排版開著：一張板一個檔（kang 2026-10-09）
-      const jobs = this._boardSheets().map((sh, i) => ({
+      const jobs = this._boardSheets({ strainFill: false }).map((sh, i) => ({
         name: `${this._base()}_板${String(i + 1).padStart(2, '0')}.svg`,
         blob: textBlob(progSVG(sh.prog, sh.title), 'image/svg+xml')
       }));
@@ -383,7 +434,7 @@ export class UnfoldPanel {
       if (n > 1) this._say(`已存 ${n} 個 SVG（一張板一個檔）。`);
       return;
     }
-    const opt = this._drawOpt();
+    const opt = this._drawOpt({ strainFill: false });
     // 多片時每片一個檔，檔名帶編號與片名，現場才對得起來
     const jobs = this.result.pieces.map((p, i) => ({
       name: `${this._base()}_${String(i + 1).padStart(2, '0')}_`
@@ -398,7 +449,7 @@ export class UnfoldPanel {
     if (!this._has()) return;
     if (this.opt.nest.on) {
       // 🔴 排版開著：一張板一個檔（kang 2026-10-09）。標題只能英數（R12）
-      const sheets = this._boardSheets();
+      const sheets = this._boardSheets({ strainFill: false });
       const jobs = sheets.map((sh, i) => ({
         name: `${this._base()}_板${String(i + 1).padStart(2, '0')}.dxf`,
         blob: textBlob(boardDXF(sh.prog, {
@@ -413,7 +464,7 @@ export class UnfoldPanel {
       return;
     }
     // 一個 DXF 裝全部的片、沿 X 排開 —— 雷切廠要的是一張料上排好版
-    const blob = textBlob(toDXF(this.result.pieces, this._drawOpt({ unit: this.opt.unit })),
+    const blob = textBlob(toDXF(this.result.pieces, this._drawOpt({ unit: this.opt.unit, strainFill: false })),
       'application/dxf');
     await saveBlob(blob, `${this._base()}.dxf`, TYPES.dxf, this.opt.askPath);
   }

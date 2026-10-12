@@ -43,6 +43,14 @@ export const STYLE = {
    * DXF 放 `CUT_AUTO` 層（`dxf.js`）。
    */
   autoCut: { w: 0.050, minPx: 1.6, dash: null,      color: '#e67e22', label: '程式加的切線' },
+  /**
+   * 🔴 **省道打版的開口**（2026-10-12）。紫色 ＝ kang 在樣板上看過的開口顏色
+   * （⚠ 3D 上改成黃綠是因為 3D 的紫色撞到「非流形邊」；展開圖上紫色沒有別的意思）。
+   * `dartCut` 剪掉的 V 形缺口 —— 要切（DXF 在 CUT 層）；
+   * `dartSew` 只畫縫線、不剪 —— 虛線，DXF 在 SEW 層（⛔ 是切割線）。
+   */
+  dartCut: { w: 0.050, minPx: 1.6, dash: null,      color: '#8e44ad', label: '開口（剪掉）' },
+  dartSew: { w: 0.030, minPx: 1.2, dash: [0.6, 0.4], color: '#8e44ad', label: '開口縫線（不剪）' },
   hole: { w: 0.040, minPx: 1.3, dash: null,        color: '#111', label: '內孔' },
   fold: { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '折線' },
   bend: { w: 0.025, minPx: 1.0, dash: [0.8, 0.5],  color: '#2980b9', label: '折彎區' },
@@ -104,10 +112,19 @@ export function drawProgram(piece, opt = {}) {
   const text = (style, x, y, s, size = 1.6, anchor = 'start') =>
     items.push({ t: 'text', style, x, y, s: String(s), size, anchor });
 
-  // ── 輪廓與內孔（程式自己加的那幾段換成橘色，`piece.autoCut`）──
-  const ac = piece.autoCut || {};
-  loop(items, piece.outline, 'cut', ac.outline);
-  piece.holes.forEach((h, k) => loop(items, h, 'hole', ac.holes && ac.holes[k]));
+  /**
+   * ── 省道打版：每個面依拉／壓上色（2026-10-12）──
+   * ⚠ **只在 `opt.strainFill` 時畫**：畫面與列印要；存 SVG／DXF ⛔ 要（送去切的檔⛔ 帶色塊 ——
+   * kang 2026-10-12「依照你的建議處理」）。放在最前面 ⇒ 線畫在色塊上面。
+   */
+  if (opt.strainFill && piece.strain) {
+    piece.faces.forEach((poly, i) => items.push({ t: 'poly', style: 'strain', pts: poly, fill: strainColor(piece.strain.faces[i]) }));
+  }
+
+  // ── 輪廓與內孔（程式自己加的那幾段換成橘色、開口紫色：`outlineSegments()`）──
+  for (const s of outlineSegments(piece, opt).segs) {
+    items.push({ t: 'line', style: s.style, x1: s.a.x, y1: s.a.y, x2: s.b.x, y2: s.b.y });
+  }
 
   // ── 折線 ──
   // 圓弧折彎帶「裡面」那些線是網格切出來的，不是真的要折的地方，
@@ -352,12 +369,76 @@ export function drawProgram(piece, opt = {}) {
   };
 }
 
-/** `auto[i]` 為真 ⇒ 第 i 段是程式自己加的切線，畫成 `autoCut` */
-function loop(items, pts, style, auto = null) {
+/**
+ * 🔴 **輪廓與內孔的每一段要畫成哪一種線** —— 展開圖與 DXF 共用這一支（⛔ 各判斷一次，兩邊一定會漂）。
+ *
+ * | 線 | 什麼時候 |
+ * |---|---|
+ * | `cut`／`hole` | 一般切割線 |
+ * | `autoCut` | 程式自己加的（只在標過分片的物件：`piece.autoCut.outline`）|
+ * | `dartCut` | 省道打版的開口、「剪掉的 V 形缺口」（預設）|
+ * | `dartSew` ＋ 口子一條 `cut` | 省道打版的開口、「只畫縫線（不剪）」：V 的兩邊畫虛線，口子用一條切割線接起來（布沒剪開）|
+ *
+ * ⭐ 「口子」怎麼認：開口在輪廓上是連續的一串開口段，從口子的一側走到尖端、再走回口子的另一側；
+ * 口子的兩側是**同一個頂點**（`vids`）的兩個分身。⇒ 一串開口段裡，**走回起點那個頂點**就是一個開口的結束
+ * （同一個口子連著好幾道開口時 —— 例如球的極點 —— 就這樣一道一道切開）。
+ *
+ * @param {object} opt `{ dartStyle: 'cut'|'sew' }`
+ * @returns {{segs: {a,b,style}[], darts: number}} `darts` ＝ 開口有幾道
+ */
+export function outlineSegments(piece, opt = {}) {
+  const segs = [];
+  let darts = 0;
+  const ac = piece.autoCut || {}, dc = piece.dartCut;
+  const sew = opt.dartStyle === 'sew';
+  const loops = [[piece.outline, 'cut', ac.outline, dc && dc.outline, dc && dc.vids],
+    ...piece.holes.map((h, k) => [h, 'hole', ac.holes && ac.holes[k], dc && dc.holes[k], dc && dc.holeVids[k]])];
+  for (const [pts, base, auto, dart, vids] of loops) {
+    const n = pts.length;
+    const style = i => (auto && auto[i]) ? 'autoCut' : (dart && dart[i]) ? (sew ? 'dartSew' : 'dartCut') : base;
+    for (let i = 0; i < n; i++) segs.push({ a: pts[i], b: pts[(i + 1) % n], style: style(i) });
+    if (!dart || !dart.some(Boolean)) continue;
+    /**
+     * 一道一道數開口（也是「只畫縫線」要接口子的地方）。
+     * 從「前一段不是開口」的那一段開始（⛔ 從一道開口的中間開始數），把整圈攤成一條直的來走：
+     * 第 b 點是口子（頂點 M）→ 往前走，第一個又是 M 的點 j ＝ 另一側的口子，b..j−1 全是開口段 ⇒ 一道。
+     */
+    const start = dart.findIndex((d, i) => d && !dart[(i - 1 + n) % n]);
+    if (start < 0) continue;                                     // 整圈都是開口（不會發生，保險）
+    const at = k => (start + k) % n;
+    let k = 0;
+    while (k < n) {
+      if (!dart[at(k)]) { k++; continue; }
+      const M = vids[at(k)];
+      let j = k + 1;
+      while (j < n && dart[at(j - 1)] && vids[at(j)] !== M) j++;
+      if (j <= n && vids[at(j % n)] === M && dart[at(j - 1)]) {
+        darts++;
+        if (sew) segs.push({ a: pts[at(k)], b: pts[at(j % n)], style: base });
+        k = j;
+      } else {
+        k = j;                                                   // 走不回口子（不是 V）：⛔ 硬接，往下找
+      }
+    }
+  }
+  return { segs, darts };
+}
+
+/**
+ * 一圈點 → 一圈同一種線。⚠ 剖面分切（`sliceProgram()`）還在用 —— 展開圖改走 `outlineSegments()` 時
+ * 一度把它刪掉，**測試當場抓到**（2026-10-12；模組解析抓不到執行期才找不到的名字）。
+ */
+function loop(items, pts, style) {
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i], b = pts[(i + 1) % pts.length];
-    items.push({ t: 'line', style: auto && auto[i] ? 'autoCut' : style, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    items.push({ t: 'line', style, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
   }
+}
+
+/** 拉伸 → 顏色：紅＝拉長、藍＝壓縮、白＝幾乎沒變；5% 以上全色（跟 `樣板-省道打版-點法.html` 同一套）*/
+export function strainColor(e) {
+  const t = Math.min(1, Math.abs(e || 0) / 0.05), m = a => Math.round(255 + (a - 255) * t);
+  return e > 0 ? `rgb(${m(214)},${m(60)},${m(50)})` : `rgb(${m(40)},${m(110)},${m(220)})`;
 }
 
 /**
@@ -462,8 +543,9 @@ export function titleLines(piece, opt = {}) {
   if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
   if (spec.length) out.push(spec.join('　'));
 
+  /** 省道打版的面積是**攤平後的**（布要買多少），跟 3D 表面積不一樣 —— 寫清楚是哪一個 */
   out.push(`外框 ${fmt(piece.width)} × ${fmt(piece.height)} cm`
-    + `　面積 ${fmt(piece.area)} cm²`);
+    + `　面積 ${fmt(piece.area)} cm²${piece.strain ? '（攤平後）' : ''}`);
 
   /**
    * 一定要講這一行。
@@ -486,6 +568,24 @@ export function titleLines(piece, opt = {}) {
    * ⚠ 只有標過分片的物件圖上才是橘色（理由見 `flatten.js` 的 `piece.autoCut`），
    * 所以兩種寫法 —— ⛔ 不可以在沒有橘色的圖上寫「圖上橘色」。
    */
+  /**
+   * 🔴 **省道打版的三個數字**（kang 2026-10-12 拍板：最多拉長、最多壓縮、縫邊長度最多差；填了上限、超過就紅字）。
+   * ⚠ 上限沒填 ⇒ 只寫數字，⛔ 自己編一個預設值（各材料能拉幾 %，業界沒有一家公開 —— `外部參考-打版.md`）。
+   */
+  if (piece.strain) {
+    const s = piece.strain, pc = v => `${fmt(v * 100)}%`;
+    out.push(`省道打版：最多拉長 ${pc(s.max)}　最多壓縮 ${pc(-s.min)}　縫邊長度最多差 ${pc(s.seamErr)}`);
+    const d = outlineSegments(piece, opt).darts;
+    if (d) out.push(`開口 ${d} 道（${opt.dartStyle === 'sew' ? '只畫縫線、不剪' : '剪掉的 V 形缺口'}）`);
+    const lim = +opt.limit;
+    if (opt.limit !== undefined && opt.limit !== '' && Number.isFinite(lim)) {
+      const worst = Math.max(s.max, -s.min) * 100;
+      out.push(worst > lim + 1e-9
+        ? `⚠ 超過你填的上限 ${fmt(lim)}%（這片最多 ${fmt(worst)}%）—— 多開幾道開口或多分幾片`
+        : `在你填的上限 ${fmt(lim)}% 以內`);
+    }
+  }
+
   const ac = piece.autoCut || {};
   if (ac.lines) {
     out.push(ac.userSeams
@@ -542,6 +642,15 @@ export function renderCanvas(ctx, prog, px, opt = {}) {
 
   for (const it of prog.items) {
     const st = STYLE[it.style] || STYLE.cut;
+    /** 省道打版的拉伸色塊（2026-10-12）：只填色、⛔ 描邊 */
+    if (it.t === 'poly') {
+      ctx.beginPath();
+      it.pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y)));
+      ctx.closePath();
+      ctx.fillStyle = it.fill;
+      ctx.fill();
+      continue;
+    }
     if (it.t === 'line') {
       ctx.beginPath();
       ctx.strokeStyle = st.color;
@@ -673,6 +782,10 @@ export function progSVG(prog, title = []) {
 
   for (const it of prog.items) {
     const st = STYLE[it.style] || STYLE.cut;
+    if (it.t === 'poly') {
+      out.push(`<polygon points="${it.pts.map(p => `${X(p.x)},${Y(p.y)}`).join(' ')}" fill="${it.fill}" stroke="none"/>`);
+      continue;
+    }
     if (it.t === 'line') {
       out.push(`<line x1="${X(it.x1)}" y1="${Y(it.y1)}" x2="${X(it.x2)}" y2="${Y(it.y2)}" `
         + `stroke="${st.color}" stroke-width="${st.w}" stroke-linecap="round"`

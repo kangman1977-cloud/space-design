@@ -88,13 +88,25 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const tolDeg = opts.flatTolDeg ?? FLAT_TOL_DEG;
   const warnings = [];
 
+  /**
+   * 🔴 **展開方式**（2026-10-12，kang 拍板）：`'exact'`（預設）＝ 精確分片（原本的路，一個字都不變）；
+   * `'dart'` ＝ **省道打版**：容許變形、縫邊長度保持真值、變形只擠到片的中間。
+   * → `規格\建模器-省道打版.md`「第二步」
+   *
+   * ⭐ 省道打版**⛔ 管材料「折不折得動」**（布哪裡都彎得了 —— kang 2026-10-12「依照你的建議處理」）：
+   * 分片只照使用者標的切線。⇒ 幾何核心看到的是一份「什麼都折得動」的規則；
+   * 材料本身（縫份那一行、`validate()`）照舊用原本的 `rule`。
+   */
+  const dart = opts.mode === 'dart';
+  const geo = dart ? Object.assign(Object.create(rule), { foldable: true, canFold: () => true }) : rule;
+
   mesh.computeNormals();
 
   if (!mesh.faces.length) {
     return { pieces: [], warnings: ['這個物件沒有任何面'], stats: empty() };
   }
 
-  const patches = splitPatches(mesh, rule, tolDeg);
+  const patches = splitPatches(mesh, geo, tolDeg);
   const pieces = [];
 
   /**
@@ -122,7 +134,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const jointNo = wantJoints ? { map: new Map(), next: 1 } : null;
 
   for (const patch of patches) {
-    const r = flattenPatch(mesh, patch, rule, tolDeg, jointNo);
+    const r = flattenPatch(mesh, patch, geo, tolDeg, jointNo, dart);
     if (r.piece) pieces.push(r.piece);
     else if (r.error && !warnings.includes(r.error)) warnings.push(r.error);
   }
@@ -138,10 +150,22 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const arcs = merged.reduce((n, p) => n + p.bends.filter(b => b.isArc).length, 0);
   const sharp = merged.reduce((n, p) => n + p.bends.filter(b => !b.isArc).length, 0);
 
-  if (!rule.foldable) {
+  if (!rule.foldable && !dart) {
     warnings.push(`${rule.label}折不了，所有折線已改成切割線，各片分開下料`);
   }
   for (const p of merged) {
+    /**
+     * 🔴 省道打版：攤平後有面翻過來（疊在一起）＝ **這片就算能拉也做不出來**（2026-10-12）。
+     * ⚠ 一般的重疊偵測抓不到它：翻過來的面跟隔壁共用一條邊，`sharesEdge()` 當成相鄰放過去了。
+     * 沙箱實測：半球的開口停在 6 成高 ⇒ 上面那頂帽子太鼓，有 1 個面翻過來；不開口 ⇒ 50 個。
+     */
+    if (dart && p.strain && p.strain.flips) {
+      warnings.push(`「${p.name}」攤平後有 ${p.strain.flips} 個面翻過來（疊在一起）—— 這片就算能拉也做不出來。`
+                  + `請多開幾道開口（開長一點），或多分幾片`);
+    }
+    if (dart && p.strain && !p.strain.converged) {
+      warnings.push(`「${p.name}」算到上限還沒停下來 —— 上面的拉伸數字可能還會再變一點`);
+    }
     /**
      * 重疊回饋分三態，不是一個布林。
      * 〔2026-08-23 修正。原本只有一句「有重疊，需要切分（第 7 期會做自動分片）」〕
@@ -264,7 +288,7 @@ function splitPatches(mesh, rule, tolDeg) {
  * 所以兩者的「左」剛好指向相反側，不必額外判斷。
  * 這是半邊結構本身就帶著的資訊，換成面清單就要自己算繞向。
  */
-function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
+function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false) {
   if (!faces.length) return null;
 
   const inPatch = new Set(faces.map(f => f.id));
@@ -390,8 +414,13 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
    * （有轉折就是折線，平的就什麼都不畫）。⛔ 不問角虧：角虧是「為什麼」，貼不貼得上才是「結果」。
    * 容許值 0.001 cm（10 微米）：比這更近的縫，刀子也切不出來。
    * ⚠ 這時的座標還是**剛體攤平**的結果（圓弧修正、擺正都在 `buildPiece()` 裡，還沒做）。
+   *
+   * 🔴 **省道打版⛔ 做這一步**（2026-10-12）：剛體攤平只是它的起點，座標之後會被拉動 ——
+   * 「現在貼在一起」不代表「拓撲上不用剪」。圓環那段要剪開的一刀裡，剛好有邊兩側是貼著的，
+   * 這一步先把它拿掉 ⇒ 環沒剪開 ⇒ 拉出來打結（【實證】拉 89%、7 個面翻過來）。
+   * 省道打版該剪幾刀由 `pruneToTopology()` 決定。
    */
-  for (const f of used) {
+  for (const f of dart ? [] : used) {
     for (const he of mesh.faceLoop(f)) {
       if (!implicit.has(he.id) || !he.twin) continue;
       const t = he.twin;
@@ -405,6 +434,9 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
     }
   }
 
+  /** 🔴 省道打版：程式自己剪的邊只留「不剪就攤不開」的那幾條（理由見 `pruneToTopology()`）*/
+  if (dart) pruneToTopology(mesh, used, implicit, he => edgeIsCut(mesh, he, rule, tolDeg));
+
   const isCut = he => edgeIsCut(mesh, he, rule, tolDeg) || implicit.has(he.id);
 
   // 完全封閉、一條邊都不能切 → 展不開。封閉實體要先抽殼，
@@ -415,10 +447,247 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null) {
     return { error: '這是封閉的實體，沒有任何切割線可以攤開。請先抽殼成板件，或標出要剪開的邊' };
   }
 
+  /** 🔴 省道打版：剛體攤平只是起點，接著拉成「縫邊等長、變形在中間」（`relaxDart()`）*/
+  const strain = dart ? relaxDart(mesh, used, pt2, isCut) : null;
+
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
     used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : [],
-    jointNo, he => implicit.has(he.id));
+    jointNo, he => implicit.has(he.id), strain);
   return { piece };
+}
+
+/**
+ * 🔴 **省道打版：程式自己剪的邊，只留「不剪就攤不開」的那幾條**（2026-10-12）。
+ *
+ * 模式一剪掉生成樹沒走到的每一條邊 —— 那是為了**攤平不變形**（每個鼓的點都要剪到）。
+ * 模式二的鼓交給材料伸縮，⛔ 不該再為它剪；但**拓撲上**還是有非剪不可的：
+ * 圓環切成一段一段，每段是一個「環」，不剪一刀永遠攤不開。
+ *
+ * ⭐ 做法（「切割圖」的標準做法）：從模式一那批邊出發，**一直修掉停在片中間的那一頭** ——
+ * 某個頂點只接一條、而且它⛔ 在邊界上（網格邊界、使用者標的切線、開口），那條就不必剪。
+ * 修到不能再修，剩下的就是：連接兩個邊界的路（環要剪開的那一刀）、或繞著洞的圈。
+ * 【沙箱實證 2026-10-12】球、半球一條都不剩；圓環每段剩一條（8 條邊）。
+ *
+ * ⚠ 用佇列一次走完（⛔ 每輪從頭掃 —— 預設球直接展開有 481 條要修，那會是 O(邊數²)）。
+ *
+ * @param {Set<number>} implicit 就地刪改（兩條半邊一起）
+ * @param {(he)=>boolean} isRealCut 網格邊界 ＋ 使用者標的切線（⛔ 含 implicit）
+ */
+function pruneToTopology(mesh, faces, implicit, isRealCut) {
+  const onBd = new Set();
+  const inc = new Map();                       // 頂點 → 還留著的 implicit 邊（取 id 小的那條半邊）
+  for (const f of faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (isRealCut(he)) { onBd.add(he.v.id); onBd.add(he.to.id); continue; }
+      if (!implicit.has(he.id) || (he.twin && he.twin.id < he.id)) continue;
+      for (const v of [he.v.id, he.to.id]) {
+        if (!inc.has(v)) inc.set(v, new Set());
+        inc.get(v).add(he);
+      }
+    }
+  }
+  const queue = [...inc.keys()].filter(v => inc.get(v).size === 1 && !onBd.has(v));
+  while (queue.length) {
+    const v = queue.pop();
+    const set = inc.get(v);
+    if (!set || set.size !== 1 || onBd.has(v)) continue;
+    const he = [...set][0];
+    implicit.delete(he.id); if (he.twin) implicit.delete(he.twin.id);
+    for (const w of [he.v.id, he.to.id]) {
+      const s = inc.get(w); if (!s) continue;
+      s.delete(he);
+      if (w !== v && s.size === 1 && !onBd.has(w)) queue.push(w);
+    }
+  }
+}
+
+/**
+ * 🔴 **省道打版的攤平：縫邊長度 ＝ 3D 真值（硬規定），變形只擠到片的中間**（2026-10-12）。
+ *
+ * kang 定的（`外部參考-打版.md` 第 4 節）：容許變形、但**縫邊長度保持真值**、每片印出拉／壓幾 %。
+ * 業界的同一類做法：彈簧／能量最小化（ExactFlat、CDI 專利、technet 的硬約束）。
+ *
+ * ── 怎麼做 ──────────────────────────────────────────
+ * 每個面的每條邊、加上三角化的對角線當彈簧（原長 ＝ 3D 長度，面因此保持形狀）；
+ * 切割線（網格邊界、使用者的縫與開口、程式為了攤開才剪的）那幾條是「縫邊」。
+ *   ① 從剛體攤平出發（模式一同一套），把同一個點的幾個角合成一個節點
+ *   ② 整片一起拉幾輪
+ *   ③ **交替**：中間拉一次 → 縫邊拉回原長好幾次，反覆到不動為止
+ *   ④ 最後只拉縫邊，直到誤差 < 十億分之一
+ * ⚠ 試過但比較差的：「縫邊先拉準、再固定縫邊只動中間」—— 中間被逼到極端（球 4 片不開口拉 80%，交替是 22%）。
+ *
+ * ── 收斂 ────────────────────────────────────────────
+ * 【沙箱實證 2026-10-12】交替 1000 輪 vs 16000 輪，最大拉／壓差不到 0.05% ⇒ 每 50 輪看一次最大位移，
+ * 小到 1 微米（0.0001 cm）就停；上限 6000 輪，到上限還在動就講出來（`converged`）。
+ *
+ * @returns {{faces:number[], max:number, min:number, seamErr:number, flips:number, converged:boolean, area:number}}
+ *   `faces[i]` ＝ 第 i 個面（`faces` 的順序）的平均拉伸（正＝拉長、負＝壓縮，0.05 ＝ 5%）
+ *   `area` ＝ 攤平後的面積（布要買多少；⚠ 跟 3D 表面積不一樣，那就是變形）
+ */
+function relaxDart(mesh, faces, pt2, isCut) {
+  // ① 角 → 節點（不切的邊兩側是同一個點）
+  const par = new Map();
+  const find = x => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
+  for (const f of faces) for (const he of mesh.faceLoop(f)) par.set(he.id, he.id);
+  const inPatch = new Set(faces.map(f => f.id));
+  for (const f of faces) {
+    for (const he of mesh.faceLoop(f)) {
+      if (isCut(he) || !he.twin || !he.twin.face || !inPatch.has(he.twin.face.id)) continue;
+      const t = he.twin;
+      for (const [a, b] of [[he.id, t.next.id], [he.next.id, t.id]]) {
+        const ra = find(a), rb = find(b); if (ra !== rb) par.set(ra, rb);
+      }
+    }
+  }
+  const idx = new Map();
+  let n = 0;
+  for (const id of par.keys()) { const r = find(id); if (!idx.has(r)) idx.set(r, n++); }
+
+  /**
+   * 起點：**從一個面一圈一圈往外擺**（廣度優先、照這一片最後的切線）——
+   * ⛔ 直接用模式一的剛體攤平（「先走最平的邊」，而且是照模式一那批多剪的邊擺的）。
+   * 【實證 2026-10-12】圓環那一段照模式一的擺法會攤成一長條繞來繞去，拉完 89%、7 個面翻過來；
+   * 一圈一圈往外擺是 27%、0 個（跟沙箱版一致）。球兩種起點結果一樣。
+   */
+  const start = new Map();
+  {
+    const seed = faces[0], loop = mesh.faceLoop(seed), o = loop[0].v.p;
+    const e1 = new THREE.Vector3().subVectors(loop[1].v.p, o).normalize();
+    const e2 = new THREE.Vector3().crossVectors(seed.normal, e1);
+    for (const he of loop) {
+      const d = new THREE.Vector3().subVectors(he.v.p, o);
+      start.set(he.id, { x: d.dot(e1), y: d.dot(e2) });
+    }
+    const placed = new Set([seed.id]), queue = [seed];
+    for (let qi = 0; qi < queue.length; qi++) {
+      for (const he of mesh.faceLoop(queue[qi])) {
+        const t = he.twin;
+        if (isCut(he) || !t || !t.face || !inPatch.has(t.face.id) || placed.has(t.face.id)) continue;
+        placeFace(mesh, t, start.get(he.next.id), start.get(he.id), start);
+        placed.add(t.face.id); queue.push(t.face);
+      }
+    }
+  }
+  const X = new Float64Array(n), Y = new Float64Array(n), C = new Float64Array(n);
+  for (const id of par.keys()) {
+    const k = idx.get(find(id)), p = start.get(id) || pt2.get(id);
+    if (!p) continue;
+    X[k] += p.x; Y[k] += p.y; C[k]++;
+  }
+  for (let k = 0; k < n; k++) if (C[k]) { X[k] /= C[k]; Y[k] /= C[k]; }
+  const nid = he => idx.get(find(he.id));
+
+  // 彈簧：面的邊（記是不是縫邊）＋ 三角化的對角線
+  const springs = new Map();
+  const add = (a, b, L, edge, bd) => {
+    if (a === b) return;
+    const key = a < b ? a * n + b : b * n + a;
+    const s = springs.get(key);
+    if (!s) springs.set(key, { a, b, L, edge, bd });
+    else { s.edge = s.edge || edge; s.bd = s.bd || bd; }
+  };
+  for (const f of faces) {
+    const loop = mesh.faceLoop(f);
+    for (const he of loop) add(nid(he), nid(he.next), he.v.p.distanceTo(he.next.v.p), true, isCut(he));
+    /**
+     * ⚠ 六邊以內的面：**每兩個角之間都拉一條**（四邊形兩條對角線都要）。
+     * 只拉三角化的一條對角線，四邊形會**斜著歪掉**而每條邊長度都沒變 —— 拉伸數字看起來變小，
+     * 其實布被斜拉了（那也是變形）。【實證 2026-10-12】只拉一條時圓環有 21 個面翻過來，兩條都拉 0 個。
+     * 更大的面（共面合併出來的大片）用三角化，⛔ 每兩點一條（32 邊形會變 496 條）。
+     */
+    if (loop.length <= 6) {
+      for (let i = 0; i < loop.length; i++) for (let k = i + 2; k < loop.length; k++) {
+        if (i === 0 && k === loop.length - 1) continue;
+        add(nid(loop[i]), nid(loop[k]), loop[i].v.p.distanceTo(loop[k].v.p), false, false);
+      }
+    } else {
+      const byV = new Map(loop.map(he => [he.v, he]));
+      for (const [a, b, c] of mesh.faceTriangles(f)) {
+        for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+          const hu = byV.get(u), hv = byV.get(v);
+          if (hu && hv) add(nid(hu), nid(hv), u.p.distanceTo(v.p), false, false);
+        }
+      }
+    }
+  }
+  const all = [...springs.values()];
+  const bd = all.filter(s => s.bd), inner = all.filter(s => !s.bd);
+
+  const pull = list => {
+    for (const s of list) {
+      const dx = X[s.b] - X[s.a], dy = Y[s.b] - Y[s.a];
+      const l = Math.hypot(dx, dy) || 1e-12;
+      const c = (l - s.L) / l * 0.5;
+      const mx = dx * c, my = dy * c;
+      X[s.a] += mx; Y[s.a] += my; X[s.b] -= mx; Y[s.b] -= my;
+    }
+  };
+  const seamErr = () => {
+    let e = 0;
+    for (const s of bd) e = Math.max(e, Math.abs(Math.hypot(X[s.b] - X[s.a], Y[s.b] - Y[s.a]) / s.L - 1));
+    return e;
+  };
+
+  for (let i = 0; i < 300; i++) { pull(all); pull(bd); pull(bd); }                  // ②
+  /**
+   * ③ 收斂：**比「這 50 輪前後，形狀差多少」**（⛔ 比「這一輪有沒有人在動」）——
+   * 中間拉一次、縫邊拉回來，到了平衡點每一輪還是會互相推來推去一點點，但形狀已經不變了。
+   * 【實證 2026-10-12】第一版比「這一輪動了多少」，一次都沒停過。
+   * ⚠ **整片會一直慢慢轉**（這種一條一條拉的做法的副作用，形狀不變）⇒ 比之前先扣掉平移與轉動。
+   * 【實證 2026-10-12】只扣平移時，每 50 輪的差停在 0.001 cm 不再下降 —— 那就是整片在轉，6000 輪都停不下來。
+   */
+  let converged = false;
+  const PX = new Float64Array(n), PY = new Float64Array(n);
+  const snap = () => {
+    let cx = 0, cy = 0; for (let k = 0; k < n; k++) { cx += X[k]; cy += Y[k]; } cx /= n; cy /= n;
+    /** 跟上一次比，整片轉了幾度（最小平方的那個角度）*/
+    let sn = 0, cs = 0;
+    for (let k = 0; k < n; k++) { const x = X[k] - cx, y = Y[k] - cy; sn += PX[k] * y - PY[k] * x; cs += PX[k] * x + PY[k] * y; }
+    const th = Math.atan2(sn, cs), c = Math.cos(-th), s = Math.sin(-th);
+    let d = 0;
+    for (let k = 0; k < n; k++) {
+      const x = X[k] - cx, y = Y[k] - cy;
+      d = Math.max(d, Math.abs(x * c - y * s - PX[k]) + Math.abs(x * s + y * c - PY[k]));
+      PX[k] = x; PY[k] = y;
+    }
+    return d;
+  };
+  snap();
+  /**
+   * 門檻跟著片的大小走：每 50 輪形狀變化 < 片大小的百萬分之五（1 公尺的片 ＝ 0.05 mm），最少 1 微米。
+   * 【實證 2026-10-12】預設球分 4 片（每片 97 cm）到 6000 輪還在以每 50 輪 0.0015 mm 慢慢變 ——
+   * 固定 1 微米會一直報「還沒算完」，那是誤報（刀子根本切不出這種差別）。
+   */
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let k = 0; k < n; k++) { x0 = Math.min(x0, X[k]); x1 = Math.max(x1, X[k]); y0 = Math.min(y0, Y[k]); y1 = Math.max(y1, Y[k]); }
+  const tol = Math.max(1e-4, 5e-6 * Math.hypot(x1 - x0, y1 - y0));
+  for (let i = 0; i < 6000; i++) {                                                    // ③
+    pull(inner);
+    for (let j = 0; j < 6; j++) pull(bd);
+    if (i % 50 === 49 && snap() < tol) { converged = true; break; }
+  }
+  for (let i = 0; i < 20000; i++) { pull(bd); if (i % 100 === 99 && seamErr() < 1e-9) break; }   // ④
+
+  // 寫回每個角
+  for (const id of par.keys()) { const k = idx.get(find(id)); pt2.set(id, { x: X[k], y: Y[k] }); }
+
+  // 拉伸：面的邊（2D 長 ÷ 3D 長 − 1）
+  let max = 0, min = 0, flipsPos = 0, flipsNeg = 0, area = 0;
+  const per = [];
+  for (const f of faces) {
+    const loop = mesh.faceLoop(f);
+    let sum = 0, a2 = 0;
+    for (const he of loop) {
+      const p = pt2.get(he.id), q = pt2.get(he.next.id);
+      const e = Math.hypot(q.x - p.x, q.y - p.y) / he.v.p.distanceTo(he.next.v.p) - 1;
+      sum += e; if (e > max) max = e; if (e < min) min = e;
+      a2 += p.x * q.y - q.x * p.y;
+    }
+    per.push(sum / loop.length);
+    if (a2 > 0) flipsPos++; else flipsNeg++;
+    area += Math.abs(a2) / 2;
+  }
+  return { faces: per, max, min, seamErr: seamErr(), flips: Math.min(flipsPos, flipsNeg), converged, area };
 }
 
 /**
@@ -505,10 +774,14 @@ function placeFace(mesh, th, O2, T2, pt2) {
  * 全部就地改同一份 pt2，所以折線、輪廓、折彎帶三者永遠對得起來，
  * 不會出現「輪廓修正了、折線沒修正」這種畫面騙人的情況。
  */
-function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto = () => false) {
+function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto = () => false, strain = null) {
   const inPatch = new Set(faces.map(f => f.id));
 
-  const folds = collectFolds(mesh, faces, inPatch, pt2, isCut);
+  /**
+   * 🔴 省道打版（`strain` 有值）：**⛔ 折線、⛔ 圓弧修正**（kang 2026-10-12「依照你的建議處理」）——
+   * 布、皮不會沿著網格的稜線折；球一片會有幾百條折線，畫了只是雜訊。
+   */
+  const folds = strain ? [] : collectFolds(mesh, faces, inPatch, pt2, isCut);
 
   /**
    * 折線的方向分組要在修正之前算好，而且要傳給 arcCorrection 共用一份。
@@ -521,7 +794,14 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
   const bands = arcCorrection(pt2, folds, dirGroups);
   orient(pt2, folds, mesh, faces, isCut);
 
-  const traced = traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto);
+  /**
+   * 開口 ＝ 使用者標的切線、兩側都在這一片（切進去、沒把片分開）。⚠ 只在省道打版才分出來 ——
+   * 精確分片的圖一個字都不變（開口在那裡照舊是一般的切割線）。
+   */
+  const isDart = strain
+    ? he => he.role === EDGE_ROLE.CUT && !!he.twin && !!he.twin.face && inPatch.has(he.twin.face.id)
+    : () => false;
+  const traced = traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto, isDart);
   const loops = traced.map(l => l.pts);
   const polys = faces.map(f => mesh.faceLoop(f).map(he => pt2.get(he.id)));
 
@@ -626,6 +906,23 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
       holes: jointNo ? traced.slice(1).map(l => l.auto) : traced.slice(1).map(() => []),
       lines: autoCutLines(mesh, faces, isAuto)
     },
+    /**
+     * 🔴 **省道打版的開口**（2026-10-12）：`outline[i]` ＝ 第 i 段是開口的一邊；
+     * `vids[i]` ＝ 第 i 點是哪個頂點 —— 「只畫縫線」要把開口的口子接起來，靠它認出 V 的兩個口。
+     * 精確分片 ⇒ `null`。
+     */
+    dartCut: strain ? {
+      outline: (traced[0] && traced[0].dart) || [],
+      holes: traced.slice(1).map(l => l.dart),
+      vids: (traced[0] && traced[0].vids) || [],
+      holeVids: traced.slice(1).map(l => l.vids)
+    } : null,
+    /**
+     * 🔴 **省道打版的變形量**（2026-10-12）：`faces[i]` 對應 `piece.faces[i]`（正＝拉長、負＝壓縮）；
+     * `max`／`min` 最多拉／壓；`seamErr` 縫邊長度最多差（應該 ≈ 0）；`flips` 翻過來的面數。
+     * 精確分片 ⇒ `null`。
+     */
+    strain,
     folds: folds.map(f => ({ a: f.a, b: f.b, angle: f.angle, isArcEdge: !!f.band })),
     /**
      * 接合處：這條邊在 2D 上是邊界，但在 3D 上有鄰居，要接回去。
@@ -654,6 +951,8 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
   };
 
   measure(piece, mesh, faces);
+  /** 省道打版：面積 ＝ 攤平後的（布要買多少）—— ⚠ 跟 3D 表面積不一樣，差的就是變形 */
+  if (strain) piece.area = strain.area;
   return piece;
 }
 
@@ -1393,7 +1692,7 @@ function computeFlanges(bands, minX, maxX) {
  * 做法跟 region.js 的 regionLoops 相同：邊界半邊 ＝ 自己在片內、
  * 隔壁不在（或根本沒有隔壁）。
  */
-function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false) {
+function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false, isDart = () => false) {
   const isBorder = he => he.face && inPatch.has(he.face.id) && isCut(he);
 
   const border = new Set();
@@ -1407,14 +1706,18 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false) {
   for (const start of border) {
     if (used.has(start)) continue;
     const loop = [];
-    /** 第 i 點出發的那一段是不是程式自己加的切線（跟 loop 一一對應）*/
-    const auto = [];
+    /**
+     * 第 i 點出發的那一段是哪一種線（跟 loop 一一對應）：
+     * `'cut'` 一般切割線／`'auto'` 程式自己加的（2026-10-12）／`'dart'` 省道打版的開口（2026-10-12）。
+     * `vids[i]` ＝ 第 i 點是哪個頂點（「只畫縫線」認 V 的口子用）。
+     */
+    const kind = [], vids = [];
     let he = start, guard = 0;
 
     do {
       used.add(he);
       const p = pt2.get(he.id);
-      if (p) { loop.push(p); auto.push(!!isAuto(he)); }
+      if (p) { loop.push(p); kind.push(isAuto(he) ? 'auto' : isDart(he) ? 'dart' : 'cut'); vids.push(he.v.id); }
 
       let c = he.next, spin = 0;
       while (c && !isBorder(c) && spin++ < 1e5) {
@@ -1425,7 +1728,7 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false) {
       he = c;
     } while (he !== start && guard++ < 1e6);
 
-    if (loop.length >= 3) loops.push(dropCollinear(loop, auto));
+    if (loop.length >= 3) loops.push(dropCollinear(loop, kind, vids));
   }
 
   // 面積最大的當外輪廓，其餘是孔
@@ -1438,15 +1741,16 @@ function traceLoops(mesh, faces, inPatch, pt2, isCut, isAuto = () => false) {
  * 攤平後的輪廓上會留下一堆三角化／分段的殘留點，
  * 標尺寸與出 DXF 之前一定要清掉，否則一條邊會變成十幾條線。
  *
- * ⚠ `auto[i]` ＝ 第 i 點出發那一段是不是程式自己加的切線（2026-10-12）。
+ * ⚠ `kind[i]` ＝ 第 i 點出發那一段是哪一種線（2026-10-12：一般／程式加的／開口）。
  * **兩側是不同種的線就⛔ 不併** —— 併了之後那一段只能有一種顏色，橘色就會吃掉黑色（或反過來）。
  *
- * @returns {{pts: object[], auto: boolean[]}}
+ * @returns {{pts: object[], kind: string[], auto: boolean[], dart: boolean[], vids: number[]}}
  */
-function dropCollinear(loop, auto = loop.map(() => false), tolDeg = 0.1) {
-  if (loop.length < 3) return { pts: loop.slice(), auto: auto.slice() };
+function dropCollinear(loop, kind = loop.map(() => 'cut'), vids = loop.map(() => -1), tolDeg = 0.1) {
+  const pack = (pts, k, v) => ({ pts, kind: k, vids: v, auto: k.map(x => x === 'auto'), dart: k.map(x => x === 'dart') });
+  if (loop.length < 3) return pack(loop.slice(), kind.slice(), vids.slice());
   const cosTol = Math.cos((180 - tolDeg) / DEG);
-  const out = [], outAuto = [];
+  const out = [], outK = [], outV = [];
 
   for (let i = 0; i < loop.length; i++) {
     const a = loop[(i - 1 + loop.length) % loop.length];
@@ -1456,11 +1760,11 @@ function dropCollinear(loop, auto = loop.map(() => false), tolDeg = 0.1) {
     const bx = b.x - c.x, by = b.y - c.y;
     const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
     if (la < 1e-9 || lb < 1e-9) continue;
-    const sameKind = auto[(i - 1 + loop.length) % loop.length] === auto[i];
+    const sameKind = kind[(i - 1 + loop.length) % loop.length] === kind[i];
     if (sameKind && (ax * bx + ay * by) / (la * lb) <= cosTol) continue;
-    out.push(c); outAuto.push(auto[i]);
+    out.push(c); outK.push(kind[i]); outV.push(vids[i]);
   }
-  return out.length >= 3 ? { pts: out, auto: outAuto } : { pts: loop.slice(), auto: auto.slice() };
+  return out.length >= 3 ? pack(out, outK, outV) : pack(loop.slice(), kind.slice(), vids.slice());
 }
 
 /**

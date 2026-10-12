@@ -136,6 +136,8 @@ export function boardProgram(board, opt = {}) {
      */
     const clampY = y => Math.max(0, Math.min(p.height, y));
     for (let e of prog.items) {
+      /** 省道打版的拉伸色塊（2026-10-12）：每個點搬到板子上 */
+      if (e.t === 'poly') { items.push({ ...e, pts: e.pts.map(q => T(q.x, q.y)) }); continue; }
       if (e.t === 'line') {
         if (e.style === 'bend') e = { ...e, y1: clampY(e.y1), y2: clampY(e.y2) };
         const a = T(e.x1, e.y1), b = T(e.x2, e.y2);
