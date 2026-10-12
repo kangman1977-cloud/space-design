@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：省道打版 點法</title>
+<!--
+  🔴 這是【給 kang 試點法的樣板】，⛔ 不是要上線的程式。
+  ⭐ 顏色照 建模器/index.html 的深色介面抄；3D 上的接縫照 scene.js 的橘色（0xff7a1a）。
+  ⚠ 右邊的「省道打版」攤平是簡化版（彈簧法，縫邊加重），只為了讓 kang 看到「點完會長什麼樣」，
+     ⛔ 數字不是最後版本。
+  球：半徑 30、橫 12 段、直 16 段，已經「轉成可編輯網格」。
+-->
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #1b1e23; color: #e8eaed;
+  font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  font-size: 13px; padding: 16px;
+}
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #8b93a1; font-size: 12.5px; margin: 0 0 14px; line-height: 1.7; }
+.sub b { color: #e8eaed; }
+.wrap { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.box { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; overflow: hidden; }
+.boxHead { padding: 8px 12px; background: #24272e; border-bottom: 1px solid #3a3f48; font-weight: 600; font-size: 12.5px; }
+.boxHead .w { color: #6fa8ff; font-weight: 400; margin-left: 6px; font-size: 11.5px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid #2e323a; }
+.lbl { color: #8b93a1; font-size: 12px; }
+select, input[type=number] {
+  background: #2f333c; color: #e8eaed; border: 1px solid #454b56; border-radius: 6px;
+  padding: 4px 6px; font-family: inherit; font-size: 12.5px;
+}
+input[type=number] { width: 64px; }
+button {
+  background: #2f333c; color: #e8eaed; border: 1px solid #454b56; border-radius: 6px;
+  padding: 4px 9px; font-family: inherit; font-size: 12.5px; cursor: pointer;
+}
+button:hover { border-color: #6fa8ff; }
+.seg button.on { background: #2d6cdf; border-color: #2d6cdf; }
+#v3 { display: block; background: #15171b; cursor: crosshair; touch-action: none; }
+#status { padding: 8px 12px; min-height: 40px; font-size: 12.5px; line-height: 1.6; color: #cfd5de; }
+#status b { color: #ffd23f; }
+.legend span { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11.5px; margin-right: 4px; }
+#flat { display: block; background: #fff; width: 100%; height: auto; }
+#v3 { max-width: 100%; height: auto; }
+.cards { padding: 8px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.card { background: #262a31; border: 1px solid #3a3f48; border-radius: 8px; padding: 7px 9px; font-size: 12px; line-height: 1.6; }
+.card .t { font-weight: 600; }
+.card .warn { color: #ff6b5a; }
+.card .ok { color: #7bd88f; }
+.q { margin-top: 14px; background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; padding: 10px 14px; line-height: 1.8; max-width: 1240px; }
+.q h2 { font-size: 14.5px; margin: 0 0 4px; }
+.q li { margin-bottom: 4px; }
+.q .rec { color: #7bd88f; }
+.note { color: #8b93a1; font-size: 11.5px; }
+@media (max-width: 760px) { body { padding: 10px; } }
+</style>
+</head>
+<body>
+<h1>樣板：省道打版 —— 怎麼在模型上標開口</h1>
+<p class="sub">
+  ⛔ 這不是建模器，是給你<b>試點法</b>的樣板。左邊是一顆已經「轉成可編輯網格」的球（半徑 30、橫 12 段、直 16 段），
+  <b>拖曳</b>可以轉、<b>點一條邊</b>就標。右邊即時顯示展開結果。<br>
+  ⭐ <b>縫</b>和<b>開口</b>都是同一種「切割線」：切開之後把片分成兩片的是<b>縫</b>（橘色），
+  切進去但沒有分開、停在片中間的是<b>開口</b>（紫色）—— <b>程式自己認</b>，你只管標線。
+</p>
+
+<div class="wrap">
+  <!-- ── 左：3D ── -->
+  <div class="box">
+    <div class="boxHead">分片模式<span class="w">右側「點一條稜線時」</span></div>
+    <div class="row">
+      <span class="lbl">點一條稜線時</span>
+      <select id="pickMode">
+        <option value="one">只標那一條</option>
+        <option value="loop">標一整圈</option>
+        <option value="all">連同方向的全部一起標</option>
+        <option value="span" selected>⭐ 標一段（新）：先點起點、再點終點</option>
+      </select>
+    </div>
+    <div class="row">
+      <span class="lbl">快速試</span>
+      <button data-preset="gores">12 片（模式一）</button>
+      <button data-preset="four">4 片、不開口</button>
+      <button data-preset="fourDart">4 片＋開口</button>
+      <button data-preset="clear">全部清除</button>
+    </div>
+    <canvas id="v3" width="440" height="440"></canvas>
+    <div id="status"></div>
+  </div>
+
+  <!-- ── 右：展開圖 ── -->
+  <div class="box" style="flex:1; min-width:340px; max-width:820px">
+    <div class="boxHead">展開圖<span class="w">視窗上方多一排</span></div>
+    <div class="row">
+      <span class="lbl">展開方式</span>
+      <span class="seg" id="modeSeg">
+        <button data-mode="exact">精確分片（不變形）</button>
+        <button data-mode="dart" class="on">省道打版（容許變形）</button>
+      </span>
+    </div>
+    <div class="row" id="dartRow">
+      <span class="lbl">這個材料最多能拉</span>
+      <input type="number" id="limit" min="0" step="0.5" placeholder="不填"><span class="lbl">%</span>
+      <span class="lbl" style="margin-left:10px">開口畫成</span>
+      <select id="dartStyle">
+        <option value="cut">剪掉的 V 形缺口</option>
+        <option value="sew">只畫縫線（不剪）</option>
+      </select>
+    </div>
+    <div class="row legend" id="legend"></div>
+    <canvas id="flat" width="800" height="460"></canvas>
+    <div class="cards" id="cards"></div>
+  </div>
+</div>
+
+<div class="q">
+  <h2>要請你決定的（試點完再回答）</h2>
+  <ol>
+    <li><b>標開口的點法</b>：「標一段」＝ 先點開口起點那條邊（貼著縫的那一頭），再點開口要停的那條邊，中間整段一次標起來。
+      <span class="rec">→ 建議：加這一種，原本三種照舊</span></li>
+    <li><b>縫和開口分兩種顏色</b>（縫橘色、開口紫色），由程式自己認，<b>⛔ 不多一顆「標開口」的按鈕</b>。
+      <span class="rec">→ 建議：照這樣</span></li>
+    <li><b>展開方式</b>放在展開圖視窗上方：精確分片／省道打版。省道打版那一排才出現「最多能拉幾 %」與「開口畫成」。
+      <span class="rec">→ 建議：照這樣；預設是精確分片（原本的圖一個字都不變）</span></li>
+    <li><b>每片卡片寫三個數字</b>：最多拉長幾 %、最多壓縮幾 %、縫邊長度最多差幾 %。填了上限、超過就變紅字。
+      <span class="rec">→ 建議：照這樣</span></li>
+  </ol>
+  <div class="note">⚠ 右邊「省道打版」的攤平是樣板用的簡化算法，數字只是讓你看趨勢；正式版會讓縫邊長度嚴格不變。</div>
+</div>
+
+<script>
+'use strict';
+// ═══════════ 球的網格 ═══════════
+const R = 30, W = 12, H = 16;
+const P = [];                                   // 頂點 3D
+P.push([0, R, 0]);                              // 北極 0
+for (let k = 1; k < H; k++) for (let j = 0; j < W; j++) {
+  const th = k * Math.PI / H, ph = j * 2 * Math.PI / W;
+  P.push([R * Math.sin(th) * Math.cos(ph), R * Math.cos(th), R * Math.sin(th) * Math.sin(ph)]);
+}
+P.push([0, -R, 0]);                             // 南極
+const NP = 0, SP = P.length - 1;
+const vi = (k, j) => k === 0 ? NP : k === H ? SP : 1 + (k - 1) * W + ((j % W) + W) % W;
+const F = [];                                   // 面：頂點索引
+for (let j = 0; j < W; j++) F.push([NP, vi(1, j), vi(1, j + 1)]);
+for (let k = 1; k < H - 1; k++) for (let j = 0; j < W; j++) F.push([vi(k, j), vi(k + 1, j), vi(k + 1, j + 1), vi(k, j + 1)]);
+for (let j = 0; j < W; j++) F.push([vi(H - 1, j), SP, vi(H - 1, j + 1)]);
+
+const ekey = (a, b) => a < b ? a + '_' + b : b + '_' + a;
+const E = new Map();                            // key → {a,b,faces,type,j,k}
+F.forEach((f, fi) => f.forEach((a, i) => {
+  const b = f[(i + 1) % f.length], key = ekey(a, b);
+  if (!E.has(key)) E.set(key, { key, a, b, faces: [] });
+  E.get(key).faces.push(fi);
+}));
+// 分類：經線（j, 第 k 段：第 k 圈到第 k+1 圈）或緯線（第 k 圈, 第 j 段）
+const ringOf = v => v === NP ? 0 : v === SP ? H : 1 + Math.floor((v - 1) / W);
+const colOf = v => (v === NP || v === SP) ? null : (v - 1) % W;
+for (const e of E.values()) {
+  const ka = ringOf(e.a), kb = ringOf(e.b);
+  if (ka !== kb) { e.type = 'mer'; e.k = Math.min(ka, kb); e.j = colOf(ka === 0 || ka === H ? e.b : e.a); }
+  else { e.type = 'lat'; e.k = ka; const ja = colOf(e.a), jb = colOf(e.b); e.j = ((jb - ja + W) % W === 1) ? ja : jb; }
+}
+const merEdge = (j, k) => E.get(ekey(vi(k, j), vi(k + 1, j)));
+const latEdge = (k, j) => E.get(ekey(vi(k, j), vi(k, j + 1)));
+
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const dist3 = (a, b) => len(sub(P[a], P[b]));
+
+// ═══════════ 狀態 ═══════════
+const cut = new Set();
+let spanStart = null, hover = null, mode = 'dart';
+const $ = id => document.getElementById(id);
+
+// ═══════════ 分片：片、縫、開口 ═══════════
+function analyze() {
+  const par = F.map((_, i) => i);
+  const find = x => { while (par[x] !== x) x = par[x] = par[par[x]]; return x; };
+  for (const e of E.values()) if (!cut.has(e.key) && e.faces.length === 2) {
+    const a = find(e.faces[0]), b = find(e.faces[1]); if (a !== b) par[a] = b;
+  }
+  const pieceOf = F.map((_, i) => find(i));
+  const kind = new Map();                       // 切線 → 'seam' | 'dart'
+  for (const k of cut) { const e = E.get(k); kind.set(k, pieceOf[e.faces[0]] === pieceOf[e.faces[1]] ? 'dart' : 'seam'); }
+  return { pieceOf, kind };
+}
+
+// ═══════════ 攤平 ═══════════
+function flatten(an) {
+  const { pieceOf } = an;
+  const corner = (fi, v) => fi * 4 + F[fi].indexOf(v);
+  // 角落合併（不切的邊兩側同一個點）
+  const cpar = new Map();
+  const cf = x => { while (cpar.get(x) !== x) { cpar.set(x, cpar.get(cpar.get(x))); x = cpar.get(x); } return x; };
+  F.forEach((f, fi) => f.forEach(v => cpar.set(corner(fi, v), corner(fi, v))));
+  for (const e of E.values()) if (!cut.has(e.key) && e.faces.length === 2) {
+    const [f1, f2] = e.faces;
+    for (const v of [e.a, e.b]) { const a = cf(corner(f1, v)), b = cf(corner(f2, v)); if (a !== b) cpar.set(a, b); }
+  }
+  // 剛體攤平（精確分片的樣子：攤不平的地方會裂開）
+  const pos = new Map(), placed = new Set();
+  const groups = new Map();
+  F.forEach((_, fi) => { const p = pieceOf[fi]; if (!groups.has(p)) groups.set(p, []); groups.get(p).push(fi); });
+  const nbr = F.map(() => []);
+  for (const e of E.values()) if (!cut.has(e.key) && e.faces.length === 2) {
+    nbr[e.faces[0]].push([e.faces[1], e]); nbr[e.faces[1]].push([e.faces[0], e]);
+  }
+  for (const faces of groups.values()) {
+    const s = faces[0], f = F[s];
+    const o = P[f[0]], e1 = sub(P[f[1]], o); const l1 = len(e1); const u = e1.map(x => x / l1);
+    const t = sub(P[f[2]], o), n = [u[1] * t[2] - u[2] * t[1], u[2] * t[0] - u[0] * t[2], u[0] * t[1] - u[1] * t[0]];
+    const nl = len(n), nn = n.map(x => x / nl), w = [nn[1] * u[2] - nn[2] * u[1], nn[2] * u[0] - nn[0] * u[2], nn[0] * u[1] - nn[1] * u[0]];
+    for (const v of f) { const d = sub(P[v], o); pos.set(corner(s, v), [dot(d, u), dot(d, w)]); }
+    placed.add(s);
+    const q = [s];
+    while (q.length) {
+      const fi = q.shift();
+      for (const [g, e] of nbr[fi]) {
+        if (placed.has(g)) continue;
+        const A = pos.get(corner(fi, e.a)), B = pos.get(corner(fi, e.b));
+        let cx = 0, cy = 0; for (const v of F[fi]) { const p = pos.get(corner(fi, v)); cx += p[0]; cy += p[1]; }
+        cx /= F[fi].length; cy /= F[fi].length;
+        const ux = B[0] - A[0], uy = B[1] - A[1], ul = Math.hypot(ux, uy), uX = ux / ul, uY = uy / ul;
+        const side = ((cx - A[0]) * -uY + (cy - A[1]) * uX) > 0 ? -1 : 1;  // 跟 F 相反那一側
+        const a3 = P[e.a], u3 = sub(P[e.b], a3), u3l = len(u3);
+        for (const v of F[g]) {
+          if (v === e.a) { pos.set(corner(g, v), A.slice()); continue; }
+          if (v === e.b) { pos.set(corner(g, v), B.slice()); continue; }
+          const d = sub(P[v], a3), al = dot(d, u3) / u3l;
+          const pr = Math.sqrt(Math.max(0, dot(d, d) - al * al));
+          pos.set(corner(g, v), [A[0] + al * uX - side * pr * uY, A[1] + al * uY + side * pr * uX]);
+        }
+        placed.add(g); q.push(g);
+      }
+    }
+  }
+  // 精確分片：數裂縫（兩側落在不同位置的、沒標的邊）
+  const cracks = new Map();
+  for (const e of E.values()) if (!cut.has(e.key) && e.faces.length === 2) {
+    const [f1, f2] = e.faces;
+    let gap = 0; for (const v of [e.a, e.b]) { const p = pos.get(corner(f1, v)), q2 = pos.get(corner(f2, v)); gap = Math.max(gap, Math.hypot(p[0] - q2[0], p[1] - q2[1])); }
+    if (gap > 1e-3) { const p = pieceOf[f1]; cracks.set(p, (cracks.get(p) || 0) + 1); }
+  }
+  // 省道打版：同一個點合成一個節點，彈簧拉回原長（縫邊加重）
+  const node = new Map(), N = [];
+  for (const id of cpar.keys()) {
+    const r = cf(id); if (!node.has(r)) { node.set(r, N.length); N.push({ x: 0, y: 0, n: 0 }); }
+    const p = pos.get(id), nd = N[node.get(r)]; nd.x += p[0]; nd.y += p[1]; nd.n++;
+  }
+  for (const nd of N) { nd.x /= nd.n; nd.y /= nd.n; }
+  const nid = (fi, v) => node.get(cf(corner(fi, v)));
+  const S = new Map();
+  F.forEach((f, fi) => {
+    for (let i = 0; i < f.length; i++) for (let k = i + 1; k < f.length; k++) {
+      const a = nid(fi, f[i]), b = nid(fi, f[k]), key = a < b ? a + ',' + b : b + ',' + a;
+      const adj = k === i + 1 || (i === 0 && k === f.length - 1);
+      const ed = adj ? E.get(ekey(f[i], f[k])) : null;
+      if (!S.has(key)) S.set(key, { a, b, L: dist3(f[i], f[k]), edge: adj, seam: !!(ed && cut.has(ed.key)), piece: pieceOf[fi] });
+      else if (adj) { S.get(key).edge = true; if (ed && cut.has(ed.key)) S.get(key).seam = true; }
+    }
+  });
+  const SS = [...S.values()], seamS = SS.filter(s => s.seam);
+  const relax = (list, k) => {
+    for (const s of list) {
+      const A = N[s.a], B = N[s.b], dx = B.x - A.x, dy = B.y - A.y, l = Math.hypot(dx, dy) || 1e-9;
+      const c = (l - s.L) / l * 0.5 * k; A.x += dx * c; A.y += dy * c; B.x -= dx * c; B.y -= dy * c;
+    }
+  };
+  if (mode === 'dart') for (let it = 0; it < 1500; it++) { relax(SS, 1); relax(seamS, 1); relax(seamS, 1); }
+  for (const s of SS) { const A = N[s.a], B = N[s.b]; s.e = Math.hypot(B.x - A.x, B.y - A.y) / s.L - 1; }
+  return { pos, corner, N, nid, SS, groups, cracks };
+}
+
+// ═══════════ 3D 畫面 ═══════════
+const cv3 = $('v3'), g3 = cv3.getContext('2d');
+let yaw = 0.6, pitch = 0.35;
+const S3 = 6.2;
+function proj(p) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const x = p[0] * cy - p[2] * sy, z1 = p[0] * sy + p[2] * cy;
+  const y = p[1] * cp - z1 * sp, z = p[1] * sp + z1 * cp;
+  return [cv3.width / 2 + x * S3, cv3.height / 2 - y * S3, z];
+}
+const COL = { seam: '#ff7a1a', dart: '#d65cff', start: '#ffd23f', hover: '#ffffff' };
+let visEdges = [];
+function draw3() {
+  const an = analyze();
+  g3.clearRect(0, 0, cv3.width, cv3.height);
+  const pr = P.map(proj);
+  const order = F.map((f, i) => ({ i, z: f.reduce((s, v) => s + pr[v][2], 0) / f.length })).sort((a, b) => a.z - b.z);
+  const faceVis = new Set();
+  for (const { i, z } of order) {
+    const f = F[i];
+    if (z < 0) continue;                        // 背面不畫
+    faceVis.add(i);
+    const c = Math.round(120 + 90 * Math.min(1, z / R));
+    g3.beginPath(); f.forEach((v, k) => k ? g3.lineTo(pr[v][0], pr[v][1]) : g3.moveTo(pr[v][0], pr[v][1])); g3.closePath();
+    g3.fillStyle = `rgb(${c},${c + 4},${c + 12})`; g3.fill();
+    g3.strokeStyle = 'rgba(30,34,40,.55)'; g3.lineWidth = 1; g3.stroke();
+  }
+  visEdges = [];
+  for (const e of E.values()) {
+    if (!e.faces.some(fi => faceVis.has(fi))) continue;
+    visEdges.push(e);
+    let col = null, w = 3;
+    if (cut.has(e.key)) col = COL[an.kind.get(e.key)];
+    if (spanStart && spanStart.key === e.key) { col = COL.start; w = 4.5; }
+    if (!col) continue;
+    g3.beginPath(); g3.moveTo(pr[e.a][0], pr[e.a][1]); g3.lineTo(pr[e.b][0], pr[e.b][1]);
+    g3.strokeStyle = col; g3.lineWidth = w; g3.lineCap = 'round'; g3.stroke();
+  }
+  if (hover) {
+    const e = hover;
+    g3.beginPath(); g3.moveTo(pr[e.a][0], pr[e.a][1]); g3.lineTo(pr[e.b][0], pr[e.b][1]);
+    g3.strokeStyle = 'rgba(255,255,255,.9)'; g3.lineWidth = 2; g3.setLineDash([4, 3]); g3.stroke(); g3.setLineDash([]);
+  }
+  return an;
+}
+function nearestEdge(mx, my) {
+  let best = null, bd = 9;
+  for (const e of visEdges) {
+    const A = proj(P[e.a]), B = proj(P[e.b]);
+    const dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((mx - A[0]) * dx + (my - A[1]) * dy) / L2));
+    const d = Math.hypot(mx - A[0] - t * dx, my - A[1] - t * dy);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+
+// ═══════════ 點一條邊 ═══════════
+function lineOf(e, kind) {
+  if (kind === 'loop') return e.type === 'mer' ? [...Array(H).keys()].map(k => merEdge(e.j, k)) : [...Array(W).keys()].map(j => latEdge(e.k, j));
+  if (kind === 'all') return [...E.values()].filter(x => x.type === e.type);
+  return [e];
+}
+function setMany(list, on) { for (const x of list) on ? cut.add(x.key) : cut.delete(x.key); }
+let msg = '';
+function pick(e) {
+  const m = $('pickMode').value;
+  if (m !== 'span') { const on = !cut.has(e.key); setMany(lineOf(e, m), on); msg = `${on ? '標上' : '取消'} ${lineOf(e, m).length} 條邊`; spanStart = null; return; }
+  if (!spanStart) { spanStart = e; msg = '起點選好了（黃色）。再點<b>同一條線上</b>開口要停的那條邊。再點一次起點＝取消'; return; }
+  if (spanStart.key === e.key) { spanStart = null; msg = '取消了'; return; }
+  const s = spanStart;
+  let list = null;
+  if (s.type === 'mer' && e.type === 'mer' && s.j === e.j) {
+    list = []; for (let k = Math.min(s.k, e.k); k <= Math.max(s.k, e.k); k++) list.push(merEdge(s.j, k));
+  } else if (s.type === 'lat' && e.type === 'lat' && s.k === e.k) {
+    const fwd = (e.j - s.j + W) % W, back = (s.j - e.j + W) % W;
+    list = []; if (fwd <= back) for (let i = 0; i <= fwd; i++) list.push(latEdge(s.k, s.j + i)); else for (let i = 0; i <= back; i++) list.push(latEdge(s.k, s.j - i));
+  }
+  if (!list) { msg = '⚠ 終點要在<b>同一條線上</b>（同一條經線或同一圈緯線）。起點保留著，再點一次'; return; }
+  const on = !cut.has(s.key); setMany(list, on); spanStart = null;
+  msg = `${on ? '標上' : '取消'}一段：<b>${list.length} 條邊</b>`;
+}
+
+// ═══════════ 展開圖 ═══════════
+const cvF = $('flat'), gF = cvF.getContext('2d');
+function strainCol(e) {
+  const t = Math.min(1, Math.abs(e) / 0.05), m = a => Math.round(255 + (a - 255) * t);
+  return e > 0 ? `rgb(${m(214)},${m(60)},${m(50)})` : `rgb(${m(40)},${m(110)},${m(220)})`;
+}
+function drawFlat(an) {
+  if (!cut.size) {
+    gF.fillStyle = '#fff'; gF.fillRect(0, 0, cvF.width, cvF.height);
+    gF.fillStyle = '#555'; gF.font = '15px sans-serif'; gF.textAlign = 'center';
+    gF.fillText('一條切線都沒有 —— 封閉的球攤不開。先在左邊標縫。', cvF.width / 2, cvF.height / 2);
+    $('cards').innerHTML = ''; $('legend').innerHTML = '';
+    return;
+  }
+  const fl = flatten(an);
+  const { pos, corner, N, nid, SS, groups, cracks } = fl;
+  const exact = mode === 'exact';
+  const limit = parseFloat($('limit').value);
+  const sew = $('dartStyle').value === 'sew';
+  // 每片：點（精確＝每個面自己的角；省道＝節點），轉正（長軸直立），排成一列
+  const pieces = [];
+  let pno = 0;
+  for (const [pid, faces] of groups) {
+    const ptsOf = fi => F[fi].map(v => exact ? pos.get(corner(fi, v)) : [N[nid(fi, v)].x, N[nid(fi, v)].y]);
+    let all = faces.flatMap(ptsOf);
+    let mx = 0, my = 0; all.forEach(p => { mx += p[0]; my += p[1]; }); mx /= all.length; my /= all.length;
+    let sxx = 0, syy = 0, sxy = 0; all.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), rot = Math.PI / 2 - ang, c = Math.cos(rot), s = Math.sin(rot);
+    const T = p => [(p[0] - mx) * c - (p[1] - my) * s, (p[0] - mx) * s + (p[1] - my) * c];
+    const polys = faces.map(fi => ({ fi, pts: ptsOf(fi).map(T) }));
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    polys.forEach(q => q.pts.forEach(p => { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }));
+    const mine = SS.filter(q => q.piece === pid && q.edge);
+    const st = { max: Math.max(0, ...mine.map(q => q.e)), min: Math.min(0, ...mine.map(q => q.e)),
+      seamErr: Math.max(0, ...mine.filter(q => q.seam).map(q => Math.abs(q.e))) };
+    let darts = 0; for (const [k, kd] of an.kind) if (kd === 'dart' && an.pieceOf[E.get(k).faces[0]] === pid) darts++;
+    pieces.push({ pid, no: 'P' + String(++pno).padStart(2, '0'), polys, T, x0, x1, y0, y1, st, darts, cracks: cracks.get(pid) || 0 });
+  }
+  // 排版：一列排下去，太寬就換行
+  const gap = 4, maxW = Math.max(120, ...pieces.map(p => p.x1 - p.x0));
+  let cx = 0, cy = 0, rowH = 0, rowsW = 0, total = Math.max(maxW, Math.sqrt(pieces.reduce((s, p) => s + (p.x1 - p.x0 + gap) * (p.y1 - p.y0 + gap), 0)) * 1.4);
+  for (const p of pieces) {
+    const w = p.x1 - p.x0, h = p.y1 - p.y0;
+    if (cx > 0 && cx + w > total) { cx = 0; cy += rowH + gap; rowH = 0; }
+    p.ox = cx - p.x0; p.oy = cy - p.y0; cx += w + gap; rowH = Math.max(rowH, h); rowsW = Math.max(rowsW, cx);
+  }
+  const allH = cy + rowH, sc = Math.min((cvF.width - 20) / Math.max(1, rowsW), (cvF.height - 20) / Math.max(1, allH));
+  gF.fillStyle = '#fff'; gF.fillRect(0, 0, cvF.width, cvF.height);
+  const X = (p, q) => 10 + (q[0] + p.ox) * sc, Y = (p, q) => 10 + (q[1] + p.oy) * sc;
+  for (const p of pieces) {
+    // 面（省道打版：依拉／壓上色）
+    for (const { fi, pts } of p.polys) {
+      gF.beginPath(); pts.forEach((q, i) => i ? gF.lineTo(X(p, q), Y(p, q)) : gF.moveTo(X(p, q), Y(p, q))); gF.closePath();
+      if (!exact) {
+        const f = F[fi]; let e = 0;
+        for (let i = 0; i < f.length; i++) { const a = nid(fi, f[i]), b = nid(fi, f[(i + 1) % f.length]); const s = SS.find(z => (z.a === a && z.b === b) || (z.a === b && z.b === a)); e += s ? s.e : 0; }
+        gF.fillStyle = strainCol(e / f.length); gF.fill();
+      }
+      gF.strokeStyle = 'rgba(0,0,0,.18)'; gF.lineWidth = 0.6; gF.stroke();
+    }
+    // 切割線：縫（黑實線）、開口（剪掉＝黑實線／只畫縫線＝紫虛線＋口子接起來）
+    for (const { fi, pts } of p.polys) {
+      const f = F[fi];
+      for (let i = 0; i < f.length; i++) {
+        const e = E.get(ekey(f[i], f[(i + 1) % f.length]));
+        const isCrack = exact && !cut.has(e.key) && e.faces.length === 2 && (() => {
+          const o = e.faces[0] === fi ? e.faces[1] : e.faces[0]; if (an.pieceOf[o] !== p.pid) return false;
+          const a1 = pos.get(corner(fi, e.a)), a2 = pos.get(corner(o, e.a)), b1 = pos.get(corner(fi, e.b)), b2 = pos.get(corner(o, e.b));
+          return Math.max(Math.hypot(a1[0] - a2[0], a1[1] - a2[1]), Math.hypot(b1[0] - b2[0], b1[1] - b2[1])) > 1e-3;
+        })();
+        if (!cut.has(e.key) && !isCrack) continue;
+        const kd = cut.has(e.key) ? an.kind.get(e.key) : 'crack';
+        const q1 = pts[i], q2 = pts[(i + 1) % f.length];
+        gF.beginPath(); gF.moveTo(X(p, q1), Y(p, q1)); gF.lineTo(X(p, q2), Y(p, q2));
+        if (kd === 'crack') { gF.strokeStyle = '#e67e22'; gF.lineWidth = 1.4; gF.setLineDash([]); }
+        else if (kd === 'dart' && sew && !exact) { gF.strokeStyle = '#8e44ad'; gF.lineWidth = 1.2; gF.setLineDash([4, 3]); }
+        else if (kd === 'dart') { gF.strokeStyle = '#8e44ad'; gF.lineWidth = 1.6; gF.setLineDash([]); }
+        else { gF.strokeStyle = '#111'; gF.lineWidth = 1.6; gF.setLineDash([]); }
+        gF.stroke(); gF.setLineDash([]);
+      }
+    }
+    // 只畫縫線：開口的口子用一條線接起來（布沒剪開）
+    if (sew && !exact) {
+      for (const [k, kd] of an.kind) {
+        if (kd !== 'dart') continue;
+        const e = E.get(k); if (an.pieceOf[e.faces[0]] !== p.pid) continue;
+        for (const v of [e.a, e.b]) {
+          const n1 = nid(e.faces[0], v), n2 = nid(e.faces[1], v);
+          if (n1 === n2) continue;                    // 尖端：兩側是同一點
+          const onSeam = [...cut].some(k2 => { const e2 = E.get(k2); return an.kind.get(k2) === 'seam' && (e2.a === v || e2.b === v); });
+          if (!onSeam) continue;                      // 只接「貼著縫」的那一頭
+          const q1 = p.T([N[n1].x, N[n1].y]), q2 = p.T([N[n2].x, N[n2].y]);
+          gF.beginPath(); gF.moveTo(X(p, q1), Y(p, q1)); gF.lineTo(X(p, q2), Y(p, q2)); gF.strokeStyle = '#111'; gF.lineWidth = 1.6; gF.stroke();
+        }
+      }
+    }
+    gF.fillStyle = '#b9770e'; gF.font = '12px sans-serif'; gF.textAlign = 'center';
+    gF.fillText(p.no, 10 + ((p.x0 + p.x1) / 2 + p.ox) * sc, 10 + ((p.y0 + p.y1) / 2 + p.oy) * sc);
+  }
+  // 卡片
+  const pct = v => (v * 100).toFixed(1) + '%';
+  $('cards').innerHTML = pieces.map(p => {
+    if (exact) {
+      return `<div class="card"><div class="t">${p.no}</div>`
+        + (p.cracks ? `<div class="warn">程式自己剪開 ${p.cracks} 條邊（圖上橘色）—— 攤不平，裂開了</div>` : `<div class="ok">完全攤平，0 變形</div>`)
+        + (p.darts ? `<div>開口 ${p.darts} 條邊</div>` : '') + `</div>`;
+    }
+    const worst = Math.max(p.st.max, -p.st.min) * 100;
+    const over = Number.isFinite(limit) && worst > limit;
+    return `<div class="card"><div class="t">${p.no}</div>`
+      + `<div>最多拉長 <b>${pct(p.st.max)}</b>　最多壓縮 <b>${pct(-p.st.min)}</b></div>`
+      + `<div>縫邊長度最多差 ${pct(p.st.seamErr)}</div>`
+      + (p.darts ? `<div>開口 ${p.darts} 條邊</div>` : '')
+      + (over ? `<div class="warn">⚠ 超過你填的 ${limit}%</div>` : (Number.isFinite(limit) ? `<div class="ok">在 ${limit}% 以內</div>` : '<div class="note">沒填上限：只顯示數字</div>'))
+      + `</div>`;
+  }).join('');
+  $('legend').innerHTML = exact
+    ? '<span style="background:#111;color:#fff">黑＝你標的縫</span><span style="background:#8e44ad;color:#fff">紫＝開口</span><span style="background:#e67e22;color:#fff">橘＝程式自己剪開（攤不平）</span>'
+    : '<span style="background:rgb(214,60,50);color:#fff">紅＝要拉長 5% 以上</span><span style="background:#fff;color:#111">白＝幾乎沒變</span><span style="background:rgb(40,110,220);color:#fff">藍＝要壓縮 5% 以上</span><span style="background:#8e44ad;color:#fff">紫＝開口</span>';
+  $('dartRow').style.display = exact ? 'none' : '';
+}
+
+// ═══════════ 接線 ═══════════
+function redraw() {
+  const an = draw3();
+  drawFlat(an);
+  const nSeam = [...an.kind.values()].filter(k => k === 'seam').length, nDart = [...an.kind.values()].filter(k => k === 'dart').length;
+  const nP = new Set(an.pieceOf).size;
+  $('status').innerHTML = (msg ? msg + '<br>' : '') + `展開後 <b>${nP} 片</b>　縫 ${nSeam} 條邊（橘）　開口 ${nDart} 條邊（紫）`;
+}
+let drag = null, moved = false;
+/** 畫布可能被縮小顯示（窄螢幕）—— 滑鼠位置換回畫布自己的座標 */
+const at = ev => { const k = cv3.width / cv3.clientWidth; return [ev.offsetX * k, ev.offsetY * k]; };
+cv3.addEventListener('pointerdown', ev => { const [x, y] = at(ev); drag = [x, y, yaw, pitch]; moved = false; cv3.setPointerCapture(ev.pointerId); });
+cv3.addEventListener('pointermove', ev => {
+  const [x, y] = at(ev);
+  if (drag) {
+    const dx = x - drag[0], dy = y - drag[1];
+    if (Math.hypot(dx, dy) > 4) moved = true;
+    if (moved) { yaw = drag[2] + dx * 0.01; pitch = Math.max(-1.4, Math.min(1.4, drag[3] + dy * 0.01)); draw3(); }
+    return;
+  }
+  const e = nearestEdge(x, y);
+  if (e !== hover) { hover = e; draw3(); }
+});
+cv3.addEventListener('pointerup', ev => {
+  if (drag && !moved) { const [x, y] = at(ev); const e = nearestEdge(x, y); if (e) { pick(e); redraw(); } }
+  drag = null;
+});
+cv3.addEventListener('pointerleave', () => { hover = null; draw3(); });
+$('pickMode').addEventListener('change', () => { spanStart = null; msg = ''; redraw(); });
+$('limit').addEventListener('input', redraw);
+$('dartStyle').addEventListener('change', redraw);
+document.querySelectorAll('#modeSeg button').forEach(b => b.addEventListener('click', () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x === b));
+  redraw();
+}));
+document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
+  cut.clear(); spanStart = null;
+  const pr = b.dataset.preset;
+  if (pr === 'gores') for (let j = 0; j < W; j++) setMany(lineOf(merEdge(j, 0), 'loop'), true);
+  if (pr === 'four' || pr === 'fourDart') for (let j = 0; j < W; j += 3) setMany(lineOf(merEdge(j, 0), 'loop'), true);
+  if (pr === 'fourDart') for (let j = 0; j < W; j++) if (j % 3) for (let k = 0; k < H; k++) if (k < 7 || k >= H - 7) cut.add(merEdge(j, k).key);
+  msg = { gores: '每條經線都切：12 片，模式一就能 0 變形', four: '每 3 條經線切一條：4 片', fourDart: '4 片，其餘經線從南北極各往赤道開 7 格（共 8 格）', clear: '清掉了' }[pr];
+  redraw();
+}));
+// 開頁先載入「4 片＋開口」（網址後面加 #gores／#four／#clear、#exact 可以換，給檢查用）
+const hash = location.hash.slice(1).split('&');
+const pre = ['gores', 'four', 'fourDart', 'clear'].find(h => hash.includes(h)) || 'fourDart';
+if (hash.includes('exact')) document.querySelector('[data-mode="exact"]').click();
+document.querySelector(`[data-preset="${pre}"]`).click();
+msg = '已經先標好「4 片＋開口」。也可以按「全部清除」自己點：「標一段」＝ 先點起點的邊（黃色），再點同一條線上要停的那條邊';
+redraw();
+</script>
+</body>
+</html>

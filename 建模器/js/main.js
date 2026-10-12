@@ -39,7 +39,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -309,7 +309,7 @@ const app = {
   isPenEditing: obj => !!penEditing && !!obj && penEditing.id === obj.id,
   /** 分片模式「點一條線時標多少」（2026-10-09）：'edge' 只標那一條（原本的用法、預設）／'loop' 一整圈／'all' 連同方向全部 */
   getSeamLineMode: () => seamLineMode,
-  setSeamLineMode: m => { seamLineMode = m; },
+  setSeamLineMode: m => { seamLineMode = m; dropSeamSpan(); },
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
 };
@@ -1042,7 +1042,7 @@ const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
  */
 function exitOtherModes(keep) {
   if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); }
-  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); }
+  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); }
   if (keep !== 'mate' && sel.mateMode) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
@@ -1118,6 +1118,11 @@ function dropPendingPicks() {
   }
   if (sel.mateMode && matePick1) {
     matePick1 = null; view.clearPickMarks();
+    dropped = true;
+  }
+  /** 分片「標一段」點了起點（2026-10-12）—— Undo 會換掉網格，那條起點就不存在了 */
+  if (seamSpanStart) {
+    dropSeamSpan();
     dropped = true;
   }
   return dropped;
@@ -4192,6 +4197,7 @@ function toggleSeamMode() {
   if (on) {
     toast('分片模式：點稜線＝切開／取消，點面的中央＝整圈切開。再按一次「分片」離開');
   } else {
+    dropSeamSpan();
     toast('已離開分片模式');
   }
 }
@@ -4201,6 +4207,18 @@ function toggleSeamMode() {
  * ⭐ 預設 `'edge'` ＝ 原本的行為一格都沒變；切換在右側面板「分片」那一塊。
  */
 let seamLineMode = 'edge';
+
+/**
+ * 🔴 **「標一段」點了第一下的那條邊**（2026-10-12，省道打版的開口）。
+ * ⚠ 存著物件**與當時的網格** —— Undo／改參數會換掉網格，舊的半邊就不能拿來走了（換了就當沒點過）。
+ * 換點法、離開分片模式都要清掉（`dropSeamSpan()`），⛔ 留一條黃線在畫面上騙人。
+ */
+let seamSpanStart = null;
+
+function dropSeamSpan() {
+  seamSpanStart = null;
+  view.clearSeamSpanStart();
+}
 
 /**
  * 分片模式下點了畫面。實際的幾何判斷在 seam.js（測得到），
@@ -4213,6 +4231,37 @@ function seamPick(hit) {
   }
 
   const mesh = hit.obj.mesh();
+
+  /**
+   * 🔴 **標一段：先點起點、再點同一條線上的終點，中間整段一次標**（2026-10-12，kang 拍板）。
+   * 跟另外兩種一樣：照**起點**現在是不是切線，整段一起切換。
+   * ⚠ 點到面（⛔ 不是稜線）時照舊是「整圈切開那個面」—— 起點留著，⛔ 偷偷清掉。
+   */
+  if (hit.kind === 'edge' && seamLineMode === 'span') {
+    const s = seamSpanStart;
+    if (!s || s.obj !== hit.obj || s.mesh !== mesh) {
+      seamSpanStart = { obj: hit.obj, mesh, he: hit.he };
+      const m4 = hit.obj.matrix();
+      view.setSeamSpanStart([hit.he.v.p.clone().applyMatrix4(m4), hit.he.to.p.clone().applyMatrix4(m4)]);
+      toast(s && s.obj !== hit.obj
+        ? '換了一個物件 —— 這條當新的起點（黃色）。再點同一條線上要停的那條邊'
+        : '起點選好了（黃色）。再點同一條線上要停的那條邊；再點一次起點＝取消');
+      return;
+    }
+    if (s.he === hit.he || s.he === hit.he.twin) { dropSeamSpan(); toast('取消了起點'); return; }
+    const hes = seamSpanEdges(mesh, s.he, hit.he);
+    if (!hes) {
+      toast('終點要在起點的同一條線上（順著起點那條邊一直走得到的地方）。起點還留著，再點一次', true);
+      return;
+    }
+    const on = !isSeam(s.he);
+    let n = 0;
+    for (const h of hes) if (isSeam(h) !== on) { setSeam(mesh, h, on); n++; }
+    dropSeamSpan();
+    if (!n) { toast('這一段已經是' + (on ? '切割線' : '沒有標記') + '了', true); return; }
+    commitSeam(hit.obj, `${on ? '標記' : '取消'}一段（${n} 條邊）`);
+    return;
+  }
 
   if (hit.kind === 'edge') {
     const on = !isSeam(hit.he);

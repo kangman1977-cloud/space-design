@@ -14639,6 +14639,93 @@ section('程式自己剪的邊：貼在一起的⛔ 剪、張開的講出來（2
   }
 }
 
+section('省道打版 第一步：「標一段」＋ 縫與開口分開認（2026-10-12）');
+
+/**
+ * kang 拍板（`規格\建模器-省道打版.md`「定案」1、2）：
+ * ① 分片模式多一種「標一段」：先點起點、再點同一條線上的終點，中間整段一次標
+ * ② 縫與開口是同一種標記，程式自己認：切開後兩側還是同一片的 ＝ 開口
+ */
+{
+  const { seamSpanEdges, seamLoopEdges } = await import('../js/core/selectops.js');
+  const { setSeam, seamKinds, cutAroundFace } = await import('../js/unfold/seam.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const { segW, segH } = PRIM_DEFAULTS.sphere;
+  const ball = () => {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', ...PRIM_DEFAULTS.sphere } });
+    o.bake();
+    return o.mesh();
+  };
+  const isPole = v => Math.hypot(v.p.x, v.p.z) < 1e-6;
+  const ang = v => Math.atan2(v.p.z, v.p.x);
+  /** 第 j 條經線（照角度排）、從北極數第 k 段 */
+  const merAt = (m, j, k) => {
+    const all = [...m.edges()].filter(he => {
+      const a = he.v, b = he.to;
+      if (isPole(a) && isPole(b)) return false;
+      if (Math.abs(a.p.y - b.p.y) < 1e-6) return false;
+      if (!isPole(a) && !isPole(b) && Math.abs(ang(a) - ang(b)) > 1e-6) return false;
+      return true;
+    });
+    const angs = [...new Set(all.map(he => ang(isPole(he.v) ? he.to : he.v).toFixed(6)))].sort((a, b) => a - b);
+    const on = all.filter(he => ang(isPole(he.v) ? he.to : he.v).toFixed(6) === angs[j])
+      .sort((a, b) => Math.max(b.v.p.y, b.to.p.y) - Math.max(a.v.p.y, a.to.p.y));
+    return on[k];
+  };
+  /**
+   * 赤道（第 segH/2 圈）的第 j 段，照「邊的中點」的角度排。
+   * ⚠ 第一版拿兩端角度相加來排 —— 跨過 ±180° 的那一段相加 ≈ 0，被排到中間去，測試當場錯（⛔ 是程式錯）。
+   */
+  const eqAt = (m, j) => {
+    const mid = he => Math.atan2(he.v.p.z + he.to.p.z, he.v.p.x + he.to.p.x);
+    const eq = [...m.edges()].filter(he => Math.abs(he.v.p.y) < 1e-6 && Math.abs(he.to.p.y) < 1e-6)
+      .sort((a, b) => mid(a) - mid(b));
+    return eq[j];
+  };
+
+  // ── ① 標一段 ──
+  {
+    const m = ball();
+    eq('前提：一條經線從極走到極 ＝ segH 段', seamLoopEdges(m, merAt(m, 0, 0), 'loop').length, segH);
+    const a = seamSpanEdges(m, merAt(m, 0, 0), merAt(m, 0, 5));
+    eq('★★★ 經線：從第 0 段點到第 5 段 ＝ 6 條（含頭尾）', a && a.length, 6);
+    const sameLine = new Set(seamLoopEdges(m, merAt(m, 0, 0), 'loop'));
+    ok('★★ 　 全部在同一條經線上', a.every(h => sameLine.has(h) || sameLine.has(h.twin)));
+    eq('★★★ 反過來點（第 5 段 → 第 0 段）也是 6 條', seamSpanEdges(m, merAt(m, 0, 5), merAt(m, 0, 0)).length, 6);
+    eq('★★ 從中間（第 3 段）點到第 10 段 ＝ 8 條', seamSpanEdges(m, merAt(m, 0, 3), merAt(m, 0, 10)).length, 8);
+    eq('★★ 起點跟終點同一條 ＝ 1 條', seamSpanEdges(m, merAt(m, 0, 3), merAt(m, 0, 3)).length, 1);
+    eq('★★★ 終點不在同一條線上 ⇒ null（⛔ 猜）', seamSpanEdges(m, merAt(m, 0, 3), merAt(m, 1, 3)), null);
+    /** 赤道是繞一圈的 ⇒ 兩個方向都到得了，取短的那一段 */
+    eq('前提：赤道一圈 ＝ segW 段', seamLoopEdges(m, eqAt(m, 0), 'loop').length, segW);
+    eq('★★★ 赤道：第 0 段點到第 3 段 ＝ 4 條（順著走比較短）', seamSpanEdges(m, eqAt(m, 0), eqAt(m, 3)).length, 4);
+    eq('★★★ 赤道：第 0 段點到倒數第 2 段 ＝ 3 條（往回走比較短）', seamSpanEdges(m, eqAt(m, 0), eqAt(m, segW - 2)).length, 3);
+  }
+
+  // ── ② 縫與開口 ──
+  {
+    const m = buildPrim('box', PRIM_DEFAULTS.box);
+    cutAroundFace(m, m.faces[0], true);
+    const k = seamKinds(m);
+    ok('★★ 方塊切出一個面：全部是縫、沒有開口', k.seams.length > 0 && k.darts.length === 0, `縫 ${k.seams.length}`);
+  }
+  {
+    const m = ball();
+    for (const h of seamLoopEdges(m, merAt(m, 0, 0), 'loop')) setSeam(m, h, true);
+    const k = seamKinds(m);
+    eq('★★★ 球只切一條經線（極到極）：還是一整片 ⇒ 全部算開口（切進去、沒分開）', k.darts.length, segH);
+    eq('★★ 　 縫 0 條', k.seams.length, 0);
+  }
+  {
+    const m = ball();
+    const step = segW / 4;
+    for (let j = 0; j < segW; j += step) for (const h of seamLoopEdges(m, merAt(m, j, 0), 'loop')) setSeam(m, h, true);
+    for (const h of seamSpanEdges(m, merAt(m, 1, 0), merAt(m, 1, 5))) setSeam(m, h, true);
+    const k = seamKinds(m);
+    eq('★★★ 球切 4 條經線（4 片）＋ 另一條經線從極往下標一段 6 條：縫 ＝ 4 × segH', k.seams.length, 4 * segH);
+    eq('★★★ 　 開口 ＝ 那一段的 6 條', k.darts.length, 6);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

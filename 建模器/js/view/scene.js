@@ -12,7 +12,15 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { EDGE_ROLE } from '../core/mesh.js';
+import { seamKinds } from '../unfold/seam.js';
+
+/**
+ * 🔴 **3D 上「開口」的顏色：黃綠**（2026-10-12，kang「依照你建議」）。縫照舊橘色（`0xff7a1a`）。
+ * ⚠ kang 在樣板上看的是紫色，但**紫色在這個畫面上已經有意思了**：非流形邊的標示（`setNonManifoldPreview()`，
+ * 「紫＝這裡黏在一起了」），而接縫線是**一直顯示**的 —— 兩個會同時出現在畫面上 ⇒ 換一個沒用過的。
+ * 〔3D 上的顏色：橘＝縫、黃綠＝開口、黃＝選取／「標一段」的起點、青＝程式算出來的、紅＝破洞、紫＝非流形〕
+ */
+export const DART_COLOR = 0x9be22d;
 
 /**
  * 🔴 **指到的東西「變大」多少**（kang 2026-08-26 拍板：只變大，⛔ 不換顏色）。
@@ -345,6 +353,19 @@ export class SceneView {
     seams.renderOrder = 2;
     node.add(seams);
 
+    /**
+     * 🔴 **開口：切進去、但沒有把片分開的切割線**（2026-10-12，kang 拍板「縫和開口分兩種顏色、程式自己認」）。
+     * 跟縫是同一種標記，分類在 `seam.js` 的 `seamKinds()`。顏色 → `DART_COLOR`。
+     */
+    const darts = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: DART_COLOR })
+    );
+    darts.name = 'darts';
+    darts.raycast = () => {};
+    darts.renderOrder = 2;
+    node.add(darts);
+
     node.userData.geomKey = null;
     node.userData.seamKey = null;
     return node;
@@ -372,22 +393,45 @@ export class SceneView {
     const seams = node.getObjectByName('seams');
     const stale = node.userData.seamMesh !== mesh || this._seamsDirty;
 
+    const darts = node.getObjectByName('darts');
     if (stale) {
-      const pos = [];
-      let n = 0;
-      for (const he of mesh.edges()) {
-        if (he.role !== EDGE_ROLE.CUT || !he.face || !he.twin || !he.twin.face) continue;
-        pos.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
-        n++;
-      }
-      seams.geometry.dispose();
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      seams.geometry = g;
+      /** 縫與開口分兩條線畫（`seamKinds()`：切開後還是同一片的 ＝ 開口）*/
+      const kinds = seamKinds(mesh);
+      const build = (line, list) => {
+        const pos = [];
+        for (const he of list) pos.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
+        line.geometry.dispose();
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        line.geometry = g;
+      };
+      build(seams, kinds.seams);
+      build(darts, kinds.darts);
       node.userData.seamMesh = mesh;
-      node.userData.seamCount = n;
+      node.userData.seamCount = kinds.seams.length;
+      node.userData.dartCount = kinds.darts.length;
     }
     seams.visible = (node.userData.seamCount || 0) > 0 && !this.wireframe;
+    darts.visible = (node.userData.dartCount || 0) > 0 && !this.wireframe;
+  }
+
+  /**
+   * 🔴 「標一段」的起點（2026-10-12）：點了第一下之後畫面上**一定要看得到**選了哪一條
+   * （坑第 21 條：點了沒反應的操作）。黃色 ＝ 跟選取同一個顏色（`0xffd23f`）——「你選了這個」。
+   */
+  setSeamSpanStart(worldPts) {
+    this.clearSeamSpanStart();
+    this._spanPrev = this._buildLineOverlay('seamSpanStart', worldPts, worldPts, 0xffd23f);
+  }
+
+  clearSeamSpanStart() {
+    if (!this._spanPrev) return;
+    this.scene.remove(this._spanPrev);
+    this._spanPrev.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this._spanPrev = null;
   }
 
   /**

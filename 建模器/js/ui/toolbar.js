@@ -14,7 +14,7 @@ import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
-import { seamCount, markableEdges, clearSeams, seamBlockReason } from '../unfold/seam.js';
+import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds } from '../unfold/seam.js';
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
@@ -874,11 +874,18 @@ export class Panel {
       pieces = null;
     }
 
+    /**
+     * 🔴 縫與開口分開數（2026-10-12）：3D 上兩種顏色，這裡也要對得起來
+     * （鐵律三：讓兩個數字互相對得起來）。⚠ 只在有開口時才多講 —— 原本的用法一個字都不變。
+     */
+    const darts = n ? seamKinds(mesh).darts.length : 0;
+
     const box = document.createElement('div');
     box.className = 'note';
-    box.innerHTML = pieces === null
+    box.innerHTML = (pieces === null
       ? `已標記 <b>${n}</b> / ${total} 條邊　（片數算不出來）`
-      : `展開後 <b>${pieces}</b> 片　已標記 <b>${n}</b> / ${total} 條邊`;
+      : `展開後 <b>${pieces}</b> 片　已標記 <b>${n}</b> / ${total} 條邊`)
+      + (darts ? `<br>其中 <b>${darts}</b> 條是<b>開口</b>（切進去、沒有把片分開 —— 3D 上另一個顏色）` : '');
     this.form.appendChild(box);
 
     this.form.appendChild(note(
@@ -892,13 +899,16 @@ export class Panel {
      * ⭐ 預設「只標那一條」＝ 原本的用法。⚠ 走的是四邊形的格子 —— 三角形的地方會停。
      */
     if (this.app.getSeamLineMode) {
+      /** ⭐ 「標一段」（2026-10-12，kang 拍板）：省道打版的開口 —— 從縫切進去、停在片中間 */
       this._rowSelect('點一條稜線時', this.app.getSeamLineMode(), [
         ['edge', '只標那一條'],
         ['loop', '標一整圈'],
-        ['all', '連同方向的全部一起標']
+        ['all', '連同方向的全部一起標'],
+        ['span', '標一段（先點起點、再點終點）']
       ], v => { this.app.setSeamLineMode(v); this.refresh(); },
       '一整圈：沿著那條線走到底（繞一圈或走到頭）。'
-      + '同方向的全部：跟它平行的每一圈都一起標 —— 圓環、球切成一瓣一瓣用這個');
+      + '同方向的全部：跟它平行的每一圈都一起標 —— 圓環、球切成一瓣一瓣用這個。'
+      + '標一段：先點起點那條邊（黃色），再點同一條線上要停的那條邊，中間整段一次標 —— 省道打版的開口用這個');
     }
 
     if (n > 0) {

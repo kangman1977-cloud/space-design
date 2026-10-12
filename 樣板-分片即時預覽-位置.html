@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：分片即時預覽 放哪裡</title>
+<!--
+  🔴 這是【比較用的樣板】，⛔ 不是要上線的程式。
+  ⭐ 尺寸照線上版建模器量的（2026-10-12，1269×822 的視窗）：
+     頂端列 103、左側直條 66、右側面板 300、3D 畫面 ＝ 剩下的。
+     平板照 1024×768 橫放算（⚠ 頂端列沿用桌機的 103，平板上可能折成更多排、更高）。
+  ⚠ 3D 畫面與預覽只畫示意（一顆球、四片西瓜皮），重點是【位置與大小】。
+-->
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #1b1e23; color: #e8eaed;
+  font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  font-size: 13px; padding: 16px;
+}
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #8b93a1; font-size: 12.5px; margin: 0 0 16px; line-height: 1.7; max-width: 1180px; }
+.sub b { color: #e8eaed; }
+.case { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; margin-bottom: 16px; overflow: hidden; max-width: 1180px; }
+.head { padding: 9px 14px; background: #24272e; border-bottom: 1px solid #3a3f48; font-weight: 600; font-size: 14px; }
+.head .tag { color: #7bd88f; font-weight: 400; font-size: 12px; margin-left: 8px; }
+.body { display: flex; gap: 18px; padding: 12px 14px; flex-wrap: wrap; align-items: flex-start; }
+.dev { display: flex; flex-direction: column; gap: 4px; }
+.dev .cap { color: #8b93a1; font-size: 11.5px; }
+.dev svg { display: block; border: 1px solid #3a3f48; border-radius: 4px; background: #111; max-width: 100%; height: auto; }
+.pros { flex: 1; min-width: 260px; line-height: 1.75; font-size: 12.5px; }
+.pros .g { color: #7bd88f; } .pros .b { color: #ff8a7a; }
+.q { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; padding: 10px 14px; line-height: 1.8; max-width: 1180px; }
+.q h2 { font-size: 14.5px; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<h1>樣板：分片時的「即時預覽」要放哪裡（三案比較）</h1>
+<p class="sub">
+  你要的是像剛才那個樣板：<b>左邊標線、旁邊馬上看到展開結果</b>。建模器的版面是固定的
+  （上面工具列、左邊工具直條、右邊面板、中間 3D 畫面），所以預覽一定要<b>跟某個東西搶位置</b>。
+  下面三案都畫了<b>桌機</b>（照線上版量的 1269 × 822）與<b>平板</b>（1024 × 768 橫放）兩種大小，
+  ⭐ 綠框是預覽、數字是實際像素。<br>
+  ⚠ 三案共同：<b>只有在「分片」模式才出現</b>，按預覽上的「放大」就打開原本的展開圖視窗（存 SVG／DXF 還是在那裡）。
+</p>
+
+<div id="cases"></div>
+
+<div class="q">
+  <h2>要請你選的</h2>
+  <ol>
+    <li><b>預覽放哪裡</b>：一、右側面板裡　二、浮在 3D 畫面右下角　三、3D 畫面左右對半</li>
+    <li>⚠ 不管選哪一案，<b>平板一定要你實測</b>（版面在平板上從頭到尾沒驗過，`介面編排-設計方向.md` 那條代價）</li>
+  </ol>
+</div>
+
+<script>
+'use strict';
+const DEV = {
+  desk: { W: 1269, H: 822, label: '桌機 1269 × 822' },
+  tab:  { W: 1024, H: 768, label: '平板 1024 × 768（橫放）' }
+};
+const BAR = 103, RAIL = 66, PANEL = 300;
+
+/** 一顆球（示意）：圓 ＋ 經線（橘＝縫、紫＝開口） */
+function sphere(cx, cy, r) {
+  let s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#9aa1ad" stroke="#59606b"/>`;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI, rx = Math.abs(Math.cos(a)) * r;
+    const col = i % 3 === 0 ? '#ff7a1a' : '#d65cff';
+    if (Math.cos(a) < 0) continue;
+    s += `<ellipse cx="${cx}" cy="${cy}" rx="${rx.toFixed(1)}" ry="${r}" fill="none" stroke="${col}" stroke-width="${i % 3 === 0 ? 2.4 : 1.6}"/>`;
+  }
+  for (let k = 1; k < 8; k++) {
+    const y = cy - r + (2 * r * k) / 8, w = Math.sqrt(r * r - (y - cy) ** 2);
+    s += `<line x1="${cx - w}" y1="${y}" x2="${cx + w}" y2="${y}" stroke="#59606b" stroke-width="0.8"/>`;
+  }
+  return s;
+}
+/** 預覽（示意）：白底、四片西瓜皮，淡紅淡藍上色 ＋ 一行數字 */
+function preview(x, y, w, h, title = '展開預覽') {
+  let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#20232a" stroke="#3ddc84" stroke-width="3"/>`;
+  s += `<text x="${x + 8}" y="${y + 17}" fill="#e8eaed" font-size="13">${title}　4 片　最多拉 1.5%</text>`;
+  s += `<text x="${x + w - 8}" y="${y + 17}" fill="#6fa8ff" font-size="12" text-anchor="end">放大 ⤢</text>`;
+  const px = x + 6, py = y + 26, pw = w - 12, ph = h - 32;
+  s += `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="#fff"/>`;
+  const n = 4, gw = Math.min(pw / (n * 1.25), ph * 0.38), gh = Math.min(ph - 12, gw * 2.6);
+  for (let i = 0; i < n; i++) {
+    const cx = px + pw * (i + 0.5) / n, cy = py + ph / 2;
+    s += `<path d="M${cx} ${cy - gh / 2} Q${cx + gw} ${cy} ${cx} ${cy + gh / 2} Q${cx - gw} ${cy} ${cx} ${cy - gh / 2}Z" fill="#fde7e4" stroke="#111" stroke-width="1.4"/>`;
+    s += `<path d="M${cx} ${cy - gh / 2} L${cx} ${cy - gh * 0.08} M${cx} ${cy + gh / 2} L${cx} ${cy + gh * 0.08}" stroke="#8e44ad" stroke-width="1.2"/>`;
+    s += `<rect x="${cx - gw * 0.42}" y="${cy - gh * 0.07}" width="${gw * 0.84}" height="${gh * 0.14}" fill="#dbe7fb"/>`;
+  }
+  return s;
+}
+/** 版面骨架 */
+function frame(d, stageFn, panelExtra = '') {
+  const { W, H } = d, sx = RAIL, sy = BAR, sw = W - RAIL - PANEL, sh = H - BAR;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="${Math.round(W * 0.42)}" xmlns="http://www.w3.org/2000/svg">`;
+  s += `<rect width="${W}" height="${BAR}" fill="#24272e"/>`;
+  for (let i = 0; i < 2; i++) for (let k = 0; k < 7; k++) s += `<rect x="${10 + k * 150}" y="${10 + i * 46}" width="${130}" height="36" rx="5" fill="#2f333c"/>`;
+  s += `<text x="${W - 12}" y="${BAR - 10}" fill="#8b93a1" font-size="16" text-anchor="end">工具列</text>`;
+  s += `<rect x="0" y="${BAR}" width="${RAIL}" height="${sh}" fill="#24272e"/>`;
+  for (let k = 0; k < 9; k++) s += `<rect x="8" y="${BAR + 10 + k * 50}" width="50" height="42" rx="6" fill="${k === 3 ? '#2d6cdf' : '#2f333c'}"/>`;
+  s += `<text x="33" y="${BAR + 10 + 3 * 50 + 26}" fill="#fff" font-size="12" text-anchor="middle">分片</text>`;
+  s += `<rect x="${W - PANEL}" y="${BAR}" width="${PANEL}" height="${sh}" fill="#20232a" stroke="#3a3f48"/>`;
+  s += `<text x="${W - PANEL + 14}" y="${BAR + 26}" fill="#e8eaed" font-size="15">分片</text>`;
+  s += `<rect x="${W - PANEL + 14}" y="${BAR + 38}" width="${PANEL - 28}" height="30" rx="5" fill="#2f333c"/>`;
+  s += `<text x="${W - PANEL + 22}" y="${BAR + 58}" fill="#cfd5de" font-size="13">點一條稜線時：標一段</text>`;
+  s += `<text x="${W - PANEL + 14}" y="${BAR + 92}" fill="#8b93a1" font-size="13">展開後 4 片　縫 4 條　開口 8 條</text>`;
+  s += stageFn(sx, sy, sw, sh) + panelExtra;
+  s += '</svg>';
+  return s;
+}
+
+const CASES = [
+  {
+    title: '一、放在右側面板裡（「分片」那一塊底下）',
+    tag: '',
+    draw: d => {
+      const { W, H } = d, pw = PANEL - 20, ph = 260, px = W - PANEL + 10, py = BAR + 108;
+      return {
+        svg: frame(d, (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#15171b"/>` + sphere(x + w / 2, y + h / 2, Math.min(w, h) * 0.32),
+          preview(px, py, pw, ph)),
+        note: `預覽 ${pw} × ${ph}　3D ${W - RAIL - PANEL} × ${H - BAR}（一格都沒少）`
+      };
+    },
+    pros: `<span class="g">＋ 3D 畫面一格都不少</span>，點邊跟現在一樣好點（平板上尤其重要）<br>
+      <span class="g">＋ 照「面板＝上下文參數」那條分類</span>：分片的設定跟結果放在一起<br>
+      <span class="b">－ 預覽最小</span>（寬 280）：12 片以上會很擠，要看清楚得按「放大」<br>
+      <span class="b">－ 面板本來就長</span>，預覽在下面可能要捲動`
+  },
+  {
+    title: '二、浮在 3D 畫面右下角（可以拖大小、可以收起來）',
+    tag: '',
+    draw: d => {
+      const { W, H } = d, sw = W - RAIL - PANEL, sh = H - BAR;
+      const pw = Math.round(Math.min(380, sw * 0.5)), ph = Math.round(Math.min(300, sh * 0.42));
+      return {
+        svg: frame(d, (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#15171b"/>`
+          + sphere(x + w * 0.4, y + h * 0.42, Math.min(w, h) * 0.3)
+          + preview(x + w - pw - 12, y + h - ph - 12, pw, ph)),
+        note: `預覽 ${pw} × ${ph}（可拖大）　蓋住 3D 畫面約 ${Math.round(pw * ph / (sw * sh) * 100)}%`
+      };
+    },
+    pros: `<span class="g">＋ 預覽比較大</span>，而且可以拖大小、按一下收起來<br>
+      <span class="g">＋ 一眼同時看到模型與預覽</span>（最像剛才的樣板）<br>
+      <span class="b">－ 蓋住 3D 畫面一角</span>：模型轉到右下角時要先把預覽收起來或移開<br>
+      <span class="b">－ 平板上</span>手指拖預覽和轉模型可能會互相誤觸`
+  },
+  {
+    title: '三、3D 畫面左右對半（分片模式時）',
+    tag: '',
+    draw: d => {
+      const { W, H } = d, sw = W - RAIL - PANEL, sh = H - BAR, half = Math.round(sw / 2);
+      return {
+        svg: frame(d, (x, y, w, h) => `<rect x="${x}" y="${y}" width="${half}" height="${h}" fill="#15171b"/>`
+          + sphere(x + half / 2, y + h / 2, Math.min(half, h) * 0.36)
+          + preview(x + half, y, w - half, h)),
+        note: `3D ${half} × ${sh}　預覽 ${sw - half} × ${sh}`
+      };
+    },
+    pros: `<span class="g">＋ 預覽最大</span>，跟剛才的樣板一模一樣的感覺<br>
+      <span class="b">－ 3D 畫面剩一半</span>：平板上只剩 ${Math.round((1024 - RAIL - PANEL) / 2)} 寬，點一條邊會變難<br>
+      <span class="b">－ 進出分片模式時畫面會跳</span>（3D 突然變窄、再變回來）`
+  }
+];
+
+document.getElementById('cases').innerHTML = CASES.map(c => {
+  const a = c.draw(DEV.desk), b = c.draw(DEV.tab);
+  return `<div class="case"><div class="head">${c.title}<span class="tag">${c.tag}</span></div><div class="body">
+    <div class="dev"><div class="cap">${DEV.desk.label}　${a.note}</div>${a.svg}</div>
+    <div class="dev"><div class="cap">${DEV.tab.label}　${b.note}</div>${b.svg}</div>
+    <div class="pros">${c.pros}</div></div></div>`;
+}).join('');
+</script>
+</body>
+</html>

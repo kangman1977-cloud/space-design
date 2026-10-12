@@ -133,6 +133,35 @@ export function toggleSeam(mesh, he, tolDeg = FLAT_TOL_DEG) {
   return setSeam(mesh, he, !isSeam(he), tolDeg);
 }
 
+/**
+ * 🔴 **使用者標的切割線，哪些是「縫」、哪些是「開口」**（2026-10-12，kang 拍板「程式自己認」）。
+ *
+ * 兩者是**同一種**標記（`EDGE_ROLE.CUT`），⛔ 沒有「標開口」的另一顆按鈕：
+ * - **縫** ＝ 切開之後兩側落在**不同片**（這一刀把片分開了）
+ * - **開口** ＝ 切開之後兩側**還是同一片**（切進去、停在片中間）—— 省道打版的「省道」
+ *
+ * 判準只看**使用者標的**：沿著「沒標 CUT 的邊」把面連起來，連得到就是同一片。
+ * ⚠ ⛔ 不管材料（壓克力會把每條折線都切開）—— 這裡回答的是「你標的這一刀是什麼」，
+ * ⛔ 不是「展開圖最後幾片」（那個要問 `unfoldObject()`）。
+ *
+ * @returns {{seams: HalfEdge[], darts: HalfEdge[]}} 每條邊只出現一次（`mesh.edges()` 那一條）
+ */
+export function seamKinds(mesh) {
+  const par = new Map();
+  const find = x => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
+  for (const f of mesh.faces) par.set(f.id, f.id);
+  const cuts = [];
+  for (const he of mesh.edges()) {
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    if (isSeam(he)) { cuts.push(he); continue; }
+    const a = find(he.face.id), b = find(he.twin.face.id);
+    if (a !== b) par.set(a, b);
+  }
+  const out = { seams: [], darts: [] };
+  for (const he of cuts) (find(he.face.id) === find(he.twin.face.id) ? out.darts : out.seams).push(he);
+  return out;
+}
+
 /** 目前標了幾條 */
 export function seamCount(mesh, tolDeg = FLAT_TOL_DEG) {
   return markableEdges(mesh, tolDeg).filter(isSeam).length;

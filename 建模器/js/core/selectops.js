@@ -113,11 +113,14 @@ const THRESH_TOL_DEG = 0.01;
  * @param {HalfEdge} he0 種子邊
  * @param {{tolDeg?:number, markableOnly?:boolean}} [opt]
  *        `markableOnly`（預設 true）＝ 只走**畫面上看得見**的邊
- * @returns {{hes:HalfEdge[], keys:string[], closed:boolean, stopped:string[]}}
+ * @returns {{hes:HalfEdge[], keys:string[], closed:boolean, stopped:string[], split:number}}
  *          `hes` 每條邊只出現一次，`keys` 是「小索引-大索引」字串
+ *          `split` ＝ 第一個方向走完時 `hes` 有幾條（`hes[0]` 是種子；
+ *          `hes[1..split-1]` 是第一個方向、照走的順序；`hes[split..]` 是另一個方向、照走的順序）——
+ *          `seamSpanEdges()` 靠它切出「從起點到終點」那一段（2026-10-12）
  */
 export function edgeLoop(mesh, he0, opt = {}) {
-  const out = { hes: [], keys: [], closed: false, stopped: [] };
+  const out = { hes: [], keys: [], closed: false, stopped: [], split: 1 };
   if (!mesh || !he0) return out;
 
   const vi = mesh._vertIndex();
@@ -168,10 +171,42 @@ export function edgeLoop(mesh, he0, opt = {}) {
       out.hes.push(nxt);
       h = nxt;
     }
+    if (start === he0) out.split = out.hes.length;
   }
 
   out.keys = out.hes.map(keyOf);
   return out;
+}
+
+/**
+ * 🔴 **分片模式「標一段」：從起點那條邊，沿著同一條線走到終點那條邊**（2026-10-12，kang 拍板）。
+ *
+ * 省道打版的「開口」是從縫切進去、**停在片中間**的一段線 ——
+ * 「標一整圈」會一路標到底（那就變成縫了），一條一條點又太慢。
+ * ⇒ 先點起點、再點終點，中間整段一次標。
+ *
+ * ⭐ ⛔ 不寫新的走訪：`edgeLoop()` 從起點往兩個方向走，終點落在哪一個方向就取那一段。
+ * ⚠ 繞一圈的線（緯線、管子）兩個方向都到得了 ⇒ **取比較短的那一段**。
+ *
+ * @returns {HalfEdge[]|null} 含起點與終點；終點⛔ 在同一條線上 ⇒ `null`（呼叫端講原因，⛔ 猜）
+ */
+export function seamSpanEdges(mesh, heA, heB, opt = {}) {
+  if (!mesh || !heA || !heB) return null;
+  const L = edgeLoop(mesh, heA, opt);
+  const vi = mesh._vertIndex();
+  const kB = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const idx = L.keys.indexOf(kB(vi.get(heB.v.id), vi.get(heB.to.id)));
+  if (idx < 0) return null;
+  if (idx === 0) return [L.hes[0]];
+  if (L.closed) {
+    /** 繞一圈的整條都在第一個方向（第二個方向一出發就繞回起點）：往前走到 idx，或從尾巴往回走到 idx */
+    const fwd = L.hes.slice(0, idx + 1);
+    const back = [L.hes[0], ...L.hes.slice(idx).reverse()];
+    return fwd.length <= back.length ? fwd : back;
+  }
+  return idx < L.split
+    ? L.hes.slice(0, idx + 1)
+    : [L.hes[0], ...L.hes.slice(L.split, idx + 1)];
 }
 
 /**
