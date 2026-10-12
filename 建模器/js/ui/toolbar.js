@@ -14,7 +14,31 @@ import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
-import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds } from '../unfold/seam.js';
+import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds, isSeam } from '../unfold/seam.js';
+import { renderCanvas } from '../out/sheet.js';
+import { previewProgram } from '../out/nest.js';
+
+/** 分片的即時預覽開關（2026-10-12）—— 記在瀏覽器裡；讀不到就當開（預設開）*/
+const SEAM_PREVIEW_KEY = 'modeler_seam_preview';
+function seamPreviewOn() {
+  try { return localStorage.getItem(SEAM_PREVIEW_KEY) !== 'off'; } catch (e) { return true; }
+}
+/** 網格物件 → 編號（Undo／改參數會換掉整個網格，換了就要重算）*/
+const meshUid = new WeakMap();
+let meshUidNext = 1;
+/**
+ * 預覽要不要重算：物件、網格本人、縮放、**哪幾條是切線**、展開方式、材料。
+ * 切線用「邊 id 的雜湊 ＋ 條數」—— 走一遍邊是 O(邊數)，跟面板本來就在做的 `seamCount()` 同一級。
+ */
+export function seamPreviewKey(obj, st) {
+  const mesh = obj.mesh();
+  if (!meshUid.has(mesh)) meshUid.set(mesh, meshUidNext++);
+  let h = 0, n = 0;
+  for (const he of mesh.edges()) if (isSeam(he)) { h = (h + Math.imul(he.id + 1, 2654435761)) >>> 0; n++; }
+  const s = obj.scale || {};
+  return [obj.id, meshUid.get(mesh), s.x, s.y, s.z, n, h, st.mode, st.material].join('|');
+}
+const fmtPct = v => `${Math.round(v * 1000) / 10}%`;
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
@@ -919,6 +943,84 @@ export class Panel {
           this._edit('清除分片標記');
         });
     }
+
+    this._seamPreview(obj);
+  }
+
+  /**
+   * 🔴 **分片模式的即時預覽**（2026-10-12，省道打版第三步；位置是 kang 選的方案一 → `規格\建模器-省道打版.md`）。
+   *
+   * - **開關**（kang：「是否可以做一個開/關..這樣就可以做一個彈性的選擇」）：預設開，記在瀏覽器裡
+   * - **停手一下才算**（0.3 秒）：連點好幾條線不會每一下都算；算的時候寫「計算中…」
+   * - **跟著展開圖視窗目前選的**展開方式、材料、開口畫法（`app.getUnfoldSettings()`）
+   * - 結果照「物件＋網格＋哪幾條是切線＋展開方式＋材料」記一份：面板重畫（選取、捲動…）⛔ 重算
+   * - 算一次超過 1 秒 ⇒ 講出來，提醒可以關掉（⛔ 安靜地卡）
+   *
+   * ⚠ 面板每次 `refresh()` 都整個重建，所以計時器到點時要先看畫布還在不在（⛔ 畫到一個已經被丟掉的畫布上）。
+   */
+  _seamPreview(obj) {
+    if (!this.app.getUnfoldSettings) return;
+    const on = seamPreviewOn();
+    this._rowCheck('即時預覽', on, v => {
+      try { localStorage.setItem(SEAM_PREVIEW_KEY, v ? 'on' : 'off'); } catch (e) { /* 無所謂 */ }
+      this.refresh();
+    }, '標一條線，下面馬上畫出展開的樣子（跟著展開圖視窗目前選的展開方式）。模型大、覺得頓就關掉');
+    if (!on) return;
+
+    const st = this.app.getUnfoldSettings();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin:4px 0 8px';
+    const info = document.createElement('div');
+    info.className = 'note';
+    const cv = document.createElement('canvas');
+    cv.style.cssText = 'display:block;width:100%;background:#fff;border-radius:4px;margin:4px 0';
+    const big = document.createElement('button');
+    big.className = 'wide';
+    big.textContent = '放大 ⤢（打開展開圖）';
+    big.title = '打開展開圖視窗 —— 存 SVG／DXF、列印都在那裡';
+    big.onclick = () => this.app.openUnfold();
+    wrap.append(info, cv, big);
+    this._target.appendChild(wrap);
+
+    const modeLabel = st.mode === 'dart' ? '省道打版' : '精確分片';
+    const draw = pv => {
+      const r = pv.r;
+      const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true, dartStyle: st.dartStyle });
+      let txt = `預覽（${modeLabel}）：<b>${r.stats.total}</b> 片`;
+      if (st.mode === 'dart' && r.pieces.length) {
+        const mx = Math.max(...r.pieces.map(p => p.strain ? p.strain.max : 0));
+        const mn = Math.min(...r.pieces.map(p => p.strain ? p.strain.min : 0));
+        txt += `　最多拉 <b>${fmtPct(mx)}</b>　壓 <b>${fmtPct(-mn)}</b>`;
+      }
+      if (r.warnings.length) txt += `<br>⚠ ${r.warnings.length} 則警告 —— 放大看`;
+      if (pv.ms > 1000) txt += `<br>算一次要 ${(pv.ms / 1000).toFixed(1)} 秒 —— 覺得慢可以關掉即時預覽`;
+      info.innerHTML = txt;
+      if (!prog) { cv.hidden = true; return; }
+      const W = Math.max(200, cv.clientWidth || 270), H = Math.min(260, Math.max(120, W * prog.box.h / prog.box.w));
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      cv.width = Math.ceil(W * dpr); cv.height = Math.ceil(H * dpr);
+      cv.style.height = H + 'px';
+      const ctx = cv.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+      const px = Math.min(W / prog.box.w, H / prog.box.h);
+      ctx.translate((W - prog.box.w * px) / 2, (H - prog.box.h * px) / 2);
+      renderCanvas(ctx, prog, px);
+    };
+
+    const key = seamPreviewKey(obj, st);
+    if (this._pv && this._pv.key === key) { draw(this._pv); return; }
+    info.textContent = `預覽（${modeLabel}）：計算中…`;
+    clearTimeout(this._pvTimer);
+    this._pvTimer = setTimeout(() => {
+      if (!cv.isConnected) return;                 // 面板已經重建 —— 新的那一次自己會排
+      const t0 = performance.now();
+      let r;
+      try { r = unfoldObject(obj, { material: st.material, mode: st.mode }); }
+      catch (e) { info.textContent = '預覽算不出來：' + (e.message || e); return; }
+      this._pv = { key, r, ms: performance.now() - t0 };
+      draw(this._pv);
+    }, 300);
   }
 
   /** 布林與陣列共用的「凍結成網格」 */

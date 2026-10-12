@@ -161,6 +161,37 @@ export function boardProgram(board, opt = {}) {
   return { box: { x: 0, y: 0, w: BW, h: BH }, items };
 }
 
+/**
+ * 🔴 **分片模式的即時預覽：所有片擺成一張**（2026-10-12，省道打版第三步）。
+ * ⭐ ⛔ 另寫一套擺法 —— 借排版的 `packBoards()`／`boardProgram()`：板子寬取「夠放最寬那片、而且大致方正」，
+ * 高給到放得下全部（一張板），畫完再把板子外框拿掉、外框縮到真的用到的範圍。
+ * 預覽太小，接合編號與尺寸都⛔ 畫（`showJoints: false`）。
+ * @returns {{box, items}} 跟 `drawProgram()` 同一種格式；沒有片 ⇒ `null`
+ */
+export function previewProgram(pieces, opt = {}) {
+  if (!pieces || !pieces.length) return null;
+  const gap = 2;
+  const maxW = Math.max(...pieces.map(p => p.width));
+  const area = pieces.reduce((a, p) => a + (p.width + gap) * (p.height + gap) * (p.qty || 1), 0);
+  const W = Math.max(maxW + 2 * gap, Math.sqrt(area) * 1.4);
+  const nest = packBoards(pieces, { w: W, h: 1e7, gap, rotate: false });
+  /**
+   * 片號：預覽拿的是單一物件的展開（`unfoldObject()`），那條路⛔ 編片號（片號在 `unfoldMany()` 才編）——
+   * 沒有就照順序補 P01、P02…（寫法跟 `part.js` 的 `pieceNo()` 一樣）。【實證 2026-10-12】測試抓到預覽一個片號都沒有。
+   */
+  const no = p => p.no || 'P' + String(pieces.indexOf(p) + 1).padStart(2, '0');
+  const prog = boardProgram(nest.boards[0], { ...opt, showJoints: false, label: no });
+  const items = prog.items.filter(i => i.style !== 'note');
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const take = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
+  for (const i of items) {
+    if (i.t === 'line') { take(i.x1, i.y1); take(i.x2, i.y2); }
+    else if (i.t === 'poly') i.pts.forEach(p => take(p.x, p.y));
+    else take(i.x, i.y);
+  }
+  return { box: { x: x0 - gap, y: y0 - gap, w: x1 - x0 + 2 * gap, h: y1 - y0 + 2 * gap }, items, boards: nest.boards.length };
+}
+
 /** 一張板子的標題（SVG 上方、畫面上那張卡片的說明）*/
 export function boardTitle(board, i, n, opt = {}) {
   const labels = board.items.map(it => (opt.label ? opt.label(it.piece) : it.piece.no) || '').filter(Boolean);

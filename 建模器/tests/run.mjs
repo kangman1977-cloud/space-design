@@ -14846,6 +14846,50 @@ section('省道打版 第二步：攤平（縫邊等長、變形在中間）＋ 
   }
 }
 
+section('省道打版 第三步：分片模式的即時預覽（2026-10-12）');
+
+/**
+ * 預覽畫面在 DOM 裡（沙箱驗不了），能驗的是兩支純函式：
+ * `previewProgram()`（所有片擺成一張）與 `seamPreviewKey()`（什麼時候要重算）。
+ */
+{
+  const { previewProgram } = await import('../js/out/nest.js');
+  const { seamPreviewKey } = await import('../js/ui/toolbar.js');
+  const { setSeam, isSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', r: 30, segW: 12, segH: 16 } });
+  o.bake();
+  const m = o.mesh();
+  const isPole = v => Math.hypot(v.p.x, v.p.z) < 1e-6, ang = v => Math.atan2(v.p.z, v.p.x);
+  const mer = [...m.edges()].filter(he => !isPole(he.v) && !isPole(he.to) && Math.abs(ang(he.v) - ang(he.to)) < 1e-6);
+  const angs = [...new Set(mer.map(he => ang(he.v).toFixed(6)))].sort((a, b) => a - b);
+  for (const a of angs.filter((_, i) => i % 3 === 0)) for (const h of seamLoopEdges(m, mer.find(he => ang(he.v).toFixed(6) === a), 'loop')) setSeam(m, h, true);
+
+  const st = { mode: 'dart', material: 'paper', dartStyle: 'cut' };
+  const r = unfoldObject(o, { material: 'paper', mode: 'dart' });
+  const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true });
+  eq('前提：球 4 片（省道打版）', r.stats.total, 4);
+  ok('★★★ 預覽：4 片擺成一張（一張板）', prog && prog.boards === 1);
+  const inBox = (x, y) => x >= prog.box.x - 1e-6 && x <= prog.box.x + prog.box.w + 1e-6 && y >= prog.box.y - 1e-6 && y <= prog.box.y + prog.box.h + 1e-6;
+  ok('★★★ 每一條線、每一塊色都在框裡（框縮到真的用到的範圍）',
+     prog.items.every(i => i.t === 'line' ? inBox(i.x1, i.y1) && inBox(i.x2, i.y2) : i.t === 'poly' ? i.pts.every(p => inBox(p.x, p.y)) : inBox(i.x, i.y)));
+  eq('★★ ⛔ 畫板子外框（預覽不是排版）', prog.items.filter(i => i.style === 'note').length, 0);
+  eq('★★ ⛔ 畫接合編號（太小看不清楚）', prog.items.filter(i => i.style === 'joint').length, 0);
+  eq('★★ 片號每片一個', prog.items.filter(i => i.t === 'text' && i.style === 'num').length, 4);
+  ok('★★ 省道打版有色塊', prog.items.some(i => i.t === 'poly'));
+  eq('★★ 沒有片 ⇒ null（⛔ 畫一個空框）', previewProgram([], {}), null);
+
+  const k1 = seamPreviewKey(o, st);
+  eq('★★★ 什麼都沒改 ⇒ 不重算（同一把鑰匙）', seamPreviewKey(o, st), k1);
+  ok('★★★ 換展開方式 ⇒ 重算', seamPreviewKey(o, { ...st, mode: 'exact' }) !== k1);
+  ok('★★ 換材料 ⇒ 重算', seamPreviewKey(o, { ...st, material: 'acrylic' }) !== k1);
+  const he = [...m.edges()].find(h => h.face && h.twin && h.twin.face && !isSeam(h) && Math.abs(h.v.p.y - h.to.p.y) < 1e-6);
+  setSeam(m, he, true);
+  ok('★★★ 多標一條切線 ⇒ 重算', seamPreviewKey(o, st) !== k1);
+  setSeam(m, he, false);
+  eq('★★ 　 再取消 ⇒ 回到原本那把（⛔ 白算一次）', seamPreviewKey(o, st), k1);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

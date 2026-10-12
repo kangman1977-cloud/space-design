@@ -246,7 +246,14 @@ export class UnfoldPanel {
     };
   }
 
-  close() { this.el.hidden = true; }
+  /**
+   * ⚠ 關掉時通知一聲（2026-10-12）：分片模式的即時預覽「跟著這裡選的展開方式」——
+   * 在這裡改了展開方式或材料，關掉之後右邊的預覽要跟著換（⛔ 留著舊的騙人）。
+   */
+  close() {
+    this.el.hidden = true;
+    if (this.app.onUnfoldClosed) this.app.onUnfoldClosed();
+  }
 
   get isOpen() { return !this.el.hidden; }
 
