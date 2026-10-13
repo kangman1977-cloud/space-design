@@ -25,7 +25,7 @@ import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
 import { Panel, fillPrimMenu, fieldNum } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
-         setKeep, isKeep, markSignature }
+         setKeep, isKeep, markSignature, nearestFace }
   from './unfold/seam.js';
 import { proposeSeams } from './unfold/propose.js';
 import { unfoldObject } from './unfold/part.js';
@@ -36,6 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
+         sampleCurve, curveCutFace, CURVE_STEP_CM,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -73,6 +74,11 @@ const sel = new Selection(view, {
   onMeasure: r => updateMeasureBox(r),
   /** 刀具：點下去吸到最近的邊，`hit` 帶著那條邊與邊上的落點 */
   onKnifePick: (hit, info) => knifePick(hit, info),
+  /** 刀具裡的「曲線」：按下＝放一點、拖＝拉圓滑把手、放開＝這一點放好、移動＝預覽下一點 */
+  onCurveDown: (x, y) => curveDown(x, y),
+  onCurveDrag: (x, y) => curveDrag(x, y),
+  onCurveUp: (x, y, moved) => curveUp(x, y, moved),
+  onCurveHover: (x, y) => curveHover(x, y),
   /**
    * ⚠ **⛔ 這裡不再自己設按鈕文字**（2026-08-30 改）——
    * 文字的決定權統一在 `updateBar()`。
@@ -773,6 +779,9 @@ $('penCancel').onclick = () => cancelPenMode();
 $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeUndoDel').onclick = () => undoKnifeDelete();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
+$('knifeCurve').onclick = () => toggleKnifeCurve();
+$('curveUndo').onclick = () => curveUndo();
+$('curveStep').oninput = () => drawCurve();
 $('separate').onclick = () => separateSelected();
 $('solidCut').onclick = () => solidCutSelected();
 $('vertDots').onclick = () => toggleVertexDots();
@@ -1086,7 +1095,7 @@ function exitOtherModes(keep) {
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
-    knifePicks = []; knifeDeleted = []; knifeMoving = null; hideKnifeLine();
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; hideKnifeLine();
   }
   /**
    * 🔴 **參考線也要收**（2026-08-31）。
@@ -1133,8 +1142,8 @@ function exitOtherModes(keep) {
  */
 function dropPendingPicks() {
   let dropped = false;
-  if (sel.knifeMode && (knifePicks.length || knifeDeleted.length || knifeMoving)) {
-    knifePicks = []; knifeDeleted = []; knifeMoving = null; hideKnifeLine();
+  if (sel.knifeMode && (knifePicks.length || knifeDeleted.length || knifeMoving || curve)) {
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; hideKnifeLine();
     dropped = true;
   }
   if (sel.mateMode && matePick1) {
@@ -1195,6 +1204,16 @@ function jumpHistory(redo) {
  * ⛔ 不另開一種模式管理。
  */
 let knifePicks = [];
+/**
+ * 🔴 **刀具裡「曲線」的資料只有這一份**（跟 `knifePicks` 同一個做法；`select.js` 只轉送滑鼠）。
+ *
+ * `{ obj, node, face, n, d, loop, anchors:[{p, hin, hout, edge}], done, hover }`
+ * —— 全部是**物件座標**；`face` 是第一下點到的那個面，之後每一點都打在它的平面上（⛔ 不投影到網格）。
+ * `edge` ＝ 這一點吸在面的邊上（頭尾一定要在邊上：第一步只做「從邊到邊」）。
+ * ⚠ **宣告放在這裡（跟 `knifePicks` 一起）**：`updateBar()` 會讀它，宣告前就被讀到 ⇒ 整個網頁一行都不跑（STATUS「穩定參考」）。
+ * 規格：`規格\建模器-曲線刀具.md`
+ */
+let curve = null;
 
 /**
  * 🔴 **剛才刪掉的切點，照【刪掉的順序】疊著**（2026-09-01，`退一步` 用的）。
@@ -1350,6 +1369,12 @@ function knifeStroke(obj, localPts, snapMid) {
 }
 
 function toggleKnifeMode() {
+  /** 曲線模式：畫好了 ⇒ 這一按就是「切下去」；還沒畫好 ⇒ 講缺什麼（⛔ 不離開，取消請按「取消」）*/
+  if (sel.knifeMode && sel.knifeCurve) {
+    if (curve && curve.done) curveApply();
+    else toast('曲線還沒畫好 —— 從面的邊上開始，最後一點點在邊上；或按「取消」離開', true);
+    return;
+  }
   /** 已經在模式裡而且點滿兩個 → 這一按就是「切下去」 */
   if (sel.knifeMode && knifePicks.length >= 2) { knifeApply(); return; }
   if (sel.knifeMode) {
@@ -1794,10 +1819,192 @@ function cancelKnifeMode() {
   knifePicks = [];
   knifeDeleted = [];
   knifeMoving = null;
+  curve = null;
   hideKnifeLine();
   panel.refresh();
   updateBar();
   toast('已離開刀具');
+}
+
+// ── 刀具裡的「曲線」—— 規格：`規格\建模器-曲線刀具.md` ──────────────
+
+/** 「每隔幾公分切一段」—— 欄位打壞了就用預設，⛔ 不擋（打字打到一半常常是空的）*/
+function curveStepCm() {
+  const v = Number($('curveStep').value);
+  return v > 0 ? v : CURVE_STEP_CM;
+}
+
+/** 刀具裡切換「直線／曲線」（kang 2026-10-13 選的進入方式：⛔ 左側直條不加按鈕）*/
+function toggleKnifeCurve() {
+  sel.knifeCurve = !sel.knifeCurve;
+  knifePicks = []; knifeDeleted = []; knifeMoving = null;
+  curve = null;
+  hideKnifeLine();
+  updateBar();
+  toast(sel.knifeCurve
+    ? '曲線：在一個平的面的【邊上】點第一點，【點一下】＝尖角、【按住拖】＝圓滑，最後點在【邊上】就畫好了，'
+      + '再按「切下去」。⚠ 這個模式裡按住拖是拉曲線，⛔ 不是一筆畫'
+    : '直線：跟原本的刀具一樣（點在邊上、按住拖＝一筆畫）');
+}
+
+/** 那個面的角（物件座標，照順序）*/
+function curveFaceLoop(mesh, face) {
+  return mesh.faceLoop(face).map(he => he.v.p.clone());
+}
+
+function curveDown(x, y) {
+  if (curve && curve.done) {
+    toast('曲線已經畫好了 —— 按「切下去」，或按「退一點」改最後一點', true);
+    return;
+  }
+  if (!curve) {
+    const h = sel.curveSurfaceHit(x, y);
+    if (!h) { toast('先點在模型的一個平的面上（從那個面的邊上開始）', true); return; }
+    if (h.obj.isParametric) {
+      toast('這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」', true);
+      return;
+    }
+    const mesh = h.obj.mesh();
+    const nf = nearestFace(mesh, h.pLocal);
+    if (!nf) return;
+    const loop = curveFaceLoop(mesh, nf.face);
+    /** 那個面的平面（Newell 法向）：之後每一點都打在這上面 */
+    const n = loop[0].clone().set(0, 0, 0);
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i], b = loop[(i + 1) % loop.length];
+      n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+    }
+    if (n.length() < 1e-12) return;
+    n.normalize();
+    const c = loop.reduce((s, p) => s.add(p), loop[0].clone().set(0, 0, 0)).multiplyScalar(1 / loop.length);
+    const d = n.dot(c);
+    if (loop.some(p => Math.abs(n.dot(p) - d) > PLANAR_TOL_CM)) {
+      toast('這個面不是平的 —— 曲線刀具只能畫在平的面上（曲面上的彎曲分界請用布林「差集」）', true);
+      return;
+    }
+    const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal);
+    if (!snap) {
+      toast('曲線要從這個面的【邊上】開始 —— 靠近邊一點再點（面中間的封閉圈是下一步，還沒做）', true);
+      return;
+    }
+    curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop,
+              anchors: [{ p: snap.p, hin: null, hout: null, edge: true }], done: false, hover: null };
+    drawCurve();
+    updateBar();
+    return;
+  }
+  const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
+  if (!p) return;
+  const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
+  curve.anchors.push({ p: snap ? snap.p : p, hin: null, hout: null, edge: !!snap });
+  curve.hover = null;
+  drawCurve();
+  updateBar();
+}
+
+/** 拖 ＝ 拉最後那一點的圓滑把手（兩邊對稱，跟鋼筆一樣）*/
+function curveDrag(x, y) {
+  if (!curve || curve.done) return;
+  const a = curve.anchors[curve.anchors.length - 1];
+  const q = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
+  if (!q) return;
+  a.hout = q;
+  a.hin = a.p.clone().multiplyScalar(2).sub(q);
+  /** 起點在邊上：往外的那一半把手沒有意義（曲線不會往面外走）*/
+  if (curve.anchors.length === 1) a.hin = null;
+  drawCurve();
+}
+
+/** 放開：第二點以後點在邊上 ⇒ 畫好了（等「切下去」）*/
+function curveUp() {
+  if (!curve || curve.done) return;
+  const a = curve.anchors[curve.anchors.length - 1];
+  if (curve.anchors.length >= 2 && a.edge) {
+    a.hout = null;
+    curve.done = true;
+    toast(`曲線畫好了（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+  }
+  drawCurve();
+  updateBar();
+}
+
+function curveHover(x, y) {
+  if (!curve || curve.done) return;
+  const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
+  if (!p) return;
+  const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
+  curve.hover = snap ? snap.p : p;
+  drawCurve();
+}
+
+/** 退一點：畫好了 ⇒ 回到還沒畫完；沒畫好 ⇒ 拿掉最後一點；拿光了 ⇒ 重新選面 */
+function curveUndo() {
+  if (!curve) return;
+  if (curve.done) curve.done = false;
+  else curve.anchors.pop();
+  if (!curve.anchors.length) curve = null;
+  drawCurve();
+  updateBar();
+}
+
+/**
+ * 畫預覽：曲線本身（照「每隔幾公分」切好的樣子 ⇒ 看得到真的會新增哪些點）＋ 把手。
+ * ⭐ 借刀具那條預覽線（`setKnifePreview()`，兩兩一組的線段），⛔ 不另開一套畫法。
+ */
+function drawCurve() {
+  if (!curve) { hideKnifeLine(); return; }
+  const list = curve.anchors.slice();
+  if (!curve.done && curve.hover) list.push({ p: curve.hover, hin: null, hout: null });
+  const w = p => curve.node.localToWorld(p.clone());
+  const segs = [];
+  if (list.length >= 2) {
+    const pts = sampleCurve(list, curveStepCm()).map(w);
+    for (let i = 0; i + 1 < pts.length; i++) segs.push(pts[i], pts[i + 1]);
+  }
+  const dots = curve.anchors.map(a => w(a.p));
+  if (!curve.done) {
+    for (const a of curve.anchors) {
+      for (const h of [a.hin, a.hout]) if (h) { segs.push(w(a.p), w(h)); dots.push(w(h)); }
+    }
+  }
+  view.setKnifePreview(segs, dots);
+}
+
+/** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
+function curveApply() {
+  if (!curve || !curve.done) { toast('曲線還沒畫好 —— 最後一點要點在面的邊上', true); return false; }
+  const obj = curve.obj;
+  const pts = sampleCurve(curve.anchors, curveStepCm());
+  const r = curveCutFace(obj.mesh(), curve.face, pts);
+  if (!r.ok) { toast(r.reason, true); return false; }
+
+  curve = null;
+  hideKnifeLine();
+  sel.setKnifeMode(false);
+  $('knife').classList.remove('on');
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('曲線刀具');
+
+  const di = r.mesh._vertIndex();
+  const want = new Set(r.newEdges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)));
+  const hes = [];
+  for (const he of r.mesh.edges()) {
+    const a = di.get(he.v.id), b = di.get(he.to.id);
+    if (want.has(a < b ? `${a}-${b}` : `${b}-${a}`)) hes.push(he);
+  }
+  if (!sel.editMode) { sel.setEditMode(true); $('edit').classList.add('on'); }
+  const got = sel.selectEdges(obj, hes);
+  syncModeButtons();
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  toast(`已沿曲線切開　新增 ${r.added} 個點、${r.newEdges.length} 條線`
+      + (got ? '（已選起來）—— 要推高、挖洞，切到「面」選那一塊' : ''));
+  return true;
 }
 
 /**
@@ -5450,7 +5657,9 @@ function updateBar() {
    * 那幾顆裡面是 `<svg>` ＋ `<span class="lab">`，寫下去會**把圖示整個洗掉**，
    * ⚠ 而且**不會報錯**（`index.html` 的 `#rail` 註解寫著同一件事）。
    */
-  const 收工 = sel.knifeMode
+  const 收工 = sel.knifeMode && sel.knifeCurve
+    ? (curve && curve.done ? '切下去（曲線）' : null)
+    : sel.knifeMode
     ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : null)
     : penEditing ? '完成'
     : sel.penMode ? '完成' : null;
@@ -5460,7 +5669,11 @@ function updateBar() {
    * 狀態字：**⛔ 只講「做到哪」，⛔ 不講「該按誰」** —— 該按誰是上面那顆的事。
    * ⚠ 刀具點不到兩個時 `#toolDone` 不出現，所以那句話要由這裡講。
    */
-  const 狀態 = sel.knifeMode
+  const 狀態 = sel.knifeMode && sel.knifeCurve
+    ? (!curve ? '曲線：在一個平的面的【邊上】點第一點'
+       : curve.done ? ''
+       : `曲線：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後一點點在【邊上】`)
+    : sel.knifeMode
     ? (knifePicks.length >= 2 ? '' : `刀具：在模型上點兩個以上的位置（現在 ${knifePicks.length} 個）`)
     : sel.penMode
       ? (penEditing ? '正在改這條路徑'
@@ -5572,13 +5785,25 @@ function updateBar() {
    * ⚠ ⛔ 不用 `disabled`：一顆永遠灰著的按鈕使用者⛔ 不知道它什麼時候會亮
    * —— 照這一排其他顆的規矩用 `hidden`（2026-08-31 那 45 個就是這樣統一的）。
    */
-  $('knifeUndoDel').hidden = !sel.knifeMode || !knifeDeleted.length;
+  $('knifeUndoDel').hidden = !sel.knifeMode || sel.knifeCurve || !knifeDeleted.length;
+  /**
+   * 🔴 **刀具裡的「直線／曲線」**（kang 2026-10-13 選的進入方式）。
+   * 曲線模式下：吸中點、退一步（那兩顆是直線切點用的）收起來；換成「退一點」與「每隔幾 cm 一段」。
+   */
+  const curveOn = sel.knifeMode && sel.knifeCurve;
+  $('knifeCurve').hidden = !sel.knifeMode;
+  $('knifeCurve').classList.toggle('on', !!sel.knifeCurve);
+  $('knifeCurve').textContent = sel.knifeCurve ? '曲線' : '直線';
+  $('curveUndo').hidden = !curveOn || !curve;
+  $('curveStepLbl').hidden = !curveOn;
+  $('curveStep').hidden = !curveOn;
+  $('curveStepUnit').hidden = !curveOn;
   /**
    * 🔴 **吸中點只在刀具模式裡出現，而且開著的時候要看得出來。**
    * ⚠ 一顆按下去畫面上什麼都不變的開關就是坑第 21 條 ——
    * 這裡用跟其他模式一樣的 `.on` 樣式，⛔ 不另發明一種。
    */
-  $('knifeSnapMid').hidden = !sel.knifeMode;
+  $('knifeSnapMid').hidden = !sel.knifeMode || sel.knifeCurve;
   $('knifeSnapMid').classList.toggle('on', !!sel.knifeSnapMid);
   $('knife').title = sel.knifeMode
     ? (knifePicks.length >= 2

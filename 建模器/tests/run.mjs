@@ -15582,6 +15582,72 @@ section('切成實心（切蛋糕）第一步（2026-10-13）');
   ok('★★ 切完原本的網格一格都沒變（體積、面數）', Math.abs(fil.volume() - 104780.23) < 0.01 && fil.faces.length === 182, `${fil.volume()} ${fil.faces.length}`);
 }
 
+section('曲線刀具 第一步：平面上從邊到邊（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`。方塊 60 × 45 × 40 的頂面（y ＝ 20）。
+ * 主斷言：**形狀一格都不變**（體積、封閉、χ）、頂面切成的幾塊面積加起來 ＝ 2700、新的線全標 hard。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const top = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const v = (x, z) => new THREE.Vector3(x, Y, z);
+  const A = (p, hin, hout) => ({ p, hin: hin || null, hout: hout || null });
+  const chiOf = m => m.verts.length - [...m.edges()].length + m.faces.length;
+  const topAreas = m => m.faces.filter(f => m.faceVerts(f).every(x => Math.abs(x.p.y - Y) < 1e-9))
+    .map(f => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0));
+  const wave = [A(v(-30, -6), null, v(-20, -18)), A(v(-5, 2), v(-14, 10), v(4, -6)), A(v(14, -4), v(8, -14), v(20, 6)), A(v(30, 4), v(24, 14), null)];
+
+  // sampleCurve：直線段只要兩端；曲線段依弧長每隔 step 一段、至少 2 段
+  eq('★★ 沒有把手的兩點 ⇒ 只有 2 點（直線⛔ 多插點）', edit.sampleCurve([A(v(-30, 0)), A(v(30, 5))], 1).length, 2);
+  const s1 = edit.sampleCurve(wave, 1), s5 = edit.sampleCurve(wave, 5);
+  ok('★★ 每隔 1 cm 比每隔 5 cm 點多（84 ＞ 19）', s1.length === 84 && s5.length === 19, `${s1.length} ${s5.length}`);
+  const gaps = s1.slice(1).map((p, i) => p.distanceTo(s1[i]));
+  ok('★★ 每隔 1 cm：每一段都不超過 1 cm（依弧長等分）', Math.max(...gaps) <= 1 + 1e-6, Math.max(...gaps));
+  eq('★ 很短的曲線段至少 2 段', edit.sampleCurve([A(v(0, 0), null, v(0.1, 0.1)), A(v(0.2, 0), v(0.1, 0.1), null)], 1).length, 3);
+
+  const cut = (anchors, step = 1, face = top, mesh = box) => edit.curveCutFace(mesh, face, edit.sampleCurve(anchors, step));
+  const r1 = cut(wave);
+  ok('★★★ ① 波浪線（左邊→右邊）⇒ 成功、封閉、χ ＝ 2', r1.ok && r1.mesh.isClosed() && r1.mesh.validate().ok && chiOf(r1.mesh) === 2, r1.reason);
+  near('★★★ 　 體積一格都沒變', r1.ok && r1.mesh.volume(), 108000, 1e-6);
+  const a1 = r1.ok ? topAreas(r1.mesh) : [];
+  ok('★★★ 　 頂面切成 2 塊、面積加起來 ＝ 2700', a1.length === 2 && Math.abs(a1[0] + a1[1] - 2700) < 1e-6, a1.join('+'));
+  ok('★★★ 　 新的 83 條線全部標 hard（⛔ 不標的話看不見、點不到）', r1.ok && r1.newEdges.length === 83
+    && [...r1.mesh.edges()].filter(h => r1.mesh.marksOf(h).hard).length === 83);
+  eq('★★ 　 新增 84 個點（2 個在邊上、82 個在面裡）', r1.ok && `${r1.added}/${r1.inner}`, '84/82');
+
+  const r2 = cut([A(v(-30, 0)), A(v(30, 5))]);
+  const a2 = r2.ok ? topAreas(r2.mesh).map(x => Math.round(x * 1e6) / 1e6).sort((p, q) => p - q) : [];
+  ok('★★ ② 直線（沒有把手）⇒ 梯形 1200 ＋ 1500（手算）', a2.join() === '1200,1500', a2.join());
+  const r3 = cut([A(v(-30, -22.5)), A(v(0, 0), v(-10, -5), v(10, 5)), A(v(30, 10))]);
+  ok('★★ ③ 從角出發 ⇒ 成功、角⛔ 不重複插點（新增 ＝ 面裡的點 ＋ 1）', r3.ok && r3.added === r3.inner + 1 && r3.mesh.isClosed(), r3.reason);
+  const r4 = cut([A(v(-10, -22.5), null, v(-10, -5)), A(v(10, -22.5), v(10, -5), null)]);
+  ok('★★ ④ 頭尾在同一條邊（凸出一塊）⇒ 成功、面積加起來 2700', r4.ok && Math.abs(topAreas(r4.mesh).reduce((s, x) => s + x, 0) - 2700) < 1e-6, r4.reason);
+  ok('★★ 　 側面那一片也跟著插了點（隔壁的面⛔ 不插就接不起來）', r4.ok && r4.mesh.isClosed() && chiOf(r4.mesh) === 2);
+
+  // 擋下來的
+  const r6 = cut([A(v(-30, 0), null, v(0, 60)), A(v(30, 0), v(0, 60), null)]);
+  ok('★★★ ⑥ 曲線跑出面外 ⇒ 擋下來、講「跑出這個面」', !r6.ok && /跑出這個面/.test(r6.reason), r6.reason);
+  const r7 = cut([A(v(-20, 0)), A(v(30, 0))]);
+  ok('★★★ ⑦ 起點不在邊上 ⇒ 擋下來、講「從邊上開始」', !r7.ok && /邊上/.test(r7.reason), r7.reason);
+  const r8 = cut([A(v(-30, 0)), A(v(10, 10)), A(v(10, -10)), A(v(-10, 10)), A(v(30, -5))]);
+  ok('★★★ ⑧ 自己交叉 ⇒ 擋下來、講「交叉」', !r8.ok && /交叉/.test(r8.reason), r8.reason);
+  ok('★★ ⑨ 頭尾是相鄰的角、中間沒點 ⇒ 擋下來', !cut([A(v(-30, -22.5)), A(v(30, -22.5))]).ok);
+  const side = box.faces.find(f => box.faceVerts(f).every(x => Math.abs(x.p.z - 22.5) < 1e-9));
+  ok('★★ 　 曲線不在這個面的平面上 ⇒ 擋下來', !edit.curveCutFace(box, side, edit.sampleCurve(wave, 1)).ok);
+
+  // ⑩ 在已經切過的面上再切一條
+  const ra = cut([A(v(-30, 0)), A(v(30, 0))]);
+  const fa = ra.mesh.faces.find(f => { const vs = ra.mesh.faceVerts(f); return vs.every(x => Math.abs(x.p.y - Y) < 1e-9) && vs.some(x => x.p.z > 1); });
+  const rb = cut([A(v(0, 0), null, v(0, 15)), A(v(30, 15), v(15, 15), null)], 1, fa, ra.mesh);
+  const ab = rb.ok ? topAreas(rb.mesh) : [];
+  ok('★★★ ⑩ 在切過的那一塊上再切曲線 ⇒ 頂面 3 塊、加起來 2700、體積不變',
+    rb.ok && ab.length === 3 && Math.abs(ab.reduce((s, x) => s + x, 0) - 2700) < 1e-6 && Math.abs(rb.mesh.volume() - 108000) < 1e-6, rb.reason);
+  ok('★★ 　 第一刀那條線被插點切成兩段，兩段都還是 hard', rb.ok && [...rb.mesh.edges()].filter(h => rb.mesh.marksOf(h).hard).length === 2 + rb.newEdges.length);
+  ok('★★ 切完原本的網格一格都沒變（面數、體積）', box.faces.length === 6 && Math.abs(box.volume() - 108000) < 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

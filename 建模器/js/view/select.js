@@ -198,6 +198,13 @@ export class Selection {
      * 平板沒有 Esc，⛔ 不可以只給鍵盤的出路。
      */
     this.knifeMode = false;
+    /**
+     * 🔴 **刀具裡的「曲線」**（kang 2026-10-13 → `規格\建模器-曲線刀具.md`）。
+     * 開著時手勢換成鋼筆那一套：點一下＝尖角、按住拖＝圓滑把手 —— ⛔ 不再是直線模式的一筆畫。
+     * 按下、拖、放開都交給 `main.js` 的 `onCurve*`（曲線的資料只在那裡一份）。
+     */
+    this.knifeCurve = false;
+    this._curveDown = null;
 
     /**
      * 🔴 **一筆畫：按住拖過表面，交點自動變成切點**（kang 2026-08-26 批准）。
@@ -1053,7 +1060,13 @@ export class Selection {
        * ⭐ `button === 0` 同時涵蓋**桌機左鍵**與**觸控／觸控筆的主要接觸點**
        * （兩者按下時都是 0）—— ⛔ 不必為 `pointerType` 各寫一段（坑第 31 條）。
        */
-      if (this.knifeMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
+      /** 🔴 **曲線模式：按下去就放一個錨點**（跟鋼筆一樣按下就看得到，拖的話再補把手）*/
+      if (this.knifeMode && this.knifeCurve && !this.tc.dragging && e.button === DRAW_BUTTON) {
+        this._curveDown = { x: e.clientX, y: e.clientY, moved: false };
+        this._stroke = null;
+        this._knifeMove = null;
+        if (this.hooks.onCurveDown) this.hooks.onCurveDown(e.clientX, e.clientY);
+      } else if (this.knifeMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
         /**
          * 🔴🔴 **起手就落在某一顆切點上 → 這一次是「移動它」，⛔ 不是一筆畫**
          * （2026-09-01，kang 提的）。
@@ -1179,6 +1192,21 @@ export class Selection {
        * ⭐ 那顆按鈕亮著是**看得到的**，但講一句是**問得到的**，兩個都要。
        */
       this._tellIfViewLocked(e);
+
+      /**
+       * 🔴 **曲線模式**：按著拖 ＝ 拉最後那個錨點的圓滑把手（超過 `TAP_MOVE` 才算拖，手會抖）；
+       * 沒按著 ＝ 預覽「下一點會放在哪」。⛔ 不走直線模式的切點 hover。
+       */
+      if (this.knifeMode && this.knifeCurve) {
+        const cd = this._curveDown;
+        if (cd) {
+          if (!cd.moved && Math.hypot(e.clientX - cd.x, e.clientY - cd.y) >= TAP_MOVE) cd.moved = true;
+          if (cd.moved && this.hooks.onCurveDrag) this.hooks.onCurveDrag(e.clientX, e.clientY);
+        } else if (this.hooks.onCurveHover) {
+          this.hooks.onCurveHover(e.clientX, e.clientY);
+        }
+        return;
+      }
 
       /**
        * 🔴 **參考線：抓著一條線在拖**（第 3 階段，2026-09-01）。
@@ -1375,6 +1403,7 @@ export class Selection {
     cv.addEventListener('pointercancel', () => {
       this._endMarquee(null, false);
       this._stroke = null;
+      this._curveDown = null;
       /** ⚠ 搬到一半被系統收走 → **彈回原位**（跟拖到模型外同一條路） */
       if (this._knifeMove) {
         this._knifeMove = null;
@@ -1402,7 +1431,16 @@ export class Selection {
        */
       const kmove = this._knifeMove;
       this._knifeMove = null;
+      const cdown = this._curveDown;
+      this._curveDown = null;
       if (!d) return;
+      /** 🔴 **曲線模式的放開**：右鍵／中鍵是轉視角，⛔ 不收（跟直線刀具同一條，判準用按下去那顆鍵）*/
+      if (this.knifeMode && this.knifeCurve) {
+        if (d.button === DRAW_BUTTON && cdown && this.hooks.onCurveUp) {
+          this.hooks.onCurveUp(e.clientX, e.clientY, cdown.moved);
+        }
+        return;
+      }
       if (kmove && kmove.moved) {
         if (this.hooks.onKnifeMoveEnd) this.hooks.onKnifeMoveEnd(true);
         return;
@@ -3792,7 +3830,66 @@ export class Selection {
     this._lastKnifeTap = null;
     this._stroke = null;
     this._knifeMove = null;
+    this._curveDown = null;
     return this.knifeMode;
+  }
+
+  // ── 曲線刀具（刀具裡的「曲線」）—— 規格：`規格\建模器-曲線刀具.md` ──
+  //
+  // ⭐ **曲線的資料只有 `main.js` 一份**（跟 `knifePicks` 同一個做法）；這裡只做三件「要用到相機與畫布」的事。
+
+  /** 點到哪個物件的哪裡（公開版的 `_surfaceHit()`）*/
+  curveSurfaceHit(clientX, clientY) { return this._surfaceHit(clientX, clientY); }
+
+  /**
+   * 滑鼠射線打到「那個面的平面」上的哪一點（物件座標）。
+   * 🔴 **⛔ 不投影到網格** —— 曲線就在那個平面上，這正是「只做平面」的理由（規格「只做平面上的」）。
+   * @param {THREE.Object3D} node 物件的節點（帶變換）
+   * @param {THREE.Vector3} n 平面法向（物件座標）
+   * @param {number} d 平面：n·p ＝ d
+   */
+  curvePlanePoint(clientX, clientY, node, n, d) {
+    const r = this._toCanvasPx(clientX, clientY);
+    if (!r.w || !r.h) return null;
+    this._ndc.x = (r.x / r.w) * 2 - 1;
+    this._ndc.y = -(r.y / r.h) * 2 + 1;
+    this._ray.setFromCamera(this._ndc, this.view.camera);
+    const o = node.worldToLocal(this._ray.ray.origin.clone());
+    const dir = node.worldToLocal(this._ray.ray.origin.clone().add(this._ray.ray.direction)).sub(o);
+    const den = n.dot(dir);
+    if (Math.abs(den) < 1e-12) return null;              // 視線跟那個面平行
+    const t = (d - n.dot(o)) / den;
+    if (t < 0) return null;                              // 平面在鏡頭後面
+    return o.addScaledVector(dir, t);
+  }
+
+  /**
+   * 游標靠近那個面的**角或邊**就吸過去（物件座標）；⛔ 不夠近回 null。
+   * ⚠ 比的是**螢幕距離**，沿用 `EDGE_GRAB_PX`／`_TOUCH`，⛔ 不新定一個值（跟刀具一樣）。
+   * ⭐ 角優先 —— 跟刀具「吸到角」同一條（規格「刀具『吸到角』」）。
+   * @param {THREE.Vector3[]} loop 那個面的角（物件座標，照順序）
+   */
+  curveSnapBoundary(clientX, clientY, node, loop, pLocal) {
+    const r = this._toCanvasPx(clientX, clientY);
+    if (!r.w || !r.h || !loop || loop.length < 3) return null;
+    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+    const px = p => this._project(node.localToWorld(p.clone()), r);
+    let best = null;
+    for (const c of loop) {
+      const s = px(c), dd = Math.hypot(s.x - r.x, s.y - r.y);
+      if (dd <= grab && (!best || dd < best.d)) best = { p: c.clone(), d: dd, corner: true };
+    }
+    if (best) return best;
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i], b = loop[(i + 1) % loop.length];
+      const ab = b.clone().sub(a), L2 = ab.lengthSq();
+      if (L2 < 1e-18 || !pLocal) continue;
+      const t = Math.max(0, Math.min(1, pLocal.clone().sub(a).dot(ab) / L2));
+      const q = a.clone().addScaledVector(ab, t);
+      const s = px(q), dd = Math.hypot(s.x - r.x, s.y - r.y);
+      if (dd <= grab && (!best || dd < best.d)) best = { p: q, d: dd, corner: false };
+    }
+    return best;
   }
 
   /**

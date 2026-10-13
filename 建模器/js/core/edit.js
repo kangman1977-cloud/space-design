@@ -2763,6 +2763,234 @@ function trisCross(A, B) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  曲線刀具（平面上）—— 規格：`規格\建模器-曲線刀具.md`
+// ═══════════════════════════════════════════════════════
+
+/** 曲線切多細的預設：每隔 1 cm 一段（kang 2026-10-13：做成輸入欄位，單位照建議用公分）*/
+export const CURVE_STEP_CM = 1;
+
+/**
+ * 🔴 **把一串錨點（照鋼筆：尖角／圓滑）變成「切下去要新增的點」。**
+ *
+ * - 兩個錨點之間**都沒有把手** ⇒ 直線，只要兩端（⛔ 不在直線上多插點）
+ * - 有把手 ⇒ 三次貝茲，**依弧長每隔 `stepCm` 一段**，至少 2 段（太短的段也不會變成直線）
+ *   ⚠ 依「弧長」等分，⛔ 不是依參數 t 等分 —— 把手拉得長時，t 等分會一頭密一頭疏
+ *
+ * @param {{p:THREE.Vector3, hin:THREE.Vector3|null, hout:THREE.Vector3|null}[]} anchors
+ * @param {number} stepCm 每隔幾公分一段
+ * @returns {THREE.Vector3[]} 第一點到最後一點（含兩端）
+ */
+export function sampleCurve(anchors, stepCm = CURVE_STEP_CM) {
+  if (!Array.isArray(anchors) || anchors.length < 2) return [];
+  const step = stepCm > 0 ? stepCm : CURVE_STEP_CM;
+  const out = [anchors[0].p.clone()];
+  for (let i = 0; i + 1 < anchors.length; i++) {
+    const a = anchors[i], b = anchors[i + 1];
+    if (!a.hout && !b.hin) { out.push(b.p.clone()); continue; }
+    const c1 = a.hout || a.p, c2 = b.hin || b.p;
+    const at = t => {
+      const s = 1 - t;
+      return a.p.clone().multiplyScalar(s * s * s)
+        .add(c1.clone().multiplyScalar(3 * s * s * t))
+        .add(c2.clone().multiplyScalar(3 * s * t * t))
+        .add(b.p.clone().multiplyScalar(t * t * t));
+    };
+    /** 弧長查表：細切 128 段累加 */
+    const M = 128, ts = [0], ls = [0];
+    let prev = a.p, acc = 0;
+    for (let j = 1; j <= M; j++) {
+      const q = at(j / M);
+      acc += q.distanceTo(prev);
+      prev = q; ts.push(j / M); ls.push(acc);
+    }
+    const k = Math.max(2, Math.ceil(acc / step - 1e-9));
+    for (let j = 1; j < k; j++) {
+      const want = acc * j / k;
+      let lo = 0;
+      while (lo + 1 < ls.length && ls[lo + 1] < want) lo++;
+      const span = ls[lo + 1] - ls[lo];
+      const f = span > 0 ? (want - ls[lo]) / span : 0;
+      out.push(at(ts[lo] + (ts[lo + 1] - ts[lo]) * f));
+    }
+    out.push(b.p.clone());
+  }
+  return out;
+}
+
+/**
+ * 🔴 **曲線刀具：沿一串點把「一個平的面」切成兩塊。**（第一步：從邊到邊）
+ *
+ * ── 它是「連接兩點」多了中間那串點 ─────────────────────────
+ * `connectVerts()` 沿兩個角之間的直線把面切成兩半；這一支的兩端可以落在**邊上**（插新點），
+ * 中間多一串**落在面裡面的新點**。骨架完全照它（帳本 → preflight → cleanRebuild → 搬標記）。
+ *
+ * ── 🔴 三條一定要守的 ─────────────────────────────────
+ * ① **新的線全部標 `hard`** —— 切開的兩塊共面，不標的話看不見、點不到、會被「還原多邊形」併掉（`connectVerts()` 那條）
+ * ② **端點插在邊上時，隔壁那個面也要跟著插** —— 否則兩邊的迴圈對不起來（`subdivideEdges()` 那條）
+ * ③ **整串點要留在這個面裡**：中間的點在面內、每一段不可以穿出邊界、不可以自己交叉 —— 不然擋下來講原因
+ *
+ * ⚠ 第一步**只吃一個網格面**（曲線穿過那個面上原本的線就擋）；面中間的封閉圈是第二步。
+ *
+ * @param {Mesh} mesh
+ * @param {Face} face 要切的那個面（呼叫端用 `nearestFace()` 找）
+ * @param {THREE.Vector3[]} pts 物件座標；第一點與最後一點在這個面的**邊上（或角上）**，其餘在面裡面
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map, newEdges?:Array, added?:number, inner?:number}}
+ */
+export function curveCutFace(mesh, face, pts) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!face || !mesh.faces.includes(face)) return { ok: false, reason: '找不到要切的那個面' };
+  if (!Array.isArray(pts) || pts.length < 2) return { ok: false, reason: '曲線至少要兩個點' };
+
+  const vi = mesh._vertIndex();
+  const loop = mesh.faceLoop(face).map(he => vi.get(he.v.id));
+  const n = loop.length;
+  const points = mesh.verts.map(v => v.p.clone());
+  const P = i => points[i];
+  const TOL = 1e-4;
+
+  /** 這個面的平面：曲線一定要在上面（⛔ 不投影 —— 那是只做平面的理由）*/
+  const pl = planeOfPoints(loop.map(P));
+  if (!pl || pl.dev > PLANAR_TOL_CM) return { ok: false, reason: '這個面不是平的 —— 曲線刀具只能畫在平的面上' };
+  if (pts.some(p => Math.abs(pl.n.dot(p) - pl.d) > PLANAR_TOL_CM * 10)) {
+    return { ok: false, reason: '曲線不在這個面的平面上' };
+  }
+
+  /** 端點落在哪：既有的角（回 {v}）或某一條邊上（回 {i, t}，邊 ＝ loop[i]→loop[i+1]）*/
+  const locate = (p) => {
+    for (let i = 0; i < n; i++) if (P(loop[i]).distanceTo(p) <= TOL) return { v: loop[i], i };
+    let best = null;
+    for (let i = 0; i < n; i++) {
+      const a = P(loop[i]), b = P(loop[(i + 1) % n]);
+      const ab = b.clone().sub(a), L2 = ab.lengthSq();
+      if (L2 < 1e-18) continue;
+      const t = Math.max(0, Math.min(1, p.clone().sub(a).dot(ab) / L2));
+      const d = a.clone().addScaledVector(ab, t).distanceTo(p);
+      if (!best || d < best.d) best = { i, t, d };
+    }
+    return best && best.d <= TOL && best.t > 1e-9 && best.t < 1 - 1e-9 ? best : null;
+  };
+  const s = locate(pts[0]), e = locate(pts[pts.length - 1]);
+  if (!s || !e) {
+    return { ok: false, reason: '曲線要從這個面的【邊上】開始、在【邊上】結束（面中間的封閉圈是下一步，還沒做）' };
+  }
+
+  /** 2D：投影到面自己的平面上，檢查「留在面裡、不穿出、不自己交叉」*/
+  const ux = Math.abs(pl.n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const U = new THREE.Vector3().crossVectors(pl.n, ux).normalize();
+  const V = new THREE.Vector3().crossVectors(pl.n, U);
+  const to2 = p => [p.dot(U), p.dot(V)];
+  const poly = loop.map(i => to2(P(i)));
+  const chain = pts.map(to2);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const EPS = 1e-9;
+  const properCross = (A, B, C, D) => {
+    const d1 = cross(A, B, C), d2 = cross(A, B, D), d3 = cross(C, D, A), d4 = cross(C, D, B);
+    return ((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS)) && ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS));
+  };
+  const insidePoly = ([x, y]) => {
+    let inside = false;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  const OUT = '曲線跑出這個面了（或碰到面的邊界）—— 整條曲線要留在這個面裡面，只有頭尾落在邊上';
+  for (let k = 1; k + 1 < chain.length; k++) if (!insidePoly(chain[k])) return { ok: false, reason: OUT };
+  for (let k = 0; k + 1 < chain.length; k++) {
+    for (let i = 0; i < n; i++) if (properCross(chain[k], chain[k + 1], poly[i], poly[(i + 1) % n])) return { ok: false, reason: OUT };
+    const mid = [(chain[k][0] + chain[k + 1][0]) / 2, (chain[k][1] + chain[k + 1][1]) / 2];
+    if (!insidePoly(mid)) return { ok: false, reason: OUT };
+    for (let j = k + 2; j + 1 < chain.length; j++) {
+      if (properCross(chain[k], chain[k + 1], chain[j], chain[j + 1])) {
+        return { ok: false, reason: '曲線自己交叉了 —— 把那個打結的地方拉開再切' };
+      }
+    }
+  }
+
+  /** 插點：端點在邊上 ⇒ 新點；同一條邊上有兩個端點時照 t 的順序插 */
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const marks = new Map();
+  for (const he of mesh.edges()) marks.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  const newIdx = (p) => { points.push(p.clone()); return points.length - 1; };
+  const sIdx = s.v !== undefined ? s.v : newIdx(pts[0]);
+  const eIdx = e.v !== undefined ? e.v : newIdx(pts[pts.length - 1]);
+  if (sIdx === eIdx) return { ok: false, reason: '曲線的頭尾落在同一個點上，切不出東西' };
+  /** 每條被插點的邊（原本的兩端 a→b）→ 照 a→b 方向排好的新點 */
+  const splits = new Map();
+  for (const [loc, idx] of [[s, sIdx], [e, eIdx]]) {
+    if (loc.v !== undefined) continue;
+    const a = loop[loc.i], b = loop[(loc.i + 1) % n];
+    const k = `${a}>${b}`;
+    if (!splits.has(k)) splits.set(k, []);
+    splits.get(k).push({ t: loc.t, idx });
+  }
+  for (const list of splits.values()) list.sort((x, y) => x.t - y.t);
+  /** 插進任何一個面的迴圈：走到 a→b 就插（隔壁那個面走的是 b→a，反過來插）*/
+  const withSplits = (idx) => {
+    const out = [];
+    for (let i = 0; i < idx.length; i++) {
+      const a = idx[i], b = idx[(i + 1) % idx.length];
+      out.push(a);
+      const f = splits.get(`${a}>${b}`), r = splits.get(`${b}>${a}`);
+      if (f) for (const x of f) out.push(x.idx);
+      if (r) for (const x of r.slice().reverse()) out.push(x.idx);
+    }
+    return out;
+  };
+  const inner = pts.slice(1, -1).map(newIdx);
+  const L = withSplits(loop);
+  const pa = L.indexOf(sIdx), pb = L.indexOf(eIdx);
+  if (!inner.length && (Math.abs(pa - pb) === 1 || Math.abs(pa - pb) === L.length - 1)) {
+    return { ok: false, reason: '曲線的頭尾在這個面上是相鄰的，中間又沒有點 —— 切不出東西' };
+  }
+  /** 兩塊：A 沿邊框走到 B 再沿曲線回 A；B 沿邊框走到 A 再沿曲線回 B */
+  const walk = (from, to) => { const out = []; let i = from; for (;;) { out.push(L[i]); if (i === to) break; i = (i + 1) % L.length; } return out; };
+  const f1 = [...walk(pa, pb), ...inner.slice().reverse()];
+  const f2 = [...walk(pb, pa), ...inner];
+
+  const faces = [];
+  for (const f of mesh.faces) {
+    if (f === face) { faces.push(f1, f2); continue; }
+    faces.push(withSplits(mesh.faceLoop(f).map(he => vi.get(he.v.id))));
+  }
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `切下去做出壞掉的網格：${pre.fatal[0]}` };
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  /** 標記：原本的邊照搬；被插點的邊兩段都繼承原本那條；曲線的每一段標 hard */
+  const want = new Map();
+  for (const [k, m] of marks) want.set(k, m);
+  for (const [k, list] of splits) {
+    const [a, b] = k.split('>').map(Number);
+    const m = marks.get(kOf(a, b));
+    const seq = [a, ...list.map(x => x.idx), b];
+    for (let i = 0; i + 1 < seq.length; i++) want.set(kOf(seq[i], seq[i + 1]), m);
+  }
+  const path = [sIdx, ...inner, eIdx];
+  const newPairs = [];
+  for (let i = 0; i + 1 < path.length; i++) {
+    const k = kOf(path[i], path[i + 1]);
+    want.set(k, Object.assign({}, want.get(k), { hard: true }));
+    newPairs.push([path[i], path[i + 1]]);
+  }
+  const to = i => clean.remap.get(i);
+  const di = out._vertIndex();
+  const back = new Map([...clean.remap].map(([a, b]) => [b, a]));
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(back.get(di.get(he.v.id)), back.get(di.get(he.to.id)))));
+  }
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    newEdges: newPairs.map(([a, b]) => [to(a), to(b)]).filter(([a, b]) => a !== undefined && b !== undefined),
+    added: inner.length + (s.v === undefined ? 1 : 0) + (e.v === undefined ? 1 : 0),
+    inner: inner.length
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  邊上加點（＝ Blender 的 Subdivide 選一條邊）
 // ═══════════════════════════════════════════════════════
 
