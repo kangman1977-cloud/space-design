@@ -35,7 +35,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, subdivideEdges, separateAlongEdges,
+         splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -774,6 +774,7 @@ $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeUndoDel').onclick = () => undoKnifeDelete();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('separate').onclick = () => separateSelected();
+$('solidCut').onclick = () => solidCutSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('measureHud').onclick = () => toggleMeasureHud();
 $('measureCircle').onclick = () => toggleMeasureCircle();
@@ -3070,6 +3071,54 @@ function separateSelected() {
    */
   toast(`已分離成 ${made.length} 個物件　⚠ 切開的斷面是空的 —— `
       + '選一個物件按「補洞」就補起來');
+}
+
+/**
+ * 🔴 **切成實心（切蛋糕）**：選好範圍 → 切下來的、剩下的，每一塊都是實心。
+ * 規格：`規格\建模器-切成實心.md`。幾何全在 `solidCut()`，這裡只管建物件（照 `分離` 那一段）。
+ *
+ * ⚠ **跟 `分離` 不同的只有兩件**：
+ * ① 點／邊／面都吃（`分離` 只吃邊）
+ * ② 切口是新長出來的稜線 → 每一塊要跑 `refreshAfterEdit()` 重標折線（跟 `補洞` 同一條）
+ */
+function solidCutSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先進「拉點線面」，用點、邊或面選好要切下來的範圍，再按「切成實心」', true);
+    return;
+  }
+  const obj = els[0].obj;
+  if (els.some(e => e.obj !== obj)) { toast('一次只能切一個物件', true); return; }
+
+  const r = solidCut(obj.mesh(), els);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  for (const m of r.meshes) refreshAfterEdit(m);
+  /** 名字、變換、原點：跟 `分離` 一模一樣（理由見 `separateSelected()` 那一段）*/
+  const made = r.meshes.map((m, i) => new ModelObject({
+    name: `${obj.name}－${i + 1}`,
+    kind: obj.kind,
+    src: { type: 'mesh' },
+    mesh: m,
+    pos: obj.pos, rot: obj.rot, scale: obj.scale,
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+  }));
+  for (const o of made) recenterOrigin(o);
+
+  sel.clearEditSel();
+  doc.remove(obj);
+  for (const o of made) doc.add(o);
+  view.sync(doc);
+  sel.set(made.map(o => o.id));
+  panel.analysisCache.clear();
+  commit(`切成實心 ${made.length} 塊`);
+  panel.refresh();
+  updateBar();
+
+  /** 講出切口長什麼樣 —— 彎的那種展開時要再分割，⛔ 不講的話他會以為展開圖壞了 */
+  const kinds = [...new Set(r.kinds)];
+  toast(`已切成 ${made.length} 塊實心　切口：${kinds.join('、')}`
+      + (kinds.includes('彎的') ? '　⚠ 彎的切口在展開圖上攤不平，要再分割才能下料' : ''));
 }
 
 /**
@@ -5557,6 +5606,16 @@ function updateBar() {
       : sel.editCount === 0
         ? '先用「切一刀」或「環切」切一圈（切完會自動選中），再按這裡'
         : '「分離」要沿著一圈邊切開 —— 把過濾器切到「邊」';
+  /**
+   * 切成實心：**編輯模式選到東西就給按**（點／邊／面都吃）。
+   * 切不切得出來由 `solidCut()` 判斷並講原因 —— ⛔ 介面不再判一次（跟 `分離` 同一條，坑第 31 條）。
+   */
+  const solidAnySel = sel.editMode && sel.editCount > 0;
+  $('solidCut').hidden = !solidAnySel;
+  $('solidCut').title = solidAnySel
+    ? '切成實心：把選到的範圍切下來，切下來的與剩下的都是實心（切口封起來，兩塊密合）。'
+      + '點／邊／面都可以選範圍'
+    : '先按「拉點線面」，用點、邊或面選好要切下來的範圍';
 
   /**
    * 邊上加點：**選到邊就給按**（一條或好幾條都行）。

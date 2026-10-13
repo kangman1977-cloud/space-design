@@ -2326,6 +2326,443 @@ export function separateAlongEdges(mesh, hes) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  切成實心（切蛋糕）—— 規格：`規格\建模器-切成實心.md`
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **切成實心：選好範圍 → 切下來的、剩下的，每一塊都是封閉的實心。**
+ *
+ * ── kang 2026-10-13 ─────────────────────────────────
+ * > 「我在方塊上切下來的任何造型…在原本被切下的方塊也是實心的」「很像切蛋糕」
+ * > 用意是**展開圖**：切口在展開圖上是獨立、可以直接下料的面。
+ *
+ * ⚠ **⛔ 不是改 `分離`** —— `分離` 照舊切成空殼（做碗、薄殼件）。
+ * 兩支前半段一樣（分組），差別只在這一支**幫每一塊補上切口**。
+ *
+ * ── 選取 → 哪些面在同一組 ─────────────────────────────
+ * | 選的 | 分組 |
+ * |---|---|
+ * | 面 | 選到的面（整個共面區域）一組、其他一組 |
+ * | 點 | 每個角都被選到的面一組、其他一組 |
+ * | 邊 | 跟 `分離` 一樣：邊當牆、走得到的同一組 |
+ *
+ * ── 切口怎麼往裡面長（`capPolys()`）─────────────────────
+ * 整圈平的 → 一片；分成兩段各自平的 → 兩片（共用交接線）；
+ * 三段以上、平面交在同一點 → 每段接到那一點；都不是 → 彎的（扇形接到重心）。
+ * 🔴 **同一份切口給交界兩邊**（一邊反方向）⇒ 兩塊密合、各自封閉。
+ *
+ * ── 對答案（⛔ 不靠畫面）──────────────────────────────
+ * 每一塊都要封閉、結構對、體積大於 0，而且**體積加起來 ＝ 原本**。
+ * 不成立就整個擋下來（⛔ 不切出壞東西）。另外檢查切口有沒有穿過外皮（凹的形狀會）。
+ *
+ * @param {Mesh} mesh 要封閉的網格
+ * @param {object[]} els 編輯模式的選取（`{kind:'vertex'|'edge'|'face', vert?, he?, face?}`）
+ * @returns {{ok:boolean, reason?:string, meshes?:Mesh[], kinds?:string[], loops?:number, capFaces?:number}}
+ */
+export function solidCut(mesh, els, tolDeg = 0.5) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(els) || !els.length) return { ok: false, reason: '先用點、邊或面選好要切下來的範圍' };
+  if (!mesh.isClosed()) {
+    return { ok: false, reason: '這個物件本身不是封閉的（有洞），切不出實心 —— 先按「補洞」把它補起來' };
+  }
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const kinds = new Set(els.map(e => e.kind));
+  if (kinds.has('edge') && kinds.size > 1) {
+    return { ok: false, reason: '邊跟點／面不能混著選 —— 用「邊」圈一圈，或用點／面選範圍，擇一' };
+  }
+
+  /** 每個面屬於哪一組 */
+  const gid = new Map();
+  if (kinds.has('edge')) {
+    const wall = new Set();
+    for (const e of els) {
+      const a = vi.get(e.he && e.he.v && e.he.v.id), b = vi.get(e.he && e.he.to && e.he.to.id);
+      if (a === undefined || b === undefined) return { ok: false, reason: '選到的邊不在這個物件上' };
+      wall.add(kOf(a, b));
+    }
+    let g = 0;
+    for (const f0 of mesh.faces) {
+      if (gid.has(f0)) continue;
+      const stack = [f0];
+      gid.set(f0, g);
+      while (stack.length) {
+        for (const he of mesh.faceLoop(stack.pop())) {
+          if (wall.has(kOf(vi.get(he.v.id), vi.get(he.to.id)))) continue;
+          const nb = he.twin && he.twin.face;
+          if (nb && !gid.has(nb)) { gid.set(nb, g); stack.push(nb); }
+        }
+      }
+      g++;
+    }
+    if (g < 2) {
+      return { ok: false, reason: '這幾條邊沒有把物件圍成兩邊 —— 要繞成完整的一圈才切得開' };
+    }
+  } else {
+    const pick = new Set();
+    for (const e of els) {
+      if (e.kind === 'face' && e.face) for (const f of regionOf(mesh, e.face, tolDeg).faces) pick.add(f);
+    }
+    const vs = new Set(els.filter(e => e.kind === 'vertex' && e.vert).map(e => e.vert));
+    if (vs.size) {
+      for (const f of mesh.faces) if (mesh.faceVerts(f).every(v => vs.has(v))) pick.add(f);
+    }
+    if (!pick.size) {
+      return { ok: false, reason: '選到的點沒有圍住任何一個面 —— 一個面的每個角都要選到，那個面才算在裡面' };
+    }
+    if (pick.size === mesh.faces.length) return { ok: false, reason: '選到的是整個物件，沒有東西可以切' };
+    for (const f of mesh.faces) gid.set(f, pick.has(f) ? 1 : 0);
+  }
+
+  /**
+   * 交界的半邊：只取「小組號那一側」的半邊（每條交界邊只取一次），串成一圈一圈。
+   * ⚠ 一圈只能隔開**同一對**組 —— 三組在同一條線上交會（刀線分岔）先擋下來。
+   */
+  const cut = [];
+  for (const he of mesh.halfEdges) {
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    const a = gid.get(he.face), b = gid.get(he.twin.face);
+    if (a < b) cut.push(he);
+  }
+  const nextOf = new Map();
+  for (const he of cut) {
+    const k = `${gid.get(he.face)}|${vi.get(he.v.id)}`;
+    if (nextOf.has(k)) {
+      return { ok: false, reason: '切線在一個點上交叉或碰在一起（兩圈共用一個點）—— 這種形狀目前切不出實心，把範圍改小一點或分兩次切' };
+    }
+    nextOf.set(k, he);
+  }
+  const points = mesh.verts.map(v => v.p.clone());
+  const extra = new Map();          // 組號 → 這一組要多加的切口面
+  const add = (g, poly) => { if (!extra.has(g)) extra.set(g, []); extra.get(g).push(poly); };
+  const used = new Set();
+  const capKinds = [];
+  let loops = 0, capFaces = 0;
+  for (const he0 of cut) {
+    if (used.has(he0)) continue;
+    const ga = gid.get(he0.face), gb = gid.get(he0.twin.face);
+    const loop = [];
+    let he = he0, guard = 0;
+    do {
+      if (gid.get(he.face) !== ga || gid.get(he.twin.face) !== gb) {
+        return { ok: false, reason: '切線分岔了（一圈線同時隔開三塊以上）—— 這種形狀目前切不出實心，分兩次切' };
+      }
+      used.add(he);
+      loop.push(vi.get(he.v.id));
+      he = nextOf.get(`${ga}|${vi.get(he.to.id)}`);
+    } while (he && he !== he0 && guard++ < 1e6);
+    if (he !== he0) return { ok: false, reason: '切線沒有繞回來（不是完整的一圈）' };
+    loops++;
+    const cap = capPolys(loop, points);
+    capKinds.push(cap.kind);
+    /** ga 那一側的面走 a→b，所以它的切口要反過來走；gb 那一側照原方向 */
+    for (const p of cap.polys) { add(ga, p.slice().reverse()); add(gb, p); capFaces++; }
+  }
+
+  /** 每一組各建一個網格，再把不相連的部分拆開 */
+  const groups = [...new Set(gid.values())];
+  const marks = new Map();
+  for (const he of mesh.edges()) marks.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  const out = [];
+  for (const g of groups) {
+    const faces = mesh.faces.filter(f => gid.get(f) === g).map(f => mesh.faceLoop(f).map(h => vi.get(h.v.id)));
+    faces.push(...(extra.get(g) || []));
+    for (const part of splitFaceComponents(faces)) {
+      const pre = preflightRebuild(points, part);
+      if (!pre.ok) return { ok: false, reason: `切出來的一塊壞掉了：${pre.fatal[0]}` };
+      const clean = cleanRebuild(points, part);
+      const m = Mesh.fromFaceList(clean.points, clean.faces);
+      m.computeNormals();
+      /** 標記搬回去：新索引 → 原本索引（切口的新邊原本沒有標記，`get` 拿到 undefined 就是不標）*/
+      const di = m._vertIndex();
+      const back = new Map([...clean.remap].map(([from, to]) => [to, from]));
+      for (const h of m.edges()) {
+        m.applyMarks(h, marks.get(kOf(back.get(di.get(h.v.id)), back.get(di.get(h.to.id)))));
+      }
+      out.push(m);
+    }
+  }
+
+  /**
+   * 🔴 對答案，**三道的順序不能換**（沙箱 2026-10-13 兩個方向都撞過）：
+   * ① 封閉 → ② 穿出外皮 → ③ 體積
+   * · 範圍本身是平的（只選圓柱頂面）：切口貼在外皮上，② 撒的點落在表面上分不出裡外 → 會誤報「穿出」。
+   * 　它在 ① 就不封閉（切口跟選到的面疊在一起被清掉），所以 ① 要先問。
+   * · 切口穿過中空（管子外壁上半）：每一塊都封閉，但某一塊體積算成負的 → 先問 ③ 會誤報「太平」。
+   */
+  const flatMsg = '切不出東西：選到的範圍本身是平的，或切口跟選到的面疊在一起（切下來沒有厚度）。'
+    + '範圍要「包住一塊有厚度的東西」，例如一整個圓角、半顆球';
+  if (out.some(m => !m.isClosed() || !m.validate().ok)) return { ok: false, reason: flatMsg };
+  if (capPiercesSkin(points, mesh, vi, extra)) {
+    return {
+      ok: false,
+      reason: '切口會穿出模型外面（形狀有凹進去或中空的地方，刀子往裡面走時穿過了另一面外皮）—— 把範圍改小一點，或分兩次切'
+    };
+  }
+  const v0 = mesh.volume();
+  const vols = out.map(m => m.volume());
+  const thin = Math.max(1e-6, Math.abs(v0) * 1e-6);
+  if (vols.some(v => !(v > thin))) return { ok: false, reason: flatMsg };
+  const sum = vols.reduce((s, v) => s + v, 0);
+  if (Math.abs(sum - v0) > Math.max(1e-6, Math.abs(v0) * 1e-6)) {
+    return { ok: false, reason: `切完的體積對不起來（${sum.toFixed(2)} ≠ 原本 ${v0.toFixed(2)}），已取消` };
+  }
+
+  /** 大的排前面 —— 呼叫端拿第一塊沿用原本的名字順序（跟 `分離` 一樣） */
+  const order = out.map((m, i) => i).sort((a, b) => vols[b] - vols[a]);
+  return {
+    ok: true,
+    meshes: order.map(i => out[i]),
+    volumes: order.map(i => vols[i]),
+    kinds: capKinds, loops, capFaces
+  };
+}
+
+/** 面表（頂點索引陣列）分成不相連的幾份 —— 共用一條邊才算相連 */
+function splitFaceComponents(faces) {
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const byEdge = new Map();
+  faces.forEach((f, fi) => {
+    for (let i = 0; i < f.length; i++) {
+      const k = kOf(f[i], f[(i + 1) % f.length]);
+      if (!byEdge.has(k)) byEdge.set(k, []);
+      byEdge.get(k).push(fi);
+    }
+  });
+  const comp = new Array(faces.length).fill(-1);
+  let n = 0;
+  for (let s = 0; s < faces.length; s++) {
+    if (comp[s] >= 0) continue;
+    const stack = [s];
+    comp[s] = n;
+    while (stack.length) {
+      const f = faces[stack.pop()];
+      for (let i = 0; i < f.length; i++) {
+        for (const nb of byEdge.get(kOf(f[i], f[(i + 1) % f.length]))) {
+          if (comp[nb] < 0) { comp[nb] = n; stack.push(nb); }
+        }
+      }
+    }
+    n++;
+  }
+  return Array.from({ length: n }, (_, c) => faces.filter((_, i) => comp[i] === c));
+}
+
+/**
+ * 一圈切線 → 切口的面（頂點索引，可能在 `points` 後面加一個內部點）。
+ * 回傳的面**照那一圈原本的方向**走；呼叫端給另一側時反過來。
+ * 判準與沙箱量測 → `規格\建模器-切成實心.md`「切口怎麼算」。
+ */
+function capPolys(loop, points) {
+  const n = loop.length;
+  const ps = loop.map(i => points[i]);
+  const all = planeOfPoints(ps);
+  if (!all || all.dev <= PLANAR_TOL_CM) return { kind: '一片平的', polys: [loop.slice()] };
+
+  /** 分成最少段「各自是平的」：每個起點都試一次，取段數最少的（段與段共用端點）*/
+  const flat = (from, to) => {
+    const q = [];
+    for (let t = from; t <= to; t++) q.push(ps[t % n]);
+    const pl = planeOfPoints(q);
+    return !pl || pl.dev <= PLANAR_TOL_CM;
+  };
+  let best = null;
+  for (let s = 0; s < n; s++) {
+    const starts = [];
+    let cur = s, guard = 0;
+    while (cur < s + n && guard++ < n) {
+      starts.push(cur % n);
+      let e = cur + 2;
+      while (e < s + n && flat(cur, e + 1)) e++;
+      cur = e;
+    }
+    if (!best || starts.length < best.length) best = starts;
+    if (best.length <= 2) break;
+  }
+  const k = best.length;
+  const runs = best.map((s, j) => {
+    const e = best[(j + 1) % k];
+    const idx = [];
+    let t = s;
+    do { idx.push(t); t = (t + 1) % n; } while (t !== (e + 1) % n);
+    return idx;
+  });
+  const pls = runs.map(r => planeOfPoints(r.map(i => ps[i])));
+
+  if (k === 2 && pls.every(Boolean)) {
+    return { kind: '兩片平的', polys: runs.map(r => r.map(i => loop[i])) };
+  }
+  if (k >= 3 && pls.every(Boolean)) {
+    /** 最小平方求一點同時在 k 個平面上（加一點點往重心拉，平面幾乎平行時才不會爆掉）*/
+    const c = ps.reduce((s, p) => s.clone().add(p), ps[0].clone().set(0, 0, 0)).multiplyScalar(1 / n);
+    const eps = 1e-9;
+    const A = [[eps, 0, 0], [0, eps, 0], [0, 0, eps]], b = [eps * c.x, eps * c.y, eps * c.z];
+    for (const { n: m, d } of pls) {
+      const v = [m.x, m.y, m.z];
+      for (let i = 0; i < 3; i++) { for (let j = 0; j < 3; j++) A[i][j] += v[i] * v[j]; b[i] += v[i] * d; }
+    }
+    const det = M => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+      - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+    const D = det(A);
+    const col = j => A.map((r, i) => r.map((x, jj) => (jj === j ? b[i] : x)));
+    const C = ps[0].clone().set(det(col(0)) / D, det(col(1)) / D, det(col(2)) / D);
+    const off = Math.max(...pls.map(({ n: m, d }) => Math.abs(m.dot(C) - d)));
+    if (Number.isFinite(off) && off <= PLANAR_TOL_CM * 10) {
+      const ci = points.length;
+      points.push(C);
+      return { kind: `${k} 片平的，交在裡面一點`, polys: runs.map(r => [...r.map(i => loop[i]), ci]) };
+    }
+  }
+  /** 彎的：扇形接到這一圈的重心（第二步再改成更順的曲面）*/
+  const c = ps.reduce((s, p) => s.clone().add(p), ps[0].clone().set(0, 0, 0)).multiplyScalar(1 / n);
+  const ci = points.length;
+  points.push(c);
+  return { kind: '彎的', polys: loop.map((v, i) => [v, loop[(i + 1) % n], ci]) };
+}
+
+/** 一串點的平面（Newell 法向）＋ 最遠的點離平面多遠；共線（法向算不出來）回 null */
+function planeOfPoints(ps) {
+  const nrm = ps[0].clone().set(0, 0, 0);
+  for (let i = 0; i < ps.length; i++) {
+    const a = ps[i], b = ps[(i + 1) % ps.length];
+    nrm.x += (a.y - b.y) * (a.z + b.z);
+    nrm.y += (a.z - b.z) * (a.x + b.x);
+    nrm.z += (a.x - b.x) * (a.y + b.y);
+  }
+  if (nrm.length() < 1e-12) return null;
+  nrm.normalize();
+  const c = ps.reduce((s, p) => s.clone().add(p), ps[0].clone().set(0, 0, 0)).multiplyScalar(1 / ps.length);
+  const d = nrm.dot(c);
+  let dev = 0;
+  for (const p of ps) dev = Math.max(dev, Math.abs(nrm.dot(p) - d));
+  return { n: nrm, d, dev };
+}
+
+/**
+ * 🔴 **切口有沒有穿過外皮**（形狀凹進去時會）。
+ * 拿切口的每個三角形，跟原本外皮上**不共用頂點**的三角形一個一個問「有沒有交叉」。
+ * ⚠ 只抓「真的穿過去」（兩邊都嚴格跨過對方的平面）；剛好碰到邊、貼在同一平面的不算。
+ */
+function capPiercesSkin(points, mesh, vi, extra) {
+  const seen = new Set();
+  const capTris = [];
+  for (const list of extra.values()) {
+    for (const poly of list) {
+      const key = poly.slice().sort((x, y) => x - y).join(',');
+      if (seen.has(key)) continue;          // 同一片切口兩邊各一份，只問一次
+      seen.add(key);
+      for (const t of fanOrEar(poly, points)) capTris.push(t);
+    }
+  }
+  if (!capTris.length) return false;
+  const skin = [];
+  for (const f of mesh.faces) {
+    for (const t of mesh.faceTriangles(f)) skin.push(t.map(v => vi.get(v.id)));
+  }
+  const box = t => {
+    const xs = t.map(i => points[i]);
+    return {
+      lo: [Math.min(...xs.map(p => p.x)), Math.min(...xs.map(p => p.y)), Math.min(...xs.map(p => p.z))],
+      hi: [Math.max(...xs.map(p => p.x)), Math.max(...xs.map(p => p.y)), Math.max(...xs.map(p => p.z))]
+    };
+  };
+  /**
+   * ① 切口上撒點，問「在不在原本的實心裡面」—— 穿過中空、凹處時一定有點落在外面。
+   * ⚠ 光靠下面 ② 那道「三角形互穿」不夠：外皮剛好以邊貼在切口平面上時（例如先在那裡切過一刀），
+   * 沒有任何三角形「嚴格穿過」，② 會放行（沙箱：管子外壁上半，2026-10-13 撞到）。
+   * 🔴 兩條不同方向的射線**都說在外面**才算 —— 射線剛好擦過邊時單一條會數錯，⛔ 不可以誤擋正常的切法。
+   */
+  const skinPts = skin.map(t => t.map(i => points[i]));
+  const hits = (o, d) => {
+    let n = 0;
+    for (const [a, b, c] of skinPts) {
+      const e1 = b.clone().sub(a), e2 = c.clone().sub(a);
+      const pv = d.clone().cross(e2);
+      const det = e1.dot(pv);
+      if (Math.abs(det) < 1e-12) continue;
+      const tv = o.clone().sub(a);
+      const u = tv.dot(pv) / det;
+      if (u < 0 || u > 1) continue;
+      const qv = tv.cross(e1);
+      const v = d.dot(qv) / det;
+      if (v < 0 || u + v > 1) continue;
+      if (e2.dot(qv) / det > 1e-7) n++;
+    }
+    return n;
+  };
+  const d1 = points[0].clone().set(0.5773, 0.6123, 0.5406).normalize();
+  const d2 = points[0].clone().set(-0.4417, 0.3361, -0.8318).normalize();
+  const W = [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]];
+  for (const t of capTris) {
+    const [a, b, c] = t.map(i => points[i]);
+    for (const [wa, wb, wc] of W) {
+      const p = a.clone().multiplyScalar(wa).add(b.clone().multiplyScalar(wb)).add(c.clone().multiplyScalar(wc));
+      if (hits(p, d1) % 2 === 0 && hits(p, d2) % 2 === 0) return true;
+    }
+  }
+
+  /** ② 切口的三角形跟外皮的三角形互相穿過 */
+  const skinBox = skin.map(box);
+  for (const t of capTris) {
+    const bt = box(t);
+    for (let s = 0; s < skin.length; s++) {
+      const u = skin[s];
+      if (u.some(i => t.includes(i))) continue;
+      const bu = skinBox[s];
+      if (bu.lo[0] > bt.hi[0] || bu.hi[0] < bt.lo[0] || bu.lo[1] > bt.hi[1] || bu.hi[1] < bt.lo[1]
+        || bu.lo[2] > bt.hi[2] || bu.hi[2] < bt.lo[2]) continue;
+      if (trisCross(t.map(i => points[i]), u.map(i => points[i]))) return true;
+    }
+  }
+  return false;
+}
+
+/** 切口的面 → 三角形（三角形原樣；平的多邊形借 `Mesh` 的耳切）*/
+function fanOrEar(poly, points) {
+  if (poly.length === 3) return [poly];
+  const m = Mesh.fromFaceList(poly.map(i => points[i]), [poly.map((_, k) => k)]);
+  const f = m.faces[0];
+  const idx = m._vertIndex();
+  return m.faceTriangles(f).map(t => t.map(v => poly[idx.get(v.id)]));
+}
+
+/** 兩個三角形是不是真的互相穿過（⛔ 只碰到、共面都不算）*/
+function trisCross(A, B) {
+  const EPS = 1e-6;
+  const side = (T, P) => {
+    const n = T[1].clone().sub(T[0]).cross(T[2].clone().sub(T[0]));
+    const L = n.length();
+    if (L < 1e-12) return null;
+    n.multiplyScalar(1 / L);
+    return P.map(p => n.dot(p.clone().sub(T[0])));
+  };
+  const dB = side(A, B), dA = side(B, A);
+  if (!dB || !dA) return false;
+  const strad = d => d.some(x => x > EPS) && d.some(x => x < -EPS);
+  if (!strad(dB) || !strad(dA)) return false;
+  /** 兩個三角形各自跟對方平面的交線段，在交線方向上的區間要嚴格重疊 */
+  const dir = A[1].clone().sub(A[0]).cross(A[2].clone().sub(A[0]))
+    .cross(B[1].clone().sub(B[0]).cross(B[2].clone().sub(B[0])));
+  if (dir.length() < 1e-12) return false;
+  const interval = (T, d) => {
+    const ts = [];
+    for (let i = 0; i < 3; i++) {
+      const j = (i + 1) % 3;
+      if ((d[i] > EPS && d[j] < -EPS) || (d[i] < -EPS && d[j] > EPS)) {
+        const s = d[i] / (d[i] - d[j]);
+        ts.push(dir.dot(T[i].clone().lerp(T[j], s)));
+      } else if (Math.abs(d[i]) <= EPS) ts.push(dir.dot(T[i]));
+    }
+    return ts.length ? [Math.min(...ts), Math.max(...ts)] : null;
+  };
+  const ia = interval(A, dA), ib = interval(B, dB);
+  if (!ia || !ib) return false;
+  const lenScale = dir.length() * 1e-6;
+  return Math.min(ia[1], ib[1]) - Math.max(ia[0], ib[0]) > lenScale;
+}
+
+// ═══════════════════════════════════════════════════════
 //  邊上加點（＝ Blender 的 Subdivide 選一條邊）
 // ═══════════════════════════════════════════════════════
 

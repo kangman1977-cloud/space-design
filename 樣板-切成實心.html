@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：切成實心（切蛋糕）</title>
+<!--
+  🔴 這是【給 kang 確認結果用的樣板】，⛔ 不是要上線的程式，也⛔ 不是之後的演算法。
+  ⭐ 例子照 kang 2026-10-13 的截圖：圓角方塊，用「邊」圈住一個圓角（球角）那一圈。
+     方塊 60 × 45 × 40 cm、圓角半徑 5 cm。
+  ⚠ 這裡的切口是「知道答案」直接畫的（圓角那一圈三段弧各自是平的 → 三片平面交在內部一點），
+     ⛔ 沒有走建模器的任何一支程式。可以直接雙擊打開（three.js 走 ../lib 那份非模組版）。
+-->
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #1b1e23; color: #e8eaed;
+  font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  font-size: 13px; padding: 16px;
+}
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #8b93a1; font-size: 12.5px; margin: 0 0 12px; line-height: 1.7; max-width: 1180px; }
+.sub b { color: #e8eaed; }
+.wrap { display: flex; gap: 16px; flex-wrap: wrap; max-width: 1180px; }
+#view { flex: 1 1 640px; min-width: 300px; height: 560px; border: 1px solid #3a3f48; border-radius: 8px; background: #15181d; position: relative; touch-action: none; }
+#view canvas { display: block; width: 100%; height: 100%; border-radius: 8px; }
+#hint { position: absolute; left: 10px; bottom: 8px; color: #6b7280; font-size: 11.5px; pointer-events: none; }
+.side { flex: 0 1 340px; min-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+.card { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; padding: 10px 14px; line-height: 1.75; font-size: 12.5px; }
+.card h2 { font-size: 14px; margin: 0 0 6px; }
+.btns { display: flex; flex-direction: column; gap: 6px; }
+.btns button { text-align: left; background: #2a2e36; color: #e8eaed; border: 1px solid #3a3f48; border-radius: 6px; padding: 8px 10px; font: inherit; cursor: pointer; }
+.btns button.on { background: #2f5d9a; border-color: #4a86d0; }
+.btns button small { display: block; color: #9aa3b2; font-size: 11.5px; }
+.btns button.on small { color: #d6e4f7; }
+label.row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+label.row input[type=range] { flex: 1; }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+#state { color: #f2c46d; }
+</style>
+</head>
+<body>
+<h1>樣板：切成實心（切蛋糕）</h1>
+<p class="sub">
+  例子是你截圖那個：<b>圓角方塊，用「邊」圈住一個圓角</b>（方塊 60 × 45 × 40 cm、圓角半徑 5 cm）。
+  左邊三個按鈕切換看：原本的樣子／現在的 <b>分離</b>／想要的 <b>切成實心</b>。
+  <b>拖曳可以轉、滾輪可以拉近</b>，轉到背面或拉開一點，看裡面是空的還是實的。
+</p>
+
+<div class="wrap">
+  <div id="view"><div id="hint">拖曳旋轉　滾輪縮放</div></div>
+  <div class="side">
+    <div class="card">
+      <h2>看哪一種</h2>
+      <div class="btns">
+        <button data-mode="orig">原本<small>還沒切，方塊上看得到圈起來的那一圈</small></button>
+        <button data-mode="shell">現在的「分離」<small>兩個空殼：切口開著，裡面是空的（深灰色＝看到殼的內面）</small></button>
+        <button data-mode="solid" class="on">想要的「切成實心」<small>兩塊都是實心：切口封起來，兩邊各一片</small></button>
+      </div>
+      <label class="row">拉開距離 <input id="gap" type="range" min="0" max="25" step="0.5" value="10"> <span id="gapv">10</span> cm</label>
+      <div id="state" style="margin-top:6px"></div>
+    </div>
+    <div class="card">
+      <h2>顏色</h2>
+      <span class="sw" style="background:#4a7fc0"></span>原本的方塊（剩下的那塊）<br>
+      <span class="sw" style="background:#3fae8a"></span>切下來的那塊<br>
+      <span class="sw" style="background:#f0a030"></span>切口（同一個面，兩邊各一片）<br>
+      <span class="sw" style="background:#2a2f38;border:1px solid #555"></span>殼的內面（看得到＝裡面是空的）
+    </div>
+    <div class="card">
+      <h2>要你確認的</h2>
+      ① 切下來那塊、剩下的方塊，<b>兩塊都是實心</b>，放回去剛好密合 —— 是不是你要的？<br>
+      ② 這個例子的切口是<b>三片平的面</b>（四分之一圓），在方塊裡面交在同一點 —— 是不是你腦中的那一刀？
+    </div>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script>
+  /* 在 Claude 的瀏覽器窗格裡打開時，這頁是單獨一頁、旁邊的 lib 讀不到 → 改抓同一版（r128）的 CDN */
+  if (!window.THREE) document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+</script>
+<script>
+(() => {
+  const HX = 30, HY = 22.5, HZ = 20, R = 5;           // 半長（cm）、圓角半徑
+  const H = [HX, HY, HZ], I = H.map(h => h - R);      // I＝圓角開始的地方
+  const K = 6, M = 6;                                 // 圓角段數、平面段數
+
+  // 每一軸的取樣點：-H → -I（圓角）、-I → I（平面）、I → H（圓角）
+  const lin = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => a + (b - a) * i / n);
+  const S = H.map((h, a) => {
+    const s = [...lin(-h, -I[a], K), ...lin(-I[a], I[a], M).slice(1), ...lin(I[a], h, K).slice(1)];
+    return s;
+  });
+
+  // 方塊表面的點 v → 圓角方塊表面的點
+  const round = (v) => {
+    const q = v.map((x, a) => Math.max(-I[a], Math.min(I[a], x)));
+    const d = v.map((x, a) => x - q[a]);
+    const L = Math.hypot(...d);
+    return L < 1e-9 ? v.slice() : q.map((x, a) => x + R * d[a] / L);
+  };
+  const inCorner = (v) => v.every((x, a) => x >= I[a] - 1e-9);   // +X +Y +Z 那個圓角
+
+  const body = [], piece = [];
+  for (let n = 0; n < 3; n++) for (const sgn of [1, -1]) {
+    const u = (n + 1) % 3, w = (n + 2) % 3;
+    const fn = [0, 0, 0]; fn[n] = sgn;
+    const su = S[u], sw = S[w];
+    for (let i = 0; i < su.length - 1; i++) for (let j = 0; j < sw.length - 1; j++) {
+      const cell = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => {
+        const v = [0, 0, 0]; v[n] = sgn * H[n]; v[u] = su[a]; v[w] = sw[b]; return v;
+      });
+      const dst = cell.every(inCorner) ? piece : body;
+      const p = cell.map(round);
+      for (const t of [[0, 1, 2], [0, 2, 3]]) {
+        let [a, b, c] = t.map(k => p[k]);
+        const e1 = b.map((x, k) => x - a[k]), e2 = c.map((x, k) => x - a[k]);
+        const nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+        if (nx * fn[0] + ny * fn[1] + nz * fn[2] < 0) [b, c] = [c, b];
+        dst.push(...a, ...b, ...c);
+      }
+    }
+  }
+
+  // 切口：三段弧各自在 x＝Ix／y＝Iy／z＝Iz 的平面上 → 從內部那一點 C 扇形補
+  const C = I.slice();
+  const capPiece = [], capBody = [];
+  for (let a = 0; a < 3; a++) {
+    const b = (a + 1) % 3, c = (a + 2) % 3;
+    const arc = [];
+    for (const x of S[c].filter(x => x >= I[c] - 1e-9)) { const v = [0, 0, 0]; v[a] = I[a]; v[b] = H[b]; v[c] = x; arc.push(round(v)); }
+    for (const y of S[b].filter(y => y >= I[b] - 1e-9).reverse().slice(1)) { const v = [0, 0, 0]; v[a] = I[a]; v[c] = H[c]; v[b] = y; arc.push(round(v)); }
+    for (let k = 0; k < arc.length - 1; k++) {
+      let p0 = C, p1 = arc[k], p2 = arc[k + 1];
+      const e1 = p1.map((x, i) => x - p0[i]), e2 = p2.map((x, i) => x - p0[i]);
+      const nn = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      // 切下來那塊：法向朝 −a（朝方塊本體）；剩下的方塊：朝 +a（朝缺口）
+      const tp = nn[a] < 0 ? [p0, p1, p2] : [p0, p2, p1];
+      capPiece.push(...tp[0], ...tp[1], ...tp[2]);
+      capBody.push(...tp[0], ...tp[2], ...tp[1]);
+    }
+  }
+
+  // ── three.js ──
+  const view = document.getElementById('view');
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  view.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x15181d);
+  const camera = new THREE.PerspectiveCamera(35, 1, 1, 2000);
+  scene.add(new THREE.HemisphereLight(0xdfe8f5, 0x30343c, 0.75));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(60, 90, 70); scene.add(sun);
+  const sun2 = new THREE.DirectionalLight(0xffffff, 0.25); sun2.position.set(-70, 20, -40); scene.add(sun2);
+
+  const geo = (arr) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3)); g.computeVertexNormals(); return g; };
+  const flat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.75, metalness: 0, flatShading: true, side: THREE.FrontSide });
+  const inner = new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 1, side: THREE.BackSide });
+
+  const mk = (arr, color, withInner) => {
+    const grp = new THREE.Group();
+    const g = geo(arr);
+    grp.add(new THREE.Mesh(g, flat(color)));
+    if (withInner) grp.add(new THREE.Mesh(g, inner));
+    const eg = new THREE.EdgesGeometry(g, 25);
+    grp.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.45 })));
+    return grp;
+  };
+  const gBody = mk(body, 0x4a7fc0, true), gPiece = mk(piece, 0x3fae8a, true);
+  const gCapB = mk(capBody, 0xf0a030, false), gCapP = mk(capPiece, 0xf0a030, false);
+  const pieceRoot = new THREE.Group(); pieceRoot.add(gPiece, gCapP);
+  const bodyRoot = new THREE.Group(); bodyRoot.add(gBody, gCapB);
+  scene.add(bodyRoot, pieceRoot);
+
+  // 原本：畫出圈起來的那一圈（黃線）
+  const ringPts = [];
+  for (let a = 0; a < 3; a++) {
+    const b = (a + 1) % 3, c = (a + 2) % 3;
+    for (const x of S[c].filter(x => x >= I[c] - 1e-9)) { const v = [0, 0, 0]; v[a] = I[a]; v[b] = H[b]; v[c] = x; ringPts.push(round(v)); }
+    for (const y of S[b].filter(y => y >= I[b] - 1e-9).reverse().slice(1)) { const v = [0, 0, 0]; v[a] = I[a]; v[c] = H[c]; v[b] = y; ringPts.push(round(v)); }
+  }
+  // 每個平面那一段弧各 2K＋1 個點，各自連起來（共 3 段）
+  const seg = 2 * K + 1, ringSegs = [];
+  for (let s = 0; s < 3; s++) for (let k = 0; k < seg - 1; k++) {
+    ringSegs.push(new THREE.Vector3(...ringPts[s * seg + k]), new THREE.Vector3(...ringPts[s * seg + k + 1]));
+  }
+  const ring = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ringSegs),
+    new THREE.LineBasicMaterial({ color: 0xffd34d }));
+  scene.add(ring);
+
+  // 地板格線
+  const grid = new THREE.GridHelper(200, 20, 0x3a3f48, 0x262a31); grid.position.y = -HY - 0.01; scene.add(grid);
+
+  // ── 模式 ──
+  let mode = 'solid';
+  const dir = new THREE.Vector3(1, 1, 1).normalize();
+  const gapEl = document.getElementById('gap'), gapV = document.getElementById('gapv'), stEl = document.getElementById('state');
+  function apply() {
+    const g = mode === 'orig' ? 0 : Number(gapEl.value);
+    gapV.textContent = g;
+    gapEl.disabled = mode === 'orig';
+    pieceRoot.position.copy(dir).multiplyScalar(g);
+    gCapB.visible = gCapP.visible = mode === 'solid';
+    ring.visible = mode === 'orig';
+    stEl.textContent = {
+      orig: '一整塊。黃線＝你用「邊」圈起來的那一圈（樣板的段數比你截圖的細，形狀一樣）。',
+      shell: '兩塊都開著口：轉一下就看得到方塊的缺口、切下來那塊的背面都是空的（深灰）。',
+      solid: '兩塊都封起來了：橘色切口兩邊各一片，拉開距離調回 0 會剛好密合。'
+    }[mode];
+    document.querySelectorAll('.btns button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+    draw();
+  }
+  document.querySelectorAll('.btns button').forEach(b => b.onclick = () => { mode = b.dataset.mode; apply(); });
+  gapEl.oninput = apply;
+
+  // ── 簡單的環繞相機 ──
+  /* 一打開就對準那個圓角：它只有 5 cm，看整個方塊會看不清楚切口 */
+  let th = -0.35, ph = 0.95, dist = 42;
+  const target = new THREE.Vector3(I[0] + 3, I[1] + 3, I[2] + 3);
+  function place() {
+    camera.position.set(
+      target.x + dist * Math.sin(ph) * Math.sin(th),
+      target.y + dist * Math.cos(ph),
+      target.z + dist * Math.sin(ph) * Math.cos(th));
+    camera.lookAt(target);
+  }
+  function size() {
+    const w = view.clientWidth, h = view.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); draw();
+  }
+  function draw() { place(); renderer.render(scene, camera); }
+  let drag = null;
+  view.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; view.setPointerCapture(e.pointerId); });
+  view.addEventListener('pointermove', e => {
+    if (!drag) return;
+    th -= (e.clientX - drag.x) * 0.008; ph -= (e.clientY - drag.y) * 0.008;
+    ph = Math.max(0.1, Math.min(Math.PI - 0.1, ph));
+    drag = { x: e.clientX, y: e.clientY }; draw();
+  });
+  view.addEventListener('pointerup', () => { drag = null; });
+  view.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(40, Math.min(400, dist * (e.deltaY > 0 ? 1.1 : 0.9))); draw(); }, { passive: false });
+  window.addEventListener('resize', size);
+  size(); apply();
+
+  // 給檢查用：兩塊各自是不是封閉（每條邊剛好被兩個三角形用到）
+  window.__closed = (arrs) => {
+    const key = (p) => p.map(x => x.toFixed(4)).join(',');
+    const cnt = new Map();
+    for (const arr of arrs) for (let t = 0; t < arr.length; t += 9) {
+      const v = [0, 3, 6].map(o => key(arr.slice(t + o, t + o + 3)));
+      for (let k = 0; k < 3; k++) { const e = [v[k], v[(k + 1) % 3]].sort().join('|'); cnt.set(e, (cnt.get(e) || 0) + 1); }
+    }
+    let bad = 0; cnt.forEach(c => { if (c !== 2) bad++; });
+    return bad;
+  };
+  window.__check = () => ({ bodyOpenEdges: __closed([body, capBody]), pieceOpenEdges: __closed([piece, capPiece]), shellBodyOpenEdges: __closed([body]), shellPieceOpenEdges: __closed([piece]) });
+})();
+</script>
+</body>
+</html>

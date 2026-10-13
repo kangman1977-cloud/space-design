@@ -15493,6 +15493,95 @@ section('edgeRing 兩個方向都走（2026-10-13）');
     r1.hes.length === 2 && r2.hes.length === 2 && !r1.closed && !r2.closed, `${r1.hes.length} ${r1.closed}／${r2.hes.length} ${r2.closed}`);
 }
 
+section('切成實心（切蛋糕）第一步（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-切成實心.md`。主斷言：**每一塊封閉、體積 > 0、加起來 ＝ 原本**。
+ * 例子跟規格那張沙箱表一樣（①～⑩），⛔ 改了一邊要改另一邊。
+ */
+{
+  const faceEls = (m, pred) => m.faces.filter(f => m.faceVerts(f).every(v => pred(v.p))).map(face => ({ kind: 'face', face }));
+  const allClosed = r => r.ok && r.meshes.every(x => x.isClosed() && x.validate().ok);
+  const sumOk = (r, m) => r.ok && Math.abs(r.volumes.reduce((a, b) => a + b, 0) - m.volume()) < 1e-6 * Math.abs(m.volume());
+
+  // ① kang 截圖那種：方塊全部邊導圓角（寬 5、4 段），切下一個圓角 —— 點／邊／面三種選法結果要一樣
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const fil = edit.bevelEdges(box, [...box.edges()], 5, { segments: 4 }).mesh;
+  fil.computeNormals();
+  const b = fil.bounds();
+  const inC = p => p.x >= b.max.x - 5 - 1e-6 && p.y >= b.max.y - 5 - 1e-6 && p.z >= b.max.z - 5 - 1e-6;
+  const F = new Set(fil.faces.filter(f => fil.faceVerts(f).every(v => inC(v.p))));
+  const hes = [];
+  for (const f of F) for (const he of fil.faceLoop(f)) if (!F.has(he.twin.face)) hes.push(he);
+  eq('（前提）圓角那一圈 12 條邊', hes.length, 12);
+  const byFace = edit.solidCut(fil, [...F].map(face => ({ kind: 'face', face })));
+  const byVert = edit.solidCut(fil, fil.verts.filter(v => inC(v.p)).map(vert => ({ kind: 'vertex', vert })));
+  const byEdge = edit.solidCut(fil, hes.map(he => ({ kind: 'edge', he })));
+  for (const [r, how] of [[byFace, '面'], [byVert, '點'], [byEdge, '邊']]) {
+    ok(`★★★ ① 圓角（用${how}選）⇒ 2 塊、都封閉`, allClosed(r) && r.meshes.length === 2, r.reason);
+    ok(`★★★ 　 切口 3 片平的、交在裡面一點`, r.ok && r.kinds[0] === '3 片平的，交在裡面一點' && r.capFaces === 3, r.ok && r.kinds.join());
+    ok(`★★★ 　 體積加起來 ＝ 原本`, sumOk(r, fil));
+  }
+  near('★★ ① 切下來那塊 59.81（1/8 球 65.45 的網格近似）', byFace.volumes[1], 59.81, 0.01);
+
+  // ②～④ 球：上半、四分之一瓣、八分之一 —— 體積剛好 1/2、1/4、1/8
+  const sph = baked('sphere', { r: 30, segW: 32, segH: 16 });
+  const V0 = sph.volume();
+  for (const [name, pred, frac, kind] of [
+    ['② 上半球', p => p.y >= -1e-6, 1 / 2, '一片平的'],
+    ['③ 四分之一瓣（兩條經線）', p => p.x >= -1e-6 && p.z >= -1e-6, 1 / 4, '兩片平的'],
+    ['④ 八分之一', p => p.x >= -1e-6 && p.z >= -1e-6 && p.y >= -1e-6, 1 / 8, '3 片平的，交在裡面一點']
+  ]) {
+    const r = edit.solidCut(sph, faceEls(sph, pred));
+    ok(`★★★ 球 ${name} ⇒ 2 塊都封閉、切口「${kind}」`, allClosed(r) && r.kinds[0] === kind, r.ok ? r.kinds.join() : r.reason);
+    rel(`★★★ 　 切下來的體積 ＝ 原本 × ${frac}`, Math.min(...r.volumes), V0 * frac, 1e-9);
+  }
+
+  // ⑤ 斜著圈一塊：線不在平面上 ⇒ 彎的切口，照樣切（kang 選的）
+  const dir = new THREE.Vector3(0.6, 0.5, 0.62).normalize();
+  const r5 = edit.solidCut(sph, faceEls(sph, p => p.dot(dir) / 30 > 0.55));
+  ok('★★★ ⑤ 斜著圈一塊 ⇒ 照樣切、2 塊都封閉、切口「彎的」', allClosed(r5) && r5.kinds[0] === '彎的', r5.ok ? r5.kinds.join() : r5.reason);
+  ok('★★ 　 體積加起來 ＝ 原本', sumOk(r5, sph));
+
+  // ⑥⑦ 範圍本身是平的 ⇒ 擋下來、講「平的」
+  const cyl = baked('cylinder', { r: 20, h: 40 });
+  const r6 = edit.solidCut(cyl, faceEls(cyl, p => p.y >= cyl.bounds().max.y - 1e-6));
+  ok('★★★ ⑥ 圓柱只選頂面 ⇒ 擋下來、講「本身是平的」', !r6.ok && /平的/.test(r6.reason), r6.reason);
+  const bb = box.bounds();
+  const r7 = edit.solidCut(box, box.faces.filter(f => {
+    const ps = box.faceVerts(f).map(v => v.p);
+    return ps.every(p => Math.abs(p.y - bb.max.y) < 1e-6) || ps.every(p => Math.abs(p.z - bb.max.z) < 1e-6);
+  }).map(face => ({ kind: 'face', face })));
+  ok('★★★ ⑦ 方塊相鄰兩面 ⇒ 擋下來、講「本身是平的」', !r7.ok && /平的/.test(r7.reason), r7.reason);
+
+  // ⑧ 圓柱中間一段 ⇒ 3 塊（中間一段、上下兩截）
+  let cy = edit.bisect(cyl, { n: new THREE.Vector3(0, 1, 0), d: 10 }).mesh;
+  cy = edit.bisect(cy, { n: new THREE.Vector3(0, 1, 0), d: -10 }).mesh;
+  cy.computeNormals();
+  const r8 = edit.solidCut(cy, faceEls(cy, p => p.y >= -10 - 1e-6 && p.y <= 10 + 1e-6));
+  ok('★★★ ⑧ 圓柱中間一段 ⇒ 3 塊都封閉（剩下的上下兩截不相連，各自一塊）', allClosed(r8) && r8.meshes.length === 3, r8.reason);
+  rel('★★ 　 中間那段 ＝ 原本一半', r8.volumes[0], cy.volume() / 2, 1e-9);
+
+  // ⑨ 管子外壁上半：切口會穿過中空 ⇒ 擋下來、講「穿出」（⛔ 不可以講成「平的」）
+  let tube = edit.bisect(baked('tube', {}), { n: new THREE.Vector3(0, 1, 0), d: 0 }).mesh;
+  tube.computeNormals();
+  const rOut = tube.bounds().max.x;
+  const r9 = edit.solidCut(tube, faceEls(tube, p => p.y >= -1e-6 && Math.hypot(p.x, p.z) > rOut - 1e-3));
+  ok('★★★ ⑨ 管子外壁上半 ⇒ 擋下來、講「穿出模型外面」', !r9.ok && /穿出/.test(r9.reason), r9.reason);
+
+  // ⑩ 其他擋關
+  ok('★★ ⑩ 邊跟面混選 ⇒ 擋下來', !edit.solidCut(box, [{ kind: 'face', face: box.faces[0] }, { kind: 'edge', he: box.faces[1].he }]).ok);
+  ok('★★ 　 沒選東西 ⇒ 擋下來', !edit.solidCut(box, []).ok);
+  ok('★★ 　 選整個物件 ⇒ 擋下來', !edit.solidCut(box, box.faces.map(face => ({ kind: 'face', face }))).ok);
+  const open = edit.deleteFaces(box, [{ kind: 'face', face: box.faces[0] }]).mesh;
+  const rOpen = edit.solidCut(open, [{ kind: 'face', face: open.faces[0] }]);
+  ok('★★ 　 物件本身有洞 ⇒ 擋下來、叫他先「補洞」', !rOpen.ok && /補洞/.test(rOpen.reason), rOpen.reason);
+  ok('★★ 　 只點兩條邊（沒圍成一圈）⇒ 擋下來', !edit.solidCut(fil, hes.slice(0, 2).map(he => ({ kind: 'edge', he }))).ok);
+
+  // 原本的網格⛔ 不可以被動到（呼叫端要拿它取消）
+  ok('★★ 切完原本的網格一格都沒變（體積、面數）', Math.abs(fil.volume() - 104780.23) < 0.01 && fil.faces.length === 182, `${fil.volume()} ${fil.faces.length}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
