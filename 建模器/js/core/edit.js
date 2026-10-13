@@ -1261,19 +1261,30 @@ export function edgeRing(mesh, he0) {
   const seen = new Set();
   const startKey = keyOf(he0);
 
+  /**
+   * 🔴 **第二個方向從 `he0.twin` 出發時，⛔ 再檢查一次起點那條邊**（2026-10-13 修）。
+   * 原本第二趟第一步就撞到「起點已經看過」⇒ 當場停下，還當成「繞回起點」回 `closed=true`：
+   * 沒繞成一圈的 ring **只走得了 he0 那一側**（球的緯線從 1 條到 15 條都有，看點到哪一側），
+   * 而且常常謊報繞回來了（「選一圈面」那一支因此另外加了「全部四邊形」的判準）。
+   * 【實證】球 32×16，第 3 圈緯線：一側 3 條（closed=true）、另一側 13 條；修完兩側都 15 條、closed=false。
+   */
   for (const start of [he0, he0.twin]) {
     if (!start) continue;
     let h = start, guard = 0;
+    let again = start !== he0;                // 第二趟：起點那條邊第一趟已經收了，直接穿過去
     while (h && h.face && guard++ < 1e6) {
       const k = keyOf(h);
-      if (seen.has(k)) {
-        // 走回起點 ＝ 閉環（第一步就撞到自己不算，那是還沒走）
-        if (k === startKey && out.hes.length > 1) out.closed = true;
-        break;
+      if (!again) {
+        if (seen.has(k)) {
+          // 走回起點 ＝ 閉環（只有第一趟會走回起點；第一步就撞到自己不算，那是還沒走）
+          if (k === startKey && out.hes.length > 1) out.closed = true;
+          break;
+        }
+        seen.add(k);
+        out.hes.push(h);
+        out.keys.push(k);
       }
-      seen.add(k);
-      out.hes.push(h);
-      out.keys.push(k);
+      again = false;
 
       const loop = mesh.faceLoop(h.face);
       if (loop.length !== 4) break;           // 只穿得過四邊形

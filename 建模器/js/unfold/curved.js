@@ -46,9 +46,9 @@ export function gridOf(mesh, faceIds) {
   const family = seed => {
     const loops = [];
     const seen = new Set();
-    // ⚠ 從 seed 跟它的另一側各走一次：`edgeRing()` 沒繞成一圈時只走得了一頭（球的緯線只走到一半）
     // ⚠ `markableOnly: false`：每走一條都要重算一次「看得見的邊」，齒輪 20 塊曲面會算到 20 秒；而且這裡本來就只看這一塊裡的邊
-    for (const e of [...seamLoopEdges(mesh, seed, 'all', LOOSE), ...seamLoopEdges(mesh, seed.twin, 'all', LOOSE)]) {
+    // （原本還從 seed 的另一側再走一次，繞過 `edgeRing()` 只走一頭的舊問題；2026-10-13 那邊修好了 ⇒ 拿掉）
+    for (const e of seamLoopEdges(mesh, seed, 'all', LOOSE)) {
       if (!inBlock(e) || seen.has(key(e))) continue;
       const L = edgeLoop(mesh, e, LOOSE);
       const hes = L.hes.filter(inBlock);

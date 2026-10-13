@@ -422,12 +422,18 @@ export function loopFaces(mesh, he0) {
    * ⚠ **一定要去重**：`edgeRing()` 兩個方向各走一次，
    * 而種子那個面**兩邊都會經過** —— 不去重的話它會被選兩次，
    * 數量也會多報一個。
+   *
+   * 🔴 **每條邊兩側的面都收**（2026-10-13，`edgeRing()` 第二個方向修好之後）：ring 上每一條邊的兩側
+   * 都是路上穿過的面（兩頭撞牆的那個面也是）。原本只收 `he.face`，第二個方向沒走時剛好湊得齊；
+   * 修好之後起點另一側那一格會漏掉（球一直排 16 個面只收到 15）。
+   * 收兩側 ⇒ 從哪一側點都一樣：圓柱蓋子邊緣 ＝ 側面一格 ＋ **兩個**圓蓋（原本看點到哪一側，2 個或 1 個）。
+   * ⚠ 先收 `he.face`、再補另一側：繞成一圈的時候另一側全都收過了 ⇒ 順序跟以前一模一樣（繞一圈的幾何順序）。
    */
   const seen = new Set();
-  for (const he of r.hes) {
-    if (!he.face || seen.has(he.face.id)) continue;
-    seen.add(he.face.id);
-    out.faces.push(he.face);
+  for (const f of [...r.hes.map(he => he.face), ...r.hes.map(he => he.twin && he.twin.face)]) {
+    if (!f || seen.has(f.id)) continue;
+    seen.add(f.id);
+    out.faces.push(f);
   }
 
   /**

@@ -9659,10 +9659,14 @@ section('選一圈面：跟「選一圈」同一條路，但收的是面');
     }
     ok('⑥（前置）找得到「圓蓋與側面之間」那一圈的邊', !!he);
     const r = so6.loopFaces(m, he);
-    eq('★ 只選到 2 個面（撞到圓蓋就停）', r.faces.length, 2);
+    // 2026-10-13 edgeRing 兩個方向都走之後：側面一格 ＋ 兩頭各撞到一個圓蓋 ＝ 3（原本看點到哪一側，2 或 1）
+    eq('★ 只選到 3 個面（側面一格、兩頭撞到圓蓋就停）', r.faces.length, 3);
+    eq('★★ 　 從另一側點也是 3', so6.loopFaces(m, he.twin).faces.length, 3);
     ok('★★★ ⛔ closed 要是 false —— 它沒有繞回來', r.closed === false);
-    ok('★★ 而 edgeRing 自己說 true（⛔ 所以不能照抄）',
-      edit.edgeRing(m, he).closed === true);
+    // 2026-10-13 修好 edgeRing 第二個方向之後，它自己也不再謊報（原本這裡驗的是「它說 true，所以不能照抄」）；
+    // 「全部四邊形」那道判準照樣留著，兩道都要過
+    ok('★★ edgeRing 自己也說 false（第二個方向修好之後）—— 從兩側出發都一樣',
+      edit.edgeRing(m, he).closed === false && edit.edgeRing(m, he.twin).closed === false);
   }
 
   /** ⑦ 壞輸入不會壞 */
@@ -15431,6 +15435,62 @@ section('智慧分切 第三步：曲面切成整齊的長線（2026-10-13）');
   const pk = P(sk);
   ok('★★★ 不准切的邊 ⇒ 每一份提案都⛔ 碰它', pk.options.every(o => !o.edges.includes(eqE)), kinds(pk));
   ok('★★ 　 還是有提案（不是整個放棄）', pk.options.length > 1 && pk.edges.length > 0, kinds(pk));
+}
+
+section('edgeRing 兩個方向都走（2026-10-13）');
+
+/**
+ * 原本第二個方向從 `he0.twin` 出發，第一步就撞到「起點看過了」⇒ 當場停、還回 `closed=true`：
+ * 沒繞成一圈的 ring 只走得了點到的那一側，而且常常謊報繞回來了。
+ * 用到它的：環切、選一圈、選一圈面、分片「同方向的全部」、智慧分切找格子。
+ * 數字：球 32×16 轉成可編輯網格 ⇒ 每一直排 15 條緯線（兩極旁邊是三角形，走到那裡停）。
+ */
+{
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const so = await import('../js/core/selectops.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mkMesh = t => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t] } });
+    o.bake();
+    return o.mesh();
+  };
+  const m = mkMesh('sphere');
+  const lat = [...m.edges()].filter(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y - h.to.p.y) < 1e-6);
+  const ys = [...new Set(lat.map(h => h.v.p.y.toFixed(3)))].map(Number).sort((a, b) => b - a);
+  eq('前提：球有 15 圈緯線', ys.length, 15);
+  // 最上面一圈、第 3 圈、赤道 —— 修之前分別是（一側／另一側）1／15、3／13、8／8
+  for (const [yi, name] of [[0, '最上面一圈'], [2, '第 3 圈'], [7, '赤道']]) {
+    const he = lat.find(h => Math.abs(h.v.p.y - ys[yi]) < 1e-3);
+    const a = edit.edgeRing(m, he), b = edit.edgeRing(m, he.twin);
+    ok(`★★★ ${name}的緯線：從兩側出發都走到 15 條（＝ 緯線圈數）`, a.hes.length === 15 && b.hes.length === 15, `${a.hes.length}／${b.hes.length}`);
+    ok(`★★★ 　 而且都說沒繞回來（兩頭撞到極點的三角形）`, !a.closed && !b.closed, `${a.closed}／${b.closed}`);
+    eq(`★★ 　 每條只出現一次`, new Set(a.keys).size, 15);
+  }
+
+  // 分片「同方向的全部」：15 圈 × 32 段，從哪一側點都一樣
+  const he3 = lat.find(h => Math.abs(h.v.p.y - ys[2]) < 1e-3);
+  eq('★★★ 分片「同方向的全部」點第 3 圈緯線 ⇒ 15 × 32 ＝ 480 條（修之前 96）', seamLoopEdges(m, he3, 'all').length, 15 * 32);
+  eq('★★ 　 從另一側點也是 480（修之前 416）', seamLoopEdges(m, he3.twin, 'all').length, 15 * 32);
+
+  // 選一圈面：一直排 14 格四邊形 ＋ 兩頭各 1 個三角形
+  const lf = so.loopFaces(m, he3);
+  eq('★★ 選一圈面 ⇒ 14 格 ＋ 兩頭三角形 ＝ 16 個面（修之前 3）', lf.faces.length, 16);
+  ok('★★ 　 沒繞回來', lf.closed === false);
+
+  // 環切：從緯線切 ⇒ 多一整條經線，從北極旁邊切到南極旁邊
+  const vol0 = m.volume();
+  const cut = edit.loopCut(m, he3);
+  ok('★★★ 環切從第 3 圈緯線切 ⇒ 成功、切過 15 條邊（修之前只切 3 條）', cut.ok && cut.ringLen === 15, `${cut.ok} ${cut.ringLen}`);
+  ok('★★ 　 體積不變、χ ＝ 2', cut.ok && Math.abs(cut.mesh.volume() - vol0) < 1e-6 * Math.abs(vol0)
+    && cut.mesh.verts.length - [...cut.mesh.edges()].length + cut.mesh.faces.length === 2);
+
+  // 已經繞成一圈的照舊（方塊 4、圓柱 32），沒繞成一圈的圓柱水平邊從兩側都 2
+  const c = mkMesh('cylinder');
+  const rim = [...c.edges()].find(e => e.face && e.twin && e.twin.face
+    && ((c.faceLoop(e.face).length === 4) !== (c.faceLoop(e.twin.face).length === 4)));
+  const r1 = edit.edgeRing(c, rim), r2 = edit.edgeRing(c, rim.twin);
+  ok('★★ 圓柱蓋子邊緣：從兩側都 2 條、都沒繞回來（修之前 2 條說繞回來／1 條）',
+    r1.hes.length === 2 && r2.hes.length === 2 && !r1.closed && !r2.closed, `${r1.hes.length} ${r1.closed}／${r2.hes.length} ${r2.closed}`);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
