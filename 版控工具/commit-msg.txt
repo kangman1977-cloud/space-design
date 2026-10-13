@@ -1,42 +1,31 @@
-切成實心（切蛋糕）第一步 —— 點／邊／面選範圍，切下來的與剩下的每一塊都是實心（切口封起來、密合）；切不出東西就擋下來講原因
+切成實心 第一步 結案 —— kang 驗收通過（「都驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md
 
-kang 2026-10-13：「我在方塊上切下來的任何造型…在原本被切下的方塊也是實心的」「很像切蛋糕」，用意是展開圖。
-⛔ 不改「分離」（照舊切成空殼）。動到 8 個檔：
-  M  建模器/js/core/edit.js        新增 solidCut()（＋ capPolys／planeOfPoints／capPiercesSkin／fanOrEar／trisCross／splitFaceComponents）
-  M  建模器/js/main.js             solidCutSelected()（建物件那段照分離，多跑 refreshAfterEdit）；按鈕顯示與說明
-  M  建模器/index.html             #solidCut 按鈕，放在「分離」旁邊
-  M  建模器/tests/run.mjs          新增一節「切成實心（切蛋糕）第一步」30 項
-  ?? 規格/建模器-切成實心.md       新檔：定案、查到的事實、沙箱量測、第一步規格、⏳ 實測清單
-  ?? 樣板-切成實心.html            新檔：給 kang 確認結果的 3D 樣板（kang：「正確..這就是我要的新增功能」）
-  M  STATUS.md                    ⏳ 指向實測清單；真待辦換成「第二步：彎的切口改順」
+⛔ 程式一行都沒改。動到 4 個檔：
+  M  HISTORY.md                   新增一節「切成實心 第一步 結案：點／邊／面選範圍，兩塊都是實心」（經過／老實話／逐字搬入的清單與 AI 線上先驗）＋ 目次重產
+  M  規格/建模器-切成實心.md       「⏳ 給 kang 的實測清單（第一步）」＋「AI 線上先驗」搬走，換成「實測：已結案」指標；步驟表第一步標 ✅ 結案
+                                  （上一輪存檔之後補的：清單第 1 項改成切在 Y 40、AI 線上先驗結果，一起搬走）
+  M  STATUS.md                    ⏳ 清空（真待辦留「第二步：彎的切口改順」）
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  切成實心 第一步（規格\建模器-切成實心.md「分兩步做」）
+  切成實心 第一步 結案
 
 【依賴哪些事實】
-  1. 分離＝邊當牆分組 → 每組 cleanRebuild＋fromFaceList 重建      【已查證 · edit.js separateAlongEdges()】
-  2. 一個面可以是多角形，畫面／計算時才耳切 ⇒ 平的切口＝一整片面  【已查證 · edit.js fillHoles()、mesh.js faceTriangles()】
-  3. 建物件那段（變換、recenterOrigin、doc.remove/add、commit）可照用  【已查證 · main.js separateSelected()】
-  4. 選取元素：{kind:'vertex',vert}／{kind:'edge',he}／{kind:'face',face}，面＝整個共面區域  【已查證 · select.js、edit.js elementVerts()／regionOf()】
-  5. 導圓角的圓角那一圈＝三段各自平的                              【已查證 · 沙箱：方塊全部邊導圓角 寬 5／4 段 → 12 條邊、三段各 4 條】
-  6. 補洞之後呼叫端跑 refreshAfterEdit()（重標折線）               【已查證 · main.js fillHolesOnSelected()】
-  7. applyMarks() 收到 undefined 就跳過（切口新邊不帶標記）         【已查證 · mesh.js applyMarks()】
+  1. kang：「都驗收OK」                                       【已查證 · kang 原話】
+  2. 結案 ＝ 逐字搬 HISTORY ＋ 規格留指標 ＋ STATUS 只留名字   【已查證 · STATUS.md「日常流程」第 6 步、「落點規則」】
+  3. 清單與 AI 先驗是規格檔的最後兩節（之後沒有別的 ## 節）     【已查證 · 搬移腳本斷言兩個標題唯一、順序對、AI 先驗之後沒有 ## 】
 
 【會動到哪幾個檔】
-  上面 8 個。
+  上面 4 個。
 
 【怎麼知道做對了】
-  · 測試新增 30 項：圓角用點／邊／面三種選法都是 2 塊封閉、切口 3 片平的、體積相加＝原本；
-    球上半／四分之一瓣／八分之一 體積剛好 1/2、1/4、1/8；斜著圈一塊＝彎的切口照樣切；圓柱中間一段＝3 塊；
-    只選頂面／相鄰兩面＝擋下講「平的」；管子外壁上半＝擋下講「穿出」（⛔ 不可講成平的）；混選／沒選／選全部／有洞／沒圍成一圈＝擋
-  · 沙箱撞到兩次「原因講錯」並修正檢查順序（封閉 → 穿出 → 體積），寫在 solidCut() 與規格裡
-  · 沙箱：切出來的塊都展得開（圓角小塊 0 則提醒；剩下那塊 1 則重疊提醒＝原本沒切的就有）
-  · 四道檢查：測試 3269 全過、目次 --check 全部最新、兩端檢查全過、模組解析 44 支全過
-  · node 文件工具/狀態行數.js：84 行（警報線 90）；動到的檔換行 CRLF ＝ 0
-  ⚠ 介面那半沙箱驗不了（內建瀏覽器開不了 localhost）—— 上傳後 AI 先開線上版驗，再交給 kang
+  · 搬移：33 行；只把兩個標題改成 `####`，還原標題後 md5 cf4b1ac97d6ecc178aafbb59a6ea1823，跟搬之前一樣；
+    HISTORY.md 原本的內容是新檔的開頭（⛔ 動到任何一個字）
+  · 目次產生器：「自我否決通過：正文逐字未變」，HISTORY.md 80 節；--all --check 三份全部最新
+  · node 文件工具/狀態行數.js：84 行（警報線 90）；換行 CRLF ＝ 0
+  · 測試 3269 全過（程式沒動，照跑一次）
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
