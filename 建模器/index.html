@@ -878,6 +878,16 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="curveStep" type="number" min="0.1" step="0.5" value="1" hidden
              title="曲線切多細：每隔幾公分一段（長的那段自動切多一點，太短的至少 2 段）。數字越小越圓滑、點越多">
       <span class="lbl" id="curveStepUnit" hidden>cm 一段</span>
+      <!--
+        曲線刀具 3a（kang 2026-10-13）：點一下已經放好的點 ⇒ 選它 ⇒ 打「離左邊／離下邊」（正對那個面看的左與下），點就搬過去；
+        畫面上有兩條尺寸線。cm／mm 切換、記住上次選的。邊上的點只能沿著那條邊移動（另一欄變灰）。
+      -->
+      <span class="lbl" id="curveDimLLbl" hidden>離左邊</span>
+      <input id="curveDimL" type="number" step="0.1" hidden title="選到的點離這個面左邊多遠（正對這個面看過去的左邊）。打數字點就搬過去">
+      <span class="lbl" id="curveDimBLbl" hidden>離下邊</span>
+      <input id="curveDimB" type="number" step="0.1" hidden title="選到的點離這個面下邊多遠（正對這個面看過去的下邊；頂面的下邊＝前面那條邊）。打數字點就搬過去">
+      <button id="curveUnitCm" hidden title="用公分打數字（會記住）">cm</button>
+      <button id="curveUnitMm" hidden title="用公釐打數字（會記住）">mm</button>
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）。⚠ 開著的時候【不會吸到角】—— 你既然按了這顆，要的就是中點">吸中點</button>
       <button id="knifeUndoDel" hidden title="把剛才刪掉的那個切點放回【原來的位置】（不是接到最後面）。可以連按，一路退回去。⚠ 這顆只管切點，跟工具列的「復原」是兩件事">退一步</button>
       <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>

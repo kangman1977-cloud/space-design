@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
-         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM,
+         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -782,6 +782,12 @@ $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
 $('knifeCurve').onclick = () => toggleKnifeCurve();
 $('curveUndo').onclick = () => curveUndo();
 $('curveStep').oninput = () => drawCurve();
+$('curveDimL').oninput = () => curveTypeDim('L', $('curveDimL').value);
+$('curveDimB').oninput = () => curveTypeDim('B', $('curveDimB').value);
+/** 打完（離開欄位）就把數字整理成目前真正的位置（邊上的點可能被夾在邊的範圍內）*/
+$('curveDimL').onchange = $('curveDimB').onchange = () => updateBar();
+$('curveUnitCm').onclick = () => setCurveUnit('cm');
+$('curveUnitMm').onclick = () => setCurveUnit('mm');
 $('separate').onclick = () => separateSelected();
 $('solidCut').onclick = () => solidCutSelected();
 $('vertDots').onclick = () => toggleVertexDots();
@@ -1214,6 +1220,11 @@ let knifePicks = [];
  * 規格：`規格\建模器-曲線刀具.md`
  */
 let curve = null;
+/**
+ * 3a 的單位：cm／mm，**記住上次選的**（kang 2026-10-13）；程式內部一律 cm。
+ * ⚠ 宣告放這裡的理由同 `curve`（`updateBar()` 會讀它）。存不到（隱私模式）就用 cm，⛔ 擋。
+ */
+let curveUnit = (() => { try { return localStorage.getItem('modeler.curveUnit') === 'mm' ? 'mm' : 'cm'; } catch (e) { return 'cm'; } })();
 
 /**
  * 🔴 **剛才刪掉的切點，照【刪掉的順序】疊著**（2026-09-01，`退一步` 用的）。
@@ -1261,6 +1272,7 @@ let knifeMoving = null;
 
 function hideKnifeLine() {
   view.clearKnifePreview();
+  view.clearCurveLabels();     // 3a 的尺寸字跟預覽線同進退（每一條清掉曲線的路都走這裡）
 }
 
 /**
@@ -1865,8 +1877,33 @@ function curveFaceLoop(mesh, face) {
 }
 
 function curveDown(x, y) {
+  /**
+   * 🔴 **3a：點一下已經放好的點 ＝ 選它**（變成要打數字的那一點；kang 2026-10-13 定案）。
+   * ⚠ 封閉圈還沒畫完時點第一點 ＝「封起來」（下面那段），⛔ 當成選取 —— 所以先讓過那一種。
+   * ⚠ 這一下⛔ 可以變成「拖把手」：`selecting` 讓 `curveDrag()`／`curveUp()` 這一回合什麼都不做。
+   */
+  if (curve) {
+    const closingFirst = curve.closed && !curve.done && curve.anchors.length >= 3
+      && sel.curveNearPoint(x, y, curve.node, curve.anchors[0].p);
+    if (!closingFirst) {
+      const hit = curve.anchors.findIndex(a => sel.curveNearPoint(x, y, curve.node, a.p));
+      if (hit >= 0) {
+        curve.sel = hit;
+        curve.selecting = true;
+        const info = curveSelInfo();
+        if (!info) toast('這個面是斜的 —— 打數字只能用在跟座標軸對齊的面（頂面、側面…）', true);
+        else if (!info.canL && !info.canB) toast(`選到第 ${hit + 1} 點：在角上，位置是固定的`);
+        else if (!info.canL || !info.canB) toast(`選到第 ${hit + 1} 點：在邊上，只能沿著那條邊移動（只有一格能打）`);
+        else toast(`選到第 ${hit + 1} 點：在上方打「離左邊／離下邊」就搬過去`);
+        drawCurve();
+        updateBar();
+        return;
+      }
+      if (curve.sel >= 0) { curve.sel = -1; drawCurve(); updateBar(); if (curve.done) return; }
+    }
+  }
   if (curve && curve.done) {
-    toast('曲線已經畫好了 —— 按「切下去」，或按「退一點」改最後一點', true);
+    toast('曲線已經畫好了 —— 按「切下去」，或按「退一點」改最後一點；點一下某個點可以打數字改它的位置', true);
     return;
   }
   if (!curve) {
@@ -1901,7 +1938,8 @@ function curveDown(x, y) {
     const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal);
     const p0 = snap ? snap.p : h.pLocal.clone().addScaledVector(n, d - n.dot(h.pLocal));
     curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: !snap, closing: false,
-              anchors: [{ p: p0, hin: null, hout: null, edge: !!snap }], done: false, hover: null };
+              anchors: [{ p: p0, hin: null, hout: null, edge: !!snap }], done: false, hover: null,
+              sel: -1, selecting: false };
     if (curve.closed) toast('封閉圈：在面裡面點下去，最後【點回第一點】就封起來（在第一點上按住拖 ＝ 那裡也是圓滑的）');
     drawCurve();
     updateBar();
@@ -1934,7 +1972,7 @@ function curveDown(x, y) {
 
 /** 拖 ＝ 拉最後那一點的圓滑把手（兩邊對稱，跟鋼筆一樣）*/
 function curveDrag(x, y) {
-  if (!curve || curve.done) return;
+  if (!curve || curve.done || curve.selecting) return;
   /** 封閉圈正在點回第一點 ⇒ 拖的是**第一點**的把手 */
   const a = curve.closing ? curve.anchors[0] : curve.anchors[curve.anchors.length - 1];
   const q = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
@@ -1948,6 +1986,7 @@ function curveDrag(x, y) {
 
 /** 放開：第二點以後點在邊上 ⇒ 畫好了；封閉圈點回第一點 ⇒ 畫好了（等「切下去」）*/
 function curveUp() {
+  if (curve && curve.selecting) { curve.selecting = false; return; }   // 3a：這一下是選點，⛔ 收工判斷
   if (!curve || curve.done) return;
   if (curve.closed) {
     if (curve.closing) {
@@ -1970,7 +2009,7 @@ function curveUp() {
 }
 
 function curveHover(x, y) {
-  if (!curve || curve.done) return;
+  if (!curve || curve.done || curve.sel >= 0) return;   // 選著一個點在打數字時⛔ 拉預覽線
   const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!p) return;
   /** 封閉圈⛔ 吸到邊（整圈要留在面裡）；靠近第一點時預覽就接回第一點 */
@@ -1995,9 +2034,54 @@ function curveUndo() {
   if (curve.closed && curve.done) { curve.done = false; drawCurve(); updateBar(); return; }
   curve.done = false;
   curve.anchors.pop();
+  if (curve.sel >= curve.anchors.length) curve.sel = -1;
   if (!curve.anchors.length) curve = null;
   drawCurve();
   updateBar();
+}
+
+// ── 3a：打數字改點的位置（「離左邊／離下邊」，cm／mm）—— 規格「第三步」「3a 樣板定案」──
+
+/** 那個面的「左／下」換算（世界座標；斜的面回 null）—— 數學在 `edit.js` `faceDimFrame()` */
+function curveFrame(c) {
+  return c ? faceDimFrame(c.loop.map(p => c.node.localToWorld(p.clone()))) : null;
+}
+
+/** 選到的那一點：離左邊、離下邊（cm）＋ 哪一格能改 —— 數學在 `edit.js` `faceDimInfo()` */
+function curveSelInfo() {
+  if (!curve || curve.sel < 0) return null;
+  const f = curveFrame(curve);
+  if (!f) return null;
+  const a = curve.anchors[curve.sel];
+  const info = faceDimInfo(f, curve.node.localToWorld(a.p.clone()), a.edge);
+  return info ? Object.assign(info, { f }) : null;
+}
+
+/** 顯示用：cm 數字 → 目前的單位（宣告 `curveUnit` 在 `let curve` 旁邊）*/
+function curveShow(cm) { return curveUnit === 'mm' ? +(cm * 10).toFixed(1) : +cm.toFixed(2); }
+function setCurveUnit(u) {
+  curveUnit = u === 'mm' ? 'mm' : 'cm';
+  try { localStorage.setItem('modeler.curveUnit', curveUnit); } catch (e) { /* 存不了就算了，⛔ 擋 */ }
+  drawCurve();
+  updateBar();
+}
+
+/** 打數字 ⇒ 搬那一點（把手跟著一起平移）。邊上的點只動能動的那格 —— 數學在 `edit.js` `faceDimMove()` */
+function curveTypeDim(which, text) {
+  const info = curveSelInfo();
+  if (!info) return;
+  const v = parseFloat(text);
+  if (!Number.isFinite(v)) return;                 // 打到一半（空的、只有負號）⛔ 動
+  const to = faceDimMove(info.f, info, which, curveUnit === 'mm' ? v / 10 : v);
+  if (!to) return;
+  const a = curve.anchors[curve.sel];
+  const loc = curve.node.worldToLocal(to);
+  const d = loc.clone().sub(a.p);
+  a.p = loc;
+  if (a.hin) a.hin.add(d);
+  if (a.hout) a.hout.add(d);
+  drawCurve();
+  updateBar();       // 另一格跟著更新（邊上的點兩格會一起變）；正在打的那格⛔ 回填
 }
 
 /**
@@ -2022,7 +2106,21 @@ function drawCurve() {
       for (const h of [a.hin, a.hout]) if (h) { segs.push(w(a.p), w(h)); dots.push(w(h)); }
     }
   }
+  /** 3a：選到的那一點 ⇒ 兩條尺寸線（左邊 → 點、下邊 → 點，兩頭加短橫）＋ 數字 */
+  const info = curveSelInfo();
+  const labels = [];
+  if (info) {
+    const { f } = info, lift = 0.05;
+    const P = (s, t) => f.toWorld(s, t, lift);         // 往面外浮一點點，⛔ 被面蓋掉
+    const tick = Math.max(0.6, Math.min(3, (Math.max(...f.ring.map(q => q[0])) - f.sMin) * 0.03));
+    segs.push(P(f.sMin, info.t), P(info.s, info.t), P(info.s, f.tMin), P(info.s, info.t));
+    segs.push(P(f.sMin, info.t - tick), P(f.sMin, info.t + tick), P(info.s - tick, f.tMin), P(info.s + tick, f.tMin));
+    segs.push(P(info.s - tick, info.t - tick), P(info.s + tick, info.t + tick), P(info.s - tick, info.t + tick), P(info.s + tick, info.t - tick));
+    labels.push({ text: `離左邊 ${curveShow(info.left)} ${curveUnit}`, pos: P((f.sMin + info.s) / 2, info.t) });
+    labels.push({ text: `離下邊 ${curveShow(info.bottom)} ${curveUnit}`, pos: P(info.s, (f.tMin + info.t) / 2) });
+  }
   view.setKnifePreview(segs, dots);
+  view.setCurveLabels(labels);
 }
 
 /** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
@@ -5857,6 +5955,25 @@ function updateBar() {
   $('curveStepLbl').hidden = !curveOn;
   $('curveStep').hidden = !curveOn;
   $('curveStepUnit').hidden = !curveOn;
+  /**
+   * 3a：選到一個點、而且是跟座標軸對齊的面 ⇒ 出現「離左邊／離下邊」與 cm／mm。
+   * ⚠ 正在打字的那一格⛔ 回填（會把打到一半的字蓋掉）；邊上的點只能改一格，另一格變灰。
+   */
+  const dimInfo = curveOn ? curveSelInfo() : null;
+  for (const id of ['curveDimLLbl', 'curveDimL', 'curveDimBLbl', 'curveDimB', 'curveUnitCm', 'curveUnitMm']) $(id).hidden = !dimInfo;
+  if (dimInfo) {
+    const step = curveUnit === 'mm' ? '1' : '0.1';
+    for (const [id, val, can] of [['curveDimL', dimInfo.left, dimInfo.canL], ['curveDimB', dimInfo.bottom, dimInfo.canB]]) {
+      const el = $(id);
+      el.step = step;
+      el.disabled = !can;
+      if (document.activeElement !== el) el.value = curveShow(val);
+    }
+    $('curveDimLLbl').textContent = `離左邊（${curveUnit}）`;
+    $('curveDimBLbl').textContent = `離下邊（${curveUnit}）`;
+    $('curveUnitCm').classList.toggle('on', curveUnit === 'cm');
+    $('curveUnitMm').classList.toggle('on', curveUnit === 'mm');
+  }
   /**
    * 🔴 **吸中點只在刀具模式裡出現，而且開著的時候要看得出來。**
    * ⚠ 一顆按下去畫面上什麼都不變的開關就是坑第 21 條 ——

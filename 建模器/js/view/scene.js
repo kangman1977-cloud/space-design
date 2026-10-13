@@ -1577,6 +1577,41 @@ export class SceneView {
     this._syncMeasureLabelScale();
   }
 
+  /**
+   * 🔴 **曲線刀具 3a 的尺寸字**（「離左邊 25 cm」那種）—— 畫法完全照 `setMeasureLabels()`，
+   * ⚠ 但**另開一組**：量測那組會被「標尺寸」自己重畫／清掉，共用的話兩邊會互相蓋掉。
+   * @param {{text:string,pos:THREE.Vector3}[]} items 世界座標
+   */
+  setCurveLabels(items) {
+    this.clearCurveLabels();
+    if (!items || !items.length) return;
+    const g = new THREE.Group();
+    g.name = 'curveLabels';
+    for (const it of items) {
+      if (!it || !it.pos) continue;
+      const sp = this._makeTextSprite(String(it.text ?? ''));
+      sp.position.copy(it.pos);
+      g.add(sp);
+    }
+    if (!g.children.length) return;
+    g.traverse(o => { o.raycast = () => {}; });
+    this.scene.add(g);
+    this._curveLabels = g;
+    this._syncLabelGroupScale(g);
+  }
+
+  clearCurveLabels() {
+    if (!this._curveLabels) return;
+    this.scene.remove(this._curveLabels);
+    this._curveLabels.traverse(o => {
+      if (o.material) {
+        if (o.material.map) o.material.map.dispose();
+        o.material.dispose();
+      }
+    });
+    this._curveLabels = null;
+  }
+
   clearMeasureLabels() {
     if (!this._measureLabels) return;
     this.scene.remove(this._measureLabels);
@@ -1658,8 +1693,11 @@ export class SceneView {
    * 而且總數被 `MEASURE_LABELS_MAX` 擋住，⛔ 不會隨模型大小成長（坑第 22 條）。
    */
   _syncMeasureLabelScale() {
-    const g = this._measureLabels;
-    if (!g) return;
+    /** 量測的字 ＋ 曲線刀具的尺寸字（3a）—— 同一套擺法，⛔ 寫第二份 */
+    for (const g of [this._measureLabels, this._curveLabels]) if (g) this._syncLabelGroupScale(g);
+  }
+
+  _syncLabelGroupScale(g) {
     const cam = this.camera;
 
     /** 單行字要佔畫面的比例（factor 的倍數）。比軸標小一點 —— 那是一串數字不是一個字母 */

@@ -15718,6 +15718,52 @@ section('曲線刀具 第二步：面中間的封閉圈（2026-10-13）');
   ok('★★ 切完原本的網格一格都沒變', box.faces.length === 6 && Math.abs(box.volume() - 108000) < 1e-9);
 }
 
+section('曲線刀具 3a：離左邊／離下邊（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「第三步」。左／下 ＝ 正對那個面看過去的左與下；只給跟座標軸對齊的面。
+ * 方塊 60（X）× 40（Y，中心 0）× 45（Z）—— 頂面 y ＝ 20、前面 z ＝ 22.5、右面 x ＝ 30。
+ */
+{
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const top = [V(-30, 20, 22.5), V(30, 20, 22.5), V(30, 20, -22.5), V(-30, 20, -22.5)];      // 法向 +Y
+  const front = [V(-30, -20, 22.5), V(30, -20, 22.5), V(30, 20, 22.5), V(-30, 20, 22.5)];    // 法向 +Z
+  const right = [V(30, -20, 22.5), V(30, -20, -22.5), V(30, 20, -22.5), V(30, 20, 22.5)];    // 法向 +X
+  const back = [V(30, -20, -22.5), V(-30, -20, -22.5), V(-30, 20, -22.5), V(30, 20, -22.5)];  // 法向 −Z
+  const ft = edit.faceDimFrame(top);
+  const it = edit.faceDimInfo(ft, V(-5, 20, 2), false);
+  ok('★★★ 頂面：離左邊 ＝ 離 x＝−30 那條（25）、離下邊 ＝ 離前面 z＝22.5 那條（20.5）',
+    Math.abs(it.left - 25) < 1e-9 && Math.abs(it.bottom - 20.5) < 1e-9, `${it.left} ${it.bottom}`);
+  const iF = edit.faceDimInfo(edit.faceDimFrame(front), V(-10, 5, 22.5), false);
+  ok('★★ 前面：離左邊 ＝ 離 x＝−30（20）、離下邊 ＝ 離底 y＝−20（25）', Math.abs(iF.left - 20) < 1e-9 && Math.abs(iF.bottom - 25) < 1e-9, `${iF.left} ${iF.bottom}`);
+  const iR = edit.faceDimInfo(edit.faceDimFrame(right), V(30, 0, 10), false);
+  ok('★★ 右面：從右邊看，左邊是前面 z＝22.5（離 12.5）', Math.abs(iR.left - 12.5) < 1e-9 && Math.abs(iR.bottom - 20) < 1e-9, `${iR.left} ${iR.bottom}`);
+  const iB = edit.faceDimInfo(edit.faceDimFrame(back), V(20, 0, -22.5), false);
+  ok('★★ 後面：從後面看，左邊是 x＝30（離 10）', Math.abs(iB.left - 10) < 1e-9, iB.left);
+  const tilted = [V(0, 0, 0), V(10, 0, 0), V(10, 5, 5), V(0, 5, 5)];
+  ok('★★★ 斜的面 ⇒ ⛔ 給欄位（null）', edit.faceDimFrame(tilted) === null);
+
+  // 打數字搬點：中間的點兩格都能改
+  const p1 = edit.faceDimMove(ft, it, 'L', 10);
+  ok('★★★ 頂面中間的點打「離左邊 10」⇒ x ＝ −20、其他不變', p1 && Math.abs(p1.x + 20) < 1e-9 && Math.abs(p1.y - 20) < 1e-9 && Math.abs(p1.z - 2) < 1e-9, p1 && p1.toArray().join());
+  const p2 = edit.faceDimMove(ft, it, 'B', 5);
+  ok('★★ 　 打「離下邊 5」⇒ z ＝ 17.5（離前面 5）', p2 && Math.abs(p2.z - 17.5) < 1e-9, p2 && p2.z);
+
+  // 邊上的點：左邊那條（x＝−30）上 ⇒ 只能改離下邊；角上 ⇒ 兩格都固定
+  const ie = edit.faceDimInfo(ft, V(-30, 20, -6), true);
+  ok('★★★ 左邊那條邊上的點 ⇒ 離左邊固定（0）、只能改離下邊', !ie.canL && ie.canB && Math.abs(ie.left) < 1e-9, `${ie.canL} ${ie.canB}`);
+  ok('★★ 　 打離左邊 ⇒ ⛔ 動', edit.faceDimMove(ft, ie, 'L', 10) === null);
+  const pe = edit.faceDimMove(ft, ie, 'B', 30);
+  ok('★★ 　 打離下邊 30 ⇒ 還在左邊那條上（x＝−30）、z ＝ −7.5', pe && Math.abs(pe.x + 30) < 1e-9 && Math.abs(pe.z + 7.5) < 1e-9, pe && pe.toArray().join());
+  const pc = edit.faceDimMove(ft, ie, 'B', 99);
+  ok('★★ 　 打超過邊長 ⇒ 夾在邊的盡頭（⛔ 跑出邊外）', pc && Math.abs(pc.z + 22.5) < 1e-9, pc && pc.z);
+  const ib = edit.faceDimInfo(ft, V(4, 20, 22.5), true);
+  ok('★★ 前面那條（下邊）上的點 ⇒ 只能改離左邊', ib.canL && !ib.canB);
+  const ic = edit.faceDimInfo(ft, V(30, 20, 22.5), true);
+  ok('★★ 角上的點 ⇒ 兩格都固定', !ic.canL && !ic.canB);
+  ok('★ 不是邊上的點、剛好在邊的位置 ⇒ 照樣兩格都能改（只有吸在邊上的才限制）', (() => { const x = edit.faceDimInfo(ft, V(-30, 20, 0), false); return x.canL && x.canB; })());
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

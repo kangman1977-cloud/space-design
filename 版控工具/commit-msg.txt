@@ -1,30 +1,38 @@
-曲線刀具 第二步 結案 —— kang 驗收通過（「驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md；稜線太淡（kang 想要粗細欄位）記進真待辦
+曲線刀具 3a —— 點一下已經放好的點就選它，打「離左邊／離下邊」（正對那個面看的左與下）點就搬過去；兩條尺寸線；cm／mm 切換並記住
 
-⛔ 程式一行都沒改。動到 4 個檔：
-  M  HISTORY.md                   新增一節「曲線刀具 第二步 結案：面中間的封閉圈」（經過／老實話／逐字搬入的清單與 AI 線上先驗）＋ 目次重產
-  M  規格/建模器-曲線刀具.md       第二步「⏳ 給 kang 的實測清單」＋「AI 線上先驗」（含兩段重看）搬走，換成「實測：已結案」指標；步驟表第二步標 ✅ 結案
-  M  STATUS.md                    ⏳ 清空；真待辦加「稜線有時很淡」
+kang 2026-10-13：「座標的方式...其實很難掌控尺寸」→ 用離邊多遠；樣板四題「都先依照你的建議」。
+動到 9 個檔：
+  M  建模器/js/core/edit.js        新增 faceDimFrame()／faceDimInfo()／faceDimMove()（左與下、離邊距離、邊上的點只能沿著邊）
+  M  建模器/js/view/scene.js       setCurveLabels()／clearCurveLabels()（另開一組字）；字的大小同步改成兩組共用
+  M  建模器/js/main.js             選點（curve.sel／selecting）、curveSelInfo／curveTypeDim／setCurveUnit、尺寸線與字、控制列顯示規則；curveUnit 宣告跟 curve 放一起
+  M  建模器/index.html             #curveDimL／#curveDimB（＋標籤）、#curveUnitCm／#curveUnitMm
+  M  建模器/tests/run.mjs          新增一節「曲線刀具 3a」14 項
+  ?? 樣板-曲線刀具-打數字.html     新檔：3a 的可點樣板（kang：「1234都先依照你的建議」）
+  M  規格/建模器-曲線刀具.md       第三步拆 3a～3d、用離邊多遠⛔ 座標、3a 樣板定案、3a 規格、⏳ 實測清單
+  M  STATUS.md                    ⏳ 指向 3a 清單
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  曲線刀具 第二步 結案；把 kang 提的稜線問題記下來（還沒動）
+  曲線刀具 3a（規格\建模器-曲線刀具.md「第三步」）
 
 【依賴哪些事實】
-  1. kang：「驗收OK」                                         【已查證 · kang 原話】
-  2. 結案 ＝ 逐字搬 HISTORY ＋ 規格留指標 ＋ STATUS 只留名字   【已查證 · STATUS.md「日常流程」第 6 步、「落點規則」】
-  3. 清單與 AI 先驗是規格檔的最後兩小節（之後沒有別的標題）   【已查證 · 搬移腳本斷言】
-  4. 稜線：LineSegments、0x11151a、opacity 0.55；linewidth 這一版沒作用  【已查證 · scene.js 建稜線那段；規格\建模器-點線面編輯.md「『變粗』⛔ 不可以用 linewidth」】
+  1. 量測的字用 Sprite 畫在 3D 裡、每幀同步大小（_syncMeasureLabelScale 每幀呼叫）  【已查證 · scene.js setMeasureLabels()／render 迴圈】
+  2. 量測那組字會被「標尺寸」自己重畫 ⇒ 曲線要另開一組                              【已查證 · scene.js setMeasureLabels() 一開始就 clearMeasureLabels()】
+  3. 封閉圈點第一點 ＝ 封起來（3a 的選點要讓過它）                                   【已查證 · main.js curveDown() 封閉圈那段】
+  4. updateBar() 會讀的變數宣告要放在 knifePicks 那裡                               【已查證 · STATUS「穩定參考」】
+  5. 樣板四題定案                                                                   【已查證 · kang 原話，寫在規格檔】
 
 【會動到哪幾個檔】
-  上面 4 個。
+  上面 9 個。
 
 【怎麼知道做對了】
-  · 搬移：35 行；只把兩個標題從 ### 改成 ####，還原標題後 md5 5577978107c3698f2614a983069bcd5c，跟搬之前一樣；
-    HISTORY.md 原本的內容是新檔的開頭（⛔ 動到任何一個字）
-  · 目次產生器：「自我否決通過：正文逐字未變」，HISTORY.md 82 節；--all --check 三份全部最新
-  · node 文件工具/狀態行數.js：89 行（警報線 90）⚠ 只剩 1 行；換行 CRLF ＝ 0
+  · 測試新增 14 項：頂／前／右／後四個面的左與下（手算）、斜的面 null、打數字搬點、
+    左邊那條上只能改離下邊、打超過夾在盡頭、下邊那條上只能改離左邊、角上兩格固定
+  · 樣板在 Claude 的瀏覽器窗格裡驗過：示範線第 2 點 25／20.5、打 10 ⇒ 搬到對的位置、mm 100／205、點邊上的點只剩一格
+  · 四道檢查：測試 3324 全過、目次 --check 全部最新、兩端檢查（78 個元件）全過、模組解析 44 支全過；換行 CRLF ＝ 0
+  ⚠ 介面那半沙箱驗不了 —— 上傳後 AI 先開線上版用滑鼠驗，再交給 kang
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

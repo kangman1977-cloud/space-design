@@ -3009,6 +3009,77 @@ export function curveCutFace(mesh, face, ptsIn) {
   };
 }
 
+// ── 曲線刀具 3a：「離左邊／離下邊」的換算（純數學，介面在 main.js）——規格「第三步」──
+
+/**
+ * 一個面（世界座標的角，照順序）的「左／下」：**正對那個面看過去**的左與下（kang 2026-10-13：用離邊多遠，⛔ 用座標）。
+ * 側面 up ＝ +Y；頂面 up ＝ −Z（前面那條邊是「下邊」）、底面 up ＝ +Z；right ＝ up × 法向。
+ * ⚠ **只給跟座標軸對齊的面** —— 斜的面回 null（打 X／Y／Z 會跑出那個面）。
+ * @param {THREE.Vector3[]} ring 世界座標
+ */
+export function faceDimFrame(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+  const pl = planeOfPoints(ring);
+  if (!pl) return null;
+  const n = pl.n;
+  if (Math.max(Math.abs(n.x), Math.abs(n.y), Math.abs(n.z)) < 1 - 1e-6) return null;
+  const up = Math.abs(n.y) > 0.5 ? new THREE.Vector3(0, 0, n.y > 0 ? -1 : 1) : new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(up, n).normalize();
+  const st = p => [p.dot(right), p.dot(up)];
+  const S = ring.map(st);
+  return {
+    n, up, right, st, ring: S, plane: n.dot(ring[0]),
+    sMin: Math.min(...S.map(q => q[0])), tMin: Math.min(...S.map(q => q[1])),
+    toWorld: (s, t, off = 0) => right.clone().multiplyScalar(s).addScaledVector(up, t).addScaledVector(n, n.dot(ring[0]) + off)
+  };
+}
+
+/**
+ * 一點（世界座標）離左邊、離下邊多遠，以及哪一格能改：
+ * 邊上的點只能沿著那條邊（沿 s 走得比較多的邊 ⇒ 只能改「離左邊」，反之只能改「離下邊」）；角上的點兩格都固定。
+ * @param {boolean} onEdge 這一點是吸在面的邊上的（曲線的頭尾）
+ */
+export function faceDimInfo(frame, pWorld, onEdge) {
+  if (!frame || !pWorld) return null;
+  const [s, t] = frame.st(pWorld);
+  let canL = true, canB = true, edge = null;
+  if (onEdge) {
+    const R = frame.ring;
+    if (R.some(q => Math.hypot(q[0] - s, q[1] - t) < 1e-4)) { canL = canB = false; }
+    else {
+      for (let i = 0; i < R.length; i++) {
+        const A = R[i], B = R[(i + 1) % R.length];
+        const ab = [B[0] - A[0], B[1] - A[1]], L2 = ab[0] ** 2 + ab[1] ** 2;
+        if (L2 < 1e-12) continue;
+        const u = ((s - A[0]) * ab[0] + (t - A[1]) * ab[1]) / L2;
+        if (u < -1e-9 || u > 1 + 1e-9) continue;
+        if (Math.hypot(A[0] + u * ab[0] - s, A[1] + u * ab[1] - t) > 1e-4) continue;
+        edge = { A, B };
+        if (Math.abs(ab[0]) >= Math.abs(ab[1])) canB = false; else canL = false;
+        break;
+      }
+    }
+  }
+  return { s, t, left: s - frame.sMin, bottom: t - frame.tMin, canL, canB, edge };
+}
+
+/**
+ * 打了一格（`which` ＝ 'L' 離左邊／'B' 離下邊，`cm`）⇒ 新的位置（世界座標）；那一格不能改就回 null。
+ * 邊上的點：沿著那條邊算出另一格，而且夾在那條邊的範圍內（⛔ 跑出邊外）。
+ */
+export function faceDimMove(frame, info, which, cm) {
+  if (!frame || !info || !Number.isFinite(cm)) return null;
+  let s = info.s, t = info.t;
+  if (which === 'L') { if (!info.canL) return null; s = frame.sMin + cm; }
+  else { if (!info.canB) return null; t = frame.tMin + cm; }
+  if (info.edge) {
+    const { A, B } = info.edge, ab = [B[0] - A[0], B[1] - A[1]];
+    const u = Math.max(0, Math.min(1, which === 'L' ? (s - A[0]) / ab[0] : (t - A[1]) / ab[1]));
+    s = A[0] + u * ab[0]; t = A[1] + u * ab[1];
+  }
+  return frame.toWorld(s, t);
+}
+
 /**
  * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
  *
