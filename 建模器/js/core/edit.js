@@ -3081,6 +3081,25 @@ export function faceDimMove(frame, info, which, cm) {
 }
 
 /**
+ * 🔴 **曲線刀具 3b：一個圓 ＝ 四段三次貝茲**（世界座標的錨點，跟鋼筆畫的錨點同一種格式）。
+ * 圓心用 (s, t)（`faceDimFrame()` 的面上座標）、半徑 r（cm）。把手長 ＝ r × 0.5523 —— 四段貝茲近似圓的標準值，
+ * 半徑誤差約 0.03%（測試量過）。切下去照第二步的封閉圈走（`curveCutFaceLoop()`）。
+ */
+export const CIRCLE_KAPPA = 0.5522847498;
+export function circleAnchors(frame, s, t, r) {
+  if (!frame || !(r > 0)) return [];
+  const k = CIRCLE_KAPPA * r;
+  const P = (ds, dt) => frame.toWorld(s + ds, t + dt);
+  /** 右、上、左、下 —— 每一點的把手順著走的方向（逆時針，從正對面看）*/
+  return [
+    { p: P(r, 0), hin: P(r, -k), hout: P(r, k) },
+    { p: P(0, r), hin: P(k, r), hout: P(-k, r) },
+    { p: P(-r, 0), hin: P(-r, k), hout: P(-r, -k) },
+    { p: P(0, -r), hin: P(-k, -r), hout: P(k, -r) }
+  ];
+}
+
+/**
  * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
  *
  * ── 難的是「一個面不能帶洞」────────────────────────────

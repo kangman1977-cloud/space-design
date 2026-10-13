@@ -1,29 +1,36 @@
-曲線刀具 3a 結案 —— kang 驗收通過（「驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md
+曲線刀具 3b —— 按「圓」在面上點一下放一個圓，改圓心離左邊／離下邊、半徑或直徑（改一格另一格跟著變、記住上一次），切下去走封閉圈
 
-⛔ 程式一行都沒改。動到 4 個檔：
-  M  HISTORY.md                   新增一節「曲線刀具 3a 結案：點一下選點、打「離左邊／離下邊」」（經過／老實話／逐字搬入的清單與 AI 線上先驗）＋ 目次重產
-  M  規格/建模器-曲線刀具.md       3a「⏳ 給 kang 的實測清單」＋「AI 線上先驗」搬走，換成「3a 實測：已結案」指標；小步表 3a 標 ✅ 結案
-  M  STATUS.md                    ⏳ 清空；真待辦那條改成「3b～3d、第四步」
+kang 2026-10-13 三題：先點位置再改數字、半徑直徑兩個都給、記住上一次的。
+動到 6 個檔：
+  M  建模器/js/core/edit.js        新增 circleAnchors()／CIRCLE_KAPPA（四段貝茲的圓）
+  M  建模器/js/main.js             curvePickFace()（第一點與放圓共用）、curvePlaceCircle／curveCircleRebuild／curveTypeCircle；
+                                  圓心借 3a 兩格、半徑直徑兩格；尺寸線加圓心與半徑；退一點拿掉圓；狀態字與「切下去（圓）」；curveCircleArm／curveRadius 宣告跟 curve 放一起
+  M  建模器/index.html             #curveCircle、#curveR／#curveD（＋標籤）
+  M  建模器/tests/run.mjs          新增一節「曲線刀具 3b」10 項
+  M  規格/建模器-曲線刀具.md       3b 定案、規格、⏳ 實測清單
+  M  STATUS.md                    ⏳ 指向 3b 清單
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  曲線刀具 3a 結案
+  曲線刀具 3b（規格\建模器-曲線刀具.md「3b 定案」）
 
 【依賴哪些事實】
-  1. kang：「驗收OK」                                         【已查證 · kang 原話】
-  2. 結案 ＝ 逐字搬 HISTORY ＋ 規格留指標 ＋ STATUS 只留名字   【已查證 · STATUS.md「日常流程」第 6 步、「落點規則」】
-  3. 清單與 AI 先驗是規格檔的最後兩小節（之後沒有別的標題）   【已查證 · 搬移腳本斷言】
+  1. 封閉圈切法吃一串封閉的點（curveCutFaceLoop），圓跑出面外會擋     【已查證 · 第二步測試 ⑤】
+  2. 面上「左／下」的換算（faceDimFrame／toWorld）                    【已查證 · 3a 測試】
+  3. _surfaceHit 回傳世界座標 world（放圓用）                          【已查證 · select.js _surfaceHit()】
+  4. updateBar() 會讀的變數宣告要放在 knifePicks 那裡                  【已查證 · STATUS「穩定參考」】
+  5. kang 三題的答案                                                  【已查證 · kang 選的，寫在規格檔】
 
 【會動到哪幾個檔】
-  上面 4 個。
+  上面 7 個。
 
 【怎麼知道做對了】
-  · 搬移：27 行；只把兩個標題從 ### 改成 ####，還原標題後 md5 7022372b44bd660edf9b673c720227b1，跟搬之前一樣；
-    HISTORY.md 原本的內容是新檔的開頭（⛔ 動到任何一個字）
-  · 目次產生器：「自我否決通過：正文逐字未變」，HISTORY.md 83 節；--all --check 三份全部最新
-  · node 文件工具/狀態行數.js：89 行（警報線 90）；換行 CRLF ＝ 0
+  · 測試新增 10 項：四錨點、圓心換算（離左邊 25、離下邊 5 ⇒ x −5、z 17.5）、切好的點離圓心 ＝ 半徑（≤ 0.03%）、
+    切下去封閉＋體積不變＋圓內 313.74（≈ π×10²）、跑出面外擋、半徑 0
+  · 四道檢查：測試 3334 全過、目次 --check 全部最新、兩端檢查（81 個元件）全過、模組解析 44 支全過；換行 CRLF ＝ 0
+  ⚠ 介面那半沙箱驗不了 —— 上傳後 AI 先開線上版用滑鼠驗，再交給 kang
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

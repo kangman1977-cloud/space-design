@@ -886,6 +886,12 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="curveDimL" type="number" step="0.1" hidden title="選到的點離這個面左邊多遠（正對這個面看過去的左邊）。打數字點就搬過去">
       <span class="lbl" id="curveDimBLbl" hidden>離下邊</span>
       <input id="curveDimB" type="number" step="0.1" hidden title="選到的點離這個面下邊多遠（正對這個面看過去的下邊；頂面的下邊＝前面那條邊）。打數字點就搬過去">
+      <!-- 曲線刀具 3b（kang 2026-10-13）：按「圓」→ 點面放圓 → 改圓心（上面兩格）、半徑或直徑（改一格另一格跟著變，記住上一次）→ 切下去 -->
+      <button id="curveCircle" hidden title="放一個圓：按下去之後在面上點一下當圓心，再改圓心位置、半徑或直徑，好了按「切下去」（會記住上一次的大小）">圓</button>
+      <span class="lbl" id="curveRLbl" hidden>半徑</span>
+      <input id="curveR" type="number" step="0.1" min="0" hidden title="圓的半徑（改了直徑會跟著變）">
+      <span class="lbl" id="curveDLbl" hidden>直徑</span>
+      <input id="curveD" type="number" step="0.1" min="0" hidden title="圓的直徑（改了半徑會跟著變）">
       <button id="curveUnitCm" hidden title="用公分打數字（會記住）">cm</button>
       <button id="curveUnitMm" hidden title="用公釐打數字（會記住）">mm</button>
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）。⚠ 開著的時候【不會吸到角】—— 你既然按了這顆，要的就是中點">吸中點</button>

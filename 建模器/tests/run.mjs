@@ -15764,6 +15764,43 @@ section('曲線刀具 3a：離左邊／離下邊（2026-10-13）');
   ok('★ 不是邊上的點、剛好在邊的位置 ⇒ 照樣兩格都能改（只有吸在邊上的才限制）', (() => { const x = edit.faceDimInfo(ft, V(-30, 20, 0), false); return x.canL && x.canB; })());
 }
 
+section('曲線刀具 3b：放一個圓（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「3b 定案」。圓 ＝ 四段貝茲（把手 ＝ r × 0.5523），切下去走封閉圈。
+ * 方塊 60 × 45 × 40（baked）頂面 y ＝ 20、x ±30、z ±22.5。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const top = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const fr = edit.faceDimFrame(box.faceVerts(top).map(v => v.p.clone()));
+  ok('（前提）頂面給得出左／下', !!fr);
+  // 圓心離左邊 30、離下邊 22.5（＝ 正中間），半徑 10
+  const cs = fr.sMin + 30, ct = fr.tMin + 22.5;
+  const an = edit.circleAnchors(fr, cs, ct, 10);
+  eq('★★ 四個錨點、每個都有兩支把手', an.length === 4 && an.every(a => a.hin && a.hout), true);
+  const ctr = fr.toWorld(cs, ct);
+  ok('★★ 圓心在頂面正中間（x 0、z 0）', Math.abs(ctr.x) < 1e-9 && Math.abs(ctr.z) < 1e-9 && Math.abs(ctr.y - Y) < 1e-9, ctr.toArray().join());
+  const pts = edit.sampleCurve(an, 1, true);
+  const dev = Math.max(...pts.map(p => Math.abs(p.distanceTo(ctr) - 10)));
+  ok('★★★ 切好的每一點離圓心 ＝ 半徑（誤差 ≤ 0.03%）', dev <= 10 * 3e-4, dev);
+  ok('★★ 　 全部在頂面的平面上', pts.every(p => Math.abs(p.y - Y) < 1e-9));
+  const r = edit.curveCutFaceLoop(box, top, pts);
+  const m = r.mesh;
+  const isl = r.ok ? m.faces.find(f => m.faceLoop(f).length === r.added) : null;
+  const areaOf = f => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0);
+  ok('★★★ 切下去 ⇒ 成功、封閉、體積不變', r.ok && m.isClosed() && Math.abs(m.volume() - 108000) < 1e-6, r.reason);
+  near('★★ 　 圓內那片 ≈ π × 10²（分段近似略小）', isl && areaOf(isl), Math.PI * 100, 1.0);
+
+  // 離左邊 25 ⇒ 圓心 x ＝ −5；直徑 8 ⇒ 半徑 4
+  const c2 = fr.toWorld(fr.sMin + 25, fr.tMin + 5);
+  ok('★★ 圓心「離左邊 25、離下邊 5」⇒ x ＝ −5、z ＝ 17.5（離前面 5）', Math.abs(c2.x + 5) < 1e-9 && Math.abs(c2.z - 17.5) < 1e-9, c2.toArray().join());
+  const out = edit.curveCutFaceLoop(box, top, edit.sampleCurve(edit.circleAnchors(fr, fr.sMin + 25, fr.tMin + 5, 8), 1, true));
+  ok('★★★ 圓跑出面外（離下邊 5、半徑 8）⇒ 擋下來、講「跑出這個面」', !out.ok && /跑出這個面/.test(out.reason), out.reason);
+  ok('★ 半徑 0 ⇒ 沒有錨點', edit.circleAnchors(fr, cs, ct, 0).length === 0);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
