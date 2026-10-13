@@ -2406,9 +2406,14 @@ function drawCurve() {
     const { f } = dim, lift = 0.05;
     const P = (s, t) => f.toWorld(s, t, lift);         // 往面外浮一點點，⛔ 被面蓋掉
     const tick = Math.max(0.6, Math.min(3, (Math.max(...f.ring.map(q => q[0])) - f.sMin) * 0.03));
-    /** 3c 半圓：圓心只能沿著那條邊走 ⇒ 只畫能打的那一條尺寸線（另一條是固定的，畫了只是多一個字擋畫面）*/
+    /**
+     * 3c 半圓：圓心只能沿著那條邊走 ⇒ 只畫能打的那一條尺寸線（另一條是固定的，畫了只是多一個字擋畫面）。
+     * 3a 選到邊上的點也一樣（3d 折線的起點在邊上就是這種）：⚠ 第一版兩條都畫 ⇒ 固定的那條長度 0、
+     * 「離下邊 0 cm」的字疊在「離左邊」的字上（2026-10-14 AI 線上先驗看到）。角上的點兩格都固定 ⇒ 兩條照畫。
+     */
     const ne = cf && curve.circle.edge;
-    const wantL = !ne || ne.field === 'L', wantB = !ne || ne.field === 'B';
+    const wantL = ne ? ne.field === 'L' : !info || info.canL || !info.canB;
+    const wantB = ne ? ne.field === 'B' : !info || info.canB || !info.canL;
     if (wantL) {
       segs.push(P(f.sMin, dim.t), P(dim.s, dim.t), P(f.sMin, dim.t - tick), P(f.sMin, dim.t + tick));
       labels.push({ text: `${dim.pre}離左邊 ${curveShow(dim.s - f.sMin)} ${curveUnit}`, pos: P((f.sMin + dim.s) / 2, dim.t) });
@@ -2432,12 +2437,21 @@ function drawCurve() {
                     pos: P(dim.s + (r + 2 * tick) * w[0], dim.t + (r + 2 * tick) * w[1]) });
     }
   }
-  /** 3d：下一段的字放在那一段中間（跑出面外的話字上講，⛔ 只靠按下去才被擋）*/
+  /**
+   * 3d：下一段的字放在那一段中間（跑出面外的話字上講，⛔ 只靠按下去才被擋）。
+   * ⚠ 跑出面外時「那一段中間」可能在畫面外（打 2000 mm ⇒ 中間在 1 m 外，2026-10-14 AI 線上先驗看到）⇒
+   * 改放在**面裡面的那一截**中間（從最後一點到碰到邊）；往面外走、一點都不在面裡 ⇒ 放在最後一點上。
+   */
   if (pn) {
     const { len, deg } = polyFields();
     const [s0, t0] = polyLast(pn.f);
+    let [ls, lt] = [(s0 + pn.s) / 2, (t0 + pn.t) / 2];
+    if (pn.where === 'out') {
+      const hit = polyRayHit(pn.f, s0, t0, deg);
+      [ls, lt] = hit ? [(s0 + hit.s) / 2, (t0 + hit.t) / 2] : [s0, t0];
+    }
     labels.push({ text: `下一段 ${curveShow(len)} ${curveUnit}　${+deg.toFixed(2)}°${pn.where === 'out' ? '（跑出面外）' : ''}`,
-                  pos: pn.f.toWorld((s0 + pn.s) / 2, (t0 + pn.t) / 2, 0.05) });
+                  pos: pn.f.toWorld(ls, lt, 0.05) });
   }
   view.setKnifePreview(segs, dots);
   view.setCurveLabels(labels);

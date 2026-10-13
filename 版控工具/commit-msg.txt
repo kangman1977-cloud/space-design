@@ -1,37 +1,30 @@
-曲線刀具 3d —— 按「折線」點起點（可打離左邊／離下邊對準），每一段打長度、角度（0° 往右、90° 往上）按 Enter 加上去；最後「延伸到邊」切成兩塊或「接回起點」封成一圈
+曲線刀具 3d 修兩個字的位置 —— 邊上的起點（3a 邊上的點）只畫能打的那條尺寸線（⛔「離下邊 0」疊在「離左邊」上）；「跑出面外」的字改放在面裡那一截（⛔ 跑到畫面外）
 
-kang 2026-10-14 3d 四題：「一段一段打出來」「跟面的方向算」「延伸到邊」＋「接回起點」「起點可以，用 3a 那套」。
-動到 6 個檔：
-  M  建模器/js/core/edit.js        新增 polyStep()、polyWhere()（裡面／邊上／外面）、polyRayHit()（延伸到邊；凹的面走出去又碰到別的邊⛔ 算）
-  M  建模器/js/main.js             「折線」開關（curvePolyOn）；第一點之後 curve.poly、起點選起來（3a 兩格）、滑鼠⛔ 再放點、⛔ 拉把手；
-                                  polyFields／polyLast／polyNext／polyPush／polyAdd／polyToEdge／polyClose；預覽跟著欄位、字「下一段 X cm　Y°」；
-                                  Enter ＝ 加一段；cm／mm 時長度欄位換算；收工字「切下去（折線）」、狀態字、還沒畫好的提示
-  M  建模器/index.html             #curvePoly「折線」、#curveLen／#curveAng（＋標籤）、#curveSegAdd「加一段」、#curveToEdge「延伸到邊」、#curvePolyClose「接回起點」
-  M  建模器/tests/run.mjs          新增一節「曲線刀具 3d」13 項
-  M  規格/建模器-曲線刀具.md       小步表 3d ⏳；3d 定案、3d（規格）、⏳ 實測清單九項
-  M  STATUS.md                    ⏳ 3d；真待辦改成「第四步 切穿」
+3d 的 AI 線上先驗（上傳 c02c7aa 之後）九項全過，但畫面上抓到兩個問題，修好再交給 kang。
+動到 3 個檔：
+  M  建模器/js/main.js             drawCurve()：wantL／wantB 對 3a 選到的點也看 canL／canB（邊上只畫能動的那條、角上照畫兩條）；
+                                  下一段的字跑出面外時放在 polyRayHit() 碰到邊之前那一截中間，碰不到就放在最後一點
+  M  規格/建模器-曲線刀具.md       3d AI 線上先驗結果、兩個畫面問題與修法；清單第 2、7 項加上「字」的檢查
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  一段一段打長度與角度畫直線折線，延伸到邊或接回起點後切下去
+  3d 線上先驗看到的兩個字的位置問題
 
 【依賴哪些事實】
-  1. sampleCurve()：兩頭都沒有把手的那一段直接接過去、⛔ 切細                       【已查證 · edit.js sampleCurve()；測試「只新增 4 個點」】
-  2. faceDimFrame() 的 s 往右、t 往上（頂面 t ＝ −z）＝ 角度 0°／90° 的方向            【已查證 · 3a 測試、這次「延伸到上邊」】
-  3. 3a 選點：curve.sel 有值 ⇒ 離左邊／離下邊出現；邊上的點只能沿邊                    【已查證 · main.js curveSelInfo()、updateBar()】
-  4. 曲線第一點的 pointerdown 之後拖曳會加把手 ⇒ 折線要擋（curveDrag 加 curve.poly）   【已查證 · main.js curveDrag()】
-  5. 長度、角度欄位按 Enter ⛔ 撞到別的全域快捷鍵                                      【已查證 · grep 'Enter' 只有各欄位自己的】
+  1. 線上：邊上的起點 ⇒「離左 離下邊 0 cm」疊在一起                                   【已查證 · 線上截圖】
+  2. 線上：2000 mm／90° ⇒ 預覽線拉到畫面外，「（跑出面外）」看不到                    【已查證 · 線上截圖】
+  3. curveSelInfo() 回的 canL／canB：邊上的點只有一個 true、角上兩個都 false          【已查證 · edit.js faceDimInfo()】
+  4. polyRayHit() 從最後一點往那個角度：面裡那一截到碰到邊；往外走 ⇒ null             【已查證 · 3d 測試】
 
 【會動到哪幾個檔】
-  上面 7 個。
+  上面 3 個。
 
 【怎麼知道做對了】
-  · 測試新增 13 項；原本的 3362 項一格都沒變
   · 四道檢查：測試 3375 全過、目次 --all --check 全部最新、兩端檢查全過、模組解析 44 支全過；CR 0
-  · 狀態行數 89（警報線 90）
-  ⚠ 介面沒辦法在沙箱點 —— 上傳後 AI 先用滑鼠與鍵盤在線上版畫 L 形與封閉長方形、切下去，再交給 kang
+  · 只動畫面上的字與尺寸線，⛔ 動切的結果
+  ⚠ 上傳後 AI 再上線看這兩處，再交給 kang
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
