@@ -1896,7 +1896,10 @@ function curveDown(x, y) {
   const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!p) return;
   const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
-  curve.anchors.push({ p: snap ? snap.p : p, hin: null, hout: null, edge: !!snap });
+  const at = snap ? snap.p : p;
+  /** 跟上一點在同一個位置（連點兩下）⇒ ⛔ 不放第二個 —— 疊在一起的點會切出長度 0 的邊 */
+  if (at.distanceTo(curve.anchors[curve.anchors.length - 1].p) < 1e-6) return;
+  curve.anchors.push({ p: at, hin: null, hout: null, edge: !!snap });
   curve.hover = null;
   drawCurve();
   updateBar();
@@ -1937,11 +1940,15 @@ function curveHover(x, y) {
   drawCurve();
 }
 
-/** 退一點：畫好了 ⇒ 回到還沒畫完；沒畫好 ⇒ 拿掉最後一點；拿光了 ⇒ 重新選面 */
+/**
+ * 退一點 ＝ **拿掉最後一點**（畫好了也一樣，順便回到還沒畫完）；拿光了 ⇒ 重新選面。
+ * ⚠ 第一版「畫好了 ⇒ 只回到還沒畫完、點留著」是錯的：最後那點還在邊上，
+ * 再點一次同一條邊 ⇒ 兩點疊在一起 ⇒ 切出長度 0 的邊（2026-10-13 AI 線上先驗撞到）。
+ */
 function curveUndo() {
   if (!curve) return;
-  if (curve.done) curve.done = false;
-  else curve.anchors.pop();
+  curve.done = false;
+  curve.anchors.pop();
   if (!curve.anchors.length) curve = null;
   drawCurve();
   updateBar();

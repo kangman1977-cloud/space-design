@@ -2836,17 +2836,24 @@ export function sampleCurve(anchors, stepCm = CURVE_STEP_CM) {
  * @param {THREE.Vector3[]} pts 物件座標；第一點與最後一點在這個面的**邊上（或角上）**，其餘在面裡面
  * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map, newEdges?:Array, added?:number, inner?:number}}
  */
-export function curveCutFace(mesh, face, pts) {
+export function curveCutFace(mesh, face, ptsIn) {
   if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
   if (!face || !mesh.faces.includes(face)) return { ok: false, reason: '找不到要切的那個面' };
-  if (!Array.isArray(pts) || pts.length < 2) return { ok: false, reason: '曲線至少要兩個點' };
+  if (!Array.isArray(ptsIn) || ptsIn.length < 2) return { ok: false, reason: '曲線至少要兩個點' };
+  const TOL = 1e-4;
+  /**
+   * 🔴 **連續疊在一起的點先合併** —— ⛔ 不合併的話會長出「兩個重合的點 ＋ 一條長度 0 的邊」，
+   * 而那正是「刀具繞一圈之後分不開」那個 bug 的形狀（規格\建模器-點線面編輯.md「繞一圈閉合之後【分得開】」）。
+   * 【實證 2026-10-13 AI 線上先驗】畫好之後按「退一點」再點同一條邊 ⇒ 最後兩個錨點在同一個位置 ⇒ 切出 1 條長度 0 的邊。
+   */
+  const pts = ptsIn.filter((p, i) => i === 0 || p.distanceTo(ptsIn[i - 1]) > TOL);
+  if (pts.length < 2) return { ok: false, reason: '曲線至少要兩個點' };
 
   const vi = mesh._vertIndex();
   const loop = mesh.faceLoop(face).map(he => vi.get(he.v.id));
   const n = loop.length;
   const points = mesh.verts.map(v => v.p.clone());
   const P = i => points[i];
-  const TOL = 1e-4;
 
   /** 這個面的平面：曲線一定要在上面（⛔ 不投影 —— 那是只做平面的理由）*/
   const pl = planeOfPoints(loop.map(P));
@@ -2896,7 +2903,16 @@ export function curveCutFace(mesh, face, pts) {
     return inside;
   };
   const OUT = '曲線跑出這個面了（或碰到面的邊界）—— 整條曲線要留在這個面裡面，只有頭尾落在邊上';
-  for (let k = 1; k + 1 < chain.length; k++) if (!insidePoly(chain[k])) return { ok: false, reason: OUT };
+  /** 中間的點離邊界太近也算碰到（射線法對「剛好在邊上」的點答案不固定，⛔ 不可以靠它）*/
+  const segDist = (p, a, b) => {
+    const ab = [b[0] - a[0], b[1] - a[1]], L2 = ab[0] * ab[0] + ab[1] * ab[1];
+    const t = L2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / L2)) : 0;
+    return Math.hypot(p[0] - a[0] - t * ab[0], p[1] - a[1] - t * ab[1]);
+  };
+  for (let k = 1; k + 1 < chain.length; k++) {
+    if (!insidePoly(chain[k])) return { ok: false, reason: OUT };
+    for (let i = 0; i < n; i++) if (segDist(chain[k], poly[i], poly[(i + 1) % n]) <= TOL) return { ok: false, reason: OUT };
+  }
   for (let k = 0; k + 1 < chain.length; k++) {
     for (let i = 0; i < n; i++) if (properCross(chain[k], chain[k + 1], poly[i], poly[(i + 1) % n])) return { ok: false, reason: OUT };
     const mid = [(chain[k][0] + chain[k + 1][0]) / 2, (chain[k][1] + chain[k + 1][1]) / 2];

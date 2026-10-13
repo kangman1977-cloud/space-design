@@ -15645,6 +15645,14 @@ section('曲線刀具 第一步：平面上從邊到邊（2026-10-13）');
   ok('★★★ ⑩ 在切過的那一塊上再切曲線 ⇒ 頂面 3 塊、加起來 2700、體積不變',
     rb.ok && ab.length === 3 && Math.abs(ab.reduce((s, x) => s + x, 0) - 2700) < 1e-6 && Math.abs(rb.mesh.volume() - 108000) < 1e-6, rb.reason);
   ok('★★ 　 第一刀那條線被插點切成兩段，兩段都還是 hard', rb.ok && [...rb.mesh.edges()].filter(h => rb.mesh.marksOf(h).hard).length === 2 + rb.newEdges.length);
+  // 🔴 AI 線上先驗撞到的（2026-10-13）：畫好之後「退一點」再點同一條邊 ⇒ 最後兩點疊在一起 ⇒ 切出長度 0 的邊
+  const dupPts = [...edit.sampleCurve(wave, 5)];
+  dupPts.push(dupPts[dupPts.length - 1].clone());
+  const rd = edit.curveCutFace(box, top, dupPts);
+  const zeroLen = rd.ok ? [...rd.mesh.edges()].filter(h => h.v.p.distanceTo(h.to.p) < 1e-6).length : -1;
+  ok('★★★ 最後兩點疊在一起 ⇒ 照樣切，而且⛔ 一條長度 0 的邊都沒有（修之前 1 條）', rd.ok && zeroLen === 0, rd.ok ? zeroLen : rd.reason);
+  const onB = edit.curveCutFace(box, top, [v(-30, 0), v(0, 5), v(30, 3), v(30, 10)]);
+  ok('★★ 中間有一點落在面的邊界上 ⇒ 擋下來（⛔ 不靠射線法剛好答對）', !onB.ok && /跑出這個面/.test(onB.reason), onB.reason);
   ok('★★ 切完原本的網格一格都沒變（面數、體積）', box.faces.length === 6 && Math.abs(box.volume() - 108000) < 1e-9);
 }
 
