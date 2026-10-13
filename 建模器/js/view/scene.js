@@ -12,15 +12,23 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { seamKinds } from '../unfold/seam.js';
+import { seamKinds, keepEdges } from '../unfold/seam.js';
 
 /**
  * 🔴 **3D 上「開口」的顏色：黃綠**（2026-10-12，kang「依照你建議」）。縫照舊橘色（`0xff7a1a`）。
  * ⚠ kang 在樣板上看的是紫色，但**紫色在這個畫面上已經有意思了**：非流形邊的標示（`setNonManifoldPreview()`，
  * 「紫＝這裡黏在一起了」），而接縫線是**一直顯示**的 —— 兩個會同時出現在畫面上 ⇒ 換一個沒用過的。
- * 〔3D 上的顏色：橘＝縫、黃綠＝開口、黃＝選取／「標一段」的起點、青＝程式算出來的、紅＝破洞、紫＝非流形〕
+ * 〔3D 上的顏色：橘＝縫、黃綠＝開口、黃＝選取／「標一段」的起點、青＝程式算出來的、紅＝破洞、紫＝非流形、
+ * 　藍＝不准切、青色虛線＝智慧分切的提案（2026-10-13）〕
  */
 export const DART_COLOR = 0x9be22d;
+
+/**
+ * 🔴 **不准切：藍色；智慧分切的提案：青色虛線**（2026-10-13，kang「可以」→ `規格\建模器-智慧分切.md`）。
+ * 藍 ＝ 3D 上還沒人用的顏色；提案用青色 ＝ 「程式算出來的」（`0x2ad4d4`，跟參考線同一個青），虛線 ＝ 還沒接受。
+ */
+export const KEEP_COLOR = 0x2f6fd6;
+export const PROPOSAL_COLOR = 0x2ad4d4;
 
 /**
  * 🔴 **指到的東西「變大」多少**（kang 2026-08-26 拍板：只變大，⛔ 不換顏色）。
@@ -366,6 +374,30 @@ export class SceneView {
     darts.renderOrder = 2;
     node.add(darts);
 
+    /** 不准切（藍）—— 跟縫一樣一直顯示；資料在 `HalfEdge.keep` */
+    const keeps = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: KEEP_COLOR })
+    );
+    keeps.name = 'keeps';
+    keeps.raycast = () => {};
+    keeps.renderOrder = 2;
+    node.add(keeps);
+
+    /**
+     * 智慧分切的提案（青色虛線）—— 只在有提案、而且是這個物件這份網格時畫（`setSeamProposal()`）。
+     * ⚠ 虛線要 `computeLineDistances()`，⛔ 算的話整條是實線。
+     */
+    const proposal = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ color: PROPOSAL_COLOR, dashSize: 2, gapSize: 1.4 })
+    );
+    proposal.name = 'proposal';
+    proposal.raycast = () => {};
+    proposal.renderOrder = 3;
+    proposal.visible = false;
+    node.add(proposal);
+
     node.userData.geomKey = null;
     node.userData.seamKey = null;
     return node;
@@ -407,12 +439,56 @@ export class SceneView {
       };
       build(seams, kinds.seams);
       build(darts, kinds.darts);
+      const ks = keepEdges(mesh);
+      build(node.getObjectByName('keeps'), ks);
       node.userData.seamMesh = mesh;
       node.userData.seamCount = kinds.seams.length;
       node.userData.dartCount = kinds.darts.length;
+      node.userData.keepCount = ks.length;
     }
     seams.visible = (node.userData.seamCount || 0) > 0 && !this.wireframe;
     darts.visible = (node.userData.dartCount || 0) > 0 && !this.wireframe;
+    node.getObjectByName('keeps').visible = (node.userData.keepCount || 0) > 0 && !this.wireframe;
+
+    /**
+     * 提案：⚠ 換了網格（Undo、改參數）就不畫 —— 提案的邊是舊網格的半邊，畫出來是騙人的。
+     * 版本號變了才重建（`setSeamProposal()` 每次 +1）。
+     */
+    const prop = node.getObjectByName('proposal');
+    const pr = this._proposal;
+    const want = !!pr && pr.objId === obj.id && pr.mesh === mesh && pr.edges.length > 0;
+    if (want && node.userData.propVer !== pr.ver) {
+      const pos = [];
+      for (const he of pr.edges) pos.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
+      prop.geometry.dispose();
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      prop.geometry = g;
+      prop.computeLineDistances();
+      node.userData.propVer = pr.ver;
+    }
+    prop.visible = want && !this.wireframe;
+  }
+
+  /**
+   * 智慧分切的提案（2026-10-13）：畫這個物件的這幾條邊（青色虛線）。⛔ 改文件 —— 只是畫。
+   * 馬上更新那一個物件（⛔ 等下一次 sync）：按了「提案」或點掉一條，畫面要當場變（坑第 21 條）。
+   */
+  setSeamProposal(obj, edges) {
+    this._proposalVer = (this._proposalVer || 0) + 1;
+    this._proposal = { objId: obj.id, mesh: obj.mesh(), edges: edges.slice(), ver: this._proposalVer };
+    for (const [id, node] of this.byId) {
+      if (id === obj.id) this._updateSeams(node, obj);
+      else node.getObjectByName('proposal').visible = false;
+    }
+  }
+
+  clearSeamProposal() {
+    this._proposal = null;
+    for (const node of this.byId.values()) {
+      const p = node.getObjectByName('proposal');
+      if (p) p.visible = false;
+    }
   }
 
   /**

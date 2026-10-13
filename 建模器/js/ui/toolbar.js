@@ -14,7 +14,8 @@ import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
   from '../build/array.js';
-import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds, isSeam } from '../unfold/seam.js';
+import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds,
+         keepCount, clearKeeps, markSignature } from '../unfold/seam.js';
 import { renderCanvas } from '../out/sheet.js';
 import { previewProgram } from '../out/nest.js';
 
@@ -33,10 +34,9 @@ let meshUidNext = 1;
 export function seamPreviewKey(obj, st) {
   const mesh = obj.mesh();
   if (!meshUid.has(mesh)) meshUid.set(mesh, meshUidNext++);
-  let h = 0, n = 0;
-  for (const he of mesh.edges()) if (isSeam(he)) { h = (h + Math.imul(he.id + 1, 2654435761)) >>> 0; n++; }
+  /** ⚠ 不准切也會改展開結果（攤平先走它）⇒ 指紋連不准切一起算（`markSignature()`，2026-10-13）*/
   const s = obj.scale || {};
-  return [obj.id, meshUid.get(mesh), s.x, s.y, s.z, n, h, st.mode, st.material].join('|');
+  return [obj.id, meshUid.get(mesh), s.x, s.y, s.z, markSignature(mesh), st.mode, st.material].join('|');
 }
 const fmtPct = v => `${Math.round(v * 1000) / 10}%`;
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
@@ -903,13 +903,15 @@ export class Panel {
      * （鐵律三：讓兩個數字互相對得起來）。⚠ 只在有開口時才多講 —— 原本的用法一個字都不變。
      */
     const darts = n ? seamKinds(mesh).darts.length : 0;
+    const keeps = keepCount(mesh);
 
     const box = document.createElement('div');
     box.className = 'note';
     box.innerHTML = (pieces === null
       ? `已標記 <b>${n}</b> / ${total} 條邊　（片數算不出來）`
       : `展開後 <b>${pieces}</b> 片　已標記 <b>${n}</b> / ${total} 條邊`)
-      + (darts ? `<br>其中 <b>${darts}</b> 條是<b>開口</b>（切進去、沒有把片分開 —— 3D 上另一個顏色）` : '');
+      + (darts ? `<br>其中 <b>${darts}</b> 條是<b>開口</b>（切進去、沒有把片分開 —— 3D 上另一個顏色）` : '')
+      + (keeps ? `<br>不准切 <b>${keeps}</b> 條（藍色）` : '');
     this.form.appendChild(box);
 
     this.form.appendChild(note(
@@ -935,16 +937,78 @@ export class Panel {
       + '標一段：先點起點那條邊（黃色），再點同一條線上要停的那條邊，中間整段一次標 —— 省道打版的開口用這個');
     }
 
-    if (n > 0) {
-      this._rowBtn(`清除全部標記（${n} 條）`,
+    /**
+     * 🔴 **「標成：切開／不准切」**（2026-10-13，智慧分切第一步；kang 選「面板上切換」）。
+     * 上面「點一條稜線時」四種點法都跟著它走。⭐ 預設「切開」＝ 原本的用法一格都沒變。
+     */
+    if (this.app.getSeamMarkKind) {
+      this._rowSelect('標成', this.app.getSeamMarkKind(), [
+        ['cut', '切開（橘色）'],
+        ['keep', '不准切（藍色）']
+      ], v => { this.app.setSeamMarkKind(v); this.refresh(); },
+      '不准切：這條邊要保持連著 —— 程式自己補剪、智慧分切提案都會繞開它。'
+      + '⚠ 真的非切不可時（折不起來的材料、繞一圈的筒子一定要剪一刀）照樣切開，展開圖上會講幾條');
+    }
+
+    if (n > 0 || keeps > 0) {
+      const parts = [n ? `切開 ${n} 條` : '', keeps ? `不准切 ${keeps} 條` : ''].filter(Boolean).join('、');
+      this._rowBtn(`清除全部標記（${parts}）`,
         '回到自動判斷。取消標記是把決定交還給材料規則，不是強迫它折起來', () => {
           clearSeams(obj.mesh());
+          clearKeeps(obj.mesh());
           this.app.view.markSeamsDirty();
           this._edit('清除分片標記');
         });
     }
 
+    this._seamProposalBox(obj);
     this._seamPreview(obj);
+  }
+
+  /**
+   * 🔴 **智慧分切：提案**（2026-10-13，第一步 → `規格\建模器-智慧分切.md`）。
+   * 提案的內容在 `unfold/propose.js`、狀態在 `main.js`（物件＋網格＋標記指紋，對不上就收起來）。
+   * 面板只負責講：幾條、幾片、最大一片、放不放得進板子；第一版還不會為了板子多切 ⇒ 放不進要講明，⛔ 讓人以為判斷過了。
+   */
+  _seamProposalBox(obj) {
+    if (!this.app.proposeSeams) return;
+    this.form.appendChild(head('智慧分切'));
+    const cur = this.app.getSeamProposal(obj);
+    if (cur && cur.stale) this.form.appendChild(note('標記改了，提案收起來了 —— 要再按一次「提案」'));
+    const p = cur && cur.proposal;
+    this._rowBtn(p ? '重新提案' : '智慧分切：提案',
+      '程式照判準建議要從哪裡切開（青色虛線），你看過再決定接受、刪掉幾條、或取消。'
+      + '第一版：提案 ＝ 程式本來就會補剪的那幾刀，但先給你看、會繞開「不准切」，並講放不放得進板子',
+      () => this.app.proposeSeams(obj));
+    if (!p) return;
+
+    const b = p.board, fmt1 = v => String(Math.round(v * 10) / 10);
+    const boardTxt = `${fmt1(b.w)}×${fmt1(b.h)}${b.rotate ? '（可以轉 90°）' : ''}`;
+    const fit = p.big
+      ? `<span style="color:#c0392b">有 <b>${p.big}</b> 片放不進 ${boardTxt} 板子</span> —— 第一版還不會為了板子多切（第二步才做）`
+      : `全部放得進 ${boardTxt} 板子`;
+    const box = document.createElement('div');
+    box.className = 'note';
+    const lines = [];
+    if (!p.edges.length && !p.removed) {
+      lines.push('已經攤得開，沒有要補的縫。');
+    } else {
+      lines.push(`提案 <b>${p.edges.length}</b> 條縫（青色虛線）：展開後 <b>${p.total}</b> 片`
+        + (p.maxPiece ? `，最大一片 ${fmt1(p.maxPiece.w)}×${fmt1(p.maxPiece.h)}` : ''));
+    }
+    lines.push(fit + '（照排版設定）');
+    if (p.removed) lines.push(`你拿掉了 ${p.removed} 條 —— 接受後展開時，程式會自己再補剪（橘色）；上面的片數是拿掉之前的`);
+    if (p.keepCut) lines.push(`有 ${p.keepCut} 條「不准切」非切不可，照樣會切開`);
+    if (p.unmarkable) lines.push(`有 ${p.unmarkable} 條在平面中間、標不上縫 —— 接受時會跳過`);
+    if (p.dartMode) lines.push('提案用精確分片算（不能拉的材料）');
+    box.innerHTML = lines.join('<br>');
+    this.form.appendChild(box);
+    if (p.edges.length) {
+      this._rowBtn(`全部接受（${p.edges.length} 條）`, '提案的縫全部變成你標的切開（橘色）。一次復原就全部退回',
+        () => this.app.acceptSeamProposal());
+    }
+    this._rowBtn('取消提案', '青色虛線收起來，什麼都不改', () => this.app.cancelSeamProposal());
+    this.form.appendChild(note('點一條青色虛線 ＝ 從提案裡拿掉它。'));
   }
 
   /**

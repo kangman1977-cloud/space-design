@@ -86,10 +86,34 @@ export function unfoldObject(obj, opt = {}) {
   return {
     ok: true,
     pieces: r.pieces,
+    /**
+     * 程式自己補剪的邊（智慧分切的提案用，2026-10-13）—— 一律是**物件自己那份網格**的邊。
+     * ⚠ 縮放過的物件展開的是套了縮放的另一份網格（上面的 `transformed()`）：頂點順序不變，照頂點編號對回來。
+     */
+    autoEdges: mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh()),
+    keepCut: r.keepCut || 0,
     warnings: [...warn, ...r.warnings],
     stats: { ...r.stats, total: r.pieces.reduce((n, p) => n + p.qty, 0) },
     rule
   };
+}
+
+/** `transformed()` 出來的網格上的邊 → 原本網格上同一條邊（頂點順序一樣，照頂點編號配對）*/
+function mapEdgesBack(hes, from, to) {
+  const idx = new Map(from.verts.map((v, i) => [v.id, i]));
+  const tIdx = new Map(to.verts.map((v, i) => [v.id, i]));
+  const byPair = new Map();
+  for (const he of to.edges()) {
+    const a = tIdx.get(he.v.id), b = tIdx.get(he.to.id);
+    byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
+  }
+  const out = [];
+  for (const he of hes) {
+    const a = idx.get(he.v.id), b = idx.get(he.to.id);
+    const t = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+    if (t) out.push(t);
+  }
+  return out;
 }
 
 /**

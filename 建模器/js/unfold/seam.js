@@ -27,6 +27,10 @@
  * 標一條折線 —— 而壓克力物理上折不起來，那張圖做不出來。
  * 現在這個設計**不可能**產生做不出來的圖。
  *
+ * 🔴 **「不准切」（2026-10-13）⛔ 破這條**：它是**偏好**，⛔ 是強迫 ——
+ * 攤平時先走它（程式自己補剪會繞開它）、智慧分切提案⛔ 碰它；但**非切不可時照樣切**
+ * （折不了的材料、繞一圈的筒子一定要剪一刀），卡片講出幾條。⇒ 照樣⛔ 可能產生做不出來的圖。
+ *
  * ── 只有已烘成網格的物件標得起來 ──────────────────────
  * 參數物件（{type:'box', w:60...}）存檔只存參數，開檔時網格重新生成、
  * autoMarkFolds() 重跑，標記就沒了。而它在同一次開著的時候又是好的
@@ -126,6 +130,7 @@ export function isSeam(he) { return he.role === EDGE_ROLE.CUT; }
 export function setSeam(mesh, he, on, tolDeg = FLAT_TOL_DEG) {
   if (!isMarkable(mesh, he, tolDeg)) return false;
   mesh.setRole(he, on ? EDGE_ROLE.CUT : EDGE_ROLE.FOLD);
+  if (on && he.keep) mesh.setKeep(he, false);       // 跟「不准切」互斥
   return true;
 }
 
@@ -174,6 +179,55 @@ export function clearSeams(mesh, tolDeg = FLAT_TOL_DEG) {
     if (isSeam(he)) { mesh.setRole(he, EDGE_ROLE.FOLD); n++; }
   }
   return n;
+}
+
+// ── 不准切（2026-10-13，智慧分切第一步 → `規格\建模器-智慧分切.md`）──────────
+
+/** 這條邊是不是使用者標的「不准切」 */
+export function isKeep(he) { return !!he.keep; }
+
+/**
+ * 設定一條邊「不准切」。跟縫互斥：標上時把縫拿掉（回到 FOLD ＝ 交還給材料規則）。
+ * 只有可標記的邊能標（跟 `setSeam()` 同一個判準）—— 畫面上看不見的邊⛔ 讓人標。
+ */
+export function setKeep(mesh, he, on, tolDeg = FLAT_TOL_DEG) {
+  if (!isMarkable(mesh, he, tolDeg)) return false;
+  if (on && isSeam(he)) mesh.setRole(he, EDGE_ROLE.FOLD);
+  mesh.setKeep(he, on);
+  return true;
+}
+
+/** 標了幾條不准切 */
+export function keepCount(mesh) {
+  let n = 0;
+  for (const he of mesh.edges()) if (he.keep) n++;
+  return n;
+}
+
+/** 所有標了不准切的邊（每條一次）—— 3D 畫藍線用 */
+export function keepEdges(mesh) {
+  return [...mesh.edges()].filter(he => he.keep);
+}
+
+/** 清掉全部不准切 */
+export function clearKeeps(mesh) {
+  let n = 0;
+  for (const he of mesh.edges()) if (he.keep) { mesh.setKeep(he, false); n++; }
+  return n;
+}
+
+/**
+ * 「標記的指紋」：縫與不准切各幾條、是哪幾條 —— 換了網格（Undo、改參數）也會變。
+ * 智慧分切的提案記著當時的指紋，一對不上就收起來（規格：有提案時改了標記 ⇒ 提案收起來）。
+ * ⚠ 半邊的 id 每次載入都會重編 ⇒ Undo 之後指紋一定變，那正是要的（網格換了，提案的邊不能再用）。
+ */
+export function markSignature(mesh) {
+  let hs = 0, ns = 0, hk = 0, nk = 0;
+  for (const he of mesh.edges()) {
+    if (isSeam(he)) { hs = (hs + Math.imul(he.id + 1, 2654435761)) >>> 0; ns++; }
+    if (he.keep) { hk = (hk + Math.imul(he.id + 7, 2246822519)) >>> 0; nk++; }
+  }
+  return `${ns}:${hs}|${nk}:${hk}`;
 }
 
 // ═══════════════════════════════════════════════════════

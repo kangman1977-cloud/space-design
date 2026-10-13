@@ -113,6 +113,13 @@ export class HalfEdge {
      * 那是「安靜地少掉東西」，最難查的一種。
      */
     this.hard = false;
+    /**
+     * 🔴 **不准切**（2026-10-13，智慧分切第一步 → `規格\建模器-智慧分切.md`）。
+     * 使用者標的「這條邊要保持連著」：展開時攤平先走它（程式自己補剪會繞開它）、智慧分切提案⛔ 碰它。
+     * 跟縫（`role === CUT`）互斥 —— 互斥由 `seam.js` 的 `setSeam()`／`setKeep()` 保證。
+     * 是第四個標記：搬移走 `marksOf()`／`applyMarks()`，存檔走 `toJSON()` 的 `keep`。
+     */
+    this.keep = false;
   }
   /** 終點 ＝ 反向半邊的起點 */
   get to() { return this.twin ? this.twin.v : this.next.v; }
@@ -407,6 +414,13 @@ export class Mesh {
   // ── 邊的角色 ──────────────────────────────────────
 
   /** 設定「這條邊是曲面的一部分」。跟 setRole 一樣，兩條半邊要一起設。 */
+  /** 不准切（第四個標記，見 `HalfEdge.keep`）。兩條半邊一起設 */
+  setKeep(he, on = true) {
+    he.keep = !!on;
+    if (he.twin) he.twin.keep = !!on;
+    return this;
+  }
+
   setSmooth(he, on = true) {
     he.smooth = !!on;
     if (he.twin) he.twin.smooth = !!on;
@@ -445,7 +459,7 @@ export class Mesh {
    * 那一組回歸測試會自己把它涵蓋進去。
    */
   marksOf(he) {
-    return { role: he.role, smooth: he.smooth, hard: he.hard };
+    return { role: he.role, smooth: he.smooth, hard: he.hard, keep: he.keep };
   }
 
   /** 把 `marksOf()` 讀出來的那一包寫回另一條邊。空的（預設值）不寫。 */
@@ -454,12 +468,13 @@ export class Mesh {
     if (m.role !== undefined && m.role !== EDGE_ROLE.FREE) this.setRole(he, m.role);
     if (m.smooth) this.setSmooth(he, true);
     if (m.hard) this.setHard(he, true);
+    if (m.keep) this.setKeep(he, true);
     return this;
   }
 
   /** 這一包標記是不是全空（全空就不必搬，省一趟走訪） */
   static marksEmpty(m) {
-    return !m || (m.role === EDGE_ROLE.FREE && !m.smooth && !m.hard);
+    return !m || (m.role === EDGE_ROLE.FREE && !m.smooth && !m.hard && !m.keep);
   }
 
   /** 設定邊的角色。一定要兩條半邊一起設，不然走另一邊會讀到舊值。 */
@@ -1051,6 +1066,10 @@ export class Mesh {
        */
       hard: [...this.edges()]
         .filter(he => he.hard)
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id)]),
+      /** 不准切（2026-10-13）—— 同一種寫法；舊檔沒有這一欄 ＝ 全部沒標 */
+      keep: [...this.edges()]
+        .filter(he => he.keep)
         .map(he => [vi.get(he.v.id), vi.get(he.to.id)])
     };
   }
@@ -1063,7 +1082,7 @@ export class Mesh {
     const m = Mesh.fromFaceList(points, d.faces);
 
     if ((d.roles && d.roles.length) || (d.smooth && d.smooth.length)
-        || (d.hard && d.hard.length)) {
+        || (d.hard && d.hard.length) || (d.keep && d.keep.length)) {
       const idx = new Map(m.verts.map((v, i) => [v.id, i]));
       const byPair = new Map();
       for (const he of m.edges()) {
@@ -1081,6 +1100,10 @@ export class Mesh {
       for (const [a, b] of (d.hard || [])) {
         const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
         if (he) m.setHard(he, true);
+      }
+      for (const [a, b] of (d.keep || [])) {
+        const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+        if (he) m.setKeep(he, true);
       }
     }
     return m;

@@ -1,42 +1,62 @@
-智慧分切：畫面拍板（互動圖四題）＋ 分三步做 —— 新增 規格\建模器-智慧分切.md（第一步的規格）；⛔ 動程式
+智慧分切 第一步：不准切（藍色）＋ 提案（青色虛線、全部接受／點掉／取消）—— 分片面板；沒標的物件展開結果一個字都不變
 
-⛔ 程式一行都沒改。動到 5 個檔：
-  A  規格/建模器-智慧分切.md     新檔：定案（畫面四題、分三步）、第一步「畫面＋不准切」的規格與要量的測試；第二、三步驗收後再寫
-  M  外部參考-自動分切.md       第 5 節「下一步」改成指向規格
-  M  PROJECT_LOG.md             「自動分刀」那一段指向規格
-  M  STATUS.md                  真待辦「智慧自動分切」：指向規格、下一步改成第一步動工
+分片面板多「標成：切開／不准切」與「智慧分切」一塊。提案 ＝ 程式本來就會補剪的那幾刀，
+但先畫成青色虛線給人看、繞開不准切、講展開後幾片／最大一片／放不放得進板子（照排版設定）；
+第一版還不會為了板子多切（放不進就照實講）。
+
+動到 12 個檔：
+  M  建模器/js/core/mesh.js        HalfEdge.keep（第四個標記）、setKeep()；marksOf／applyMarks／marksEmpty、toJSON／fromJSON 多 keep
+  M  建模器/js/unfold/seam.js      setKeep／isKeep／keepCount／keepEdges／clearKeeps／markSignature；setSeam(on) 拿掉不准切（互斥）；
+                                   檔頭補一段：不准切是偏好⛔ 強迫，照樣⛔ 可能產生做不出來的圖
+  M  建模器/js/unfold/flatten.js   攤平時不准切排最前面（只有標了的拿 −1 ⇒ 沒標的排序逐字不變）；
+                                   每片記補剪的邊（autoEdges）與非切不可的不准切；整份加總（去掉重複）、寫成一則提醒
+  M  建模器/js/unfold/part.js      unfoldObject 回傳 autoEdges／keepCut；縮放過的物件照頂點編號把邊對回物件自己的網格（mapEdgesBack）
+  A  建模器/js/unfold/propose.js   proposeSeams()：純函式，⛔ 改任何一條邊
+  M  建模器/js/main.js             seamMarkKind、seamProposal（物件＋網格＋標記指紋，對不上就收起來）；
+                                   seamPick：點青色虛線 ＝ 從提案拿掉、四種點法都能標不准切、點面中央在不准切時講原因；
+                                   全部接受一步 Undo；離開分片模式收起提案
+  M  建模器/js/ui/toolbar.js       「標成」下拉、不准切條數、「智慧分切」一塊（_seamProposalBox）、清除連不准切；
+                                   即時預覽的鑰匙改用 markSignature（不准切也會改展開結果）
+  M  建模器/js/view/scene.js       藍線 keeps、青色虛線 proposal（換了網格就不畫）、setSeamProposal／clearSeamProposal
+  M  建模器/tests/run.mjs          新一節「智慧分切 第一步」；標記回歸測試的網格多標一條不准切（那組照 marksOf 自動展開 ⇒ 複製、縮放、存檔、壓平併面、擠出都驗到 keep）
+  M  規格/建模器-智慧分切.md       第一步狀態 ⏳；兩處跟原本寫的不一樣（非切不可改成展開圖上方一則提醒、「標成」做成下拉）；程式在哪；⏳ 實測清單 15 項
+  M  STATUS.md                     ⏳ 加這一項
   M  版控工具/commit-msg.txt
 
-kang 2026-10-13 的決定（互動圖、四題全照建議；分步也照建議）：
-  · 「不准切」在面板上切換（標成：切開／不准切）
-  · 提案＝青色虛線、不准切＝藍色
-  · 有提案時改了標記 ⇒ 提案收起來，要再按一次
-  · 提案按鈕只在分片面板；沒標縫的一般展開圖一個字都不變
-  · 分三步：一、畫面＋不准切 → 二、放得進板子 → 三、曲面切成整齊的長線；每步驗收後才做下一步
+🔴 這一輪的老實話
+  · 壓克力方塊 12 條全標不准切，第一版提醒寫「24 條」：夾在兩片之間的邊兩片各算一次 —— 改成記「哪幾條」再去掉重複
+  · 「共面的邊不能標」那項測試撲空三次：「轉成可編輯網格」會先把共面的面併成一整塊，轉過的方塊、圓柱、平板都沒有共面的邊 —— 改用原始網格
+  · 用 Python 寫暫存的測試片段沒指定換行，插進 run.mjs 變成 107 行 CRLF；當場轉回 LF（記憶裡記過的坑，又踩一次）
+  · 畫面（面板、點邊、3D 線）沙箱跑不到、內建瀏覽器開不了本機 —— 上傳後線上先驗
+  · 「沒標不准切 ⇒ 跟改之前一樣」的標準答案，拿的是沙箱量測時「改之前的程式」量到的數字（11 種基本形狀）
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  把互動圖的四個決定與分三步寫成規格；寫第一步的規格
+  智慧分切第一步：不准切標記 ＋ 提案畫面（規格\建模器-智慧分切.md「第一步」）
 
 【依賴哪些事實】
-  1. kang 四題與分步的回答                                              【已查證 · kang 本輪 AskUserQuestion 的回答】
-  2. 3D 顏色已用：橘＝縫、黃綠＝開口、黃＝選取、青＝程式算出來的、紅＝破洞、紫＝非流形
-                                                                        【已查證 · 建模器/js/view/scene.js:18-23, 1324-1372】
-  3. 邊上的標記走 marksOf()／applyMarks() 那一對（註解：加第四個標記只改這一對）
-                                                                        【已查證 · 建模器/js/core/mesh.js:426-462】
-  4. 存檔用頂點索引配對存 roles／smooth／hard                            【已查證 · 建模器/js/core/mesh.js:1032-1075】
-  5. 縫 ＝ role CUT、取消回 FOLD；只有可標記的邊能標                       【已查證 · 建模器/js/unfold/seam.js:89-130】
-  6. 分片面板：片數、點一條稜線時、清除全部標記、即時預覽                    【已查證 · 建模器/js/ui/toolbar.js:877-960】
-  7. 攤平「先走最平的邊」用 MinHeap 依轉折角排序；走不到的邊就是程式自己剪的   【已查證 · 建模器/js/unfold/flatten.js flattenPatch()】
+  1. 規格第一步（標記、展開怎麼對待、提案、要量的測試）                【已查證 · 規格/建模器-智慧分切.md「第一步」】
+  2. 邊上的標記走 marksOf／applyMarks 那一對；存檔用頂點索引配對          【已查證 · 建模器/js/core/mesh.js:426-462, 1032-1075】
+  3. Undo 靠 toJSON 拍快照 ⇒ keep 進 toJSON 就跟著 Undo                 【已查證 · 建模器/js/core/io.js:307-330】
+  4. 縫 ＝ role CUT；可標記的邊判準                                     【已查證 · 建模器/js/unfold/seam.js isMarkable／setSeam】
+  5. 攤平「先走最平的邊」的 frontier；走不到的邊 ＝ implicit（程式補剪）    【已查證 · 建模器/js/unfold/flatten.js flattenPatch()】
+  6. unfoldObject 縮放時用 transformed()，頂點順序不變                    【已查證 · 建模器/js/unfold/part.js:52-63；core/mesh.js transformed()】
+  7. 一樣的片會被 groupIdentical 併成一張                                 【已查證 · 建模器/js/unfold/flatten.js unfoldMesh() 結尾】
+  8. 分片模式點邊在 main.js seamPick；3D 縫線在 scene.js _updateSeams；畫面每幀重畫
+                                                                         【已查證 · 建模器/js/main.js seamPick；view/scene.js _updateSeams、render()】
+  9. 排版板子在 unfoldWin.opt.nest（w、h、rotate）                         【已查證 · 建模器/js/ui/unfoldPanel.js:47；out/nest.js:35】
 
 【會動到哪幾個檔】
-  上面 5 個。
+  上面 12 個。
 
 【怎麼知道做對了】
-  · 規格第一步列了「怎麼知道做對了」六條（要量的數字），動工時照它寫測試
-  · 判準⛔ 在規格裡抄第二份，只指向外部參考第 5、6 節（文件鐵律一）
-  · 目次產生器：已是最新；node 文件工具/狀態行數.js：86 行（警報線 90）；換行 CRLF ＝ 0
+  · 測試全部通過（3179 項），新的一節驗：互斥、共面⛔ 能標、存檔再開、11 種基本形狀跟改之前一樣、
+    提案 ＝ 原本補剪的 7 條、標了不准切就換別的 7 條且⛔ 碰、接受後補剪 0 條且片與外框一樣、
+    圓柱非切不可 1 條且有提醒、壓克力 12／12、板子 300×300 與轉 90°、縮放 2 倍的邊在物件自己的網格上
+  · 模組解析：43 支全部解析通過、47 支接得上；兩端檢查：沒有打架的；目次已是最新
+  · node 文件工具/狀態行數.js：87 行（警報線 90）；改過的 11 個檔 CRLF ＝ 0
+  · ⚠ 沙箱驗不了：面板、點邊、3D 線、存檔再開 —— 在 ⏳ 清單裡，上傳後 AI 先驗
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

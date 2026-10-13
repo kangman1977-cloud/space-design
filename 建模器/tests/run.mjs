@@ -7703,7 +7703,7 @@ function marksSurvive(name, src, dst, remap) {
 }
 
 {
-  /** 準備一個三樣標記都有的網格：baked 圓柱 → 環切 3 刀（hard）→ 手動標 CUT 與 smooth */
+  /** 準備一個每樣標記都有的網格：baked 圓柱 → 環切 3 刀（hard）→ 手動標 CUT、smooth、不准切（keep，2026-10-13 加的第四樣）*/
   const base = (() => {
     const b = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 60, seg: 16 }));
     const m0 = b.ok ? b.mesh : buildPrim('cylinder', { r: 25, h: 60, seg: 16 });
@@ -7718,11 +7718,12 @@ function marksSurvive(name, src, dst, remap) {
     m.setRole(pick[0], EDGE_ROLE.CUT);
     m.setRole(pick[1], EDGE_ROLE.CUT);
     m.setSmooth(pick[2], true);
+    m.setKeep(pick[3], true);
     return m;
   })();
 
   const want = markCount(base);
-  ok(`準備好的網格三樣標記都有（${Object.entries(want).map(([k, v]) => k + ' ' + v).join('、')}）`,
+  ok(`準備好的網格每樣標記都有（${Object.entries(want).map(([k, v]) => k + ' ' + v).join('、')}）`,
      Object.values(want).every(v => v > 0));
 
   marksSurvive('★ clone() 之後每一樣都還在', base, base.clone());
@@ -15138,6 +15139,119 @@ section('對位記號：沿縫每隔一段距離，兩側同一個位置（2026-
   const pc = pairUp(mc, cyl.pieces, 10);
   eq('★★★ 3 條縫（直縫、上緣、下緣）都找到另一側', pc.pairs, 3);
   ok('★★★ 　 同一個起點、同一個方向，換回 3D 同一個點', pc.sameDir && pc.sameCount && pc.worst < 1e-3, pc.worst);
+}
+
+section('智慧分切 第一步：不准切 ＋ 提案（2026-10-13）');
+
+/**
+ * kang 拍板（→ `規格\建模器-智慧分切.md`）：程式提案、kang 決定；不准切是邊上的第四個標記（藍色）；
+ * 第一步的提案 ＝ 程式本來就會補剪的那幾刀，但繞開不准切、講放不放得進板子；接受之後程式補剪 0 條。
+ */
+{
+  const { setSeam, isSeam, setKeep, isKeep, keepCount, clearKeeps, markSignature, isMarkable } = await import('../js/unfold/seam.js');
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { seamPreviewKey } = await import('../js/ui/toolbar.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const key = he => Math.min(he.id, he.twin.id);
+  const inner = m => [...m.edges()].filter(h => h.face && h.twin && h.twin.face);
+
+  // ── 標記本身 ──
+  const b0 = mk('box'), m0 = b0.mesh();
+  const e0 = inner(m0).find(h => isMarkable(m0, h));
+  /**
+   * ⚠ 「轉成可編輯網格」會先把共面的面併成一整塊 ⇒ 轉過的網格⛔ 共面的邊（第一版拿方塊、圓柱、平板測，三次都撲空）。
+   * ⇒ 用還沒轉的原始網格：圓柱的蓋子是一圈三角形，中間的邊都共面。
+   */
+  const mcy0 = buildPrim('cylinder', PRIM_DEFAULTS.cylinder);
+  mcy0.computeNormals();
+  const flat = inner(mcy0).find(h => !isMarkable(mcy0, h));
+  ok('★★ 標不准切：可以標', setKeep(m0, e0, true) && isKeep(e0) && isKeep(e0.twin));
+  ok('★★★ 　 再標成切開 ⇒ 不准切自動拿掉（互斥）', setSeam(m0, e0, true) && isSeam(e0) && !isKeep(e0));
+  ok('★★★ 　 再標回不准切 ⇒ 切開自動拿掉', setKeep(m0, e0, true) && isKeep(e0) && !isSeam(e0));
+  ok('★★ 共面的邊（畫面上看不見）⛔ 能標', !!flat && !setKeep(mcy0, flat, true) && !isKeep(flat));
+  const re = Mesh.fromJSON(JSON.parse(JSON.stringify(m0.toJSON())));
+  eq('★★★ 存檔再開：不准切還在', keepCount(re), 1);
+  const s0 = markSignature(m0);
+  setKeep(m0, inner(m0).filter(h => isMarkable(m0, h))[3], true);
+  ok('★★ 標記指紋：多標一條不准切 ⇒ 變', markSignature(m0) !== s0);
+  eq('★★ 清除不准切', clearKeeps(m0), 2);
+  eq('★★ 　 清完 0 條', keepCount(m0), 0);
+  const st = { mode: 'exact', material: 'foamboard' };
+  const k1 = seamPreviewKey(b0, st);
+  setKeep(m0, e0, true);
+  ok('★★★ 即時預覽：標了不准切也要重算（展開結果會變）', seamPreviewKey(b0, st) !== k1);
+  setKeep(m0, e0, false);
+
+  /**
+   * ── 🔴 沒標不准切 ⇒ 展開結果跟改之前一樣 ──
+   * 標準答案是 2026-10-13 沙箱量測（`外部參考-自動分切.md` 第 6 節）用**改之前的程式**量到的：
+   * 程式自己剪幾條邊、最大一片的外框（珍珠板、精確分片、預設尺寸、轉成可編輯網格）。
+   */
+  const before = { box: [7, 145, 210], wedge: [5, 106, 168], prism: [11, 195, 164], stairs: [19, 120, 420], roundBox: [39, 200, 142],
+    cylinder: [63, 179, 170], cone: [32, 126, 149], tube: [127, 179, 206], dome: [256, 191, 242], sphere: [481, 223, 297], torus: [358, 166, 198] };
+  const diff = [];
+  for (const [t, [n, w, h]] of Object.entries(before)) {
+    const r = unfoldObject(mk(t), { material: 'foamboard' });
+    const p = r.pieces.slice().sort((a, b) => b.width * b.height - a.width * a.height)[0];
+    if (r.autoEdges.length !== n || Math.round(p.width) !== w || Math.round(p.height) !== h)
+      diff.push(`${t}: ${r.autoEdges.length} 條 ${Math.round(p.width)}×${Math.round(p.height)}（以前 ${n} 條 ${w}×${h}）`);
+  }
+  eq('★★★ 11 種基本形狀：程式剪的邊數、最大一片 ＝ 改之前（沒標不准切）', diff.join('；'), '');
+
+  // ── 提案 ──
+  const bx = mk('box'), mb = bx.mesh();
+  const p0 = proposeSeams(bx, { material: 'foamboard' });
+  eq('★★★ 方塊沒標：提案 ＝ 程式原本剪的 7 條', p0.edges.length, 7);
+  ok('★★ 　 1 片、最大 145×210、放不進 240×120', p0.total === 1 && Math.round(p0.maxPiece.w) === 145 && Math.round(p0.maxPiece.h) === 210 && p0.big === 1);
+  ok('★★ 　 提案⛔ 改任何一條邊（只是算）', !inner(mb).some(isSeam));
+  const locked = p0.edges.slice(0, 3);
+  for (const h of locked) setKeep(mb, h, true);
+  const p1 = proposeSeams(bx, { material: 'foamboard' });
+  eq('★★★ 把其中 3 條標不准切 ⇒ 提案換別的 7 條', p1.edges.length, 7);
+  ok('★★★ 　 ⛔ 碰不准切的那 3 條', !p1.edges.some(h => isKeep(h)));
+  ok('★★ 　 而且真的換了（不是同一批）', p1.edges.map(key).sort().join() !== p0.edges.map(key).sort().join());
+  for (const h of p1.edges) setSeam(mb, h, true);
+  const ra = unfoldObject(bx, { material: 'foamboard' });
+  eq('★★★ 接受之後再展開：程式自己剪 0 條', ra.autoEdges.length, 0);
+  ok('★★★ 　 片數、外框跟提案時一樣', ra.stats.total === p1.total && Math.round(ra.pieces[0].width) === Math.round(p1.maxPiece.w) && Math.round(ra.pieces[0].height) === Math.round(p1.maxPiece.h),
+     `${ra.pieces[0].width}×${ra.pieces[0].height}`);
+  ok('★★ 　 不准切那 3 條還是不准切、⛔ 被接受成切開', locked.every(h => isKeep(h) && !isSeam(h)));
+  eq('★★ 接受完再提案 ⇒ 沒有要補的', proposeSeams(bx, { material: 'foamboard' }).edges.length, 0);
+
+  // ── 非切不可的不准切 ──
+  const cy = mk('cylinder'), mc = cy.mesh();
+  let nv = 0;
+  for (const h of inner(mc)) if (Math.abs(h.v.p.y - h.to.p.y) > 1e-6 && Math.hypot(h.v.p.x, h.v.p.z) > 1 && setKeep(mc, h, true)) nv++;
+  eq('前提：圓柱的直邊全標不准切', nv, PRIM_DEFAULTS.cylinder.seg);
+  const rc = unfoldObject(cy, { material: 'foamboard' });
+  eq('★★★ 繞一圈一定要剪一刀 ⇒ 1 條不准切非切不可', rc.keepCut, 1);
+  ok('★★★ 　 展開圖上講出來（⛔ 安靜地切）', rc.warnings.some(w => w.startsWith('有 1 條「不准切」的邊非切不可') && w.includes('不剪就攤不開')), rc.warnings.join('｜'));
+  eq('★★ 　 提案也講', proposeSeams(cy, { material: 'foamboard' }).keepCut, 1);
+  const ac = mk('box');
+  let na = 0;
+  for (const h of inner(ac.mesh())) if (setKeep(ac.mesh(), h, true)) na++;
+  const rac = unfoldObject(ac, { material: 'acrylic' });
+  eq('★★★ 壓克力方塊 12 條全標不准切 ⇒ 12 條非切不可（⛔ 重複算夾在兩片之間的）', `${na}/${rac.keepCut}`, '12/12');
+  ok('★★ 　 原因寫「折不起來」', rac.warnings.some(w => w.includes('12 條是壓克力／木板折不起來')));
+
+  // ── 板子 ──
+  eq('★★ 板子 300×300 ⇒ 方塊放得進', proposeSeams(mk('box'), { material: 'foamboard', board: { w: 300, h: 300 } }).big, 0);
+  const wd = { material: 'foamboard', board: { w: 240, h: 120, rotate: false } };
+  eq('★★ 楔形 106×168、240×120 ⛔ 轉 ⇒ 放不進', proposeSeams(mk('wedge'), wd).big, 1);
+  eq('★★ 　 可以轉 90° ⇒ 放得進（照排版那個勾）', proposeSeams(mk('wedge'), { ...wd, board: { ...wd.board, rotate: true } }).big, 0);
+
+  // ── 縮放過的物件：提案的邊要是物件自己那份網格的 ──
+  const sc = mk('box');
+  sc.scale.set(2, 2, 2);
+  const ps = proposeSeams(sc, { material: 'foamboard' });
+  const own = new Set([...sc.mesh().edges()].map(key));
+  ok('★★★ 縮放 2 倍：提案 7 條、每條都在物件自己的網格上（接受才標得上）', ps.edges.length === 7 && ps.edges.every(h => own.has(key(h))));
+  ok('★★ 　 外框照縮放算（290×420）', Math.round(ps.maxPiece.w) === 290 && Math.round(ps.maxPiece.h) === 420, `${ps.maxPiece.w}×${ps.maxPiece.h}`);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -103,7 +103,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   mesh.computeNormals();
 
   if (!mesh.faces.length) {
-    return { pieces: [], warnings: ['這個物件沒有任何面'], stats: empty() };
+    return { pieces: [], warnings: ['這個物件沒有任何面'], autoEdges: [], keepCut: 0, stats: empty() };
   }
 
   const patches = splitPatches(mesh, geo, tolDeg);
@@ -141,6 +141,20 @@ export function unfoldMesh(mesh, rule, opts = {}) {
 
   // 完全一樣的片合併成「一張圖 ×N」—— 12 片一樣的側板要出一張圖，
   // 不是 12 張一樣的圖。這跟說明表的「套數」是同一個概念。
+  /** 智慧分切要的是**全部**補剪的邊 ⇒ 在「一樣的片併成一張」之前收（併掉的片也有它自己的邊）*/
+  const autoEdges = pieces.flatMap(p => p.autoEdges || []);
+  /**
+   * 🔴 **不准切卻非切不可的**：一樣在併片之前加總（併掉的片也算），寫成整份的一則提醒（⛔ 安靜地切）。
+   * ⚠ 標不准切的物件⛔ 一定標過縫，片可能被併成一張 —— 寫在卡片上只會算到留下來的那一片。
+   */
+  const keepLoop = new Set(pieces.flatMap(p => (p.keepCut && p.keepCut.loop) || [])).size;
+  const keepMat = new Set(pieces.flatMap(p => (p.keepCut && p.keepCut.material) || [])).size;
+  if (keepLoop + keepMat) {
+    const why = [];
+    if (keepLoop) why.push(`${keepLoop} 條是不剪就攤不開（例如繞一圈的筒子一定要剪一刀）`);
+    if (keepMat) why.push(`${keepMat} 條是${rule.label}折不起來`);
+    warnings.push(`有 ${keepLoop + keepMat} 條「不准切」的邊非切不可，已經切開：${why.join('；')}`);
+  }
   const merged = groupIdentical(pieces, !wantJoints);
 
   for (const p of merged) {
@@ -208,6 +222,10 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   return {
     pieces: merged,
     warnings,
+    /** 程式自己補剪的邊（每條一次、所有片）—— 智慧分切的提案用（2026-10-13）*/
+    autoEdges,
+    /** 不准切卻非切不可的條數（所有片）*/
+    keepCut: keepLoop + keepMat,
     stats: {
       pieces: merged.length,
       total: merged.reduce((n, p) => n + p.qty, 0),
@@ -363,7 +381,11 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false) {
       if (placed.has(th.face.id)) continue;
       if (edgeIsCut(mesh, he, rule, tolDeg)) continue;
       const d = mesh.dihedral(he);
-      frontier.push(he, d === null ? Infinity : Math.abs(d));
+      /**
+       * 🔴 **「不准切」排最前面**（2026-10-13，智慧分切第一步）：先連起來 ⇒ 程式自己補剪時繞開它。
+       * ⭐ 沒標不准切的物件，排序跟以前逐字一樣（只有標了的才拿 −1）—— 測試守著「展開結果一個字都不變」。
+       */
+      frontier.push(he, he.keep ? -1 : d === null ? Infinity : Math.abs(d));
     }
   };
 
@@ -458,6 +480,32 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false) {
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
     used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : [],
     jointNo, he => implicit.has(he.id), strain);
+
+  /**
+   * 🔴 **程式自己補剪的邊（每條一次）＋ 不准切卻非切不可的**（2026-10-13，智慧分切第一步）。
+   * `autoEdges`：智慧分切的提案就是這幾條（`propose.js`）。
+   * `keepCut`：標了不准切、最後還是切開的 —— `loop` ＝ 不剪就攤不開（例如繞一圈的筒子），
+   * `material` ＝ 材料折不了（壓克力的轉角）。卡片照實講（⛔ 安靜地切）。
+   */
+  const autoEdges = [], seenE = new Set(), keepLoop = [], keepMat = [];
+  for (const f of used) {
+    for (const he of mesh.faceLoop(f)) {
+      if (!he.twin || !he.twin.face) continue;
+      const k = Math.min(he.id, he.twin.id);
+      if (seenE.has(k)) continue;
+      seenE.add(k);
+      if (implicit.has(he.id)) autoEdges.push(he);
+      if (!he.keep) continue;
+      if (implicit.has(he.id)) keepLoop.push(k);
+      else if (edgeIsCut(mesh, he, rule, tolDeg)) keepMat.push(k);
+    }
+  }
+  piece.autoEdges = autoEdges;
+  /**
+   * 記「哪幾條」（邊的鍵）⛔ 記條數：材料折不了的那一條夾在**兩片**之間，兩片各看到一次 ——
+   * 加總時要去掉重複（【實證】壓克力方塊 12 條邊全標不准切，第一版寫成「24 條」）。
+   */
+  piece.keepCut = { loop: keepLoop, material: keepMat };
   return { piece };
 }
 

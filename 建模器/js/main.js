@@ -24,8 +24,10 @@ import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
 import { Panel, fillPrimMenu, fieldNum } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
-import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable }
+import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
+         setKeep, isKeep, markSignature }
   from './unfold/seam.js';
+import { proposeSeams } from './unfold/propose.js';
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
@@ -310,6 +312,16 @@ const app = {
   /** 分片模式「點一條線時標多少」（2026-10-09）：'edge' 只標那一條（原本的用法、預設）／'loop' 一整圈／'all' 連同方向全部 */
   getSeamLineMode: () => seamLineMode,
   setSeamLineMode: m => { seamLineMode = m; dropSeamSpan(); },
+  /**
+   * 🔴 **智慧分切第一步**（2026-10-13 → `規格\建模器-智慧分切.md`）：
+   * 「標成：切開／不准切」、提案（青色虛線）、全部接受、取消。理由與狀態見下面 `seamProposal`。
+   */
+  getSeamMarkKind: () => seamMarkKind,
+  setSeamMarkKind: k => { seamMarkKind = k === 'keep' ? 'keep' : 'cut'; dropSeamSpan(); },
+  proposeSeams: obj => makeSeamProposal(obj),
+  getSeamProposal: obj => currentSeamProposal(obj),
+  acceptSeamProposal: () => acceptSeamProposal(),
+  cancelSeamProposal: () => { dropSeamProposal(); panel.refresh(); toast('提案取消了，什麼都沒改'); },
   /**
    * 🔴 分片模式的即時預覽（2026-10-12，省道打版第三步）：**跟著展開圖視窗目前選的**展開方式、材料、開口畫法；
    * 「放大」＝ 打開展開圖視窗。⚠ `unfoldWin` 在下面才建 —— 這兩支只在點了之後才呼叫，⛔ 在建構時。
@@ -1049,7 +1061,7 @@ const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
  */
 function exitOtherModes(keep) {
   if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); }
-  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); }
+  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); }
   if (keep !== 'mate' && sel.mateMode) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
@@ -4205,6 +4217,7 @@ function toggleSeamMode() {
     toast('分片模式：點稜線＝切開／取消，點面的中央＝整圈切開。再按一次「分片」離開');
   } else {
     dropSeamSpan();
+    dropSeamProposal();
     toast('已離開分片模式');
   }
 }
@@ -4228,6 +4241,80 @@ function dropSeamSpan() {
 }
 
 /**
+ * 🔴 **「標成」：`'cut'` 切開（原本的用法、預設）／`'keep'` 不准切**（2026-10-13，智慧分切第一步）。
+ * 「點一條線時標多少」四種都跟著它走；「點面中央整圈切開」只用在切開。
+ */
+let seamMarkKind = 'cut';
+
+/**
+ * 🔴 **智慧分切的提案**（2026-10-13 → `規格\建模器-智慧分切.md`；計算在 `unfold/propose.js`）。
+ * 存著提案當時的**物件、網格、標記指紋**；三樣有一樣對不上 ⇒ 收起來（規格：有提案時改了標記 ⇒ 提案收起來，要再按一次）。
+ * ⭐ 用指紋判斷、⛔ 在每一個改標記的地方各自收 —— 標縫、標不准切、清除、Undo、讀檔都會改到指紋，一個判準全包
+ * （鐵律二：與其讓好幾條路對齊，不如換一個只有一條路的定義）。
+ * `seamProposalStale`：剛被收起來 ⇒ 面板下次重畫講一次「標記改了，提案收起來了」。
+ */
+let seamProposal = null;
+let seamProposalStale = false;
+const edgeKeyOf = he => Math.min(he.id, he.twin ? he.twin.id : he.id);
+
+function dropSeamProposal() {
+  seamProposal = null;
+  view.clearSeamProposal();
+}
+
+function makeSeamProposal(obj) {
+  const st = app.getUnfoldSettings();
+  const N = unfoldWin.opt.nest || {};
+  let p;
+  try {
+    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, rotate: !!N.rotate } });
+  } catch (e) {
+    toast('提案算不出來：' + e.message, true);
+    return null;
+  }
+  seamProposal = { obj, ...p, keys: new Set(p.edges.map(edgeKeyOf)), removed: 0, dartMode: st.mode === 'dart' };
+  seamProposalStale = false;
+  view.setSeamProposal(obj, seamProposal.edges);
+  panel.refresh();
+  toast(p.edges.length ? `智慧分切提案 ${p.edges.length} 條縫（青色虛線）—— 結果在右側面板` : '已經攤得開，沒有要補的縫');
+  return seamProposal;
+}
+
+/** 面板問「現在有沒有提案」—— 順便檢查還算不算數（指紋、網格、物件） */
+function currentSeamProposal(obj) {
+  const p = seamProposal;
+  if (p && (p.obj !== obj || p.obj.mesh() !== p.mesh || markSignature(p.mesh) !== p.sig)) {
+    dropSeamProposal();
+    seamProposalStale = true;
+  }
+  if (seamProposal) return { proposal: seamProposal };
+  if (seamProposalStale) { seamProposalStale = false; return { stale: true }; }
+  return null;
+}
+
+/** 全部接受：提案的邊一條一條標成縫 ⇒ **一步** Undo 全部退回 */
+function acceptSeamProposal() {
+  const p = seamProposal;
+  if (!p) return;
+  if (p.obj.mesh() !== p.mesh || markSignature(p.mesh) !== p.sig) {
+    dropSeamProposal();
+    seamProposalStale = true;
+    panel.refresh();
+    toast('標記改了，提案收起來了 —— 要再按一次「提案」', true);
+    return;
+  }
+  let n = 0, skip = 0;
+  for (const he of p.edges) {
+    if (isSeam(he)) continue;
+    if (setSeam(p.mesh, he, true)) n++; else skip++;
+  }
+  dropSeamProposal();
+  seamProposalStale = false;
+  if (!n) { panel.refresh(); toast('提案裡沒有可以標的邊', true); return; }
+  commitSeam(p.obj, `接受智慧分切提案（${n} 條${skip ? `，${skip} 條標不上` : ''}）`);
+}
+
+/**
  * 分片模式下點了畫面。實際的幾何判斷在 seam.js（測得到），
  * 這裡只負責「改了文件之後要做什麼」——記一步 Undo、更新畫面、講一句話。
  */
@@ -4238,6 +4325,28 @@ function seamPick(hit) {
   }
 
   const mesh = hit.obj.mesh();
+
+  /**
+   * 🔴 **點到提案的青色虛線 ＝ 從提案裡拿掉它**（2026-10-13，不管「標成」選哪個）。
+   * ⚠ 只改提案、⛔ 改標記 ⇒ 指紋不變、提案還在。
+   */
+  const pr = seamProposal;
+  if (hit.kind === 'edge' && pr && pr.obj === hit.obj && pr.mesh === mesh && pr.keys.has(edgeKeyOf(hit.he))) {
+    const k = edgeKeyOf(hit.he);
+    pr.keys.delete(k);
+    pr.edges = pr.edges.filter(h => edgeKeyOf(h) !== k);
+    pr.removed++;
+    view.setSeamProposal(hit.obj, pr.edges);
+    panel.refresh();
+    toast(`從提案裡拿掉 1 條（剩 ${pr.edges.length} 條）`);
+    return;
+  }
+
+  /** 「標成」不准切 ⇒ 底下四種點法都改標不准切（判準與互斥在 `seam.js`）*/
+  const keep = seamMarkKind === 'keep';
+  const isM = keep ? isKeep : isSeam;
+  const setM = (m, h, on) => keep ? setKeep(m, h, on) : setSeam(m, h, on);
+  const word = keep ? '不准切' : '切割線';
 
   /**
    * 🔴 **標一段：先點起點、再點同一條線上的終點，中間整段一次標**（2026-10-12，kang 拍板）。
@@ -4261,20 +4370,20 @@ function seamPick(hit) {
       toast('終點要在起點的同一條線上（順著起點那條邊一直走得到的地方）。起點還留著，再點一次', true);
       return;
     }
-    const on = !isSeam(s.he);
+    const on = !isM(s.he);
     let n = 0;
-    for (const h of hes) if (isSeam(h) !== on) { setSeam(mesh, h, on); n++; }
+    for (const h of hes) if (isM(h) !== on && setM(mesh, h, on)) n++;
     dropSeamSpan();
-    if (!n) { toast('這一段已經是' + (on ? '切割線' : '沒有標記') + '了', true); return; }
-    commitSeam(hit.obj, `${on ? '標記' : '取消'}一段（${n} 條邊）`);
+    if (!n) { toast('這一段已經是' + (on ? word : '沒有標記') + '了', true); return; }
+    commitSeam(hit.obj, `${on ? '標記' : '取消'}一段${keep ? '不准切' : ''}（${n} 條邊）`);
     return;
   }
 
   if (hit.kind === 'edge') {
-    const on = !isSeam(hit.he);
+    const on = !isM(hit.he);
     if (seamLineMode === 'edge') {
-      setSeam(mesh, hit.he, on);
-      commitSeam(hit.obj, on ? '標記切割線' : '取消切割線');
+      setM(mesh, hit.he, on);
+      commitSeam(hit.obj, (on ? '標記' : '取消') + word);
       return;
     }
     /**
@@ -4283,10 +4392,15 @@ function seamPick(hit) {
      */
     const hes = seamLoopEdges(mesh, hit.he, seamLineMode);
     let n = 0;
-    for (const h of hes) if (isSeam(h) !== on) { setSeam(mesh, h, on); n++; }
-    if (!n) { toast('這一圈已經是' + (on ? '切割線' : '沒有標記') + '了', true); return; }
+    for (const h of hes) if (isM(h) !== on && setM(mesh, h, on)) n++;
+    if (!n) { toast('這一圈已經是' + (on ? word : '沒有標記') + '了', true); return; }
     const what = seamLineMode === 'all' ? '同方向的全部' : '一整圈';
-    commitSeam(hit.obj, `${on ? '標記' : '取消'}${what}（${n} 條邊）`);
+    commitSeam(hit.obj, `${on ? '標記' : '取消'}${what}${keep ? '不准切' : ''}（${n} 條邊）`);
+    return;
+  }
+
+  if (hit.kind === 'face' && keep) {
+    toast('「不准切」請點稜線 —— 點面的中央是「整圈切開」，只用在切開', true);
     return;
   }
 
