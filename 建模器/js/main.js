@@ -321,6 +321,7 @@ const app = {
   proposeSeams: obj => makeSeamProposal(obj),
   getSeamProposal: obj => currentSeamProposal(obj),
   acceptSeamProposal: () => acceptSeamProposal(),
+  useSeamAlternative: i => useSeamAlternative(i),
   cancelSeamProposal: () => { dropSeamProposal(); panel.refresh(); toast('提案取消了，什麼都沒改'); },
   /**
    * 🔴 分片模式的即時預覽（2026-10-12，省道打版第三步）：**跟著展開圖視窗目前選的**展開方式、材料、開口畫法；
@@ -4272,12 +4273,27 @@ function makeSeamProposal(obj) {
     toast('提案算不出來：' + e.message, true);
     return null;
   }
-  seamProposal = { obj, ...p, keys: new Set(p.edges.map(edgeKeyOf)), removed: 0, dartMode: st.mode === 'dart' };
+  seamProposal = { obj, ...p, keys: new Set(p.edges.map(edgeKeyOf)), removed: 0, active: 0, dartMode: st.mode === 'dart' };
   seamProposalStale = false;
   view.setSeamProposal(obj, seamProposal.edges);
   panel.refresh();
-  toast(p.edges.length ? `智慧分切提案 ${p.edges.length} 條縫（青色虛線）—— 結果在右側面板` : '已經攤得開，沒有要補的縫');
+  const kind = p.options.length > 1 ? `（${p.label}）` : '';
+  toast(p.edges.length ? `智慧分切提案${kind} ${p.edges.length} 條縫（青色虛線）—— 結果在右側面板` : '已經攤得開，沒有要補的縫');
   return seamProposal;
+}
+
+/**
+ * 其他切法：換成第 i 份（智慧分切第三步規格第 2 節）。⚠ 只換提案、⛔ 改標記 ⇒ 指紋不變。
+ * 點掉的青色虛線⛔ 帶過去 —— 換了就是另一份，重新從整份開始。
+ */
+function useSeamAlternative(i) {
+  const p = seamProposal;
+  const o = p && p.options && p.options[i];
+  if (!o) return;
+  Object.assign(p, o, { edges: o.edges.slice(), keys: new Set(o.edges.map(edgeKeyOf)), removed: 0, active: i });
+  view.setSeamProposal(p.obj, p.edges);
+  panel.refresh();
+  toast(`換成「${o.label}」：${o.edges.length} 條縫、展開後 ${o.total} 片`);
 }
 
 /** 面板問「現在有沒有提案」—— 順便檢查還算不算數（指紋、網格、物件） */

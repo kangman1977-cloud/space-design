@@ -15334,12 +15334,103 @@ section('智慧分切 第二步：放得進板子（2026-10-13）');
   }
 
   // ── 還放不進的：講是哪一種 ──
+  // 第三步之後球、圓環有花瓣可以切 ⇒ 看「只沿轉角」那一份（＝ 第二步的切法）
+  const cornerOf = p => p.options.find(o => o.kind === 'corner');
   const ps = P(mk('sphere'));
-  ok('★★★ 球 ⇒ 1 片是「一整個曲面、沒有轉角可以切」（第三步）', ps.big === 1 && ps.bigCurved === 1 && ps.bigFlat === 0, `${ps.big}/${ps.bigCurved}/${ps.bigFlat}`);
+  const psc = cornerOf(ps);
+  ok('★★★ 球「只沿轉角」那一份 ⇒ 1 片是「一整個曲面、沒有轉角可以切」', psc.big === 1 && psc.bigCurved === 1 && psc.bigFlat === 0, `${psc.big}/${psc.bigCurved}/${psc.bigFlat}`);
   const pp = P(mk('plate', { w: 300, d: 50 }));
   ok('★★★ 300×50 的平板 ⇒ 1 片是「本身就是一個比板子大的平面」', pp.big === 1 && pp.bigFlat === 1 && pp.bigCurved === 0, `${pp.big}/${pp.bigCurved}/${pp.bigFlat}`);
-  ok('★★ 圓環 ⇒ 還有重疊要講（第三步）', P(mk('torus')).overlap);
+  ok('★★ 圓環「只沿轉角」那一份 ⇒ 還有重疊要講', cornerOf(P(mk('torus'))).overlap);
   ok('★★ 都沒有算到時間上限', !pb.timedOut && !pc.timedOut && !ps.timedOut);
+}
+
+section('智慧分切 第三步：曲面切成整齊的長線（2026-10-13）');
+
+/**
+ * 規格「第三步」第 3 節：格子曲面列候選（長條／環帶／花瓣，候選在 `curved.js`）→ 每個都攤一次 →
+ * 放不進的少 → 沒重疊 → 程式補剪的線少 → 片少 → 縫短 挑；每一種各留一份（`options`）。數字的來源：規格第 0 節的沙箱。
+ */
+{
+  const { setSeam, setKeep } = await import('../js/unfold/seam.js');
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { gridOf, candidatesOf } = await import('../js/unfold/curved.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const B = { w: 240, h: 120, gap: 1, rotate: false };
+  const P = o => proposeSeams(o, { material: 'foamboard', board: B });
+  const kinds = p => p.options.map(o => `${o.label} ${o.total}`).join(' / ');
+  /** 照某一份提案標縫、再展開：片數、每片最多補剪幾條 */
+  const accept = (o, opt) => {
+    for (const h of opt.edges) setSeam(o.mesh(), h, true);
+    const r = unfoldObject(o, { material: 'foamboard' });
+    return { total: r.stats.total, maxAuto: Math.max(0, ...r.pieces.map(p => (p.autoCut && p.autoCut.lines) || 0)) };
+  };
+  const whole = o => { const m = o.mesh(); return new Set(m.faces.map(f => f.id)); };
+
+  // ── 找格子 ──
+  const sg = mk('sphere');
+  const gs = gridOf(sg.mesh(), whole(sg));
+  const gsn = gs ? [gs.A.length, gs.B.length].sort((a, b) => a - b).join('×') : '找不到';
+  eq('★★★ 球（32×16）⇒ 找到格子：32 條經線 ＋ 15 圈緯線', gsn, '15×32');
+  const tor = mk('torus');
+  const gt = gridOf(tor.mesh(), whole(tor));
+  eq('★★★ 圓環（32×12）⇒ 繞管子 32 圈 ＋ 沿大圓 12 圈', gt ? [gt.A.length, gt.B.length].sort((a, b) => a - b).join('×') : '找不到', '12×32');
+  const cs = gs ? [...new Set(candidatesOf(gs).map(c => c.kind))].sort().join(',') : '';
+  eq('★★ 球的候選三種都有', cs, 'band,petal,strip');
+  const box = mk('box');
+  eq('★★ 方塊整個 ⇒ ⛔ 是格子', gridOf(box.mesh(), whole(box)), null);
+
+  // ── 球：兩朵花 ──
+  const sp = mk('sphere'), ps = P(sp);
+  ok('★★★ 球 ⇒ 提案是花瓣、2 片、全放得進（沙箱：兩朵花 94×94）', ps.kind === 'petal' && ps.total === 2 && ps.big === 0 && !ps.overlap, kinds(ps));
+  const strip = ps.options.find(o => o.kind === 'strip');
+  ok('★★★ 　 其他切法裡有長條：32 片', !!strip && strip.total === 32, kinds(ps));
+  ok('★★ 　 「只沿轉角」也在（1 片放不進）', ps.options.some(o => o.kind === 'corner' && o.big === 1), kinds(ps));
+  ok('★★ 　 第 0 份 ＝ 提案本身', ps.options[0].kind === ps.kind && ps.options[0].edges === ps.edges);
+  const as = accept(sp, ps);
+  ok('★★★ 　 接受之後再展開 ⇒ 2 片、每片程式補剪 0～1 條', as.total === 2 && as.maxAuto <= 1, `${as.total} 片 補剪 ${as.maxAuto}`);
+  ok('★★ 　 沒有算到時間上限', !ps.timedOut);
+
+  // ── 半球、圓環 ──
+  const pd = P(mk('dome'));
+  ok('★★★ 半球 ⇒ 花瓣、2 片（花＋底板）全放得進', pd.kind === 'petal' && pd.total === 2 && pd.big === 0, kinds(pd));
+  const pt = P(tor);
+  ok('★★★ 圓環 ⇒ 花瓣、1～2 片全放得進、沒有重疊（第二步：1 片放不進、有重疊）', pt.kind === 'petal' && pt.total <= 2 && pt.big === 0 && !pt.overlap, kinds(pt));
+  const at = accept(tor, pt);
+  ok('★★ 　 接受之後再展開 ⇒ 片數一樣、每片補剪 0～1 條', at.total === pt.total && at.maxAuto <= 1, `${at.total} 片 補剪 ${at.maxAuto}`);
+
+  // ── 圓柱：照舊 ──
+  const pc = P(mk('cylinder'));
+  ok('★★★ 圓柱 ⇒ 照舊 3 片「只沿轉角」，⛔ 被換成長條', pc.kind === 'corner' && pc.total === 3 && pc.big === 0, kinds(pc));
+  ok('★★ 　 長條列在其他切法（34 片）', pc.options.some(o => o.kind === 'strip' && o.total === 34), kinds(pc));
+
+  // ── 只有平面的：跟第二步一樣、⛔ 列其他切法 ──
+  for (const t of ['box', 'wedge', 'stairs', 'prism']) {
+    const p = P(mk(t));
+    ok(`★★★ ${t} ⇒ 只有一份（只沿轉角）、⛔ 寫是哪一種`, p.options.length === 1 && p.kind === 'corner', kinds(p));
+  }
+
+  // ── 換成其他切法 ──
+  const sp2 = mk('sphere'), ps2 = P(sp2);
+  const alt = ps2.options.find(o => o.kind === 'strip');
+  ok('★★★ 換成長條 ⇒ 提案的邊跟著換', !!alt && alt.edges.length !== ps2.edges.length, `${ps2.edges.length} → ${alt && alt.edges.length}`);
+  const a2 = accept(sp2, alt);
+  ok('★★★ 　 接受之後再展開 ⇒ 片數跟那一份一樣（32）、每片補剪 0～1 條', a2.total === alt.total && a2.maxAuto <= 1, `${a2.total} 片 補剪 ${a2.maxAuto}`);
+
+  // ── 不准切 ──
+  const sk = mk('sphere');
+  const m = sk.mesh();
+  // 赤道那一圈的一條緯線邊（兩朵花的切口一定會用到它）
+  const eqE = [...m.edges()].find(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y) < 1e-6 && Math.abs(h.to.p.y) < 1e-6);
+  setKeep(m, eqE, true);
+  const pk = P(sk);
+  ok('★★★ 不准切的邊 ⇒ 每一份提案都⛔ 碰它', pk.options.every(o => !o.edges.includes(eqE)), kinds(pk));
+  ok('★★ 　 還是有提案（不是整個放棄）', pk.options.length > 1 && pk.edges.length > 0, kinds(pk));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

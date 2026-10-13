@@ -978,7 +978,8 @@ export class Panel {
     const p = cur && cur.proposal;
     this._rowBtn(p ? '重新提案' : '智慧分切：提案',
       '程式照判準建議要從哪裡切開（青色虛線），你看過再決定接受、刪掉幾條、或取消。'
-      + '沿轉角切、切到每片都放得進板子（照排版設定），片盡量少、縫盡量短；會繞開「不准切」',
+      + '沿轉角切、切到每片都放得進板子（照排版設定），片盡量少、縫盡量短；會繞開「不准切」。'
+      + '一圈一圈的曲面（球、圓環…）會試花瓣、長條、環帶，挑切口最整齊的',
       () => this.app.proposeSeams(obj));
     if (!p) return;
 
@@ -993,12 +994,14 @@ export class Panel {
     const fitLines = [];
     if (!p.big) fitLines.push(`全部放得進 ${boardTxt} 板子（${cond}）`);
     else {
-      if (p.bigCurved) fitLines.push(red(`有 <b>${p.bigCurved}</b> 片是一整個曲面、沒有轉角可以切，放不進`) + ' —— 要第三步才切得開');
+      if (p.bigCurved) fitLines.push(red(`有 <b>${p.bigCurved}</b> 片是一整個曲面、沒有轉角可以切，放不進`) + (p.nonGrid ? '' : ' —— 要換大板，或自己標縫切開'));
       if (p.bigFlat) fitLines.push(red(`有 <b>${p.bigFlat}</b> 片本身就是一個比板子大的平面`) + ' —— 要換大板，或自己標縫切開');
       const rest = p.big - p.bigCurved - p.bigFlat;
       if (rest > 0) fitLines.push(red(`有 <b>${rest}</b> 片放不進 ${boardTxt} 板子`) + `（${cond}）`);
     }
-    if (p.overlap) fitLines.push(red('提案的片還有重疊') + ' —— 要第三步才處理');
+    if (p.overlap) fitLines.push(red('提案的片還有重疊') + (p.nonGrid ? '' : ' —— 自己標縫切開'));
+    // 不是格子的曲面：只在結果還有問題時講（圓錐那種照沿轉角切就好好的，⛔ 多嘴）
+    if (p.nonGrid && (p.big || p.overlap)) fitLines.push('這塊曲面不是一圈一圈的格子，還不會整齊地切 —— 照沿轉角的切法提案');
     if (p.timedOut) fitLines.push('算到 2 秒先交出目前最好的');
     const box = document.createElement('div');
     box.className = 'note';
@@ -1006,7 +1009,9 @@ export class Panel {
     if (!p.edges.length && !p.removed) {
       lines.push('已經攤得開，沒有要補的縫。');
     } else {
-      lines.push(`提案 <b>${p.edges.length}</b> 條縫（青色虛線）：展開後 <b>${p.total}</b> 片`
+      // 有曲面可以挑切法時才寫是哪一種（只有平面的物件⛔ 寫）
+      const kind = p.options && p.options.length > 1 ? `<b>${p.label}</b>，` : '';
+      lines.push(`提案 <b>${p.edges.length}</b> 條縫（青色虛線）：${kind}展開後 <b>${p.total}</b> 片`
         + (p.maxPiece ? `，最大一片 ${fmt1(p.maxPiece.w)}×${fmt1(p.maxPiece.h)}` : ''));
     }
     lines.push(...fitLines);
@@ -1022,6 +1027,19 @@ export class Panel {
     }
     this._rowBtn('取消提案', '青色虛線收起來，什麼都不改', () => this.app.cancelSeamProposal());
     this.form.appendChild(note('點一條青色虛線 ＝ 從提案裡拿掉它。'));
+
+    /** 其他切法（第三步規格第 2 節）：每一種一顆按鈕，點了就換成那一份（3D 上的青色虛線跟著換）*/
+    const opts = p.options || [];
+    if (opts.length > 1) {
+      this.form.appendChild(note('其他切法（點一下就換成那一種）：'));
+      opts.forEach((o, i) => {
+        if (i === p.active) return;
+        const bad = [o.big ? `${o.big} 片放不進` : '', o.overlap ? '有重疊' : ''].filter(Boolean).join('、');
+        this._rowBtn(`${o.label}：${o.total} 片${bad ? `（${bad}）` : ''}`,
+          `換成「${o.label}」：${o.edges.length} 條縫、縫總長 ${Math.round(o.cutLen)}${i === 0 ? '（這是程式最推薦的）' : ''}`,
+          () => this.app.useSeamAlternative(i));
+      });
+    }
   }
 
   /**
