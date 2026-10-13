@@ -15801,6 +15801,55 @@ section('曲線刀具 3b：放一個圓（2026-10-13）');
   ok('★ 半徑 0 ⇒ 沒有錨點', edit.circleAnchors(fr, cs, ct, 0).length === 0);
 }
 
+section('曲線刀具：同一個面開好幾個孔（在整個區域上切，2026-10-13）');
+
+/**
+ * `regionCut()` 檔頭：開過孔的面被兩條看不見的接線拆成兩片 ⇒ 第二個圈壓到接線以前會被擋、還講「跑出這個面」。
+ * 主斷言：形狀不變、頂面面積合計 2700、每個圈內各自一塊、圈外仍是**一個區域**、⛔ 長度 0 的邊。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const topOf = m => m.faces.filter(f => m.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const fr = edit.faceDimFrame(box.faceVerts(topOf(box)[0]).map(v => v.p.clone()));
+  const circ = (s, t, r) => edit.sampleCurve(edit.circleAnchors(fr, fr.sMin + s, fr.tMin + t, r), 1, true);
+  const areaOf = (m, f) => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0);
+  const sumTop = m => topOf(m).reduce((s, f) => s + areaOf(m, f), 0);
+  const zeroLen = m => [...m.edges()].filter(h => h.v.p.distanceTo(h.to.p) < 1e-6).length;
+  const regionSizes = m => { edit.refreshAfterEdit(m); const g = new Map(); for (const f of topOf(m)) { const rid = edit.regionOf(m, f).rid; g.set(rid, (g.get(rid) || 0) + 1); } return [...g.values()].sort((a, b) => a - b); };
+  const good = (m, v0 = 108000) => m.isClosed() && m.validate().ok && Math.abs(m.volume() - v0) < 1e-6 && Math.abs(sumTop(m) - 2700) < 1e-6 && zeroLen(m) === 0;
+
+  const m1 = edit.curveCutFaceLoop(box, topOf(box)[0], circ(20, 22.5, 6)).mesh;
+  edit.refreshAfterEdit(m1);
+  const ringFaces = topOf(m1).filter(f => edit.regionOf(m1, f).faces.length === 2);
+  eq('（前提）第一個圓之後，圓外是 2 片一個區域（接線看不見）', ringFaces.length, 2);
+  const outline = edit.curveRegionOutline(m1, ringFaces[0]);
+  ok('★★★ 區域外框 ＝ 頂面的四個角（⛔ 是那一片網格面自己的角）', outline.length === 4 && outline.every(p => Math.abs(Math.abs(p.x) - 30) < 1e-9 && Math.abs(Math.abs(p.z) - 22.5) < 1e-9));
+
+  // 第二個圓壓在接線上（修之前三片全擋，講「跑出這個面」）
+  const br = [...m1.edges()].find(h => h.face && h.twin && h.twin.face && ringFaces.includes(h.face) && ringFaces.includes(h.twin.face) && !m1.marksOf(h).hard);
+  const mid = br.v.p.clone().add(br.to.p).multiplyScalar(0.5);
+  const r2 = edit.curveCutFaceLoop(m1, ringFaces[0], circ(mid.x + 30, 22.5 - mid.z, 2));
+  ok('★★★ 第二個圓壓在看不見的接線上 ⇒ 切得出來（修之前被擋）', r2.ok && good(r2.mesh), r2.reason);
+  eq('★★★ 　 區域：兩個圓內各 1 塊，圓外仍是 1 個區域', r2.ok && regionSizes(r2.mesh).slice(0, 2).join(), '1,1');
+  ok('★★ 　 圓外那個區域只有一個（其餘的三角形都看不見、都算在裡面）', r2.ok && regionSizes(r2.mesh).length === 3);
+  const r3 = edit.curveCutFaceLoop(r2.mesh, topOf(r2.mesh).find(f => edit.regionOf(r2.mesh, f).faces.length > 2), circ(45, 30, 5));
+  ok('★★ 第三個圓 ⇒ 切得出來、3 個圓內 ＋ 1 個圓外區域', r3.ok && good(r3.mesh) && regionSizes(r3.mesh).length === 4, r3.reason);
+  const r4 = edit.curveCutFaceLoop(r3.mesh, topOf(r3.mesh).find(f => edit.regionOf(r3.mesh, f).faces.length > 2), circ(24, 22.5, 6));
+  ok('★★★ 圓壓到既有的孔 ⇒ 擋下來、講「碰到…已經有的開口」', !r4.ok && /已經有的開口/.test(r4.reason), r4.reason);
+  const r5 = edit.curveCutFaceLoop(m1, ringFaces[0], circ(20, 22.5, 12));
+  ok('★★ 大圓把第一個孔整個圈住 ⇒ 切得出來（圈住的那一圈自己是一個帶孔的區域）', r5.ok && good(r5.mesh) && regionSizes(r5.mesh).length === 3, r5.reason);
+
+  // 從邊到邊的曲線，在開過孔的面上
+  const V3 = (x, z) => new THREE.Vector3(x, Y, z), A = (p, hin, hout) => ({ p, hin: hin || null, hout: hout || null });
+  const wave = edit.sampleCurve([A(V3(-30, 15), null, V3(-20, 5)), A(V3(0, 12), V3(-10, 18), V3(10, 6)), A(V3(30, 10), V3(20, 14), null)], 1);
+  const r6 = edit.curveCutFace(m1, ringFaces[0], wave);
+  ok('★★★ 開過孔的面上從邊到邊（壓過接線）⇒ 切得出來、孔分到對的那一邊', r6.ok && good(r6.mesh) && regionSizes(r6.mesh).length === 3, r6.reason);
+  const thru = edit.curveCutFace(m1, ringFaces[0], edit.sampleCurve([A(V3(-30, 0)), A(V3(30, 0))], 1));
+  ok('★★★ 直線剛好經過孔上的點、穿過孔 ⇒ 擋下來、講「跑出這個面」（⛔ 講成「形狀太複雜」）', !thru.ok && /跑出這個面/.test(thru.reason), thru.reason);
+  ok('★★ 原本的網格一格都沒變（方塊 6 面、切一個圓之後 8 面）', box.faces.length === 6 && m1.faces.length === 8);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

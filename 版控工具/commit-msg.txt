@@ -1,36 +1,36 @@
-曲線刀具 3b —— 按「圓」在面上點一下放一個圓，改圓心離左邊／離下邊、半徑或直徑（改一格另一格跟著變、記住上一次），切下去走封閉圈
+曲線刀具 同一個面開好幾個孔 —— 在整個區域上切（第二個圈／曲線壓到看不見的接線以前會被擋、還講「跑出這個面」）；3b 半徑字移到圓的正上方
 
-kang 2026-10-13 三題：先點位置再改數字、半徑直徑兩個都給、記住上一次的。
-動到 6 個檔：
-  M  建模器/js/core/edit.js        新增 circleAnchors()／CIRCLE_KAPPA（四段貝茲的圓）
-  M  建模器/js/main.js             curvePickFace()（第一點與放圓共用）、curvePlaceCircle／curveCircleRebuild／curveTypeCircle；
-                                  圓心借 3a 兩格、半徑直徑兩格；尺寸線加圓心與半徑；退一點拿掉圓；狀態字與「切下去（圓）」；curveCircleArm／curveRadius 宣告跟 curve 放一起
-  M  建模器/index.html             #curveCircle、#curveR／#curveD（＋標籤）
-  M  建模器/tests/run.mjs          新增一節「曲線刀具 3b」10 項
-  M  規格/建模器-曲線刀具.md       3b 定案、規格、⏳ 實測清單
-  M  STATUS.md                    ⏳ 指向 3b 清單
+3b 的 AI 線上先驗查到的限制，kang：「現在就修，修好再一起實測 3b」。
+動到 5 個檔：
+  M  建模器/js/core/edit.js        新增 regionCut()（外框＋孔、整個區域換掉、帶孔的三角化、面積對答案）、withSplitsOf()、curveFaceIsSimple()、
+                                  curveRegionOutline()；curveCutFace()／curveCutFaceLoop() 遇到不單純的面轉給 regionCut()；import triangulateWithHoles
+  M  建模器/js/main.js             curveFaceLoop() 改用整個區域的外框（量離左邊／下邊、吸邊）；半徑線往上、字放在圓的正上方
+  M  建模器/tests/run.mjs          新增一節「同一個面開好幾個孔」11 項
+  M  規格/建模器-曲線刀具.md       3b AI 線上先驗結果、限制與修法、清單加第 8、9 項
+  M  STATUS.md                    ⏳ 3b 改成九項
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  曲線刀具 3b（規格\建模器-曲線刀具.md「3b 定案」）
+  讓同一個面可以切好幾個圈／曲線；3b 字疊在一起的修正
 
 【依賴哪些事實】
-  1. 封閉圈切法吃一串封閉的點（curveCutFaceLoop），圓跑出面外會擋     【已查證 · 第二步測試 ⑤】
-  2. 面上「左／下」的換算（faceDimFrame／toWorld）                    【已查證 · 3a 測試】
-  3. _surfaceHit 回傳世界座標 world（放圓用）                          【已查證 · select.js _surfaceHit()】
-  4. updateBar() 會讀的變數宣告要放在 knifePicks 那裡                  【已查證 · STATUS「穩定參考」】
-  5. kang 三題的答案                                                  【已查證 · kang 選的，寫在規格檔】
+  1. 線上與沙箱重現：第一個圓之後第二個圓壓在接線上 ⇒ 三片全擋、講「跑出這個面」   【已查證 · scratchpad/bridge.mjs】
+  2. 區域在 hard 的邊停下（接線⛔ hard ⇒ 圈外兩片同一個區域）                       【已查證 · region.js、第二步測試】
+  3. triangulateWithHoles(outer 逆時針, holes 順時針)，pts 依序外框、孔…            【已查證 · triangulate.js、build/extrude.js 用法】
+  4. boundaryLoops() 回半邊迴圈；捏在一點時會斷（要檢查頭尾接得上）                【已查證 · edit.js boundaryLoops()】
+  5. 還原多邊形遇到兩圈以上的區域原樣留著                                           【已查證 · 沙箱：開兩個孔的方塊「只能維持原狀」】
 
 【會動到哪幾個檔】
-  上面 7 個。
+  上面 6 個。
 
 【怎麼知道做對了】
-  · 測試新增 10 項：四錨點、圓心換算（離左邊 25、離下邊 5 ⇒ x −5、z 17.5）、切好的點離圓心 ＝ 半徑（≤ 0.03%）、
-    切下去封閉＋體積不變＋圓內 313.74（≈ π×10²）、跑出面外擋、半徑 0
-  · 四道檢查：測試 3334 全過、目次 --check 全部最新、兩端檢查（81 個元件）全過、模組解析 44 支全過；換行 CRLF ＝ 0
-  ⚠ 介面那半沙箱驗不了 —— 上傳後 AI 先開線上版用滑鼠驗，再交給 kang
+  · 測試新增 11 項：外框＝四角、第二個圓壓接線切得出來、兩圓各一塊＋圓外一個區域、第三個圓、壓到既有孔擋、大圓圈住孔、
+    開過孔的面上從邊到邊、直線經過孔上的點要擋而且講對原因；原本的 3334 項一格都沒變
+  · 沙箱：開了兩個圓孔的方塊展開 1 片、0 則提醒；還原多邊形原樣留著
+  · 四道檢查：測試 3345 全過、目次 --check 全部最新、兩端檢查全過、模組解析 44 支全過；換行 CRLF ＝ 0
+  ⚠ 上傳後 AI 先用滑鼠在線上版開三個孔、看字的位置，再交給 kang
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

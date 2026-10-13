@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
-         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors,
+         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -1892,9 +1892,12 @@ function toggleKnifeCurve() {
     : '直線：跟原本的刀具一樣（點在邊上、按住拖＝一筆畫）');
 }
 
-/** 那個面的角（物件座標，照順序）*/
+/**
+ * 那個面的角（物件座標，照順序）—— 用**整個區域的外框**（`curveRegionOutline()`），⛔ 用點到的那一片網格面：
+ * 面開過孔之後被切成很多看不見的三角形，拿小三角形去量「離左邊」、去吸邊都會錯。
+ */
 function curveFaceLoop(mesh, face) {
-  return mesh.faceLoop(face).map(he => he.v.p.clone());
+  return curveRegionOutline(mesh, face);
 }
 
 /**
@@ -2218,10 +2221,15 @@ function drawCurve() {
     segs.push(P(dim.s - tick, dim.t - tick), P(dim.s + tick, dim.t + tick), P(dim.s - tick, dim.t + tick), P(dim.s + tick, dim.t - tick));
     labels.push({ text: `${dim.pre}離左邊 ${curveShow(dim.s - f.sMin)} ${curveUnit}`, pos: P((f.sMin + dim.s) / 2, dim.t) });
     labels.push({ text: `${dim.pre}離下邊 ${curveShow(dim.t - f.tMin)} ${curveUnit}`, pos: P(dim.s, (f.tMin + dim.t) / 2) });
+    /**
+     * 半徑線：圓心 → **圓的正上方**，字放在圓頂再上去一點。
+     * ⚠ 第一版往右拉、字放在半徑線中間 ⇒ 跟「圓心離左邊」的字疊在一起、把小圓整個蓋住（2026-10-13 AI 線上先驗看到）。
+     * 正上方⛔ 有別的字：「離左邊」在圓心那一排的左邊、「離下邊」在圓心下面。
+     */
     if (cf) {
       const r = curve.circle.r;
-      segs.push(P(dim.s, dim.t), P(dim.s + r, dim.t));
-      labels.push({ text: `半徑 ${curveShow(r)}／直徑 ${curveShow(2 * r)} ${curveUnit}`, pos: P(dim.s + r / 2, dim.t + Math.max(tick * 1.5, r * 0.25)) });
+      segs.push(P(dim.s, dim.t), P(dim.s, dim.t + r));
+      labels.push({ text: `半徑 ${curveShow(r)}／直徑 ${curveShow(2 * r)} ${curveUnit}`, pos: P(dim.s, dim.t + r + 2 * tick) });
     }
   }
   view.setKnifePreview(segs, dots);
