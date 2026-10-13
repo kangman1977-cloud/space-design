@@ -15656,6 +15656,68 @@ section('曲線刀具 第一步：平面上從邊到邊（2026-10-13）');
   ok('★★ 切完原本的網格一格都沒變（面數、體積）', box.faces.length === 6 && Math.abs(box.volume() - 108000) < 1e-9);
 }
 
+section('曲線刀具 第二步：面中間的封閉圈（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「第二步」。一個面不能帶洞 ⇒ 圈外用兩條**看不見**的接線拆成兩片。
+ * 主斷言：形狀不變、頂面 3 片加起來 2700、圈的邊全 hard、**接線⛔ hard**、圈外兩片是**同一個區域**。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const top = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const v = (x, z) => new THREE.Vector3(x, Y, z);
+  const A = (p, hin, hout) => ({ p, hin: hin || null, hout: hout || null });
+  const circle = (cx, cz, r) => { const k = 0.5523 * r; return [
+    A(v(cx + r, cz), v(cx + r, cz - k), v(cx + r, cz + k)), A(v(cx, cz + r), v(cx + k, cz + r), v(cx - k, cz + r)),
+    A(v(cx - r, cz), v(cx - r, cz + k), v(cx - r, cz - k)), A(v(cx, cz - r), v(cx - k, cz - r), v(cx + k, cz - r))]; };
+  const chiOf = m => m.verts.length - [...m.edges()].length + m.faces.length;
+  const tops = m => m.faces.filter(f => m.faceVerts(f).every(x => Math.abs(x.p.y - Y) < 1e-9));
+  const areaOf = (m, f) => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0);
+
+  const cpts = edit.sampleCurve(circle(5, 0, 10), 1, true);
+  eq('★★ sampleCurve 封閉：⛔ 重複第一點（最後一點 ≠ 第一點）', cpts[cpts.length - 1].distanceTo(cpts[0]) > 1e-6, true);
+  const r = edit.curveCutFaceLoop(box, top, cpts);
+  ok('★★★ ① 頂面中間一個圓（半徑 10）⇒ 成功、封閉、χ ＝ 2、體積不變',
+    r.ok && r.mesh.isClosed() && r.mesh.validate().ok && chiOf(r.mesh) === 2 && Math.abs(r.mesh.volume() - 108000) < 1e-6, r.reason);
+  const m = r.mesh;
+  const tf = r.ok ? tops(m) : [];
+  const isl = tf.find(f => m.faceLoop(f).length === r.added);
+  ok('★★★ 　 頂面 3 片（圈內 1 ＋ 圈外 2）、面積加起來 2700', tf.length === 3 && Math.abs(tf.reduce((s, f) => s + areaOf(m, f), 0) - 2700) < 1e-6);
+  near('★★ 　 圈內那片 ≈ π × 10²（分段近似略小）', isl && areaOf(m, isl), 313.75, 0.01);
+  const hardN = [...m.edges()].filter(h => m.marksOf(h).hard).length;
+  ok('★★★ 　 圈的 64 條邊全 hard、兩條接線⛔ hard（只有 64 條）', r.added === 64 && hardN === 64, hardN);
+  edit.refreshAfterEdit(m);
+  const ring = edit.regionOf(m, tf.find(f => f !== isl));
+  ok('★★★ 　 圈外那兩片是【同一個區域】（接線看不見，選起來是一整個面）', ring.faces.length === 2);
+  ok('★★ 　 圈內那片是自己一個區域', edit.regionOf(m, isl).faces.length === 1);
+  const mg = edit.mergeCoplanarFaces(m);
+  ok('★★★ 　 「還原多邊形」遇到它原樣留著（一個面裝不下兩圈）⛔ 併壞', !mg.ok || (mg.mesh.isClosed() && tops(mg.mesh).length === 3));
+  const ex = edit.extrudeFace(m, isl, 3);
+  near('★★ 　 擠出圈內 3 cm ⇒ 體積多「圈面積 × 3」', ex.ok && ex.mesh.volume() - 108000, areaOf(m, isl) * 3, 1e-6);
+  const del = edit.deleteFaces(m, [{ kind: 'face', face: isl }]);
+  ok('★★ 　 刪掉圈內 ⇒ 變成開口（不封閉）', del.ok && !del.mesh.isClosed());
+
+  const rRev = edit.curveCutFaceLoop(box, top, cpts.slice().reverse());
+  ok('★★ ② 反方向畫 ⇒ 結果一樣（圈的方向程式自己轉）', rRev.ok && tops(rRev.mesh).length === 3 && rRev.mesh.isClosed());
+  const rTri = edit.curveCutFaceLoop(box, top, edit.sampleCurve([A(v(-10, -5)), A(v(10, -5)), A(v(0, 10))], 1, true));
+  ok('★★ ③ 三點沒把手（三角形）⇒ 成功、圈內 150（手算 20 × 15 ÷ 2）',
+    rTri.ok && Math.abs(areaOf(rTri.mesh, tops(rTri.mesh).find(f => rTri.mesh.faceLoop(f).length === 3)) - 150) < 1e-6, rTri.reason);
+  const rCorner = edit.curveCutFaceLoop(box, top, edit.sampleCurve(circle(24, 16, 4), 1, true));
+  ok('★★ ④ 靠近角落的小圓 ⇒ 成功', rCorner.ok && rCorner.mesh.isClosed(), rCorner.reason);
+
+  const rOut = edit.curveCutFaceLoop(box, top, edit.sampleCurve(circle(25, 0, 10), 1, true));
+  ok('★★★ ⑤ 圈跑出面外 ⇒ 擋下來、講「跑出這個面」', !rOut.ok && /跑出這個面/.test(rOut.reason), rOut.reason);
+  const r8 = edit.curveCutFaceLoop(box, top, [v(-10, -10), v(10, 10), v(10, -10), v(-10, 10)]);
+  ok('★★★ ⑥ 8 字（自己交叉）⇒ 擋下來、講「交叉」', !r8.ok && /交叉/.test(r8.reason), r8.reason);
+  ok('★★ ⑦ 少於 3 點 ⇒ 擋下來', !edit.curveCutFaceLoop(box, top, [v(0, 0), v(5, 0)]).ok);
+  const dup = cpts.slice(); dup.push(cpts[0].clone());
+  const rDup = edit.curveCutFaceLoop(box, top, dup);
+  ok('★★ ⑧ 最後一點重複第一點 ⇒ 照樣切、⛔ 長度 0 的邊',
+    rDup.ok && [...rDup.mesh.edges()].every(h => h.v.p.distanceTo(h.to.p) > 1e-6), rDup.reason);
+  ok('★★ 切完原本的網格一格都沒變', box.faces.length === 6 && Math.abs(box.volume() - 108000) < 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

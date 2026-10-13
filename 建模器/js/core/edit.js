@@ -2778,14 +2778,16 @@ export const CURVE_STEP_CM = 1;
  *
  * @param {{p:THREE.Vector3, hin:THREE.Vector3|null, hout:THREE.Vector3|null}[]} anchors
  * @param {number} stepCm 每隔幾公分一段
+ * @param {boolean} closed 封閉圈（第二步）：最後一點再接回第一點；回傳⛔ 不重複第一點
  * @returns {THREE.Vector3[]} 第一點到最後一點（含兩端）
  */
-export function sampleCurve(anchors, stepCm = CURVE_STEP_CM) {
+export function sampleCurve(anchors, stepCm = CURVE_STEP_CM, closed = false) {
   if (!Array.isArray(anchors) || anchors.length < 2) return [];
   const step = stepCm > 0 ? stepCm : CURVE_STEP_CM;
   const out = [anchors[0].p.clone()];
-  for (let i = 0; i + 1 < anchors.length; i++) {
-    const a = anchors[i], b = anchors[i + 1];
+  const segs = closed ? anchors.length : anchors.length - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = anchors[i], b = anchors[(i + 1) % anchors.length];
     if (!a.hout && !b.hin) { out.push(b.p.clone()); continue; }
     const c1 = a.hout || a.p, c2 = b.hin || b.p;
     const at = t => {
@@ -2814,6 +2816,7 @@ export function sampleCurve(anchors, stepCm = CURVE_STEP_CM) {
     }
     out.push(b.p.clone());
   }
+  if (closed) out.pop();                     // 最後一點 ＝ 第一點
   return out;
 }
 
@@ -2878,7 +2881,7 @@ export function curveCutFace(mesh, face, ptsIn) {
   };
   const s = locate(pts[0]), e = locate(pts[pts.length - 1]);
   if (!s || !e) {
-    return { ok: false, reason: '曲線要從這個面的【邊上】開始、在【邊上】結束（面中間的封閉圈是下一步，還沒做）' };
+    return { ok: false, reason: '曲線要從這個面的【邊上】開始、在【邊上】結束（要在面中間畫一圈，第一點就點在面的中間）' };
   }
 
   /** 2D：投影到面自己的平面上，檢查「留在面裡、不穿出、不自己交叉」*/
@@ -3003,6 +3006,178 @@ export function curveCutFace(mesh, face, ptsIn) {
     newEdges: newPairs.map(([a, b]) => [to(a), to(b)]).filter(([a, b]) => a !== undefined && b !== undefined),
     added: inner.length + (s.v === undefined ? 1 : 0) + (e.v === undefined ? 1 : 0),
     inner: inner.length
+  };
+}
+
+/**
+ * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
+ *
+ * ── 難的是「一個面不能帶洞」────────────────────────────
+ * 圈內那塊是一個面（邊標 `hard`，看得見、選得到）；圈外那一圈是「回字形」，
+ * 而 `fromFaceList()` 的一個面只裝得下一個迴圈（`mergeCoplanarFaces()` 檔頭）⇒
+ * 用**兩條接線**把圈接到外框的角上，拆成兩片。
+ * 🔴 **接線⛔ 不標 `hard`**：它們共面 ⇒ 看不見、選不到，那兩片在選取與畫面上仍是**同一個面**。
+ * ✅ `mergeCoplanarFaces()` 遇到兩圈邊界的區域會原樣留著，⛔ 不會把它們併壞。
+ *
+ * ── 接線怎麼挑 ──────────────────────────────────────
+ * 外框的角 × 圈上的點，照距離由近到遠試；兩條接線要：⛔ 穿過外框或圈、⛔ 互相交叉、⛔ 共用端點，
+ * 而且切出來的兩片都要是**不自交、方向正確**的多邊形，面積加起來 ＝ 外框 − 圈內。
+ * ⇒ 不靠「凸不凸」的假設，凹的面（L 形）也照樣試得到。
+ *
+ * @param {Mesh} mesh
+ * @param {Face} face
+ * @param {THREE.Vector3[]} ptsIn 物件座標；**封閉**（最後一點⛔ 重複第一點），全部要在面的裡面
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map, newEdges?:Array, added?:number, inner?:number}}
+ */
+export function curveCutFaceLoop(mesh, face, ptsIn) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!face || !mesh.faces.includes(face)) return { ok: false, reason: '找不到要切的那個面' };
+  const TOL = 1e-4;
+  /** 連續疊在一起的點先合併（頭尾也算連續）—— 理由同 `curveCutFace()` */
+  let pts = (ptsIn || []).filter((p, i, a) => i === 0 || p.distanceTo(a[i - 1]) > TOL);
+  while (pts.length > 1 && pts[pts.length - 1].distanceTo(pts[0]) <= TOL) pts = pts.slice(0, -1);
+  if (pts.length < 3) return { ok: false, reason: '封閉的圈至少要三個點' };
+
+  const vi = mesh._vertIndex();
+  const loop = mesh.faceLoop(face).map(he => vi.get(he.v.id));
+  const n = loop.length;
+  const points = mesh.verts.map(v => v.p.clone());
+  const pl = planeOfPoints(loop.map(i => points[i]));
+  if (!pl || pl.dev > PLANAR_TOL_CM) return { ok: false, reason: '這個面不是平的 —— 曲線刀具只能畫在平的面上' };
+  if (pts.some(p => Math.abs(pl.n.dot(p) - pl.d) > PLANAR_TOL_CM * 10)) return { ok: false, reason: '曲線不在這個面的平面上' };
+
+  const ux = Math.abs(pl.n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const U = new THREE.Vector3().crossVectors(pl.n, ux).normalize();
+  const V = new THREE.Vector3().crossVectors(pl.n, U);
+  const to2 = p => [p.dot(U), p.dot(V)];
+  const O = loop.map(i => to2(points[i]));
+  const area2 = P => P.reduce((s, p, i) => { const q = P[(i + 1) % P.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+  const sOut = Math.sign(area2(O));
+  /** 圈的方向跟外框一致（圈內那塊的面要朝同一邊）*/
+  if (Math.sign(area2(pts.map(to2))) !== sOut) pts = pts.slice().reverse();
+  const L = pts.map(to2);
+  const m = L.length;
+
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const EPS = 1e-9;
+  const properCross = (A, B, C, D) => {
+    const d1 = cross(A, B, C), d2 = cross(A, B, D), d3 = cross(C, D, A), d4 = cross(C, D, B);
+    return ((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS)) && ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS));
+  };
+  const inPoly = (P, [x, y]) => {
+    let inside = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      const [xi, yi] = P[i], [xj, yj] = P[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  const segDist = (p, a, b) => {
+    const ab = [b[0] - a[0], b[1] - a[1]], L2 = ab[0] * ab[0] + ab[1] * ab[1];
+    const t = L2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / L2)) : 0;
+    return Math.hypot(p[0] - a[0] - t * ab[0], p[1] - a[1] - t * ab[1]);
+  };
+  const simple = P => {
+    for (let i = 0; i < P.length; i++) for (let j = i + 2; j < P.length; j++) {
+      if (i === 0 && j === P.length - 1) continue;
+      if (properCross(P[i], P[(i + 1) % P.length], P[j], P[(j + 1) % P.length])) return false;
+    }
+    return true;
+  };
+
+  /** 整圈要在面裡、碰不到邊界、不自己交叉 */
+  const OUT = '這一圈跑出這個面了（或碰到面的邊界）—— 封閉的圈要整個留在這個面裡面';
+  for (const p of L) {
+    if (!inPoly(O, p)) return { ok: false, reason: OUT };
+    for (let i = 0; i < n; i++) if (segDist(p, O[i], O[(i + 1) % n]) <= TOL) return { ok: false, reason: OUT };
+  }
+  for (let k = 0; k < m; k++) for (let i = 0; i < n; i++) {
+    if (properCross(L[k], L[(k + 1) % m], O[i], O[(i + 1) % n])) return { ok: false, reason: OUT };
+  }
+  if (!simple(L)) return { ok: false, reason: '這一圈自己交叉了 —— 把打結的地方拉開再切' };
+  if (!(Math.abs(area2(L)) > TOL)) return { ok: false, reason: '這一圈沒有圍出面積' };
+
+  /** 挑兩條接線（外框的角 i ↔ 圈上的點 j）*/
+  const bridgeOk = (i, j) => {
+    const A = O[i], B = L[j];
+    for (let k = 0; k < n; k++) {
+      const a = k, b = (k + 1) % n;
+      if (a === i || b === i) continue;
+      if (properCross(A, B, O[a], O[b])) return false;
+    }
+    for (let k = 0; k < m; k++) {
+      const a = k, b = (k + 1) % m;
+      if (a === j || b === j) continue;
+      if (properCross(A, B, L[a], L[b])) return false;
+    }
+    const mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+    return inPoly(O, mid) && !inPoly(L, mid);
+  };
+  const cands = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
+    cands.push({ i, j, d: Math.hypot(O[i][0] - L[j][0], O[i][1] - L[j][1]) });
+  }
+  cands.sort((a, b) => a.d - b.d);
+  const good = cands.filter(c => bridgeOk(c.i, c.j)).slice(0, 200);
+  /** 兩片：外框 i1→i2（照外框方向）＋ 圈 j2→j1（反方向）；另一片 i2→i1 ＋ j1→j2（反方向）*/
+  const fwd = (len, a, b) => { const out = []; let k = a; for (;;) { out.push(k); if (k === b) break; k = (k + 1) % len; } return out; };
+  const bwd = (len, a, b) => { const out = []; let k = a; for (;;) { out.push(k); if (k === b) break; k = (k - 1 + len) % len; } return out; };
+  const target = Math.abs(area2(O)) - Math.abs(area2(L));
+  let pick = null;
+  for (const b1 of good) {
+    for (const b2 of good) {
+      if (b2.i === b1.i || b2.j === b1.j) continue;
+      if (properCross(O[b1.i], L[b1.j], O[b2.i], L[b2.j])) continue;
+      const r1 = [...fwd(n, b1.i, b2.i).map(k => ({ o: k })), ...bwd(m, b2.j, b1.j).map(k => ({ l: k }))];
+      const r2 = [...fwd(n, b2.i, b1.i).map(k => ({ o: k })), ...bwd(m, b1.j, b2.j).map(k => ({ l: k }))];
+      const P1 = r1.map(x => (x.o !== undefined ? O[x.o] : L[x.l])), P2 = r2.map(x => (x.o !== undefined ? O[x.o] : L[x.l]));
+      if (P1.length < 3 || P2.length < 3) continue;
+      if (Math.sign(area2(P1)) !== sOut || Math.sign(area2(P2)) !== sOut) continue;
+      if (!simple(P1) || !simple(P2)) continue;
+      if (Math.abs(Math.abs(area2(P1)) + Math.abs(area2(P2)) - target) > 1e-6 * Math.max(1, target)) continue;
+      pick = { r1, r2 };
+      break;
+    }
+    if (pick) break;
+  }
+  if (!pick) return { ok: false, reason: '這一圈太靠近面的邊、或面的形狀太複雜，找不到地方接線 —— 把圈往面的中間移一點' };
+
+  /** 建面：圈內一片 ＋ 圈外兩片；新點接在既有點後面 */
+  const base = points.length;
+  pts.forEach(p => points.push(p.clone()));
+  const idxOf = x => (x.o !== undefined ? loop[x.o] : base + x.l);
+  const island = pts.map((_, k) => base + k);
+  const faces = [];
+  for (const f of mesh.faces) {
+    if (f === face) { faces.push(island, pick.r1.map(idxOf), pick.r2.map(idxOf)); continue; }
+    faces.push(mesh.faceLoop(f).map(he => vi.get(he.v.id)));
+  }
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `切下去做出壞掉的網格：${pre.fatal[0]}` };
+  const clean = cleanRebuild(points, faces);
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+
+  /** 標記：原本的照搬；圈的每一段標 hard；兩條接線⛔ 不標（要看不見）*/
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const want = new Map();
+  for (const he of mesh.edges()) want.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  const newPairs = [];
+  for (let k = 0; k < m; k++) {
+    const a = base + k, b = base + (k + 1) % m;
+    want.set(kOf(a, b), { hard: true });
+    newPairs.push([a, b]);
+  }
+  const di = out._vertIndex();
+  const back = new Map([...clean.remap].map(([a, b]) => [b, a]));
+  for (const he of out.edges()) {
+    out.applyMarks(he, want.get(kOf(back.get(di.get(he.v.id)), back.get(di.get(he.to.id)))));
+  }
+  const to = i => clean.remap.get(i);
+  return {
+    ok: true, mesh: out, remap: clean.remap,
+    newEdges: newPairs.map(([a, b]) => [to(a), to(b)]).filter(([a, b]) => a !== undefined && b !== undefined),
+    added: m, inner: m
   };
 }
 

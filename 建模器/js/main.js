@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
-         sampleCurve, curveCutFace, CURVE_STEP_CM,
+         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -1842,8 +1842,8 @@ function toggleKnifeCurve() {
   hideKnifeLine();
   updateBar();
   toast(sel.knifeCurve
-    ? '曲線：在一個平的面的【邊上】點第一點，【點一下】＝尖角、【按住拖】＝圓滑，最後點在【邊上】就畫好了，'
-      + '再按「切下去」。⚠ 這個模式裡按住拖是拉曲線，⛔ 不是一筆畫'
+    ? '曲線：【點一下】＝尖角、【按住拖】＝圓滑。第一點點在面的【邊上】⇒ 最後點在邊上就畫好（切成兩塊）；'
+      + '第一點點在面的【中間】⇒ 點回第一點就封成一圈。畫好再按「切下去」。⚠ 這個模式裡按住拖是拉曲線，⛔ 不是一筆畫'
     : '直線：跟原本的刀具一樣（點在邊上、按住拖＝一筆畫）');
 }
 
@@ -1859,7 +1859,7 @@ function curveDown(x, y) {
   }
   if (!curve) {
     const h = sel.curveSurfaceHit(x, y);
-    if (!h) { toast('先點在模型的一個平的面上（從那個面的邊上開始）', true); return; }
+    if (!h) { toast('先點在模型的一個平的面上（點在邊上 ⇒ 切成兩塊；點在中間 ⇒ 畫一個封閉的圈）', true); return; }
     if (h.obj.isParametric) {
       toast('這個物件還是參數物件 —— 先在右側面板按「轉成可編輯網格」', true);
       return;
@@ -1882,19 +1882,34 @@ function curveDown(x, y) {
       toast('這個面不是平的 —— 曲線刀具只能畫在平的面上（曲面上的彎曲分界請用布林「差集」）', true);
       return;
     }
+    /**
+     * 🔴 **第一點決定是哪一種**（第二步，kang 2026-10-13）：
+     * 靠近邊 ⇒ 吸到邊上，從邊到邊切成兩塊（第一步）；在面的中間 ⇒ **封閉圈**，之後點回第一點封起來。
+     */
     const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal);
-    if (!snap) {
-      toast('曲線要從這個面的【邊上】開始 —— 靠近邊一點再點（面中間的封閉圈是下一步，還沒做）', true);
-      return;
-    }
-    curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop,
-              anchors: [{ p: snap.p, hin: null, hout: null, edge: true }], done: false, hover: null };
+    const p0 = snap ? snap.p : h.pLocal.clone().addScaledVector(n, d - n.dot(h.pLocal));
+    curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: !snap, closing: false,
+              anchors: [{ p: p0, hin: null, hout: null, edge: !!snap }], done: false, hover: null };
+    if (curve.closed) toast('封閉圈：在面裡面點下去，最後【點回第一點】就封起來（在第一點上按住拖 ＝ 那裡也是圓滑的）');
     drawCurve();
     updateBar();
     return;
   }
   const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!p) return;
+  /** 封閉圈：點回第一點 ⇒ 封起來（放開手才算畫好；按著拖 ＝ 第一點的圓滑把手）*/
+  if (curve.closed) {
+    if (curve.anchors.length >= 3 && sel.curveNearPoint(x, y, curve.node, curve.anchors[0].p)) {
+      curve.closing = true;
+      return;
+    }
+    if (p.distanceTo(curve.anchors[curve.anchors.length - 1].p) < 1e-6) return;
+    curve.anchors.push({ p, hin: null, hout: null, edge: false });
+    curve.hover = null;
+    drawCurve();
+    updateBar();
+    return;
+  }
   const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
   const at = snap ? snap.p : p;
   /** 跟上一點在同一個位置（連點兩下）⇒ ⛔ 不放第二個 —— 疊在一起的點會切出長度 0 的邊 */
@@ -1908,19 +1923,30 @@ function curveDown(x, y) {
 /** 拖 ＝ 拉最後那一點的圓滑把手（兩邊對稱，跟鋼筆一樣）*/
 function curveDrag(x, y) {
   if (!curve || curve.done) return;
-  const a = curve.anchors[curve.anchors.length - 1];
+  /** 封閉圈正在點回第一點 ⇒ 拖的是**第一點**的把手 */
+  const a = curve.closing ? curve.anchors[0] : curve.anchors[curve.anchors.length - 1];
   const q = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!q) return;
   a.hout = q;
   a.hin = a.p.clone().multiplyScalar(2).sub(q);
-  /** 起點在邊上：往外的那一半把手沒有意義（曲線不會往面外走）*/
-  if (curve.anchors.length === 1) a.hin = null;
+  /** 起點在邊上：往外的那一半把手沒有意義（曲線不會往面外走）。封閉圈的起點兩邊都要 */
+  if (curve.anchors.length === 1 && !curve.closed) a.hin = null;
   drawCurve();
 }
 
-/** 放開：第二點以後點在邊上 ⇒ 畫好了（等「切下去」）*/
+/** 放開：第二點以後點在邊上 ⇒ 畫好了；封閉圈點回第一點 ⇒ 畫好了（等「切下去」）*/
 function curveUp() {
   if (!curve || curve.done) return;
+  if (curve.closed) {
+    if (curve.closing) {
+      curve.closing = false;
+      curve.done = true;
+      toast(`封閉圈畫好了（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+    }
+    drawCurve();
+    updateBar();
+    return;
+  }
   const a = curve.anchors[curve.anchors.length - 1];
   if (curve.anchors.length >= 2 && a.edge) {
     a.hout = null;
@@ -1935,8 +1961,14 @@ function curveHover(x, y) {
   if (!curve || curve.done) return;
   const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!p) return;
-  const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
-  curve.hover = snap ? snap.p : p;
+  /** 封閉圈⛔ 吸到邊（整圈要留在面裡）；靠近第一點時預覽就接回第一點 */
+  if (curve.closed) {
+    curve.hover = curve.anchors.length >= 3 && sel.curveNearPoint(x, y, curve.node, curve.anchors[0].p)
+      ? curve.anchors[0].p.clone() : p;
+  } else {
+    const snap = sel.curveSnapBoundary(x, y, curve.node, curve.loop, p);
+    curve.hover = snap ? snap.p : p;
+  }
   drawCurve();
 }
 
@@ -1947,6 +1979,8 @@ function curveHover(x, y) {
  */
 function curveUndo() {
   if (!curve) return;
+  /** 封閉圈畫好了：最後一個動作是「點回第一點」，⛔ 沒有多一個點 ⇒ 只把圈打開（⛔ 刪掉真的點）*/
+  if (curve.closed && curve.done) { curve.done = false; drawCurve(); updateBar(); return; }
   curve.done = false;
   curve.anchors.pop();
   if (!curve.anchors.length) curve = null;
@@ -1965,8 +1999,10 @@ function drawCurve() {
   const w = p => curve.node.localToWorld(p.clone());
   const segs = [];
   if (list.length >= 2) {
-    const pts = sampleCurve(list, curveStepCm()).map(w);
+    const shut = curve.closed && curve.done;
+    const pts = sampleCurve(list, curveStepCm(), shut).map(w);
     for (let i = 0; i + 1 < pts.length; i++) segs.push(pts[i], pts[i + 1]);
+    if (shut && pts.length > 2) segs.push(pts[pts.length - 1], pts[0]);
   }
   const dots = curve.anchors.map(a => w(a.p));
   if (!curve.done) {
@@ -1979,10 +2015,13 @@ function drawCurve() {
 
 /** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
 function curveApply() {
-  if (!curve || !curve.done) { toast('曲線還沒畫好 —— 最後一點要點在面的邊上', true); return false; }
+  if (!curve || !curve.done) {
+    toast(curve && curve.closed ? '封閉圈還沒畫好 —— 最後要點回第一點' : '曲線還沒畫好 —— 最後一點要點在面的邊上', true);
+    return false;
+  }
   const obj = curve.obj;
-  const pts = sampleCurve(curve.anchors, curveStepCm());
-  const r = curveCutFace(obj.mesh(), curve.face, pts);
+  const pts = sampleCurve(curve.anchors, curveStepCm(), curve.closed);
+  const r = curve.closed ? curveCutFaceLoop(obj.mesh(), curve.face, pts) : curveCutFace(obj.mesh(), curve.face, pts);
   if (!r.ok) { toast(r.reason, true); return false; }
 
   curve = null;
@@ -5665,7 +5704,7 @@ function updateBar() {
    * ⚠ 而且**不會報錯**（`index.html` 的 `#rail` 註解寫著同一件事）。
    */
   const 收工 = sel.knifeMode && sel.knifeCurve
-    ? (curve && curve.done ? '切下去（曲線）' : null)
+    ? (curve && curve.done ? (curve.closed ? '切下去（封閉圈）' : '切下去（曲線）') : null)
     : sel.knifeMode
     ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : null)
     : penEditing ? '完成'
@@ -5677,8 +5716,9 @@ function updateBar() {
    * ⚠ 刀具點不到兩個時 `#toolDone` 不出現，所以那句話要由這裡講。
    */
   const 狀態 = sel.knifeMode && sel.knifeCurve
-    ? (!curve ? '曲線：在一個平的面的【邊上】點第一點'
+    ? (!curve ? '曲線：第一點點在面的【邊上】（切成兩塊）或【中間】（封閉圈）'
        : curve.done ? ''
+       : curve.closed ? `封閉圈：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後【點回第一點】`
        : `曲線：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後一點點在【邊上】`)
     : sel.knifeMode
     ? (knifePicks.length >= 2 ? '' : `刀具：在模型上點兩個以上的位置（現在 ${knifePicks.length} 個）`)

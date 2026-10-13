@@ -872,7 +872,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         刀具裡的「直線／曲線」（kang 2026-10-13 → 規格\建模器-曲線刀具.md）：⛔ 左側直條不加按鈕。
         曲線模式：點一下＝尖角、按住拖＝圓滑（照鋼筆），從面的邊上開始、在邊上結束；「每隔幾 cm 一段」決定曲線切多細。
       -->
-      <button id="knifeCurve" hidden title="刀具的切法：直線（原本的，點在邊上、按住拖＝一筆畫）／曲線（照鋼筆：點一下＝尖角、按住拖＝圓滑，只能畫在平的面上，從邊上到邊上）">直線</button>
+      <button id="knifeCurve" hidden title="刀具的切法：直線（原本的，點在邊上、按住拖＝一筆畫）／曲線（照鋼筆：點一下＝尖角、按住拖＝圓滑，只能畫在平的面上；第一點在邊上 ⇒ 從邊到邊切成兩塊，第一點在面中間 ⇒ 點回第一點封成一圈）">直線</button>
       <button id="curveUndo" hidden title="退掉曲線的最後一點（已經畫好的話，回到還沒畫完）">退一點</button>
       <span class="lbl" id="curveStepLbl" hidden>每隔</span>
       <input id="curveStep" type="number" min="0.1" step="0.5" value="1" hidden

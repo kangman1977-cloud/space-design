@@ -3863,6 +3863,14 @@ export class Selection {
     return o.addScaledVector(dir, t);
   }
 
+  /** 游標夠不夠近某一點（封閉圈「點回第一點」用；沿用 `EDGE_GRAB_PX`／`_TOUCH`）*/
+  curveNearPoint(clientX, clientY, node, pLocal) {
+    const r = this._toCanvasPx(clientX, clientY);
+    if (!r.w || !r.h || !pLocal) return false;
+    const s = this._project(node.localToWorld(pLocal.clone()), r);
+    return Math.hypot(s.x - r.x, s.y - r.y) <= (isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX);
+  }
+
   /**
    * 游標靠近那個面的**角或邊**就吸過去（物件座標）；⛔ 不夠近回 null。
    * ⚠ 比的是**螢幕距離**，沿用 `EDGE_GRAB_PX`／`_TOUCH`，⛔ 不新定一個值（跟刀具一樣）。
