@@ -890,6 +890,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="curveCircle" hidden title="放一個圓：按下去之後在面上點一下當圓心，再改圓心位置、半徑或直徑，好了按「切下去」（會記住上一次的大小）">圓</button>
       <!-- 曲線刀具 3c（kang 2026-10-13）：按「半圓」→ 點面的邊 → 改圓心（只能沿著那條邊，一格）、半徑或直徑（跟圓共用上一次的）→ 切下去 -->
       <button id="curveNotch" hidden title="在邊上開一個半圓缺口：按下去之後在面上靠近那條邊點一下，再改圓心位置（只能沿著那條邊移動）、半徑或直徑，好了按「切下去」（大小跟「圓」共用上一次的）">半圓</button>
+      <!-- 曲線刀具 3d（kang 2026-10-14）：「折線」開著 ⇒ 點起點 → 打長度、角度按「加一段」（Enter）→「延伸到邊」或「接回起點」→ 切下去 -->
+      <button id="curvePoly" hidden title="折線：開著的時候，滑鼠只點起點（點在邊上或面中間；可以再打離左邊／離下邊對準），之後每一段打長度與角度（0° 往右、90° 往上、180° 往左、270° 往下，正對這個面看），按「加一段」或 Enter。最後按「延伸到邊」（起點在邊上）或「接回起點」（起點在中間）">折線</button>
+      <span class="lbl" id="curveLenLbl" hidden>長度</span>
+      <input id="curveLen" type="number" step="0.1" min="0" value="10" hidden title="下一段的長度（打完按 Enter 或「加一段」）">
+      <span class="lbl" id="curveAngLbl" hidden>角度（°）</span>
+      <input id="curveAng" type="number" step="1" value="0" hidden title="下一段的方向：0° 往右、90° 往上、180° 往左、270° 往下（正對這個面看）">
+      <button id="curveSegAdd" hidden title="照上面的長度與角度加一段（在欄位裡按 Enter 也一樣）">加一段</button>
+      <button id="curveToEdge" hidden title="照角度一直走到碰到這個面的邊為止（只用角度，長度自動算），折線就畫好了">延伸到邊</button>
+      <button id="curvePolyClose" hidden title="最後一點直線連回起點，封成一圈（至少 3 個點）">接回起點</button>
       <span class="lbl" id="curveRLbl" hidden>半徑</span>
       <input id="curveR" type="number" step="0.1" min="0" hidden title="圓的半徑（改了直徑會跟著變）">
       <span class="lbl" id="curveDLbl" hidden>直徑</span>

@@ -15935,6 +15935,55 @@ section('曲線刀具 3c：邊上的半圓缺口（2026-10-13）');
   ok('★★ 缺口大到碰到圓孔 ⇒ 擋下來、講「已經有的開口」', !rx.ok && /已經有的開口/.test(rx.reason), rx.reason);
 }
 
+section('曲線刀具 3d：一段一段打出來的直線折線（2026-10-14）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「3d 定案」。角度跟面的方向算：0° 往右、90° 往上（正對那個面看）。
+ * 方塊 60 × 45 × 40（baked）頂面：s ＝ x（−30～30）、t ＝ −z（−22.5～22.5）。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const topOf = m => m.faces.filter(f => m.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const top = topOf(box)[0];
+  const fr = edit.faceDimFrame(box.faceVerts(top).map(v => v.p.clone()));
+  const areaOf = (m, f) => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0);
+  const near0 = (a, b) => Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+  const A = st => ({ p: fr.toWorld(st[0], st[1]), hin: null, hout: null });
+
+  ok('★★ 0° 往右、90° 往上、180° 往左、270° 往下（走 10）',
+    near0(edit.polyStep(1, 2, 10, 0), [11, 2]) && near0(edit.polyStep(1, 2, 10, 90), [1, 12])
+    && near0(edit.polyStep(1, 2, 10, 180), [-9, 2]) && near0(edit.polyStep(1, 2, 10, 270), [1, -8]));
+  ok('★ 30° 走 2 ⇒ (√3, 1)', near0(edit.polyStep(0, 0, 2, 30), [Math.sqrt(3), 1]));
+  eq('★★ 在裡面／邊上／外面', [edit.polyWhere(fr, 0, 0), edit.polyWhere(fr, 0, -22.5), edit.polyWhere(fr, 0, -23)].join(), 'in,edge,out');
+
+  const up = edit.polyRayHit(fr, -20, -22.5, 90);
+  ok('★★★ 從下邊往上（90°）延伸 ⇒ 碰到上邊、走 45', up && near0([up.s, up.t], [-20, 22.5]) && Math.abs(up.dist - 45) < 1e-9);
+  eq('★★ 從下邊往下（270°）⇒ 往面外，碰不到', edit.polyRayHit(fr, -20, -22.5, 270), null);
+  const diag = edit.polyRayHit(fr, 20, 0, 45);
+  ok('★★ 從中間往 45° ⇒ 先碰到右邊（x 30、t 10）', diag && near0([diag.s, diag.t], [30, 10]));
+  const L = Object.assign({}, fr, { ring: [[0, 0], [20, 0], [20, 10], [10, 10], [10, 20], [0, 20]] });
+  eq('★★★ 凹的面：從邊上往外走出去、又碰到別的邊 ⇒ ⛔ 算延伸到邊', edit.polyRayHit(L, 12, 10, 150), null);
+  const inL = edit.polyRayHit(L, 15, 5, 90);
+  ok('★ 　 凹的面：從裡面往上 ⇒ 碰到凹進去那條（t 10）', inL && near0([inL.s, inL.t], [15, 10]));
+
+  // 從邊到邊：下邊（離左邊 10）往上 15、往右 20、往下延伸到邊 ⇒ 切出一個 20 × 15 的長方形
+  const p0 = [-20, -22.5], p1 = edit.polyStep(...p0, 15, 90), p2 = edit.polyStep(...p1, 20, 0);
+  const hit = edit.polyRayHit(fr, ...p2, 270);
+  ok('★★ 　 延伸到邊落在 (0, −22.5)', hit && near0([hit.s, hit.t], [0, -22.5]));
+  eq('★★ 　 打長度剛好走到邊上（往下 15）⇒ 判成「邊上」（直接畫好）', edit.polyWhere(fr, ...edit.polyStep(...p2, 15, 270)), 'edge');
+  const r1 = edit.curveCutFace(box, top, edit.sampleCurve([A(p0), A(p1), A(p2), A([hit.s, hit.t])], 1));
+  const small = r1.ok ? topOf(r1.mesh).map(f => areaOf(r1.mesh, f)).sort((a, b) => a - b)[0] : 0;
+  ok('★★★ 切下去 ⇒ 成功、封閉、體積不變；切下來那塊 ＝ 20 × 15 ＝ 300', r1.ok && r1.mesh.isClosed() && Math.abs(r1.mesh.volume() - 108000) < 1e-6 && Math.abs(small - 300) < 1e-6, r1.reason);
+  eq('★★ 　 直線段⛔ 再切細：只新增 4 個點（兩頭 ＋ 兩個轉角）', r1.ok && r1.added, 4);
+
+  // 封閉：中間起點，往右 20、往上 10、往左 20、接回起點 ⇒ 20 × 10 的開口
+  const q0 = [-10, 0], q1 = edit.polyStep(...q0, 20, 0), q2 = edit.polyStep(...q1, 10, 90), q3 = edit.polyStep(...q2, 20, 180);
+  const r2 = edit.curveCutFaceLoop(box, top, edit.sampleCurve([A(q0), A(q1), A(q2), A(q3)], 1, true));
+  const inner = r2.ok ? r2.mesh.faces.find(f => r2.mesh.faceLoop(f).length === 4 && Math.abs(areaOf(r2.mesh, f) - 200) < 1e-6) : null;
+  ok('★★★ 封閉折線 ⇒ 切得出來、裡面那塊 ＝ 20 × 10 ＝ 200', r2.ok && r2.mesh.isClosed() && !!inner, r2.reason);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

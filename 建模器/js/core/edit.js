@@ -3459,6 +3459,59 @@ export function notchAnchors(frame, edge, along, r) {
 }
 
 /**
+ * 🔴 **曲線刀具 3d：一段一段打出來的直線折線**（kang 2026-10-14：打「長度、角度」按 Enter 加一段；
+ * 角度跟面的方向算 —— 0° 往右、90° 往上、180° 往左、270° 往下，正對那個面看；收尾用「延伸到邊」或「接回起點」）。
+ * 下面三支都是面上座標（`faceDimFrame()` 的 s 往右、t 往上），純數學、有測試。
+ */
+/** 從 (s, t) 往 deg 度走 len ⇒ 新的 [s, t]（90° 的 cos 是 6e-17，不另外湊整）*/
+export function polyStep(s, t, len, deg) {
+  const a = deg * Math.PI / 180;
+  return [s + len * Math.cos(a), t + len * Math.sin(a)];
+}
+
+/** (s, t) 在外框的 'in' 裡面／'edge' 邊上（≤ tol）／'out' 外面 —— 邊上的判斷先做（射線法對剛好在邊上的點答案不固定）*/
+export function polyWhere(frame, s, t, tol = 1e-4) {
+  const R = frame.ring, n = R.length;
+  for (let i = 0; i < n; i++) {
+    const A = R[i], B = R[(i + 1) % n];
+    const ab = [B[0] - A[0], B[1] - A[1]], L2 = ab[0] ** 2 + ab[1] ** 2;
+    const u = L2 > 0 ? Math.max(0, Math.min(1, ((s - A[0]) * ab[0] + (t - A[1]) * ab[1]) / L2)) : 0;
+    if (Math.hypot(A[0] + u * ab[0] - s, A[1] + u * ab[1] - t) <= tol) return 'edge';
+  }
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [xi, yi] = R[i], [xj, yj] = R[j];
+    if ((yi > t) !== (yj > t) && s < (xj - xi) * (t - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside ? 'in' : 'out';
+}
+
+/**
+ * 「延伸到邊」：從 (s, t) 往 deg 度一直走，**最先碰到**外框的那一點 ⇒ { s, t, dist }；往外走（碰不到）⇒ null。
+ * ⚠ 起點本身在邊上時，那條邊在 dist ≈ 0 就「碰到」了 —— 小於 1e-6 的⛔ 算。
+ */
+export function polyRayHit(frame, s, t, deg) {
+  const a = deg * Math.PI / 180, d = [Math.cos(a), Math.sin(a)];
+  const R = frame.ring, n = R.length;
+  let best = null;
+  for (let i = 0; i < n; i++) {
+    const A = R[i], B = R[(i + 1) % n];
+    const e = [B[0] - A[0], B[1] - A[1]];
+    const den = d[0] * e[1] - d[1] * e[0];
+    if (Math.abs(den) < 1e-12) continue;                       // 跟這條邊平行
+    const w = [A[0] - s, A[1] - t];
+    const lam = (w[0] * e[1] - w[1] * e[0]) / den;             // 沿射線走多遠
+    const mu = (w[0] * d[1] - w[1] * d[0]) / den;              // 落在邊上的哪裡（0～1）
+    if (lam > 1e-6 && mu >= -1e-9 && mu <= 1 + 1e-9 && (!best || lam < best.dist)) {
+      best = { s: s + lam * d[0], t: t + lam * d[1], dist: lam };
+    }
+  }
+  /** 凹的面：往外走出去、又在別處碰到外框 ⇒ 中間那段在面外，⛔ 算「延伸到邊」 */
+  if (best && polyWhere(frame, (s + best.s) / 2, (t + best.t) / 2) !== 'in') return null;
+  return best;
+}
+
+/**
  * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
  *
  * ── 難的是「一個面不能帶洞」────────────────────────────

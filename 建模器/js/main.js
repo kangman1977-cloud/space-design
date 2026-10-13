@@ -37,7 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
          sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
-         notchAt, notchAnchors, notchClamp, notchFits,
+         notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -809,6 +809,23 @@ $('curveNotch').onclick = () => {
       + (curve ? '　⚠ 現在畫的會被換掉' : '')
     : '取消放半圓');
 };
+/** 3d：`折線` 開／關 —— 換模式就把畫到一半的清掉（兩種畫法的點⛔ 混在同一條裡）*/
+$('curvePoly').onclick = () => {
+  curvePolyOn = !curvePolyOn;
+  curveCircleArm = curveNotchArm = false;
+  curve = null;
+  hideKnifeLine();
+  updateBar();
+  toast(curvePolyOn
+    ? '折線：先在面上點起點（點在邊上 ⇒ 最後「延伸到邊」切成兩塊；點在中間 ⇒ 最後「接回起點」封成一圈），'
+      + '再打長度、角度（0° 往右、90° 往上、180° 往左、270° 往下）按「加一段」'
+    : '折線：關。回到用滑鼠畫曲線');
+};
+$('curveLen').oninput = $('curveAng').oninput = () => polyPreview();
+$('curveLen').onkeydown = $('curveAng').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); polyAdd(); } };
+$('curveSegAdd').onclick = () => polyAdd();
+$('curveToEdge').onclick = () => polyToEdge();
+$('curvePolyClose').onclick = () => polyClose();
 /** 打完（離開欄位）就把數字整理成目前真正的位置（邊上的點可能被夾在邊的範圍內）*/
 $('curveDimL').onchange = $('curveDimB').onchange = () => updateBar();
 $('curveUnitCm').onclick = () => setCurveUnit('cm');
@@ -1257,6 +1274,8 @@ let curveUnit = (() => { try { return localStorage.getItem('modeler.curveUnit') 
 let curveCircleArm = false;
 /** 3c：按了 `半圓`、等著點邊放半圓缺口（kang 2026-10-13：半徑跟圓共用 `curveRadius`）*/
 let curveNotchArm = false;
+/** 3d：`折線` 開著 ⇒ 滑鼠只放起點，之後一段一段打長度、角度（是一個模式，跟「直線／曲線」一樣留著）*/
+let curvePolyOn = false;
 let curveRadius = (() => { try { const v = Number(localStorage.getItem('modeler.curveRadius')); return v > 0 ? v : 5; } catch (e) { return 5; } })();
 
 /**
@@ -2085,6 +2104,11 @@ function curveDown(x, y) {
     toast('曲線已經畫好了 —— 按「切下去」，或按「退一點」改最後一點；點一下某個點可以打數字改它的位置', true);
     return;
   }
+  /** 3d 折線：起點之後的每一段都是打數字來的，滑鼠⛔ 再放點（點一下已經放好的點仍是選它，見上面 3a 那段）*/
+  if (curve && curve.poly) {
+    toast('折線模式：在上方打長度、角度按「加一段」（Enter）；點一下已經放好的點可以打數字改它的位置', true);
+    return;
+  }
   if (!curve) {
     const fa = curvePickFace(x, y);
     if (!fa) return;
@@ -2098,6 +2122,25 @@ function curveDown(x, y) {
     curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: !snap, closing: false,
               anchors: [{ p: p0, hin: null, hout: null, edge: !!snap }], done: false, hover: null,
               sel: -1, selecting: false };
+    /**
+     * 🔴 **3d 折線**：滑鼠只放起點；起點馬上選起來（3a 那兩格可以把它對到精確位置），之後一段一段打「長度、角度」。
+     * 角度跟面的方向算 ⇒ 斜的面⛔ 給（同 3a～3c）。
+     */
+    if (curvePolyOn) {
+      if (!curveFrame(curve)) {
+        curve = null;
+        toast('這個面是斜的 —— 折線（打長度、角度）只能用在跟座標軸對齊的面（頂面、側面…）', true);
+        return;
+      }
+      curve.poly = true;
+      curve.sel = 0;
+      toast(curve.closed
+        ? '折線（封閉）：起點放好了 —— 可以先打「離左邊／離下邊」對準起點；再打長度、角度按「加一段」（Enter），最後按「接回起點」'
+        : '折線：起點在邊上 —— 可以先打離邊多遠對準起點；再打長度、角度按「加一段」（Enter），最後按「延伸到邊」');
+      polyPreview();
+      updateBar();
+      return;
+    }
     if (curve.closed) toast('封閉圈：在面裡面點下去，最後【點回第一點】就封起來（在第一點上按住拖 ＝ 那裡也是圓滑的）');
     drawCurve();
     updateBar();
@@ -2130,7 +2173,7 @@ function curveDown(x, y) {
 
 /** 拖 ＝ 拉最後那一點的圓滑把手（兩邊對稱，跟鋼筆一樣）*/
 function curveDrag(x, y) {
-  if (!curve || curve.done || curve.selecting) return;
+  if (!curve || curve.done || curve.selecting || curve.poly) return;   // 3d 折線：段是打數字來的，⛔ 拉把手
   /** 封閉圈正在點回第一點 ⇒ 拖的是**第一點**的把手 */
   const a = curve.closing ? curve.anchors[0] : curve.anchors[curve.anchors.length - 1];
   const q = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
@@ -2167,7 +2210,7 @@ function curveUp() {
 }
 
 function curveHover(x, y) {
-  if (!curve || curve.done || curve.sel >= 0) return;   // 選著一個點在打數字時⛔ 拉預覽線
+  if (!curve || curve.done || curve.sel >= 0 || curve.poly) return;   // 選著一個點在打數字時⛔ 拉預覽線；3d 折線的預覽跟著欄位走
   const p = sel.curvePlanePoint(x, y, curve.node, curve.n, curve.d);
   if (!p) return;
   /** 封閉圈⛔ 吸到邊（整圈要留在面裡）；靠近第一點時預覽就接回第一點 */
@@ -2200,6 +2243,83 @@ function curveUndo() {
   updateBar();
 }
 
+// ── 3d：一段一段打出來的直線折線 —— 規格「3d 定案」──────────────────
+
+/** 欄位裡的長度（cm）、角度（度）；長度打壞了 ⇒ null（⛔ 加段）*/
+function polyFields() {
+  const v = parseFloat($('curveLen').value), a = parseFloat($('curveAng').value);
+  const len = Number.isFinite(v) && v > 0 ? (curveUnit === 'mm' ? v / 10 : v) : null;
+  return { len, deg: Number.isFinite(a) ? a : 0 };
+}
+
+/** 最後一點（面上座標）—— 數學在 `edit.js`（`faceDimFrame()` 的 s 往右、t 往上）*/
+function polyLast(f) {
+  return f.st(curve.node.localToWorld(curve.anchors[curve.anchors.length - 1].p.clone()));
+}
+
+/** 下一段會走到哪（預覽用）：{ s, t, where } 或 null */
+function polyNext() {
+  const f = curveFrame(curve);
+  const { len, deg } = polyFields();
+  if (!f || len === null) return null;
+  const [s, t] = polyStep(...polyLast(f), len, deg);
+  return { f, s, t, where: polyWhere(f, s, t) };
+}
+
+/** 加一個折線的點（面上座標 ⇒ 物件座標）*/
+function polyPush(f, s, t, edge) {
+  curve.anchors.push({ p: curve.node.worldToLocal(f.toWorld(s, t)), hin: null, hout: null, edge });
+  curve.sel = -1;
+}
+
+/**
+ * 「加一段」（或在長度、角度欄位按 Enter）：
+ * 走到面外 ⇒ 擋、講原因；從邊上開始的折線剛好走到邊上 ⇒ 直接畫好；封閉的折線⛔ 可以碰到邊。
+ */
+function polyAdd() {
+  if (!curve || !curve.poly || curve.done) return;
+  const nx = polyNext();
+  if (!nx) { toast('先打長度（大於 0）', true); return; }
+  if (nx.where === 'out') { toast('這一段會跑出這個面 —— 改短一點，或換個角度', true); return; }
+  if (nx.where === 'edge' && curve.closed) { toast('封閉的折線要整圈留在面裡面 —— 這一段碰到面的邊了', true); return; }
+  polyPush(nx.f, nx.s, nx.t, nx.where === 'edge');
+  if (nx.where === 'edge') {
+    curve.done = true;
+    toast(`折線走到邊上了（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+  }
+  drawCurve();
+  updateBar();
+}
+
+/** 「延伸到邊」：照角度欄位一直走到碰到面的邊（從邊上開始的折線才有）*/
+function polyToEdge() {
+  if (!curve || !curve.poly || curve.done || curve.closed) return;
+  const f = curveFrame(curve);
+  if (!f) return;
+  const { deg } = polyFields();
+  const hit = polyRayHit(f, ...polyLast(f), deg);
+  if (!hit) { toast(`往 ${deg}° 走出去就離開這個面了，碰不到邊 —— 換個角度`, true); return; }
+  polyPush(f, hit.s, hit.t, true);
+  curve.done = true;
+  toast(`延伸了 ${curveShow(hit.dist)} ${curveUnit} 到邊上（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+  drawCurve();
+  updateBar();
+}
+
+/** 「接回起點」：封閉的折線至少 3 個點 ⇒ 最後一點直線連回起點 */
+function polyClose() {
+  if (!curve || !curve.poly || curve.done || !curve.closed) return;
+  if (curve.anchors.length < 3) { toast('至少要 3 個點才圍得成一圈', true); return; }
+  curve.done = true;
+  curve.sel = -1;
+  toast(`折線封起來了（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+  drawCurve();
+  updateBar();
+}
+
+/** 欄位一改 ⇒ 預覽跟著動（`drawCurve()` 自己會算下一段）*/
+function polyPreview() { drawCurve(); }
+
 // ── 3a：打數字改點的位置（「離左邊／離下邊」，cm／mm）—— 規格「第三步」「3a 樣板定案」──
 
 /** 那個面的「左／下」換算（世界座標；斜的面回 null）—— 數學在 `edit.js` `faceDimFrame()` */
@@ -2220,7 +2340,11 @@ function curveSelInfo() {
 /** 顯示用：cm 數字 → 目前的單位（宣告 `curveUnit` 在 `let curve` 旁邊）*/
 function curveShow(cm) { return curveUnit === 'mm' ? +(cm * 10).toFixed(1) : +cm.toFixed(2); }
 function setCurveUnit(u) {
+  const was = curveUnit;
   curveUnit = u === 'mm' ? 'mm' : 'cm';
+  /** 3d 長度欄位是使用者打的字（⛔ 由 updateBar 回填）⇒ 換單位時跟著換算，⛔ 讓 10 cm 變成 10 mm */
+  const v = parseFloat($('curveLen').value);
+  if (was !== curveUnit && Number.isFinite(v)) $('curveLen').value = curveUnit === 'mm' ? +(v * 10).toFixed(1) : +(v / 10).toFixed(2);
   try { localStorage.setItem('modeler.curveUnit', curveUnit); } catch (e) { /* 存不了就算了，⛔ 擋 */ }
   drawCurve();
   updateBar();
@@ -2250,6 +2374,9 @@ function curveTypeDim(which, text) {
  */
 function drawCurve() {
   if (!curve) { hideKnifeLine(); return; }
+  /** 3d 折線：預覽的下一段跟著「長度、角度」欄位走（⛔ 跟滑鼠）*/
+  const pn = curve.poly && !curve.done ? polyNext() : null;
+  if (curve.poly) curve.hover = pn ? curve.node.worldToLocal(pn.f.toWorld(pn.s, pn.t)) : null;
   const list = curve.anchors.slice();
   if (!curve.done && curve.hover) list.push({ p: curve.hover, hin: null, hout: null });
   const w = p => curve.node.localToWorld(p.clone());
@@ -2305,6 +2432,13 @@ function drawCurve() {
                     pos: P(dim.s + (r + 2 * tick) * w[0], dim.t + (r + 2 * tick) * w[1]) });
     }
   }
+  /** 3d：下一段的字放在那一段中間（跑出面外的話字上講，⛔ 只靠按下去才被擋）*/
+  if (pn) {
+    const { len, deg } = polyFields();
+    const [s0, t0] = polyLast(pn.f);
+    labels.push({ text: `下一段 ${curveShow(len)} ${curveUnit}　${+deg.toFixed(2)}°${pn.where === 'out' ? '（跑出面外）' : ''}`,
+                  pos: pn.f.toWorld((s0 + pn.s) / 2, (t0 + pn.t) / 2, 0.05) });
+  }
   view.setKnifePreview(segs, dots);
   view.setCurveLabels(labels);
 }
@@ -2312,7 +2446,8 @@ function drawCurve() {
 /** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
 function curveApply() {
   if (!curve || !curve.done) {
-    toast(curve && curve.closed ? '封閉圈還沒畫好 —— 最後要點回第一點' : '曲線還沒畫好 —— 最後一點要點在面的邊上', true);
+    toast(curve && curve.poly ? (curve.closed ? '折線還沒畫好 —— 最後按「接回起點」' : '折線還沒畫好 —— 最後按「延伸到邊」（或一段剛好走到邊上）')
+      : curve && curve.closed ? '封閉圈還沒畫好 —— 最後要點回第一點' : '曲線還沒畫好 —— 最後一點要點在面的邊上', true);
     return false;
   }
   /** 3c：半圓比那條邊還寬 ⇒ 兩頭會跨過角 —— 先講清楚（⛔ 讓核心講成「要從邊上開始」那種看不懂的話）*/
@@ -6006,7 +6141,7 @@ function updateBar() {
    * ⚠ 而且**不會報錯**（`index.html` 的 `#rail` 註解寫著同一件事）。
    */
   const 收工 = sel.knifeMode && sel.knifeCurve
-    ? (curve && curve.done ? (curve.circle ? (curve.circle.edge ? '切下去（半圓）' : '切下去（圓）') : curve.closed ? '切下去（封閉圈）' : '切下去（曲線）') : null)
+    ? (curve && curve.done ? (curve.circle ? (curve.circle.edge ? '切下去（半圓）' : '切下去（圓）') : curve.poly ? '切下去（折線）' : curve.closed ? '切下去（封閉圈）' : '切下去（曲線）') : null)
     : sel.knifeMode
     ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : null)
     : penEditing ? '完成'
@@ -6020,6 +6155,8 @@ function updateBar() {
   const 狀態 = sel.knifeMode && sel.knifeCurve
     ? (curveCircleArm ? '圓：在要放的面上點一下當圓心'
        : curveNotchArm ? '半圓：在面上靠近要開缺口的那條邊點一下'
+       : curvePolyOn && !curve ? '折線：先在面上點起點（邊上 ⇒ 最後延伸到邊；中間 ⇒ 最後接回起點）'
+       : curve && curve.poly && !curve.done ? `折線：${curve.anchors.length} 點　打長度、角度按「加一段」（Enter）`
        : !curve ? '曲線：第一點點在面的【邊上】（切成兩塊）或【中間】（封閉圈）；或按「圓」放一個圓、按「半圓」在邊上開缺口'
        : curve.done ? ''
        : curve.closed ? `封閉圈：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後【點回第一點】`
@@ -6163,8 +6300,21 @@ function updateBar() {
   $('curveCircle').classList.toggle('on', curveCircleArm);
   $('curveNotch').hidden = !curveOn;
   $('curveNotch').classList.toggle('on', curveNotchArm);
-  for (const id of ['curveDimLLbl', 'curveDimL', 'curveDimBLbl', 'curveDimB', 'curveUnitCm', 'curveUnitMm']) $(id).hidden = !dimInfo;
+  for (const id of ['curveDimLLbl', 'curveDimL', 'curveDimBLbl', 'curveDimB']) $(id).hidden = !dimInfo;
   for (const id of ['curveRLbl', 'curveR', 'curveDLbl', 'curveD']) $(id).hidden = !circF;
+  /** 3d 折線：起點放好、還沒畫好 ⇒ 長度、角度、加一段；從邊上開始的給「延伸到邊」、從中間開始的給「接回起點」*/
+  $('curvePoly').hidden = !curveOn;
+  $('curvePoly').classList.toggle('on', curvePolyOn);
+  const polyOn = curveOn && !!curve && !!curve.poly && !curve.done;
+  for (const id of ['curveLenLbl', 'curveLen', 'curveAngLbl', 'curveAng', 'curveSegAdd']) $(id).hidden = !polyOn;
+  $('curveToEdge').hidden = !polyOn || curve.closed;
+  $('curvePolyClose').hidden = !polyOn || !curve.closed;
+  $('curvePolyClose').disabled = polyOn && curve.anchors.length < 3;
+  $('curveLen').step = curveUnit === 'mm' ? '1' : '0.1';
+  $('curveLenLbl').textContent = `長度（${curveUnit}）`;
+  for (const id of ['curveUnitCm', 'curveUnitMm']) $(id).hidden = !dimInfo && !polyOn;
+  $('curveUnitCm').classList.toggle('on', curveUnit === 'cm');
+  $('curveUnitMm').classList.toggle('on', curveUnit === 'mm');
   if (dimInfo) {
     const step = curveUnit === 'mm' ? '1' : '0.1';
     const rows = [['curveDimL', dimInfo.left, dimInfo.canL], ['curveDimB', dimInfo.bottom, dimInfo.canB]];
