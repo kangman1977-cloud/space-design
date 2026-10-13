@@ -15203,23 +15203,24 @@ section('智慧分切 第一步：不准切 ＋ 提案（2026-10-13）');
   }
   eq('★★★ 11 種基本形狀：程式剪的邊數、最大一片 ＝ 改之前（沒標不准切）', diff.join('；'), '');
 
-  // ── 提案 ──
+  /**
+   * ── 提案（兩步都成立的性質）──
+   * ⚠ 第二步（2026-10-13）之後提案改成「放得進板子」的切法 —— 第一步寫死的「提案 ＝ 程式原本剪的 7 條」不再成立，
+   * 改驗兩步都要守的事；第二步的數字在下一節「智慧分切 第二步」。
+   */
   const bx = mk('box'), mb = bx.mesh();
   const p0 = proposeSeams(bx, { material: 'foamboard' });
-  eq('★★★ 方塊沒標：提案 ＝ 程式原本剪的 7 條', p0.edges.length, 7);
-  ok('★★ 　 1 片、最大 145×210、放不進 240×120', p0.total === 1 && Math.round(p0.maxPiece.w) === 145 && Math.round(p0.maxPiece.h) === 210 && p0.big === 1);
-  ok('★★ 　 提案⛔ 改任何一條邊（只是算）', !inner(mb).some(isSeam));
+  ok('★★ 提案⛔ 改任何一條邊（只是算）', p0.edges.length > 0 && !inner(mb).some(isSeam));
   const locked = p0.edges.slice(0, 3);
   for (const h of locked) setKeep(mb, h, true);
   const p1 = proposeSeams(bx, { material: 'foamboard' });
-  eq('★★★ 把其中 3 條標不准切 ⇒ 提案換別的 7 條', p1.edges.length, 7);
-  ok('★★★ 　 ⛔ 碰不准切的那 3 條', !p1.edges.some(h => isKeep(h)));
-  ok('★★ 　 而且真的換了（不是同一批）', p1.edges.map(key).sort().join() !== p0.edges.map(key).sort().join());
+  ok('★★★ 把提案裡 3 條標不准切 ⇒ 新的提案⛔ 碰那 3 條', p1.edges.length > 0 && !p1.edges.some(h => isKeep(h)));
   for (const h of p1.edges) setSeam(mb, h, true);
   const ra = unfoldObject(bx, { material: 'foamboard' });
+  const maxOf = ps => ps.slice().sort((x, y) => y.width * y.height - x.width * x.height)[0];
   eq('★★★ 接受之後再展開：程式自己剪 0 條', ra.autoEdges.length, 0);
-  ok('★★★ 　 片數、外框跟提案時一樣', ra.stats.total === p1.total && Math.round(ra.pieces[0].width) === Math.round(p1.maxPiece.w) && Math.round(ra.pieces[0].height) === Math.round(p1.maxPiece.h),
-     `${ra.pieces[0].width}×${ra.pieces[0].height}`);
+  ok('★★★ 　 片數、最大一片跟提案時一樣', ra.stats.total === p1.total && Math.round(maxOf(ra.pieces).width) === Math.round(p1.maxPiece.w) && Math.round(maxOf(ra.pieces).height) === Math.round(p1.maxPiece.h),
+     `${ra.stats.total} 片 ${maxOf(ra.pieces).width}×${maxOf(ra.pieces).height}`);
   ok('★★ 　 不准切那 3 條還是不准切、⛔ 被接受成切開', locked.every(h => isKeep(h) && !isSeam(h)));
   eq('★★ 接受完再提案 ⇒ 沒有要補的', proposeSeams(bx, { material: 'foamboard' }).edges.length, 0);
 
@@ -15241,17 +15242,104 @@ section('智慧分切 第一步：不准切 ＋ 提案（2026-10-13）');
 
   // ── 板子 ──
   eq('★★ 板子 300×300 ⇒ 方塊放得進', proposeSeams(mk('box'), { material: 'foamboard', board: { w: 300, h: 300 } }).big, 0);
-  const wd = { material: 'foamboard', board: { w: 240, h: 120, rotate: false } };
-  eq('★★ 楔形 106×168、240×120 ⛔ 轉 ⇒ 放不進', proposeSeams(mk('wedge'), wd).big, 1);
-  eq('★★ 　 可以轉 90° ⇒ 放得進（照排版那個勾）', proposeSeams(mk('wedge'), { ...wd, board: { ...wd.board, rotate: true } }).big, 0);
 
   // ── 縮放過的物件：提案的邊要是物件自己那份網格的 ──
   const sc = mk('box');
   sc.scale.set(2, 2, 2);
   const ps = proposeSeams(sc, { material: 'foamboard' });
   const own = new Set([...sc.mesh().edges()].map(key));
-  ok('★★★ 縮放 2 倍：提案 7 條、每條都在物件自己的網格上（接受才標得上）', ps.edges.length === 7 && ps.edges.every(h => own.has(key(h))));
-  ok('★★ 　 外框照縮放算（290×420）', Math.round(ps.maxPiece.w) === 290 && Math.round(ps.maxPiece.h) === 420, `${ps.maxPiece.w}×${ps.maxPiece.h}`);
+  ok('★★★ 縮放 2 倍：提案的每一條都在物件自己的網格上（接受才標得上）', ps.edges.length > 0 && ps.edges.every(h => own.has(key(h))));
+  ok('★★ 　 外框照縮放算、而且全放得進（120×90×80 的方塊）', ps.big === 0 && ps.maxPiece.w > 150, `${ps.total} 片 ${ps.maxPiece.w}×${ps.maxPiece.h}`);
+}
+
+section('智慧分切 第二步：放得進板子（2026-10-13）');
+
+/**
+ * 規格「第二步」第 3 節：分塊 → 每塊一片 → 照共用邊界由長到短一對一對接（只放開那兩塊之間的邊）→ 跟程式本來剪的比；
+ * 放不放得進跟排版共用 `fitsBoard()`（扣間距、照轉 90° 的勾）。數字的來源：同一天的沙箱原型（規格第 0 節）。
+ */
+{
+  const { setSeam, isSeam, setKeep, isKeep } = await import('../js/unfold/seam.js');
+  const { proposeSeams, SMOOTH_DEG } = await import('../js/unfold/propose.js');
+  const { fitsBoard, packBoards } = await import('../js/out/nest.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const B = { w: 240, h: 120, gap: 1, rotate: false };
+  const P = (o, board = B) => proposeSeams(o, { material: 'foamboard', board });
+  const DEG = 180 / Math.PI;
+  const onCorner = (o, edges) => edges.every(h => { const d = o.mesh().dihedral(h); return d !== null && Math.abs(d * DEG) >= SMOOTH_DEG; });
+  const sizes = ps => ps.map(p => `${Math.round(p.width)}×${Math.round(p.height)}`).sort().join(',');
+
+  // ── 放不放得進：跟排版同一支 ──
+  ok('★★★ 238×118、板子 240×120、間距 1 ⇒ 放得進（扣掉兩邊間距剛好）', fitsBoard(238, 118, B));
+  ok('★★★ 　 239×118 ⇒ 放不進（第一步的錯：只跟 240×120 比）', !fitsBoard(239, 118, B));
+  ok('★★ 　 118×238：不轉放不進、可以轉就放得進', !fitsBoard(118, 238, B) && fitsBoard(118, 238, { ...B, rotate: true }));
+  const fake = (w, h) => ({ width: w, height: h, qty: 1 });
+  eq('★★ 排版用的也是它：238×118 ⇒ 1 張板、⛔ 算比板子大', packBoards([fake(238, 118)], B).boards.filter(b => !b.oversize).length, 1);
+  eq('★★ 　 239×118 ⇒ 比板子大', packBoards([fake(239, 118)], B).boards.filter(b => b.oversize).length, 1);
+
+  // ── 方塊 ──
+  const b1 = mk('box'), pb = P(b1);
+  ok('★★★ 方塊 60×45×40、不轉 90° ⇒ 3 片、全放得進、縫 400', pb.total === 3 && pb.big === 0 && Math.round(pb.cutLen) === 400, `${pb.total} 片 放不進 ${pb.big} 縫 ${pb.cutLen}`);
+  ok('★★★ 　 提案的縫全在轉角上', onCorner(b1, pb.edges));
+  const pr = P(mk('box'), { ...B, rotate: true });
+  ok('★★★ 　 可以轉 90° ⇒ 2 片、縫 355（＝ 原本十字形的縫長）', pr.total === 2 && pr.big === 0 && Math.round(pr.cutLen) === 355, `${pr.total} 片 縫 ${pr.cutLen}`);
+  const pbig = P(mk('box', { w: 150, h: 60, d: 50 }));
+  ok('★★ 方塊 150×60×50 ⇒ 2 片全放得進', pbig.total === 2 && pbig.big === 0, `${pbig.total}/${pbig.big}`);
+  const pw = P(mk('wedge'));
+  ok('★★★ 楔形 ⇒ 換一種排法、1 片就放得進（程式本來剪的 106×168 放不進）', pw.total === 1 && pw.big === 0, `${pw.total} 片 ${pw.maxPiece.w}×${pw.maxPiece.h}`);
+
+  // ── 圓柱：側面 ＋ 兩蓋 ──
+  const cy = mk('cylinder'), pc = P(cy);
+  ok('★★★ 圓柱 ⇒ 3 片全放得進（側面＋兩蓋）', pc.total === 3 && pc.big === 0, `${pc.total}/${pc.big}`);
+  for (const h of pc.edges) setSeam(cy.mesh(), h, true);
+  const rc = unfoldObject(cy, { material: 'foamboard' });
+  const side = Math.round(PRIM_DEFAULTS.cylinder.seg * 2 * PRIM_DEFAULTS.cylinder.r * Math.sin(Math.PI / PRIM_DEFAULTS.cylinder.seg));
+  ok('★★ 　 接受之後：一片是側面（32 邊形周長 × 高）、兩片是蓋子', rc.pieces.some(p => Math.round(p.width) === side && Math.round(p.height) === PRIM_DEFAULTS.cylinder.h)
+     && rc.stats.total === 3, sizes(rc.pieces));
+
+  // ── 接受之後：每片都放得進、補剪 0 條 ──
+  for (const t of ['box', 'stairs', 'prism']) {
+    const o = mk(t), p = P(o);
+    for (const h of p.edges) setSeam(o.mesh(), h, true);
+    const r = unfoldObject(o, { material: 'foamboard' });
+    ok(`★★★ ${t}：接受提案再展開 ⇒ 每片都放得進（排版那支判斷）、程式補剪 0 條`,
+       r.pieces.every(q => fitsBoard(q.width, q.height, B)) && r.autoEdges.length === 0, `${sizes(r.pieces)} 補剪 ${r.autoEdges.length}`);
+  }
+
+  // ── 不准切、使用者先標的縫 ──
+  const bk = mk('box');
+  const top = bk.mesh().edges ? [...bk.mesh().edges()].find(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y - h.to.p.y) < 1e-6 && h.v.p.y > 0) : null;
+  setKeep(bk.mesh(), top, true);
+  const pk = P(bk);
+  ok('★★★ 方塊上緣一條標不准切 ⇒ 提案⛔ 碰它、照樣全放得進', !pk.edges.some(h => isKeep(h)) && pk.big === 0, `${pk.total} 片`);
+  for (const h of pk.edges) setSeam(bk.mesh(), h, true);
+  const rk = unfoldObject(bk, { material: 'foamboard' });
+  ok('★★ 　 接受之後那條還是連著（⛔ 被切開）', isKeep(top) && !isSeam(top) && rk.keepCut === 0);
+  const bu = mk('box');
+  const mine = [...bu.mesh().edges()].find(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y - h.to.p.y) > 1e-6);
+  setSeam(bu.mesh(), mine, true);
+  const pu = P(bu);
+  ok('★★★ 使用者先標的縫：⛔ 出現在提案裡、照樣切開', !pu.edges.includes(mine) && isSeam(mine) && pu.big === 0, `${pu.total} 片`);
+
+  // ── 小東西⛔ 變差 ──
+  for (const [t, over] of [['box', { w: 20, h: 20, d: 20 }], ['cylinder', { r: 10, h: 30 }], ['prism', { r: 10, h: 20 }]]) {
+    const before = unfoldObject(mk(t, over), { material: 'foamboard' }).stats.total;
+    const p = P(mk(t, over));
+    ok(`★★ 小${t}：提案片數 ≤ 程式本來剪的（${before} 片）`, p.total <= before && p.big === 0, `${p.total} 片`);
+  }
+
+  // ── 還放不進的：講是哪一種 ──
+  const ps = P(mk('sphere'));
+  ok('★★★ 球 ⇒ 1 片是「一整個曲面、沒有轉角可以切」（第三步）', ps.big === 1 && ps.bigCurved === 1 && ps.bigFlat === 0, `${ps.big}/${ps.bigCurved}/${ps.bigFlat}`);
+  const pp = P(mk('plate', { w: 300, d: 50 }));
+  ok('★★★ 300×50 的平板 ⇒ 1 片是「本身就是一個比板子大的平面」', pp.big === 1 && pp.bigFlat === 1 && pp.bigCurved === 0, `${pp.big}/${pp.bigCurved}/${pp.bigFlat}`);
+  ok('★★ 圓環 ⇒ 還有重疊要講（第三步）', P(mk('torus')).overlap);
+  ok('★★ 都沒有算到時間上限', !pb.timedOut && !pc.timedOut && !ps.timedOut);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

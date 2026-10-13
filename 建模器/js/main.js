@@ -4267,7 +4267,7 @@ function makeSeamProposal(obj) {
   const N = unfoldWin.opt.nest || {};
   let p;
   try {
-    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, rotate: !!N.rotate } });
+    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, gap: N.gap, rotate: !!N.rotate } });
   } catch (e) {
     toast('提案算不出來：' + e.message, true);
     return null;

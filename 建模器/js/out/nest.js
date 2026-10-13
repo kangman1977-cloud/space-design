@@ -37,6 +37,22 @@ export const NEST_DEFAULTS = { on: true, w: 240, h: 120, gap: 1, rotate: false }
 const EPS = 1e-9;
 
 /**
+ * 🔴 **一片放不放得進板子** —— 排版與智慧分切的提案**共用這一支**（2026-10-13，智慧分切第二步）。
+ * 標準：寬高 ≤ 板子寬高 − 2×間距（四周都要留間距）；`rotate` ⇒ 轉 90° 也算。
+ * 【實證】第一步的提案只跟板寬板高比、⛔ 扣間距 —— 圓柱那片 179×120 提案說放得進、排版卻放不進。
+ * ⇒ 一個判斷只寫一次（鐵律二），⛔ 各算各的。
+ * @param {number} w 片的寬  @param {number} h 片的高
+ * @param {{w,h,gap,rotate}} opt 跟 `packBoards()` 同一包
+ */
+export function fitsBoard(w, h, opt = {}) {
+  const W = +opt.w > 0 ? +opt.w : NEST_DEFAULTS.w;
+  const H = +opt.h > 0 ? +opt.h : NEST_DEFAULTS.h;
+  const g = Math.max(0, Number.isFinite(+opt.gap) ? +opt.gap : NEST_DEFAULTS.gap);
+  const ok = (a, b) => a <= W - 2 * g + EPS && b <= H - 2 * g + EPS;
+  return ok(w, h) || (!!opt.rotate && ok(h, w));
+}
+
+/**
  * @param {object[]} pieces 展開好的片（`qty` 幾片就擺幾份）
  * @param {{w,h,gap,rotate}} opt 板子寬、高（cm）、片與片／片與板邊的間距、可不可以轉 90°
  * @returns {{boards: {w,h,oversize,items:{piece,copy,x,y,w,h,rot}[]}[], count:number}}
@@ -46,7 +62,8 @@ export function packBoards(pieces, opt = {}) {
   const W = +opt.w > 0 ? +opt.w : NEST_DEFAULTS.w;
   const H = +opt.h > 0 ? +opt.h : NEST_DEFAULTS.h;
   const g = Math.max(0, Number.isFinite(+opt.gap) ? +opt.gap : NEST_DEFAULTS.gap);
-  const fits = (w, h) => w <= W - 2 * g + EPS && h <= H - 2 * g + EPS;
+  /** 不轉的那一種放法放不放得進（轉 90° 的另外排一次候選）—— 判斷本身在 `fitsBoard()` */
+  const fits = (w, h) => fitsBoard(w, h, { w: W, h: H, gap: g, rotate: false });
 
   const todo = [];
   const oversize = [];

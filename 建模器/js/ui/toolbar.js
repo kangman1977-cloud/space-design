@@ -968,7 +968,7 @@ export class Panel {
   /**
    * 🔴 **智慧分切：提案**（2026-10-13，第一步 → `規格\建模器-智慧分切.md`）。
    * 提案的內容在 `unfold/propose.js`、狀態在 `main.js`（物件＋網格＋標記指紋，對不上就收起來）。
-   * 面板只負責講：幾條、幾片、最大一片、放不放得進板子；第一版還不會為了板子多切 ⇒ 放不進要講明，⛔ 讓人以為判斷過了。
+   * 面板只負責講：幾條、幾片、最大一片、放不放得進板子；還放不進的要講是哪一種（一整個曲面／一大片平面），⛔ 只講「放不進」。
    */
   _seamProposalBox(obj) {
     if (!this.app.proposeSeams) return;
@@ -978,15 +978,28 @@ export class Panel {
     const p = cur && cur.proposal;
     this._rowBtn(p ? '重新提案' : '智慧分切：提案',
       '程式照判準建議要從哪裡切開（青色虛線），你看過再決定接受、刪掉幾條、或取消。'
-      + '第一版：提案 ＝ 程式本來就會補剪的那幾刀，但先給你看、會繞開「不准切」，並講放不放得進板子',
+      + '沿轉角切、切到每片都放得進板子（照排版設定），片盡量少、縫盡量短；會繞開「不准切」',
       () => this.app.proposeSeams(obj));
     if (!p) return;
 
     const b = p.board, fmt1 = v => String(Math.round(v * 10) / 10);
-    const boardTxt = `${fmt1(b.w)}×${fmt1(b.h)}${b.rotate ? '（可以轉 90°）' : ''}`;
-    const fit = p.big
-      ? `<span style="color:#c0392b">有 <b>${p.big}</b> 片放不進 ${boardTxt} 板子</span> —— 第一版還不會為了板子多切（第二步才做）`
-      : `全部放得進 ${boardTxt} 板子`;
+    const boardTxt = `${fmt1(b.w)}×${fmt1(b.h)}`;
+    const cond = `照排版設定：間距 ${fmt1(b.gap)}、${b.rotate ? '可以轉 90°' : '不轉 90°'}`;
+    const red = t => `<span style="color:#c0392b">${t}</span>`;
+    /**
+     * 還放不進的，**講是哪一種、為什麼**（第二步規格第 2 節；⛔ 只講「放不進」）。
+     * 「第一版還不會為了板子多切」那句第二步拿掉了（兩個括號連在一起的那句也就沒了）。
+     */
+    const fitLines = [];
+    if (!p.big) fitLines.push(`全部放得進 ${boardTxt} 板子（${cond}）`);
+    else {
+      if (p.bigCurved) fitLines.push(red(`有 <b>${p.bigCurved}</b> 片是一整個曲面、沒有轉角可以切，放不進`) + ' —— 要第三步才切得開');
+      if (p.bigFlat) fitLines.push(red(`有 <b>${p.bigFlat}</b> 片本身就是一個比板子大的平面`) + ' —— 要換大板，或自己標縫切開');
+      const rest = p.big - p.bigCurved - p.bigFlat;
+      if (rest > 0) fitLines.push(red(`有 <b>${rest}</b> 片放不進 ${boardTxt} 板子`) + `（${cond}）`);
+    }
+    if (p.overlap) fitLines.push(red('提案的片還有重疊') + ' —— 要第三步才處理');
+    if (p.timedOut) fitLines.push('算到 2 秒先交出目前最好的');
     const box = document.createElement('div');
     box.className = 'note';
     const lines = [];
@@ -996,7 +1009,7 @@ export class Panel {
       lines.push(`提案 <b>${p.edges.length}</b> 條縫（青色虛線）：展開後 <b>${p.total}</b> 片`
         + (p.maxPiece ? `，最大一片 ${fmt1(p.maxPiece.w)}×${fmt1(p.maxPiece.h)}` : ''));
     }
-    lines.push(fit + '（照排版設定）');
+    lines.push(...fitLines);
     if (p.removed) lines.push(`你拿掉了 ${p.removed} 條 —— 接受後展開時，程式會自己再補剪（橘色）；上面的片數是拿掉之前的`);
     if (p.keepCut) lines.push(`有 ${p.keepCut} 條「不准切」非切不可，照樣會切開`);
     if (p.unmarkable) lines.push(`有 ${p.unmarkable} 條在平面中間、標不上縫 —— 接受時會跳過`);
