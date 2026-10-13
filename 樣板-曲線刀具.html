@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：曲線刀具（平面上）</title>
+<!--
+  🔴 這是【給 kang 確認畫法與結果用的樣板】，⛔ 不是要上線的程式。
+  ⭐ 例子：方塊 60 × 45 × 40 cm 的頂面。真的功能是「任何一個平的面」都能畫。
+  ⭐ 畫法照「鋼筆」：點一下＝尖角、按住拖＝圓滑（拉出把手）。
+     ・從面的【邊上】開始、在【邊上】結束 ⇒ 把面切成兩塊
+     ・從面的【中間】開始、點回第一個點 ⇒ 面中間一個封閉的圈
+  ⚠ 曲線就在那個面的平面上（滑鼠射線打到那個平面），⛔ 不投影到網格 —— 這正是「只做平面」的理由。
+-->
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #1b1e23; color: #e8eaed; font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; font-size: 13px; padding: 16px; }
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #8b93a1; font-size: 12.5px; margin: 0 0 12px; line-height: 1.7; max-width: 1180px; }
+.sub b { color: #e8eaed; }
+.wrap { display: flex; gap: 16px; flex-wrap: wrap; max-width: 1180px; }
+#view { flex: 1 1 640px; min-width: 300px; height: 580px; border: 1px solid #3a3f48; border-radius: 8px; background: #15181d; position: relative; touch-action: none; }
+#view canvas { display: block; width: 100%; height: 100%; border-radius: 8px; }
+#hint { position: absolute; left: 10px; top: 8px; right: 10px; color: #f2c46d; font-size: 12.5px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+#foot { position: absolute; left: 10px; bottom: 8px; color: #6b7280; font-size: 11.5px; pointer-events: none; }
+.side { flex: 0 1 360px; min-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+.card { background: #20232a; border: 1px solid #3a3f48; border-radius: 10px; padding: 10px 14px; line-height: 1.75; font-size: 12.5px; }
+.card h2 { font-size: 14px; margin: 0 0 6px; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+button { background: #2a2e36; color: #e8eaed; border: 1px solid #3a3f48; border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+button.on { background: #2f5d9a; border-color: #4a86d0; }
+button:disabled { opacity: .45; cursor: default; }
+label.r { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+label.r input[type=range] { flex: 1; }
+#stats { color: #9fe1cb; }
+#warn { color: #ff8a7a; }
+.q b { color: #f2c46d; }
+</style>
+</head>
+<body>
+<h1>樣板：曲線刀具（只做平面上的）</h1>
+<p class="sub">
+  在方塊的<b>頂面</b>畫曲線（真的功能是任何一個平的面都可以）。畫法照 <b>鋼筆</b>：<b>點一下＝尖角、按住拖＝圓滑</b>。<br>
+  <b>從邊上開始、在邊上結束</b> ⇒ 把面切成兩塊；<b>從面中間開始、點回第一個點</b> ⇒ 面中間一個封閉的圈。
+  轉視角：<b>按住右鍵拖</b>（或用右邊的按鈕），滾輪拉近。
+</p>
+
+<div class="wrap">
+  <div id="view"><div id="hint"></div><div id="foot">左鍵畫線　右鍵拖＝轉視角　滾輪＝縮放</div></div>
+  <div class="side">
+    <div class="card">
+      <h2>操作</h2>
+      <div class="row">
+        <button id="undo">退一點</button>
+        <button id="clear">重畫</button>
+        <button id="push" disabled>把切出來的那塊推高 3 cm</button>
+      </div>
+      <div class="row">
+        <button id="vIso" class="on">斜著看</button>
+        <button id="vTop">從上面看</button>
+      </div>
+      <div class="row">
+        <button id="demoWave">示範：波浪線（邊到邊）</button>
+        <button id="demoRound">示範：面中間一個圓形開口</button>
+      </div>
+      <label class="r">每一段曲線切成 <input id="seg" type="range" min="2" max="24" step="1" value="8"> <span id="segv">8</span> 段</label>
+      <div id="stats" style="margin-top:6px"></div>
+      <div id="warn"></div>
+    </div>
+    <div class="card">
+      <h2>顏色</h2>
+      藍＝方塊　<span style="color:#ffd34d">黃線</span>＝畫好的曲線（點＝切下去後真的會新增的點）<br>
+      切完：<span style="color:#7bd88f">綠</span>／<span style="color:#e98aa8">粉紅</span>＝頂面被切成的兩塊
+    </div>
+    <div class="card q">
+      <h2>要你確認／決定的</h2>
+      ① <b>畫法照鋼筆</b>（點一下尖角、按住拖圓滑）可以嗎？<br>
+      ② 要不要<b>打數字</b>的精準方式？例如「圓弧：半徑 10 cm」、或每個點的位置打座標<br>
+      ③ 曲線要切多細：像現在<b>每段固定切幾段</b>，還是<b>每多少公分切一段</b>（長的段自動切多一點）？<br>
+      ④ <b>面中間的封閉圈</b>（例如一個開口）要不要？<br>
+      ⑤ 切完主要拿來做什麼：<b>推高／壓下</b>那一塊、<b>挖洞</b>、接「<b>切成實心</b>」、還是當<b>分片線</b>？
+    </div>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script>
+  if (!window.THREE) document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+</script>
+<script>
+(() => {
+  const W = 30, D = 22.5, H = 40;          // 頂面：x −30～30、z −22.5～22.5，高 40
+  const SNAP = 2.2;                         // 離邊多近就吸到邊上（cm）
+
+  // ── three.js 場景 ──
+  const view = document.getElementById('view'), hint = document.getElementById('hint');
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  view.appendChild(renderer.domElement);
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x15181d);
+  const camera = new THREE.PerspectiveCamera(35, 1, 1, 3000);
+  scene.add(new THREE.HemisphereLight(0xdfe8f5, 0x30343c, 0.8));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(60, 120, 80); scene.add(sun);
+  const grid = new THREE.GridHelper(240, 24, 0x3a3f48, 0x262a31); scene.add(grid);
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x4a7fc0, roughness: .8, flatShading: true });
+  const box = new THREE.Mesh(new THREE.BoxGeometry(2 * W, H, 2 * D), boxMat); box.position.y = H / 2; scene.add(box);
+  box.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0x0d1117 })));
+
+  const layer = new THREE.Group(); scene.add(layer);     // 每次重畫都清掉重建
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -H);
+  const ray = new THREE.Raycaster();
+
+  // ── 相機 ──
+  let th = 0.6, ph = 0.95, dist = 170;
+  const target = new THREE.Vector3(0, H * 0.6, 0);
+  function place() {
+    camera.position.set(target.x + dist * Math.sin(ph) * Math.sin(th), target.y + dist * Math.cos(ph), target.z + dist * Math.sin(ph) * Math.cos(th));
+    camera.lookAt(target);
+  }
+  function size() { const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); draw(); }
+  function draw() { place(); renderer.render(scene, camera); }
+  window.addEventListener('resize', size);
+
+  // ── 曲線資料 ──
+  /** 錨點 {p:[u,v], hin, hout}；u＝x、v＝z。hin/hout 為 null ＝ 尖角 */
+  let A = [], closed = false, done = false, pushed = false, cursor = null, dragging = null;
+  const segEl = document.getElementById('seg');
+
+  const onEdge = (u, v) => Math.abs(Math.abs(u) - W) < 1e-6 || Math.abs(Math.abs(v) - D) < 1e-6;
+  function snapEdge(u, v) {
+    // 在面裡（或剛好超出一點）而且離邊夠近 ⇒ 吸到最近的邊上
+    if (Math.abs(u) > W + SNAP || Math.abs(v) > D + SNAP) return null;
+    const du = W - Math.abs(u), dv = D - Math.abs(v);
+    if (Math.min(du, dv) > SNAP) return null;
+    let su = Math.max(-W, Math.min(W, u)), sv = Math.max(-D, Math.min(D, v));
+    if (du < dv) su = Math.sign(u || 1) * W; else sv = Math.sign(v || 1) * D;
+    if (Math.abs(Math.abs(su) - W) < SNAP && Math.abs(Math.abs(sv) - D) < SNAP) { su = Math.sign(su) * W; sv = Math.sign(sv) * D; }  // 角
+    return [su, sv];
+  }
+  function bez(a, c1, c2, b, t) {
+    const s = 1 - t;
+    return [0, 1].map(k => s * s * s * a[k] + 3 * s * s * t * c1[k] + 3 * s * t * t * c2[k] + t * t * t * b[k]);
+  }
+  /** 把錨點串成「切下去會新增的點」：直線那段只要 1 段，有把手的段切 N 段 */
+  function samples(list, isClosed, N) {
+    const out = [list[0].p];
+    const n = list.length, segs = isClosed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = list[i], b = list[(i + 1) % n];
+      const c1 = a.hout || a.p, c2 = b.hin || b.p;
+      const straight = !a.hout && !b.hin;
+      const k = straight ? 1 : N;
+      for (let j = 1; j <= k; j++) out.push(bez(a.p, c1, c2, b.p, j / k));
+    }
+    if (isClosed) out.pop();                 // 最後一點＝第一點
+    return out;
+  }
+
+  // ── 畫面 ──
+  const Y = H + 0.06;
+  const v3 = (p, y = Y) => new THREE.Vector3(p[0], y, p[1]);
+  function addLine(pts, color, closedLine) {
+    const g = new THREE.BufferGeometry().setFromPoints(pts.map(p => v3(p)));
+    layer.add(new (closedLine ? THREE.LineLoop : THREE.Line)(g, new THREE.LineBasicMaterial({ color })));
+  }
+  function addDots(pts, color, size) {
+    const g = new THREE.BufferGeometry().setFromPoints(pts.map(p => v3(p, Y + 0.02)));
+    layer.add(new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false })));
+  }
+  const shapeOf = (pts, holes = []) => {
+    const s = new THREE.Shape(pts.map(p => new THREE.Vector2(p[0], -p[1])));
+    for (const h of holes) s.holes.push(new THREE.Path(h.map(p => new THREE.Vector2(p[0], -p[1]))));
+    return s;
+  };
+  function addRegion(pts, color, holes, raise) {
+    const sh = shapeOf(pts, holes);
+    const geo = raise ? new THREE.ExtrudeGeometry(sh, { depth: raise, bevelEnabled: false }) : new THREE.ShapeGeometry(sh);
+    geo.rotateX(-Math.PI / 2);
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: .7, side: THREE.DoubleSide, flatShading: true }));
+    m.position.y = raise ? H : H + 0.03;
+    layer.add(m);
+    if (raise) {
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), new THREE.LineBasicMaterial({ color: 0x0d1117 }));
+      edges.position.copy(m.position);
+      layer.add(edges);
+    }
+  }
+
+  /** 頂面邊框的周長參數（從 (−W,−D) 逆時針），開放曲線拿來沿邊框走回去 */
+  const corners = [[-W, -D], [W, -D], [W, D], [-W, D]];
+  const L = [2 * W, 2 * D, 2 * W, 2 * D], P = 4 * W + 4 * D;
+  function perim(p) {
+    const [u, v] = p;
+    if (Math.abs(v + D) < 1e-6) return u + W;
+    if (Math.abs(u - W) < 1e-6) return L[0] + v + D;
+    if (Math.abs(v - D) < 1e-6) return L[0] + L[1] + (W - u);
+    return L[0] + L[1] + L[2] + (D - v);
+  }
+  function walk(fromP, toP) {      // 沿邊框逆時針，從 fromP 走到 toP，回傳中間經過的角
+    let s = perim(fromP), e = perim(toP); if (e <= s) e += P;
+    const out = [];
+    let acc = 0;
+    for (let k = 0; k < 8; k++) {
+      const ci = (k + 1) % 4; acc += L[k % 4];
+      const cs = acc;              // 第 ci 個角的參數（可能超過一圈）
+      if (cs > s + 1e-9 && cs < e - 1e-9) out.push(corners[ci]);
+    }
+    return out;
+  }
+  const inside = p => Math.abs(p[0]) <= W + 1e-6 && Math.abs(p[1]) <= D + 1e-6;
+
+  const stats = document.getElementById('stats'), warn = document.getElementById('warn'), pushBtn = document.getElementById('push');
+  function render() {
+    while (layer.children.length) layer.remove(layer.children[0]);
+    const N = Number(segEl.value);
+    document.getElementById('segv').textContent = N;
+    warn.textContent = ''; stats.textContent = '';
+    pushBtn.disabled = !done;
+    if (!A.length) {
+      hint.textContent = '在頂面上點第一個點：靠近邊會吸到邊上（從邊到邊 ⇒ 切成兩塊）；在面中間 ⇒ 之後點回第一點封成一圈';
+      draw(); return;
+    }
+    // 畫好的部分 ＋ 跟著游標的那一段
+    const live = A.slice();
+    if (!done && cursor) live.push({ p: cursor.p, hin: null, hout: null });
+    const pts = samples(live, done && closed, N);
+    const bad = pts.some(p => !inside(p));
+    addLine(pts, bad ? 0xff6b5b : 0xffd34d, done && closed);
+    addDots(A.map(a => a.p), 0xffffff, 9);
+    if (!done) {
+      for (const a of A) for (const h of [a.hin, a.hout]) if (h) { addLine([a.p, h], 0x8b93a1); addDots([h], 0x8b93a1, 6); }
+      const first = A[0];
+      hint.textContent = onEdge(...first.p)
+        ? `已畫 ${A.length} 點。點在【邊上】就收工（切成兩塊）；按住拖＝圓滑`
+        : (A.length >= 3 ? `已畫 ${A.length} 點。點回【第一個點】就封成一圈；按住拖＝圓滑` : `已畫 ${A.length} 點。按住拖＝圓滑，點一下＝尖角`);
+      draw(); return;
+    }
+    hint.textContent = '切好了。拖「每一段切成幾段」看點怎麼變；按「推高 3 cm」看切出來的那塊真的變成獨立的面';
+    if (bad) { warn.textContent = '⚠ 曲線跑出這個面了（紅色）—— 真的功能會擋下來，請重畫'; addDots(pts, 0xff6b5b, 6); draw(); return; }
+    addDots(pts, 0xffd34d, 6);
+    const segs = closed ? pts.length : pts.length - 1;
+    if (closed) {
+      addRegion(pts, 0xe98aa8, [], pushed ? 3 : 0);
+      addRegion(corners, 0x7bd88f, [pts.slice().reverse()], 0);
+      stats.textContent = `切下去：新增 ${pts.length} 個點（全在面中間）、${segs} 條邊；頂面變成「外框」＋「中間一塊」`;
+    } else {
+      const a = pts[0], b = pts[pts.length - 1];
+      const regA = [...pts, ...walk(b, a)], regB = [...pts.slice().reverse(), ...walk(a, b)];
+      const area = r => Math.abs(r.reduce((s, p, i) => { const q = r[(i + 1) % r.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+      const small = area(regA) <= area(regB) ? regA : regB, big = small === regA ? regB : regA;
+      addRegion(big, 0x7bd88f, [], 0);
+      addRegion(small, 0xe98aa8, [], pushed ? 3 : 0);
+      const onE = pts.filter(p => onEdge(...p)).length;
+      stats.textContent = `切下去：新增 ${pts.length} 個點（${onE} 個在邊上、${pts.length - onE} 個在面中間）、${segs} 條邊；頂面切成 2 塊（面積 ${area(regA).toFixed(1)}／${area(regB).toFixed(1)} cm²）`;
+    }
+    draw();
+  }
+
+  // ── 滑鼠 ──
+  const toFace = (e) => {
+    const r = view.getBoundingClientRect();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hit)) return null;
+    return [hit.x, hit.z];
+  };
+  const scr = (p) => { const v = v3(p).project(camera); const r = view.getBoundingClientRect(); return [(v.x + 1) / 2 * r.width, (1 - v.y) / 2 * r.height]; };
+  let orbit = null;
+  view.addEventListener('contextmenu', e => e.preventDefault());
+  view.addEventListener('pointerdown', e => {
+    view.setPointerCapture(e.pointerId);
+    if (e.button === 2 || e.shiftKey) { orbit = { x: e.clientX, y: e.clientY }; return; }
+    if (done) return;
+    const q = toFace(e); if (!q) return;
+    // 點回第一點 ⇒ 封成一圈
+    if (A.length >= 3 && !onEdge(...A[0].p)) {
+      const [sx, sy] = scr(A[0].p), r = view.getBoundingClientRect();
+      if (Math.hypot(sx - (e.clientX - r.left), sy - (e.clientY - r.top)) < 14) { closed = true; done = true; render(); return; }
+    }
+    const sn = snapEdge(...q);
+    if (!A.length || !onEdge(...A[0].p)) {
+      // 第一點：在邊上就用吸到的；在面中間照原位置
+      if (!A.length && !sn && !inside(q)) return;
+    }
+    const p = sn || q;
+    if (!inside(p)) return;
+    dragging = { a: { p, hin: null, hout: null }, sx: e.clientX, sy: e.clientY, moved: false };
+    A.push(dragging.a);
+    render();
+  });
+  view.addEventListener('pointermove', e => {
+    if (orbit) {
+      th -= (e.clientX - orbit.x) * 0.008; ph -= (e.clientY - orbit.y) * 0.008; ph = Math.max(0.05, Math.min(1.5, ph));
+      orbit = { x: e.clientX, y: e.clientY }; draw(); return;
+    }
+    const q = toFace(e); if (!q) return;
+    if (dragging) {
+      if (Math.hypot(e.clientX - dragging.sx, e.clientY - dragging.sy) > 4) dragging.moved = true;
+      if (dragging.moved) { const a = dragging.a; a.hout = q; a.hin = [2 * a.p[0] - q[0], 2 * a.p[1] - q[1]]; }
+      render(); return;
+    }
+    if (!done && A.length) { const sn = snapEdge(...q); cursor = { p: sn || q }; render(); }
+  });
+  view.addEventListener('pointerup', () => {
+    orbit = null;
+    if (!dragging) return;
+    const a = dragging.a; dragging = null; cursor = null;
+    // 從邊上開始 ⇒ 第二點以後點在邊上就收工
+    if (A.length >= 2 && onEdge(...A[0].p) && onEdge(...a.p)) { closed = false; done = true; a.hout = null; }
+    if (A.length === 1 && onEdge(...a.p)) a.hin = null;   // 邊上的起點只留往內的把手
+    render();
+  });
+  view.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(50, Math.min(500, dist * (e.deltaY > 0 ? 1.1 : 0.9))); draw(); }, { passive: false });
+
+  // ── 按鈕 ──
+  const reset = () => { A = []; closed = false; done = false; pushed = false; cursor = null; render(); };
+  document.getElementById('clear').onclick = reset;
+  document.getElementById('undo').onclick = () => { if (done) { done = false; closed = false; pushed = false; } else A.pop(); render(); };
+  pushBtn.onclick = () => { pushed = !pushed; pushBtn.textContent = pushed ? '放回去' : '把切出來的那塊推高 3 cm'; render(); };
+  segEl.oninput = render;
+  const setView = (iso) => { document.getElementById('vIso').classList.toggle('on', iso); document.getElementById('vTop').classList.toggle('on', !iso); th = iso ? 0.6 : 0; ph = iso ? 0.95 : 0.06; dist = iso ? 170 : 150; draw(); };
+  document.getElementById('vIso').onclick = () => setView(true);
+  document.getElementById('vTop').onclick = () => setView(false);
+  document.getElementById('demoWave').onclick = () => {
+    reset();
+    A = [{ p: [-W, -6], hin: null, hout: [-20, -18] },
+         { p: [-5, 2], hin: [-14, 10], hout: [4, -6] },
+         { p: [14, -4], hin: [8, -14], hout: [20, 6] },
+         { p: [W, 4], hin: [24, 14], hout: null }];
+    done = true; closed = false; render();
+  };
+  document.getElementById('demoRound').onclick = () => {
+    reset();
+    const r = 10, k = 0.5523 * r, c = [5, 0];
+    A = [{ p: [c[0] + r, c[1]], hin: [c[0] + r, c[1] - k], hout: [c[0] + r, c[1] + k] },
+         { p: [c[0], c[1] + r], hin: [c[0] + k, c[1] + r], hout: [c[0] - k, c[1] + r] },
+         { p: [c[0] - r, c[1]], hin: [c[0] - r, c[1] + k], hout: [c[0] - r, c[1] - k] },
+         { p: [c[0], c[1] - r], hin: [c[0] - k, c[1] - r], hout: [c[0] + k, c[1] - r] }];
+    done = true; closed = true; render();
+  };
+
+  size(); render();
+  window.__state = () => ({ A, closed, done });
+  window.__demo = (which) => document.getElementById(which === 'wave' ? 'demoWave' : 'demoRound').click();
+})();
+</script>
+</body>
+</html>
