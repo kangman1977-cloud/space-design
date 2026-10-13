@@ -3386,6 +3386,79 @@ export function circleAnchors(frame, s, t, r) {
 }
 
 /**
+ * 🔴 **曲線刀具 3c：邊上的半圓缺口**（kang 2026-10-13：跟圓一樣先點邊再改數字、沿用「離左邊／離下邊」、只做剛好半圓、半徑跟圓共用）。
+ * 面的外框（`faceDimFrame()` 的 `ring`，面上座標）⇒ 一條一條**直的邊**：
+ * 一直線上的幾個點併成一條（開過缺口／被切過的邊上會多出點，⛔ 那樣的話一條邊會被拆成好幾段、半圓放不下）。
+ * 每條邊：起點 A、終點 B、沿邊方向 u、**往面裡的方向 w**、長度 len，
+ * 以及圓心沿著它走時要打哪一格（`field`：沿 s 走得比較多 ⇒ 'L' 離左邊，反之 'B' 離下邊 —— 跟 3a 邊上的點同一個判準）。
+ */
+export function notchEdges(frame) {
+  if (!frame || !Array.isArray(frame.ring) || frame.ring.length < 3) return [];
+  const R = frame.ring;
+  const n = R.length;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  /** 只留轉彎的角（前後兩段不在一直線上）*/
+  const keep = [];
+  for (let i = 0; i < n; i++) {
+    const p = R[(i + n - 1) % n], q = R[i], r = R[(i + 1) % n];
+    const a = Math.hypot(q[0] - p[0], q[1] - p[1]), b = Math.hypot(r[0] - q[0], r[1] - q[1]);
+    if (a < 1e-9 || b < 1e-9) continue;
+    const straight = Math.abs(cross(p, q, r)) <= 1e-6 * a * b && (q[0] - p[0]) * (r[0] - q[0]) + (q[1] - p[1]) * (r[1] - q[1]) > 0;
+    if (!straight) keep.push(q);
+  }
+  if (keep.length < 3) return [];
+  /** 外框的方向：逆時針（面積 > 0）⇒ 面在每條邊的左手邊 */
+  const area = keep.reduce((s, p, i) => { const q = keep[(i + 1) % keep.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+  const side = area > 0 ? 1 : -1;
+  return keep.map((A, i) => {
+    const B = keep[(i + 1) % keep.length];
+    const len = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    const u = [(B[0] - A[0]) / len, (B[1] - A[1]) / len];
+    return { A, B, u, w: [-u[1] * side, u[0] * side], len, field: Math.abs(u[0]) >= Math.abs(u[1]) ? 'L' : 'B' };
+  });
+}
+
+/** 面上一點 (s, t) 落在哪一條直的邊上（最近的那條，離它 ≤ tol）⇒ { edge, along（離 A 多遠）}；都不在 ⇒ null */
+export function notchAt(frame, s, t, tol = 1e-3) {
+  let best = null;
+  for (const e of notchEdges(frame)) {
+    const along = Math.max(0, Math.min(e.len, (s - e.A[0]) * e.u[0] + (t - e.A[1]) * e.u[1]));
+    const d = Math.hypot(e.A[0] + along * e.u[0] - s, e.A[1] + along * e.u[1] - t);
+    if (d <= tol && (!best || d < best.d)) best = { edge: e, along, d };
+  }
+  return best ? { edge: best.edge, along: best.along } : null;
+}
+
+/**
+ * 圓心沿著邊最多能走到哪：半圓兩頭要落在**同一條邊上**（⛔ 跨過角）⇒ along 夾在 [r, len − r]。
+ * 半圓比邊還寬（2r > len）就放在正中間 —— 切不切得下去由 `notchFits()` 講。
+ */
+export function notchClamp(edge, along, r) {
+  if (!edge) return along;
+  if (2 * r > edge.len) return edge.len / 2;
+  return Math.max(r, Math.min(edge.len - r, along));
+}
+export function notchFits(edge, r) { return !!edge && r > 0 && 2 * r <= edge.len + 1e-9; }
+
+/**
+ * 半圓的錨點（世界座標，跟 `circleAnchors()` 同一種格式）：圓心 c ＝ A ＋ along·u，
+ * 從 c − r·u（靠 A 那頭，在邊上）⇒ 往面裡 c ＋ r·w ⇒ c ＋ r·u（在邊上）。兩段四分之一圓，把手 ＝ r × 0.5523。
+ * 頭尾⛔ 給往面外的那一半把手（曲線不會往面外走，同 `curveDrag()` 起點的做法）。
+ */
+export function notchAnchors(frame, edge, along, r) {
+  if (!frame || !edge || !(r > 0)) return [];
+  const k = CIRCLE_KAPPA * r;
+  const c = [edge.A[0] + along * edge.u[0], edge.A[1] + along * edge.u[1]];
+  const { u, w } = edge;
+  const P = (du, dw) => frame.toWorld(c[0] + du * u[0] + dw * w[0], c[1] + du * u[1] + dw * w[1]);
+  return [
+    { p: P(-r, 0), hin: null, hout: P(-r, k) },
+    { p: P(0, r), hin: P(-k, r), hout: P(k, r) },
+    { p: P(r, 0), hin: P(r, k), hout: null }
+  ];
+}
+
+/**
  * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
  *
  * ── 難的是「一個面不能帶洞」────────────────────────────

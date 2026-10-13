@@ -15850,6 +15850,91 @@ section('曲線刀具：同一個面開好幾個孔（在整個區域上切，20
   ok('★★ 原本的網格一格都沒變（方塊 6 面、切一個圓之後 8 面）', box.faces.length === 6 && m1.faces.length === 8);
 }
 
+section('曲線刀具 3c：邊上的半圓缺口（2026-10-13）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「3c 定案」。半圓 ＝ 兩段四分之一圓，頭尾落在同一條直的邊上，切下去走從邊到邊。
+ * 方塊 60 × 45 × 40（baked）頂面 y ＝ 20、x ±30、z ±22.5；頂面的「下邊」＝ 前面那條（z ＝ +22.5）。
+ */
+{
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const topOf = m => m.faces.filter(f => m.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const top = topOf(box)[0];
+  const fr = edit.faceDimFrame(box.faceVerts(top).map(v => v.p.clone()));
+  const areaOf = (m, f) => m.faceTriangles(f).reduce((s, [a, b, c]) => s + b.p.clone().sub(a.p).cross(c.p.clone().sub(a.p)).length() / 2, 0);
+  const sumTop = m => topOf(m).reduce((s, f) => s + areaOf(m, f), 0);
+  const zeroLen = m => [...m.edges()].filter(h => h.v.p.distanceTo(h.to.p) < 1e-6).length;
+  const good = m => m.isClosed() && m.validate().ok && Math.abs(m.volume() - 108000) < 1e-6 && Math.abs(sumTop(m) - 2700) < 1e-6 && zeroLen(m) === 0;
+  const regions = m => { edit.refreshAfterEdit(m); return new Set(topOf(m).map(f => edit.regionOf(m, f).rid)).size; };
+  /** 頂面某條邊上（面上座標 s, t）放半圓 ⇒ 切好的點 */
+  const notchPts = (frame, s, t, r) => {
+    const at = edit.notchAt(frame, s, t);
+    return at ? edit.sampleCurve(edit.notchAnchors(frame, at.edge, edit.notchClamp(at.edge, at.along, r), r), 1) : [];
+  };
+
+  const es = edit.notchEdges(fr);
+  eq('★★ 頂面 ⇒ 4 條直的邊；兩條打「離左邊」、兩條打「離下邊」', es.length + ':' + es.map(e => e.field).sort().join(''), '4:BBLL');
+  const inward = es.every(e => {
+    const m = [(e.A[0] + e.B[0]) / 2 + e.w[0], (e.A[1] + e.B[1]) / 2 + e.w[1]];
+    return m[0] > fr.sMin && m[0] < fr.sMin + 60 && m[1] > fr.tMin && m[1] < fr.tMin + 45;
+  });
+  ok('★★★ 每條邊「往面裡」的方向真的指向面裡', inward);
+  const ring5 = fr.ring.slice(); ring5.splice(1, 0, [(fr.ring[0][0] + fr.ring[1][0]) / 2, (fr.ring[0][1] + fr.ring[1][1]) / 2]);
+  eq('★★ 邊上多一個點（被切過）⇒ 仍併成 4 條（⛔ 拆成兩段、半圓放不下）', edit.notchEdges(Object.assign({}, fr, { ring: ring5 })).length, 4);
+
+  // 前面那條（下邊）、圓心離左邊 30（x ＝ 0）、半徑 5
+  const at = edit.notchAt(fr, fr.sMin + 30, fr.tMin);
+  ok('★★ 點在前面那條邊上 ⇒ 找得到那條、打的是「離左邊」', at && at.edge.field === 'L' && Math.abs(at.edge.A[1] - fr.tMin) < 1e-9);
+  const an = edit.notchAnchors(fr, at.edge, at.along, 5);
+  const ctr = fr.toWorld(fr.sMin + 30, fr.tMin);
+  ok('★★★ 三個錨點：頭尾在前面那條邊上（z ＝ 22.5）、中間往裡 5（z ＝ 17.5）',
+    an.length === 3 && Math.abs(an[0].p.z - 22.5) < 1e-9 && Math.abs(an[2].p.z - 22.5) < 1e-9 && Math.abs(an[1].p.z - 17.5) < 1e-9 && Math.abs(an[1].p.x) < 1e-9
+    && !an[0].hin && !an[2].hout);
+  const pts = edit.sampleCurve(an, 1);
+  const dev = Math.max(...pts.map(p => Math.abs(p.distanceTo(ctr) - 5)));
+  ok('★★★ 切好的每一點離圓心 ＝ 半徑（誤差 ≤ 0.03%），全在面裡', dev <= 5 * 3e-4 && pts.every(p => p.z <= 22.5 + 1e-9), dev);
+  const r1 = edit.curveCutFace(box, top, pts);
+  ok('★★★ 切下去 ⇒ 成功、封閉、體積不變、頂面面積不變、沒有長度 0 的邊', r1.ok && good(r1.mesh), r1.reason);
+  const small = r1.ok ? topOf(r1.mesh).map(f => areaOf(r1.mesh, f)).sort((a, b) => a - b)[0] : 0;
+  near('★★ 　 缺口那塊 ≈ π × 5² ÷ 2（分段近似略小）', small, Math.PI * 25 / 2, 0.3);
+  eq('★★ 　 頂面變成 2 個區域（缺口一塊、其餘一塊）', r1.ok && regions(r1.mesh), 2);
+
+  // 夾住：半圓兩頭要在同一條邊上
+  eq('★★ 圓心太靠左（離 A 2、半徑 5）⇒ 夾到 5', edit.notchClamp(at.edge, 2, 5), 5);
+  eq('★★ 圓心太靠右（離 A 58、半徑 5）⇒ 夾到 55', edit.notchClamp(at.edge, 58, 5), 55);
+  ok('★★ 半圓比邊還寬（半徑 40、邊長 60）⇒ 放不下（notchFits false）、圓心放正中間', !edit.notchFits(at.edge, 40) && edit.notchClamp(at.edge, 10, 40) === 30);
+
+  // 貼著角放（半圓的一頭剛好在角上）
+  const rc = edit.curveCutFace(box, top, notchPts(fr, fr.sMin + 5, fr.tMin, 5));
+  ok('★★ 貼著角（離左邊 5、半徑 5）⇒ 切得出來、一頭用既有的角', rc.ok && good(rc.mesh), rc.reason);
+
+  // 同一條邊上第二個缺口（切過之後那條邊被半圓分成兩段）
+  if (r1.ok) {
+    const m1 = r1.mesh;
+    const big = topOf(m1).sort((a, b) => areaOf(m1, b) - areaOf(m1, a))[0];
+    const fr1 = edit.faceDimFrame(edit.curveRegionOutline(m1, big));
+    const r2 = edit.curveCutFace(m1, big, notchPts(fr1, fr1.sMin + 10, fr1.tMin, 4));
+    ok('★★★ 同一條邊上再開第二個缺口 ⇒ 切得出來、3 個區域', r2.ok && good(r2.mesh) && regions(r2.mesh) === 3, r2.reason);
+  }
+
+  // 側面（前面）的下邊：往裡 ＝ 往上
+  const front = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.z - 22.5) < 1e-9));
+  const ff = edit.faceDimFrame(box.faceVerts(front).map(v => v.p.clone()));
+  const fp = notchPts(ff, ff.sMin + 20, ff.tMin, 6);
+  const rf = edit.curveCutFace(box, front, fp);
+  ok('★★ 前面的底邊 ⇒ 半圓往上長、切得出來', fp.length > 2 && Math.max(...fp.map(p => p.y)) > -20 + 5.9 && rf.ok && rf.mesh.isClosed(), rf.reason);
+
+  // 開過孔的面上（走 regionCut）
+  const hole = edit.curveCutFaceLoop(box, top, edit.sampleCurve(edit.circleAnchors(fr, fr.sMin + 30, fr.tMin + 22.5, 6), 1, true)).mesh;
+  edit.refreshAfterEdit(hole);
+  const ring = topOf(hole).find(f => edit.regionOf(hole, f).faces.length > 1);
+  const rh = edit.curveCutFace(hole, ring, notchPts(fr, fr.sMin + 10, fr.tMin, 4));
+  ok('★★★ 開過圓孔的面上開缺口 ⇒ 切得出來（走整個區域那條路）', rh.ok && good(rh.mesh), rh.reason);
+  const rx = edit.curveCutFace(hole, ring, notchPts(fr, fr.sMin + 30, fr.tMin, 18));
+  ok('★★ 缺口大到碰到圓孔 ⇒ 擋下來、講「已經有的開口」', !rx.ok && /已經有的開口/.test(rx.reason), rx.reason);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -37,6 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
          sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
+         notchAt, notchAnchors, notchClamp, notchFits,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -791,11 +792,22 @@ $('curveR').onchange = $('curveD').onchange = () => updateBar();
 /** 3b：按 `圓` ⇒ 下一下點面就放一個圓；再按一次取消 */
 $('curveCircle').onclick = () => {
   curveCircleArm = !curveCircleArm;
+  curveNotchArm = false;
   updateBar();
   toast(curveCircleArm
     ? `圓：在要放的面上點一下當圓心（半徑先用上一次的 ${curveShow(curveRadius)} ${curveUnit}）`
       + (curve ? '　⚠ 現在畫的會被換掉' : '')
     : '取消放圓');
+};
+/** 3c：按 `半圓` ⇒ 下一下點在面的邊上就放一個半圓缺口；再按一次取消 */
+$('curveNotch').onclick = () => {
+  curveNotchArm = !curveNotchArm;
+  curveCircleArm = false;
+  updateBar();
+  toast(curveNotchArm
+    ? `半圓：在面上靠近要開缺口的那條【邊】點一下（半徑先用上一次的 ${curveShow(curveRadius)} ${curveUnit}）`
+      + (curve ? '　⚠ 現在畫的會被換掉' : '')
+    : '取消放半圓');
 };
 /** 打完（離開欄位）就把數字整理成目前真正的位置（邊上的點可能被夾在邊的範圍內）*/
 $('curveDimL').onchange = $('curveDimB').onchange = () => updateBar();
@@ -1114,7 +1126,7 @@ function exitOtherModes(keep) {
   }
   if (keep !== 'knife' && sel.knifeMode) {
     sel.setKnifeMode(false); $('knife').classList.remove('on');
-    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; curveCircleArm = false; hideKnifeLine();
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; curveCircleArm = false; curveNotchArm = false; hideKnifeLine();
   }
   /**
    * 🔴 **參考線也要收**（2026-08-31）。
@@ -1162,7 +1174,7 @@ function exitOtherModes(keep) {
 function dropPendingPicks() {
   let dropped = false;
   if (sel.knifeMode && (knifePicks.length || knifeDeleted.length || knifeMoving || curve)) {
-    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; curveCircleArm = false; hideKnifeLine();
+    knifePicks = []; knifeDeleted = []; knifeMoving = null; curve = null; curveCircleArm = false; curveNotchArm = false; hideKnifeLine();
     dropped = true;
   }
   if (sel.mateMode && matePick1) {
@@ -1243,6 +1255,8 @@ let curveUnit = (() => { try { return localStorage.getItem('modeler.curveUnit') 
  * ⚠ 宣告放這裡的理由同 `curve`。
  */
 let curveCircleArm = false;
+/** 3c：按了 `半圓`、等著點邊放半圓缺口（kang 2026-10-13：半徑跟圓共用 `curveRadius`）*/
+let curveNotchArm = false;
 let curveRadius = (() => { try { const v = Number(localStorage.getItem('modeler.curveRadius')); return v > 0 ? v : 5; } catch (e) { return 5; } })();
 
 /**
@@ -1864,6 +1878,7 @@ function cancelKnifeMode() {
   knifeMoving = null;
   curve = null;
   curveCircleArm = false;
+  curveNotchArm = false;
   hideKnifeLine();
   panel.refresh();
   updateBar();
@@ -1884,6 +1899,7 @@ function toggleKnifeCurve() {
   knifePicks = []; knifeDeleted = []; knifeMoving = null;
   curve = null;
   curveCircleArm = false;
+  curveNotchArm = false;
   hideKnifeLine();
   updateBar();
   toast(sel.knifeCurve
@@ -1944,6 +1960,7 @@ function curvePlaceCircle(x, y) {
   if (!frame) { toast('這個面是斜的 —— 放圓（打數字）只能用在跟座標軸對齊的面（頂面、側面…）', true); return; }
   const [s, t] = frame.st(h.world);
   curveCircleArm = false;
+  curveNotchArm = false;
   curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: true, closing: false,
             anchors: [], done: true, hover: null, sel: -1, selecting: false,
             circle: { s, t, r: curveRadius } };
@@ -1953,13 +1970,50 @@ function curvePlaceCircle(x, y) {
   updateBar();
 }
 
-/** 圓的三個數字 ⇒ 四個錨點（物件座標）*/
+/**
+ * 🔴 **3c：按了 `半圓` 之後點一下面的邊 ⇒ 在那條邊上放一個半圓缺口**（kang 2026-10-13：跟圓一樣先點再改數字）。
+ * 跟圓共用 `curve.circle`，多了 `edge`（那條直的邊，`edit.js` `notchEdges()`）與 `along`（圓心離那條邊起點多遠）：
+ * 圓心只能沿著那條邊走 ⇒ 只有一格能打（沿左右走的邊 ⇒ 離左邊；沿上下走的 ⇒ 離下邊），另一格變灰。
+ * 只做剛好半圓（⛔ 給深度）；切下去走從邊到邊（`curveCutFace()`）。
+ */
+function curvePlaceNotch(x, y) {
+  const fa = curvePickFace(x, y);
+  if (!fa) return;
+  const { h, nf, loop, n, d } = fa;
+  const frame = faceDimFrame(loop.map(p => h.node.localToWorld(p.clone())));
+  if (!frame) { toast('這個面是斜的 —— 放半圓（打數字）只能用在跟座標軸對齊的面（頂面、側面…）', true); return; }
+  const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal);
+  const at = snap ? notchAt(frame, ...frame.st(h.node.localToWorld(snap.p.clone()))) : null;
+  if (!at) { toast('半圓要放在面的【邊上】—— 在面上靠近那條邊的地方點一下', true); return; }
+  curveNotchArm = false;
+  curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: false, closing: false,
+            anchors: [], done: true, hover: null, sel: -1, selecting: false,
+            circle: { s: 0, t: 0, r: curveRadius, edge: at.edge, along: at.along } };
+  curveCircleRebuild();
+  toast(notchFits(at.edge, curveRadius)
+    ? '放好一個半圓 —— 在上方改圓心位置（只能沿著這條邊）、半徑或直徑，好了按「切下去」'
+    : `這條邊只有 ${curveShow(at.edge.len)} ${curveUnit}，放不下直徑 ${curveShow(2 * curveRadius)} 的半圓 —— 把半徑改小`, !notchFits(at.edge, curveRadius));
+  drawCurve();
+  updateBar();
+}
+
+/**
+ * 圓的三個數字 ⇒ 四個錨點（物件座標）。
+ * 3c 半圓：圓心先夾在那條邊上（兩頭⛔ 跨過角，`notchClamp()`），再算出 s、t ⇒ 三個錨點（頭尾在邊上）。
+ */
 function curveCircleRebuild() {
   const f = curveFrame(curve);
   if (!f || !curve.circle) return;
-  const { s, t, r } = curve.circle;
-  curve.anchors = circleAnchors(f, s, t, r).map(a => ({
-    p: curve.node.worldToLocal(a.p), hin: curve.node.worldToLocal(a.hin), hout: curve.node.worldToLocal(a.hout), edge: false
+  const c = curve.circle;
+  if (c.edge) {
+    c.along = notchClamp(c.edge, c.along, c.r);
+    c.s = c.edge.A[0] + c.along * c.edge.u[0];
+    c.t = c.edge.A[1] + c.along * c.edge.u[1];
+  }
+  const { s, t, r } = c;
+  const L = p => (p ? curve.node.worldToLocal(p) : null);
+  curve.anchors = (c.edge ? notchAnchors(f, c.edge, c.along, r) : circleAnchors(f, s, t, r)).map((a, i, all) => ({
+    p: L(a.p), hin: L(a.hin), hout: L(a.hout), edge: !!c.edge && (i === 0 || i === all.length - 1)
   }));
 }
 
@@ -1972,7 +2026,13 @@ function curveTypeCircle(which, text) {
   const f = curveFrame(curve);
   if (!f) return;
   const c = curve.circle;
-  if (which === 'L') c.s = f.sMin + cm;
+  /** 3c 半圓：打的那一格換算成「沿著邊走多遠」（只有那條邊的 `field` 那一格能打；夾在邊上由 rebuild 做）*/
+  if (c.edge && (which === 'L' || which === 'B')) {
+    const k = which === 'L' ? 0 : 1;
+    if (c.edge.field !== which || Math.abs(c.edge.u[k]) < 1e-9) return;
+    c.along = ((which === 'L' ? f.sMin : f.tMin) + cm - c.edge.A[k]) / c.edge.u[k];
+  }
+  else if (which === 'L') c.s = f.sMin + cm;
   else if (which === 'B') c.t = f.tMin + cm;
   else {
     const r = which === 'D' ? cm / 2 : cm;
@@ -1988,9 +2048,12 @@ function curveTypeCircle(which, text) {
 
 function curveDown(x, y) {
   if (curveCircleArm) { curvePlaceCircle(x, y); return; }
+  if (curveNotchArm) { curvePlaceNotch(x, y); return; }
   /** 圓是用數字改的 —— 它的四個錨點⛔ 給點選（點了也沒意義），點其他地方就講怎麼改 */
   if (curve && curve.circle) {
-    toast('這是一個圓 —— 在上方改圓心與半徑，好了按「切下去」；要重放就再按一次「圓」', true);
+    toast(curve.circle.edge
+      ? '這是一個半圓 —— 在上方改圓心位置與半徑，好了按「切下去」；要重放就再按一次「半圓」'
+      : '這是一個圓 —— 在上方改圓心與半徑，好了按「切下去」；要重放就再按一次「圓」', true);
     return;
   }
   /**
@@ -2216,11 +2279,18 @@ function drawCurve() {
     const { f } = dim, lift = 0.05;
     const P = (s, t) => f.toWorld(s, t, lift);         // 往面外浮一點點，⛔ 被面蓋掉
     const tick = Math.max(0.6, Math.min(3, (Math.max(...f.ring.map(q => q[0])) - f.sMin) * 0.03));
-    segs.push(P(f.sMin, dim.t), P(dim.s, dim.t), P(dim.s, f.tMin), P(dim.s, dim.t));
-    segs.push(P(f.sMin, dim.t - tick), P(f.sMin, dim.t + tick), P(dim.s - tick, f.tMin), P(dim.s + tick, f.tMin));
+    /** 3c 半圓：圓心只能沿著那條邊走 ⇒ 只畫能打的那一條尺寸線（另一條是固定的，畫了只是多一個字擋畫面）*/
+    const ne = cf && curve.circle.edge;
+    const wantL = !ne || ne.field === 'L', wantB = !ne || ne.field === 'B';
+    if (wantL) {
+      segs.push(P(f.sMin, dim.t), P(dim.s, dim.t), P(f.sMin, dim.t - tick), P(f.sMin, dim.t + tick));
+      labels.push({ text: `${dim.pre}離左邊 ${curveShow(dim.s - f.sMin)} ${curveUnit}`, pos: P((f.sMin + dim.s) / 2, dim.t) });
+    }
+    if (wantB) {
+      segs.push(P(dim.s, f.tMin), P(dim.s, dim.t), P(dim.s - tick, f.tMin), P(dim.s + tick, f.tMin));
+      labels.push({ text: `${dim.pre}離下邊 ${curveShow(dim.t - f.tMin)} ${curveUnit}`, pos: P(dim.s, (f.tMin + dim.t) / 2) });
+    }
     segs.push(P(dim.s - tick, dim.t - tick), P(dim.s + tick, dim.t + tick), P(dim.s - tick, dim.t + tick), P(dim.s + tick, dim.t - tick));
-    labels.push({ text: `${dim.pre}離左邊 ${curveShow(dim.s - f.sMin)} ${curveUnit}`, pos: P((f.sMin + dim.s) / 2, dim.t) });
-    labels.push({ text: `${dim.pre}離下邊 ${curveShow(dim.t - f.tMin)} ${curveUnit}`, pos: P(dim.s, (f.tMin + dim.t) / 2) });
     /**
      * 半徑線：圓心 → **圓的正上方**，字放在圓頂再上去一點。
      * ⚠ 第一版往右拉、字放在半徑線中間 ⇒ 跟「圓心離左邊」的字疊在一起、把小圓整個蓋住（2026-10-13 AI 線上先驗看到）。
@@ -2228,8 +2298,11 @@ function drawCurve() {
      */
     if (cf) {
       const r = curve.circle.r;
-      segs.push(P(dim.s, dim.t), P(dim.s, dim.t + r));
-      labels.push({ text: `半徑 ${curveShow(r)}／直徑 ${curveShow(2 * r)} ${curveUnit}`, pos: P(dim.s, dim.t + r + 2 * tick) });
+      /** 半圓：往面裡（`w`）拉到弧頂，字在弧頂再進去一點 —— 往上拉的話下邊的半圓會拉到面外 */
+      const w = ne ? ne.w : [0, 1];
+      segs.push(P(dim.s, dim.t), P(dim.s + r * w[0], dim.t + r * w[1]));
+      labels.push({ text: `半徑 ${curveShow(r)}／直徑 ${curveShow(2 * r)} ${curveUnit}`,
+                    pos: P(dim.s + (r + 2 * tick) * w[0], dim.t + (r + 2 * tick) * w[1]) });
     }
   }
   view.setKnifePreview(segs, dots);
@@ -2240,6 +2313,12 @@ function drawCurve() {
 function curveApply() {
   if (!curve || !curve.done) {
     toast(curve && curve.closed ? '封閉圈還沒畫好 —— 最後要點回第一點' : '曲線還沒畫好 —— 最後一點要點在面的邊上', true);
+    return false;
+  }
+  /** 3c：半圓比那條邊還寬 ⇒ 兩頭會跨過角 —— 先講清楚（⛔ 讓核心講成「要從邊上開始」那種看不懂的話）*/
+  const ne = curve.circle && curve.circle.edge;
+  if (ne && !notchFits(ne, curve.circle.r)) {
+    toast(`這條邊只有 ${curveShow(ne.len)} ${curveUnit}，放不下直徑 ${curveShow(2 * curve.circle.r)} 的半圓 —— 把半徑改小`, true);
     return false;
   }
   const obj = curve.obj;
@@ -5927,7 +6006,7 @@ function updateBar() {
    * ⚠ 而且**不會報錯**（`index.html` 的 `#rail` 註解寫著同一件事）。
    */
   const 收工 = sel.knifeMode && sel.knifeCurve
-    ? (curve && curve.done ? (curve.circle ? '切下去（圓）' : curve.closed ? '切下去（封閉圈）' : '切下去（曲線）') : null)
+    ? (curve && curve.done ? (curve.circle ? (curve.circle.edge ? '切下去（半圓）' : '切下去（圓）') : curve.closed ? '切下去（封閉圈）' : '切下去（曲線）') : null)
     : sel.knifeMode
     ? (knifePicks.length >= 2 ? `切下去（${knifePicks.length} 點）` : null)
     : penEditing ? '完成'
@@ -5940,7 +6019,8 @@ function updateBar() {
    */
   const 狀態 = sel.knifeMode && sel.knifeCurve
     ? (curveCircleArm ? '圓：在要放的面上點一下當圓心'
-       : !curve ? '曲線：第一點點在面的【邊上】（切成兩塊）或【中間】（封閉圈）；或按「圓」放一個圓'
+       : curveNotchArm ? '半圓：在面上靠近要開缺口的那條邊點一下'
+       : !curve ? '曲線：第一點點在面的【邊上】（切成兩塊）或【中間】（封閉圈）；或按「圓」放一個圓、按「半圓」在邊上開缺口'
        : curve.done ? ''
        : curve.closed ? `封閉圈：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後【點回第一點】`
        : `曲線：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後一點點在【邊上】`)
@@ -6073,13 +6153,16 @@ function updateBar() {
    * 3a：選到一個點、而且是跟座標軸對齊的面 ⇒ 出現「離左邊／離下邊」與 cm／mm。
    * ⚠ 正在打字的那一格⛔ 回填（會把打到一半的字蓋掉）；邊上的點只能改一格，另一格變灰。
    */
-  /** 3b：圓 ⇒ 同兩格改圓心（全都能改），再加半徑、直徑 */
+  /** 3b：圓 ⇒ 同兩格改圓心（全都能改），再加半徑、直徑；3c 半圓 ⇒ 圓心只能沿著那條邊走，只有一格能改 */
   const circF = curveOn && curve && curve.circle ? curveFrame(curve) : null;
   const dimInfo = circF
-    ? { left: curve.circle.s - circF.sMin, bottom: curve.circle.t - circF.tMin, canL: true, canB: true }
+    ? { left: curve.circle.s - circF.sMin, bottom: curve.circle.t - circF.tMin,
+        canL: !curve.circle.edge || curve.circle.edge.field === 'L', canB: !curve.circle.edge || curve.circle.edge.field === 'B' }
     : (curveOn ? curveSelInfo() : null);
   $('curveCircle').hidden = !curveOn;
   $('curveCircle').classList.toggle('on', curveCircleArm);
+  $('curveNotch').hidden = !curveOn;
+  $('curveNotch').classList.toggle('on', curveNotchArm);
   for (const id of ['curveDimLLbl', 'curveDimL', 'curveDimBLbl', 'curveDimB', 'curveUnitCm', 'curveUnitMm']) $(id).hidden = !dimInfo;
   for (const id of ['curveRLbl', 'curveR', 'curveDLbl', 'curveD']) $(id).hidden = !circF;
   if (dimInfo) {

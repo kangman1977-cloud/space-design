@@ -888,6 +888,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="curveDimB" type="number" step="0.1" hidden title="選到的點離這個面下邊多遠（正對這個面看過去的下邊；頂面的下邊＝前面那條邊）。打數字點就搬過去">
       <!-- 曲線刀具 3b（kang 2026-10-13）：按「圓」→ 點面放圓 → 改圓心（上面兩格）、半徑或直徑（改一格另一格跟著變，記住上一次）→ 切下去 -->
       <button id="curveCircle" hidden title="放一個圓：按下去之後在面上點一下當圓心，再改圓心位置、半徑或直徑，好了按「切下去」（會記住上一次的大小）">圓</button>
+      <!-- 曲線刀具 3c（kang 2026-10-13）：按「半圓」→ 點面的邊 → 改圓心（只能沿著那條邊，一格）、半徑或直徑（跟圓共用上一次的）→ 切下去 -->
+      <button id="curveNotch" hidden title="在邊上開一個半圓缺口：按下去之後在面上靠近那條邊點一下，再改圓心位置（只能沿著那條邊移動）、半徑或直徑，好了按「切下去」（大小跟「圓」共用上一次的）">半圓</button>
       <span class="lbl" id="curveRLbl" hidden>半徑</span>
       <input id="curveR" type="number" step="0.1" min="0" hidden title="圓的半徑（改了直徑會跟著變）">
       <span class="lbl" id="curveDLbl" hidden>直徑</span>
