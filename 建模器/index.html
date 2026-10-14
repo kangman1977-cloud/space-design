@@ -33,6 +33,14 @@ html, body {
   padding-top: calc(8px + env(safe-area-inset-top));
   background: #24272e; border-bottom: 1px solid #3a3f48;
 }
+/* 🔴 E11（kang 2026-10-14 看樣板 `樣板-工具列換行.html` 選 B「浮在畫面上」）：
+   工具列⛔ 再佔版面 —— 它浮在最上面，#main 的上緣固定在「平常的工具列高度」（--barBase）。
+   選了點、多出幾組 ⇒ 多出來的那幾排（--barExtra）【蓋在畫面上】，⛔ 把畫面往下推 ⇒ 模型不跳。
+   左邊直條、右邊面板、提示條各自往下讓 --barExtra（⛔ 被蓋住）；畫面本身不動。
+   兩個數字由 main.js `watchBar()` 量了寫進來。 */
+#bar { position: absolute; top: 0; left: 0; right: 0; }
+#bar.over { box-shadow: 0 6px 14px rgba(0,0,0,.45); }
+#main { margin-top: var(--barBase, 0px); }
 .grp {
   /* flex-wrap：一組按鈕自己也要能換行。
      #bar 本來就會在「組與組之間」換行，但**單一組塞不下時只會被切掉**，
@@ -104,7 +112,8 @@ select {
 #rail {
   flex: none; width: 66px; z-index: 15;
   background: #24272e; border-right: 1px solid #3a3f48;
-  padding: 6px; display: flex; flex-direction: column; gap: 5px;
+  padding: calc(6px + var(--barExtra, 0px)) 6px 6px;   /* E11：工具列多出來的排蓋在上面 ⇒ 直條的內容往下讓 */
+  display: flex; flex-direction: column; gap: 5px;
   overflow-y: auto; overflow-x: hidden;
 }
 #rail hr { border: 0; border-top: 1px solid #343943; margin: 3px 1px; width: 100%; }
@@ -161,6 +170,7 @@ select {
   -webkit-overflow-scrolling: touch;
   background: #20232a; border-left: 1px solid #3a3f48;
   padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  padding-top: var(--barExtra, 0px);   /* E11：同 #rail —— 面板最上面的名稱、編輯資訊⛔ 被工具列蓋住 */
 }
 #panel section { border-bottom: 1px solid #2c313a; }
 #panel h2 {
@@ -337,7 +347,7 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
 /* ══ 提示條 ════════════════════════════════════════ */
 #toast {
   position: absolute; left: 50%; transform: translateX(-50%);
-  top: 12px; padding: 7px 14px; border-radius: 999px;
+  top: calc(12px + var(--barExtra, 0px)); padding: 7px 14px; border-radius: 999px;   /* E11：躲開蓋下來的工具列 */
   background: rgba(47,111,208,.94); color: #fff;
   font-size: 13px; white-space: nowrap;
   opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 5;
@@ -450,6 +460,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
   #panel {
     width: 100%; flex: none; max-height: 42%;
     border-left: none; border-top: 1px solid #3a3f48;
+    padding-top: 0;   /* 窄螢幕的面板在畫面底下，⛔ 會被工具列蓋到 */
   }
   #bar { gap: 5px; padding: 6px; }
   .grp { padding: 2px 6px; }

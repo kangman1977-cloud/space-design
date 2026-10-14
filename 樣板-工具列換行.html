@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工具列換行比較</title>
+<!--
+  樣板：E11 的另一半（STATUS.md 真待辦）—— 拉點線面每多選一個點，上方工具列多一排、模型往下移。
+  病因：#app 是上下兩塊（#bar 工具列、#main 畫面），工具列長高 ⇒ 畫面變矮、整個往下推 ⇒ 模型跟著跳、按鈕也跑位。
+  四種做法，同一個假的工具列（照建模器的組數）＋ 一個假的畫面（中間一個方塊、十字是畫面中心），切換來看：
+    A 現在：工具列長高就把畫面往下推
+    B 工具列浮在畫面上：畫面的上緣固定在「沒選東西時」的工具列底下；多出來的那幾排蓋在畫面上面，模型不動
+    C 只長不縮：工具列記住長過最高的高度，之後少了幾組也不縮回去（只有第一次變高會跳）
+    D 固定一排、左右滑：工具列永遠一排，放不下的往右滑才看得到，畫面永遠不動
+  「選幾個點」模擬拉點線面裡選取變化時多出來的組；「視窗寬」模擬平板／桌機。
+-->
+<style>
+  :root { --bg: #1b1e23; --bar: #24272e; --line: #3a3f48; --ink: #e8eaed; --muted: #8b93a1; --accent: #2f6fd0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #111316; color: var(--ink);
+    font: 14px/1.5 "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  #ctl { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; background: #0d0f12; border-bottom: 1px solid #2a2e35; }
+  #ctl h1 { font-size: 16px; margin: 0; }
+  .g { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .g > span { color: var(--muted); }
+  #ctl button { padding: 5px 11px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); cursor: pointer; font: inherit; }
+  #ctl button.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  #desc { padding: 8px 16px; color: #c9cfd8; min-height: 3em; }
+  #frameWrap { padding: 0 16px 16px; overflow-x: auto; }
+  /* ── 假的建模器 ── */
+  #app { position: relative; height: 520px; border: 1px solid var(--line); background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
+  #bar { flex: none; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  .grp { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 8px; }
+  .grp[hidden] { display: none; }
+  .grp > .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; white-space: nowrap; }
+  .grp.new { border-color: #c9862b; }
+  #app button.b { flex: none; white-space: nowrap; padding: 6px 11px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); font: 13px inherit; font-family: inherit; }
+  #app input.f { width: 56px; padding: 5px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); }
+  #stage { flex: 1 1 auto; position: relative; min-height: 0; }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* B：工具列浮起來 */
+  #app.vB #bar { position: absolute; left: 0; right: 0; top: 0; box-shadow: 0 4px 10px rgba(0,0,0,.35); }
+  /* D：一排、左右滑 */
+  #app.vD #bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  #app.vD .grp { flex-wrap: nowrap; flex: none; }
+  #hud { position: absolute; left: 8px; bottom: 8px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div id="ctl">
+  <h1>工具列換行：四種做法</h1>
+  <div class="g"><span>做法</span>
+    <button data-v="A" class="on">A 現在</button><button data-v="B">B 浮在畫面上</button>
+    <button data-v="C">C 只長不縮</button><button data-v="D">D 一排、左右滑</button>
+  </div>
+  <div class="g"><span>選幾個點</span>
+    <button data-n="0" class="on">0</button><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button>
+  </div>
+  <div class="g"><span>視窗寬</span>
+    <button data-w="1024">平板橫放 1024</button><button data-w="1366" class="on">筆電 1366</button><button data-w="1920">桌機 1920</button>
+  </div>
+</div>
+<div id="desc"></div>
+<div id="frameWrap">
+  <div id="app">
+    <div id="bar"></div>
+    <div id="stage"><canvas id="cv"></canvas><div id="hud"></div></div>
+  </div>
+</div>
+<script>
+// ── 假的工具列：組名、按鈕（照建模器現在的組）；n ＝ 選幾個點以上才出現 ──
+const GROUPS = [
+  ['檔案', ['新建', '讀檔', '存檔']],
+  ['新增', ['方塊 ▾', '加入', '匯入線稿']],
+  ['編輯', ['復原', '重做', '複製', '刪除']],
+  ['排列', ['排列', '環形', '鏡射']],
+  ['編輯造型', ['自動', '點', '邊', '面', '全選邊'], 1],
+  ['點的操作', ['擠出', '壓平', '變成正圓', '#', '沿面滑動', '#'], 1],
+  ['選取', ['選轉角', '#', '選相似', '同法向 ▾', '隔一個選一個'], 1],
+  ['點與點', ['點連成面', '多點連接', '橋接', '#'], 2],
+  ['三個點以上', ['補洞', '切一刀', 'Y ▾', '#', '切成實心'], 3],
+  ['方向', ['世界', '物件', '#']],
+  ['展開', ['展開圖', '剖面分切', '3D 列印']],
+  ['模式', ['加選', '框選']],
+  ['吸附', ['關', '1', '5', '10', '#', '吸到參考線']],
+  ['視角', ['前', '側', '上', '等角', '正交', '鎖定']],
+  ['檢視', ['顯示點', '標尺寸', '量圓', '顯示參考線', '稜線', '線框', '全部入鏡']]
+];
+const bar = document.getElementById('bar');
+const grpEls = GROUPS.map(([name, btns, n]) => {
+  const g = document.createElement('div');
+  g.className = 'grp' + (n ? ' new' : '');
+  g.dataset.n = n || 0;
+  g.innerHTML = `<span class="lbl">${name}</span>` + btns.map(b => b === '#' ? '<input class="f" value="1">' : `<button class="b">${b}</button>`).join('');
+  bar.appendChild(g);
+  return g;
+});
+
+const app = document.getElementById('app'), stage = document.getElementById('stage'), cv = document.getElementById('cv'), hud = document.getElementById('hud');
+let V = 'A', N = 0, W = 1366, maxH = 0;
+const DESC = {
+  A: '<b>A 現在：</b>工具列長高就把畫面往下推 —— 選第 1、2、3 個點時看看方塊與十字會不會跳。',
+  B: '<b>B 浮在畫面上：</b>畫面的上緣固定在「沒選東西時」的工具列底下；多出來的那幾排<b>蓋在畫面上面</b>（有陰影），方塊不動。代價：選了點之後，畫面最上面一小條被工具列擋住。',
+  C: '<b>C 只長不縮：</b>工具列記住長過最高的高度，之後少了幾組也不縮回去 —— 只有<b>第一次</b>變高會跳一下，之後選來選去都不跳。代價：沒選東西時工具列下面可能多一排空白。換視窗寬會重新算。',
+  D: '<b>D 一排、左右滑：</b>工具列永遠一排，畫面永遠不動。代價：放不下的組在右邊，要<b>左右滑</b>才看得到（平板用手指滑、桌機用滾輪＋Shift 或拉捲軸）。'
+};
+
+function layout() {
+  app.className = 'v' + V;
+  app.style.width = W + 'px';
+  grpEls.forEach(g => { g.hidden = +g.dataset.n > N || (+g.dataset.n > 0 && N === 0); });
+  bar.style.minHeight = '';
+  stage.style.marginTop = '';
+  if (V === 'B') {
+    /** 沒選東西時的工具列高度 ＝ 畫面的上緣（先把要出現的組藏起來量一次）*/
+    const shown = grpEls.filter(g => !g.hidden);
+    grpEls.forEach(g => { if (+g.dataset.n > 0) g.hidden = true; });
+    const base = bar.offsetHeight;
+    shown.forEach(g => { g.hidden = false; });
+    stage.style.marginTop = base + 'px';
+  }
+  if (V === 'C') {
+    maxH = Math.max(maxH, bar.offsetHeight);
+    bar.style.minHeight = maxH + 'px';
+  }
+  document.getElementById('desc').innerHTML = DESC[V];
+  draw();
+}
+
+/** 假的 3D 畫面：方塊畫在畫面正中間、大小跟著畫面高度（跟透視相機一樣）—— 畫面變矮、往下移，方塊就跟著跳 */
+function draw() {
+  const r = stage.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.fillStyle = '#1b1e23'; c.fillRect(0, 0, r.width, r.height);
+  c.strokeStyle = '#343a44'; c.lineWidth = 1;
+  for (let x = 0; x < r.width; x += 40) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, r.height); c.stroke(); }
+  for (let y = 0; y < r.height; y += 40) { c.beginPath(); c.moveTo(0, y); c.lineTo(r.width, y); c.stroke(); }
+  const cx = r.width / 2, cy = r.height / 2, s = r.height * 0.28;
+  c.fillStyle = '#6fa8dc'; c.strokeStyle = '#11151a'; c.lineWidth = 1.5;
+  c.beginPath(); c.rect(cx - s, cy - s * 0.6, s * 1.6, s * 1.4); c.fill(); c.stroke();
+  c.fillStyle = '#5b8fc0';
+  c.beginPath(); c.moveTo(cx - s, cy - s * 0.6); c.lineTo(cx - s * 0.6, cy - s); c.lineTo(cx + s, cy - s); c.lineTo(cx + s * 0.6, cy - s * 0.6); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = '#4a7aa6';
+  c.beginPath(); c.moveTo(cx + s * 0.6, cy - s * 0.6); c.lineTo(cx + s, cy - s); c.lineTo(cx + s, cy + s * 0.4); c.lineTo(cx + s * 0.6, cy + s * 0.8); c.closePath(); c.fill(); c.stroke();
+  /** 十字 ＝ 畫面中心；旁邊寫它離整個視窗頂端多遠 —— 跳了就看得出來 */
+  const top = Math.round(r.top - app.getBoundingClientRect().top + cy);
+  c.strokeStyle = '#ff7a1a'; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(cx - 14, cy); c.lineTo(cx + 14, cy); c.moveTo(cx, cy - 14); c.lineTo(cx, cy + 14); c.stroke();
+  hud.textContent = `畫面中心離視窗頂端 ${top} px　工具列 ${bar.offsetHeight} px（${Math.round(bar.offsetHeight / 46)} 排左右）`;
+}
+
+document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('on', x === b));
+  V = b.dataset.v; maxH = 0; layout();
+});
+document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('[data-n]').forEach(x => x.classList.toggle('on', x === b));
+  N = +b.dataset.n; layout();
+});
+document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('[data-w]').forEach(x => x.classList.toggle('on', x === b));
+  W = +b.dataset.w; maxH = 0; layout();
+});
+new ResizeObserver(draw).observe(stage);
+layout();
+</script>
+</body>
+</html>

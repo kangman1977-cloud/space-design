@@ -92,6 +92,39 @@ function reportMissingIds() {
   document.body.appendChild(bar);
 }
 
+/**
+ * 🔴 **E11：工具列換行時畫面⛔ 跟著跳**（kang 2026-10-14 看樣板 `樣板-工具列換行.html` 選 B「浮在畫面上」）。
+ *
+ * ── 以前 ──────────────────────────────────────────────
+ * 工具列佔版面：拉點線面每多選一個點就多出幾組按鈕 ⇒ 工具列多一排 ⇒ 下面的畫面變矮、整個往下推 ⇒
+ * 模型跳一下、按鈕也跑位（2026-10-08 E 組線上撞到、之後每次線上先驗都在撞）。
+ *
+ * ── 現在 ──────────────────────────────────────────────
+ * 工具列浮在最上面（`index.html` `#bar { position:absolute }`）。這裡量兩個數字寫進 CSS：
+ * - `--barBase`：「平常的工具列高度」＝ 這個視窗寬度下量過最矮的那次 ⇒ #main 的上緣（畫面從這裡開始）
+ * - `--barExtra`：現在比平常多出來的高度 ⇒ 蓋在畫面上；左邊直條、右邊面板、提示條各自往下讓這麼多
+ * 視窗寬度變了、工具列收合／展開 ⇒ 平常的高度重新量（那一下畫面會動，是使用者自己做的事）。
+ */
+function watchBar() {
+  const bar = $('bar'), root = document.documentElement;
+  let base = null, lastW = -1, lastHidden = null;
+  const apply = () => {
+    const h = bar.hidden ? 0 : bar.offsetHeight;
+    if (base === null || innerWidth !== lastW || bar.hidden !== lastHidden) {
+      base = h; lastW = innerWidth; lastHidden = bar.hidden;
+    } else {
+      base = Math.min(base, h);
+    }
+    root.style.setProperty('--barBase', base + 'px');
+    root.style.setProperty('--barExtra', Math.max(0, h - base) + 'px');
+    bar.classList.toggle('over', h > base + 1);
+  };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(apply).observe(bar);
+  addEventListener('resize', apply);
+  apply();
+}
+watchBar();
+
 // ═══════════════════════════════════════════════════════
 //  組裝
 // ═══════════════════════════════════════════════════════
