@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>稜線比較樣板</title>
+<!--
+  樣板：稜線有時很淡、幾乎看不到（kang 2026-10-13 驗收曲線刀具時提 → STATUS.md 真待辦）。
+  同一個模型、同一個視角，並排三種畫法，讓 kang 用眼睛挑：
+    A 現在的樣子：近黑色、不透明度 0.55、線跟面在同一個位置（面有時會把線蓋掉）
+    B 修掉被蓋住 ＋ 加深：面往後讓一點（polygonOffset）、線不透明、顏色跟著物件深淺換（淺色物件用深線、深色物件用淺線）
+    C 粗線：B 的做法 ＋ 線的粗細可以調（three.js 的粗線元件 LineSegments2；一般的線 linewidth 沒有作用）
+  模型：方塊上有用曲線刀具切的圓和波浪線（貼在頂面上，最容易被面蓋掉的那種）＋ 一個圓柱。
+  three.js 跟建模器同一版（r185），從 CDN 載入（這個檔直接點開也看得到）。
+-->
+<style>
+  :root { --bg: #1b1e23; --panel: #23272e; --ink: #e6e9ee; --muted: #9aa3ae; --line: #343a44; --accent: #4a90e2; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  header { padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; }
+  .grp { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .grp span { color: var(--muted); }
+  button { background: #2c323b; color: var(--ink); border: 1px solid #3c444f; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sw { width: 22px; height: 22px; padding: 0; border-radius: 4px; }
+  input[type=range] { width: 120px; }
+  #wrap { position: relative; height: calc(100% - 52px); }
+  canvas { display: block; width: 100%; height: 100%; }
+  .tag { position: absolute; padding: 4px 10px; border-radius: 6px; background: rgba(20,23,28,.85);
+    border: 1px solid var(--line); font-size: 13px; pointer-events: none; max-width: 31%; }
+  .tag b { display: block; font-size: 14px; }
+  .tag small { color: var(--muted); }
+  #err { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: #ffb4a8; }
+  @media (max-width: 700px) { .tag { font-size: 11px; } .tag b { font-size: 12px; } }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>稜線：三種畫法比一比</h1>
+  <div class="grp"><span>物件顏色</span>
+    <button class="sw on" data-c="6fa8dc" title="預設的藍" style="background:#6fa8dc"></button>
+    <button class="sw" data-c="f2f2f2" title="白" style="background:#f2f2f2"></button>
+    <button class="sw" data-c="c9a27a" title="木頭色" style="background:#c9a27a"></button>
+    <button class="sw" data-c="4a4f57" title="深灰" style="background:#4a4f57"></button>
+    <button class="sw" data-c="1f3a5c" title="深藍" style="background:#1f3a5c"></button>
+  </div>
+  <div class="grp"><span>C 的粗細</span><input id="w" type="range" min="1" max="5" step="0.5" value="2"><b id="wv">2 px</b></div>
+  <div class="grp"><span>距離</span><button id="near">拉近</button><button id="far">拉遠</button></div>
+  <div class="grp"><span>拖曳轉視角、滾輪縮放（三格一起動）</span></div>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="tag" id="tA"><b>A　現在的樣子</b><small>近黑色、半透明（0.55），線跟面疊在同一個位置</small></div>
+  <div class="tag" id="tB"><b>B　修掉被蓋住 ＋ 加深</b><small>面往後讓一點、線不透明、顏色跟著物件深淺換</small></div>
+  <div class="tag" id="tC"><b>C　粗線（上面可以調粗細）</b><small>B 的做法 ＋ 線變粗</small></div>
+  <div id="err"></div>
+</div>
+<script type="module">
+let THREE, OrbitControls, LineSegments2, LineSegmentsGeometry, LineMaterial;
+try {
+  THREE = await import('three');
+  ({ OrbitControls } = await import('three/addons/controls/OrbitControls.js'));
+  ({ LineSegments2 } = await import('three/addons/lines/LineSegments2.js'));
+  ({ LineSegmentsGeometry } = await import('three/addons/lines/LineSegmentsGeometry.js'));
+  ({ LineMaterial } = await import('three/addons/lines/LineMaterial.js'));
+} catch (e) {
+  const el = document.getElementById('err');
+  el.style.display = 'grid';
+  el.textContent = 'three.js 沒有載入成功（要連得上網路）：' + e.message;
+  throw e;
+}
+
+const canvas = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setScissorTest(true);
+
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
+camera.position.set(140, 115, 175);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(18, 15, 0);
+controls.enableDamping = true;
+
+// ── 模型（三格共用同一份幾何）──────────────────────────
+/** 方塊 60 × 40 × 45，頂面 y ＝ 40 */
+const boxGeo = new THREE.BoxGeometry(60, 40, 45).translate(0, 20, 0);
+/** 圓柱 */
+const cylGeo = new THREE.CylinderGeometry(10, 10, 30, 32).translate(55, 15, 0);
+/** 頂面上用曲線刀具切出來的線（共面 ⇒ 最容易被面蓋掉）：一個圓 ＋ 一條波浪線 */
+const flat = [];
+const Y = 40;
+for (let i = 0; i < 40; i++) {
+  const a0 = i / 40 * Math.PI * 2, a1 = (i + 1) / 40 * Math.PI * 2;
+  flat.push(-12 + 7 * Math.cos(a0), Y, -6 + 7 * Math.sin(a0), -12 + 7 * Math.cos(a1), Y, -6 + 7 * Math.sin(a1));
+}
+for (let i = 0; i < 30; i++) {
+  const x0 = -30 + i * 2, x1 = x0 + 2;
+  const z = x => 12 + 4 * Math.sin(x / 6);
+  flat.push(x0, Y, z(x0), x1, Y, z(x1));
+}
+/** 每個物件的稜線點（一般稜線 ＋ 頂面的線），三種畫法共用 */
+function edgePositions(geo, extra) {
+  const e = new THREE.EdgesGeometry(geo, 1).getAttribute('position').array;
+  return extra ? Float32Array.from([...e, ...extra]) : e;
+}
+const parts = [
+  { geo: boxGeo, edges: edgePositions(boxGeo, flat) },
+  { geo: cylGeo, edges: edgePositions(cylGeo) }
+];
+
+/** 線的顏色跟著物件深淺換（B、C）：亮的物件用深線、暗的物件用淺線 */
+function lineColorFor(hex) {
+  const c = new THREE.Color(hex);
+  const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  return lum > 0.35 ? 0x11151a : 0xe8edf3;
+}
+
+const views = [];
+function makeScene(kind) {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1b1e23);
+  scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x30343c, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(280, 460, 220);
+  scene.add(sun);
+  scene.add(new THREE.GridHelper(600, 60, 0x5a6272, 0x343a44));
+  const mats = [], lines = [];
+  for (const p of parts) {
+    /** B、C：面往後讓一點 ⇒ 貼在面上的線永遠贏（⛔ 再被面蓋掉）*/
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6fa8dc, roughness: 0.62, metalness: 0.04,
+      polygonOffset: kind !== 'A', polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+    mats.push(mat);
+    scene.add(new THREE.Mesh(p.geo, mat));
+    if (kind === 'C') {
+      const g = new LineSegmentsGeometry();
+      g.setPositions(p.edges);
+      const lm = new LineMaterial({ color: 0x11151a, linewidth: 2 });
+      const ln = new LineSegments2(g, lm);
+      lines.push(lm);
+      scene.add(ln);
+    } else {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(p.edges, 3));
+      const lm = kind === 'A'
+        ? new THREE.LineBasicMaterial({ color: 0x11151a, transparent: true, opacity: 0.55 })   // ＝ 建模器現在
+        : new THREE.LineBasicMaterial({ color: 0x11151a });
+      lines.push(lm);
+      scene.add(new THREE.LineSegments(g, lm));
+    }
+  }
+  return { kind, scene, mats, lines };
+}
+views.push(makeScene('A'), makeScene('B'), makeScene('C'));
+
+function setColor(hex) {
+  for (const v of views) {
+    for (const m of v.mats) m.color.setHex(hex);
+    if (v.kind !== 'A') for (const l of v.lines) l.color.setHex(lineColorFor(hex));
+  }
+}
+function setWidth(px) {
+  for (const l of views[2].lines) l.linewidth = px;
+  document.getElementById('wv').textContent = px + ' px';
+}
+
+document.querySelectorAll('.sw').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.sw').forEach(x => x.classList.toggle('on', x === b));
+  setColor(parseInt(b.dataset.c, 16));
+});
+document.getElementById('w').oninput = e => setWidth(+e.target.value);
+const dist = f => { const d = camera.position.clone().sub(controls.target); camera.position.copy(controls.target).addScaledVector(d, f); };
+document.getElementById('near').onclick = () => dist(0.6);
+document.getElementById('far').onclick = () => dist(1.8);
+
+/**
+ * 三格怎麼排：畫面比較寬 ⇒ 左中右三欄；比較高（手機、窄窗格）⇒ 上中下三列 ——
+ * ⚠ 第一版只有三欄，窄的窗格裡每一格變成細長條、模型被裁掉（2026-10-14 AI 看到）。
+ * cells[i] ＝ 第 i 格的 { x, y（從下面算，WebGL 的座標）, w, h }。
+ */
+let cells = [];
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false);
+  const cols = w >= h;
+  cells = [0, 1, 2].map(i => cols
+    ? { x: Math.floor(i * w / 3), y: 0, w: Math.floor(w / 3), h }
+    : { x: 0, y: Math.floor((2 - i) * h / 3), w, h: Math.floor(h / 3) });
+  const c = cells[0];
+  if (c.w > 0 && c.h > 0) { camera.aspect = c.w / c.h; camera.updateProjectionMatrix(); }
+  for (const l of views[2].lines) l.resolution.set(c.w, c.h);
+  ['tA', 'tB', 'tC'].forEach((id, i) => {
+    const el = document.getElementById(id), k = cells[i];
+    el.style.left = (k.x + 8) + 'px';
+    el.style.top = (h - k.y - k.h + 8) + 'px';
+    el.style.maxWidth = (cols ? k.w - 16 : w - 16) + 'px';
+  });
+}
+addEventListener('resize', resize);
+/** 窗格從藏著變成看得到時⛔ 一定有 resize 事件 ⇒ 盯著畫布本身的大小 */
+new ResizeObserver(resize).observe(canvas);
+resize();
+
+(function loop() {
+  controls.update();
+  if (!cells.length || cells[0].w < 4 || cells[0].h < 4) { requestAnimationFrame(loop); return; }   // 窗格藏著（寬高 0）就先不畫
+  const cols = cells[1].x > 0;
+  views.forEach((v, i) => {
+    const k = cells[i];
+    renderer.setViewport(k.x, k.y, k.w, k.h);
+    /** 格與格之間留 2 px 的縫（最後一格不用）*/
+    renderer.setScissor(k.x, k.y + (!cols && i < 2 ? 2 : 0), k.w - (cols && i < 2 ? 2 : 0), k.h - (!cols && i < 2 ? 2 : 0));
+    renderer.render(v.scene, camera);
+  });
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

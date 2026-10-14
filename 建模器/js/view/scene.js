@@ -31,6 +31,18 @@ export const KEEP_COLOR = 0x2f6fd6;
 export const PROPOSAL_COLOR = 0x2ad4d4;
 
 /**
+ * 🔴 **稜線的顏色跟著物件深淺換**：亮的物件用深線、暗的物件用淺線（kang 2026-10-14 看樣板選 B）。
+ * 亮度用 sRGB 的 0～255 直接算（⚠ ⛔ 用 `THREE.Color` 的 r／g／b —— 那是線性空間，同一個藍會算成 0.37 而不是 0.63，門檻會跑掉）。
+ * 門檻 0.5：預設的藍 0.63、木頭色 0.65、白 ⇒ 深線；深灰 0.30、深藍 0.21 ⇒ 淺線。
+ */
+export const EDGE_DARK = 0x11151a;
+export const EDGE_LIGHT = 0xe8edf3;
+export function edgeLineColor(hex) {
+  const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b >= 0.5 ? EDGE_DARK : EDGE_LIGHT;
+}
+
+/**
  * 🔴 **指到的東西「變大」多少**（kang 2026-08-26 拍板：只變大，⛔ 不換顏色）。
  *
  * 點：一般的選取小球是半徑 1.4，指到變 2.6 —— **差不多兩倍才看得出來**，
@@ -325,7 +337,15 @@ export class SceneView {
       metalness: 0.04,
       // 初值；每次 _updateNode() 會依「開放且未加厚」重新決定（見下方）
       side: THREE.FrontSide,
-      wireframe: this.wireframe
+      wireframe: this.wireframe,
+      /**
+       * 🔴 **面往後讓一點 ⇒ 貼在面上的稜線永遠畫得出來**（kang 2026-10-14 看樣板選 B）。
+       * ⚠ 以前線跟面在同一個深度，誰贏看運氣（z-fighting）⇒ 有時整段線被面蓋掉
+       * —— 特別是曲線刀具切在面上的線（共面）。〔樣板：`樣板-稜線.html`〕
+       */
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1
     });
 
     const node = new THREE.Mesh(new THREE.BufferGeometry(), mat);
@@ -333,10 +353,14 @@ export class SceneView {
     node.receiveShadow = true;
     node.userData.modelId = obj.id;
 
-    // 稜線：讓造型看得清楚，也讓「合併成幾片」這件事看得見
+    /**
+     * 稜線：讓造型看得清楚，也讓「合併成幾片」這件事看得見。
+     * 🔴 不透明、顏色跟著物件深淺換（`edgeLineColor()`，每次 `_updateNode()` 重設）——
+     * ⚠ 以前一律近黑色、半透明 0.55 ⇒ 深色物件上幾乎看不到（kang 2026-10-13 回報；樣板選 B）。
+     */
     const line = new THREE.LineSegments(
       new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0x11151a, transparent: true, opacity: 0.55 })
+      new THREE.LineBasicMaterial({ color: edgeLineColor(obj.color) })
     );
     line.name = 'edges';
     line.raycast = () => {};      // 線不要參與點選
@@ -637,6 +661,7 @@ export class SceneView {
     node.scale.copy(obj.scale);
 
     node.material.color.setHex(obj.color);
+    node.getObjectByName('edges').material.color.setHex(edgeLineColor(obj.color));   // 物件換顏色 ⇒ 稜線跟著換深淺
     node.material.wireframe = this.wireframe;
     /**
      * 只有「開放而且沒加厚」的面需要雙面繪製 —— 否則從背面看會是透明的。
