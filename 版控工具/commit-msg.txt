@@ -1,29 +1,46 @@
-往外擠出的鏡像 結案 —— kang 驗收通過（「驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md
+剖面分切 排版到板子上 —— 板寬／板高／間距／可以轉 90°，存 SVG／DXF 一張板一個檔、不同板厚的片分在不同張；排版關掉時 SVG 一片一個檔（原本只存第 1 片）
 
-動到 4 個檔：
-  M  HISTORY.md                    新增一節「往外擠出的鏡像 結案（2026-10-14 從 `規格\建模器-點線面編輯.md` 搬入）」：經過、老實話、
-                                   逐字搬入（23 行；只把 2 個 ##### 改成 ####，去掉標題記號後逐字相同，md5 08304240…）；重跑目次
-  M  規格/建模器-點線面編輯.md     「往外擠出的鏡像」底下的 ⏳ 清單＋先驗換成「實測：已結案」＋ 指到 HISTORY；重跑目次
-  M  STATUS.md                     ⏳ 回到「目前沒有」
+kang 2026-10-14：「展開圖有可以設定排版…剖面分切也要有；DXF 可以全部匯出，但是 SVG 只能匯出一個檔案…你調查確認一下」。
+查到：SVG 本來就只存第 1 片（當初刻意的）；DXF 一個檔裝全部、⛔ 管板子大小。
+kang 選：板子設定各自記、第一次沿用展開圖；排版關掉時 SVG 一片一個檔。
+動到 7 個檔：
+  M  建模器/js/out/nest.js         boardProgram() 多一個 draw（⛔ 給就跟原本一樣）；新增 sliceBoards()（先分板厚再排）、sliceBoardTitle()
+  M  建模器/js/out/dxf.js          boardDXF() 多 layers／extraLayers（⛔ 給就跟原本一樣）；新增 sliceBoardDXF()：輪廓與定位孔在 CUT_T**、層號在 NUM
+  M  建模器/js/ui/slicePanel.js    第二列排版設定；排版預覽卡；存 SVG／DXF／列印 開著一張板一個檔、關著 SVG 一片一個檔
+  M  建模器/tests/run.mjs          新 section「剖面分切：排版到板子上」13 項
+  M  規格/建模器-剖面分切.md       新增「排版到板子上」：查到的、做法表、板子 DXF 的圖層、已知、驗過的數字、⏳ 清單
+  M  STATUS.md                     ⏳ 掛「剖面分切 排版到板子上」
   M  版控工具/commit-msg.txt
+
+🔴 順手擋掉的一個坑：展開圖的 boardDXF() ⛔ 認得定位孔（peg），直接拿來用孔會掉進 TEXT 層 —— 廠商只開切割層就漏切、整疊串不起來。
+   加了圖層覆寫，測試釘住「板子 DXF 的孔全部在 CUT_T10」。
+⚠ 已知：一列一列擺、⛔ 會找最省的轉法（60×40 片在 120×240／間距 10：一張 4 片，轉了其實 6 片）—— 跟展開圖同一件事，真待辦「排版擺得不夠緊」。
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  結案：清單與先驗逐字搬 HISTORY、規格與 STATUS 只留指標
+  剖面分切加「排版到板子上」，存 SVG／DXF 一張板一個檔；不同板厚分開；排版關掉時 SVG 一片一個檔。
 
 【依賴哪些事實】
-  1. kang 原話「驗收OK」                                       【已查證 · 對話】
-  2. 結案格式：上一節「細分 結案」                              【已查證 · HISTORY.md「細分 結案」】
+  1. 剖面「存 SVG」只存第 1 片（刻意的，理由：一片一個檔太多次下載）        【已查證 · ui/slicePanel.js _saveSVG()】
+  2. 剖面「存 DXF」一個檔裝全部、依板厚分區、⛔ 管板子大小                 【已查證 · out/dxf.js sliceDXF()】
+  3. 排版的擺法 packBoards()、畫法 boardProgram()、一張板一個檔 saveMany()   【已查證 · out/nest.js、out/save.js、ui/unfoldPanel.js】
+  4. boardDXF() 的圖層表⛔ 認得 peg ⇒ 定位孔會掉進 TEXT 層                    【已查證 · out/dxf.js boardDXF() 的 LAYER】
+  5. 剖面 DXF 規矩：切割線與定位孔放 cutLayer(板厚)、層號放 NUM               【已查證 · out/dxf.js sliceDXF()】
+  6. 展開圖的設定存在 localStorage 'modeler_unfold' 的 nest                    【已查證 · ui/unfoldPanel.js LS_KEY】
+  7. kang 自己的展開圖排版設定：120 × 240、間距 10、可以轉 90°                 【已查證 · kang 2026-10-14 截圖】
+  8. slice.bounds 有 minX／minY／w／h（只算輪廓）                               【已查證 · slice/section.js loopsBounds()】
 
 【會動到哪幾個檔】
-  上面 4 個。
+  上面 7 個（含 commit-msg）。
 
 【怎麼知道做對了】
-  · 搬的那一塊去掉標題記號後跟 HISTORY 裡的逐字相同（程式比對過）
-  · 沒動程式；目次 --all --check 全部最新；CR 0
-  · 狀態行數：會長大的兩節合計 81 行（警報線 90）
-  · 沒動程式，⛔ 不需要線上先驗
+  · 每一片剛好出現一次；每張板只有一種板厚；每片都在板子裡；定位孔 54 個一個都沒少 ✓
+  · 板子 DXF 的孔全部在 CUT_T10、層號在 NUM ✓
+  · 展開圖的排版測試全部照舊 ✓
+  · 四道檢查：測試 3498 全過、目次 --all --check 全部最新、兩端檢查全過、模組解析 44 支全過；CR 0
+  · 狀態行數：會長大的兩節合計 82 行（警報線 90）
+  · 上傳後 AI 線上先驗（⚠ 存檔⛔ 驗得了，只驗得到畫面與檔案內容），然後 kang 照規格那份 ⏳ 清單實測（DXF／SVG 要 kang 用真的軟體開）
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

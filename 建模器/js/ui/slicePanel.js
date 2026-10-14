@@ -18,10 +18,13 @@ import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL }
 import { findPegs, checkPegs, pegsForSlice, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
   from '../out/sheet.js';
-import { sliceDXF, UNITS } from '../out/dxf.js';
-import { saveBlob, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
+import { sliceDXF, sliceBoardDXF, UNITS } from '../out/dxf.js';
+import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
+import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
 
 const LS_KEY = 'modeler_slice';
+/** 展開圖的設定（排版那一包第一次沿用它，kang 2026-10-14）*/
+const LS_UNFOLD = 'modeler_unfold';
 
 /** 預覽最多畫幾片。再多就只是拖慢畫面，數字與匯出不受影響。 */
 const PREVIEW_MAX = 120;
@@ -45,6 +48,17 @@ export class SlicePanel {
     }
     // 舊的存檔沒有 holes 這個欄位，補上預設值
     for (const b of this.opt.bands) if (b.holes == null) b.holes = PEG_DEFAULTS.count;
+    /**
+     * 🔴 **排版到板子上**（2026-10-14，kang：「展開圖有可以設定排版…剖面分切也要有」）。
+     * 板子設定**各自記**；⭐ 第一次（剖面這邊還沒有）就**沿用展開圖現在的**，⛔ 讓人再打一次（kang 選的）。
+     */
+    if (!this.opt.nest) {
+      let u = null;
+      try { u = (JSON.parse(localStorage.getItem(LS_UNFOLD)) || {}).nest || null; } catch (e) { /* 沒有就用預設 */ }
+      this.opt.nest = { ...NEST_DEFAULTS, ...(u || {}) };
+    } else {
+      this.opt.nest = { ...NEST_DEFAULTS, ...this.opt.nest };
+    }
     this.result = null;
     this.pegs = null;
     this._build();
@@ -79,6 +93,14 @@ export class SlicePanel {
           <button id="slPrint">列印</button>
           <button id="slSvg">存 SVG</button>
           <button id="slDxf">存 DXF</button>
+        </div>
+        <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。不同板厚的片放在不同張。關掉就回到原本的存法（SVG 一片一個檔、DXF 全部一個檔）">
+          <label class="uwCk"><input type="checkbox" id="slNest"> 排版到板子上</label>
+          <span class="lbl">板寬</span><input type="number" id="slNW" min="1" step="1" style="width:64px">
+          <span class="lbl">板高</span><input type="number" id="slNH" min="1" step="1" style="width:64px">
+          <span class="lbl">間距</span><input type="number" id="slNG" min="0" step="0.5" style="width:52px">
+          <span class="lbl">cm</span>
+          <label class="uwCk" title="板材有紋路時（木板）轉了方向會不一樣 —— 需要時才打開"><input type="checkbox" id="slNR"> 可以轉 90°</label>
         </div>
         <div class="uwBody" id="slBody"></div>
       </div>`;
@@ -136,6 +158,21 @@ export class SlicePanel {
         + '本機用內網 IP 開會自動退回一般下載。線上版可以用';
     if (!canChoosePath()) this.askIn.parentElement.classList.add('off');
     this.askIn.onchange = () => { this.opt.askPath = this.askIn.checked; save(this.opt); };
+
+    // ── 排版（跟展開圖同一套寫法）──
+    const N = this.opt.nest;
+    const nestIn = { on: $('slNest'), w: $('slNW'), h: $('slNH'), gap: $('slNG'), rotate: $('slNR') };
+    nestIn.on.checked = !!N.on; nestIn.rotate.checked = !!N.rotate;
+    nestIn.w.value = N.w; nestIn.h.value = N.h; nestIn.gap.value = N.gap;
+    const nestChanged = () => {
+      N.on = nestIn.on.checked; N.rotate = nestIn.rotate.checked;
+      /** 填錯（空白、0、負數）就退回上一個能用的值 —— ⛔ 不讓排版算出一個不存在的板子 */
+      for (const k of ['w', 'h']) { const v = +nestIn[k].value; if (v > 0) N[k] = v; else nestIn[k].value = N[k]; }
+      const gv = +nestIn.gap.value; if (gv >= 0) N.gap = gv; else nestIn.gap.value = N.gap;
+      save(this.opt);
+      if (this.result) this._render();
+    };
+    for (const k of Object.keys(nestIn)) nestIn[k].onchange = nestChanged;
 
     $('slClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
@@ -264,6 +301,8 @@ export class SlicePanel {
       + '不同板厚的切割線分在不同圖層（CUT_T10、CUT_T20…），'
       + '上機時一次只開一層、鋪對應厚度的板。'));
 
+    if (this.opt.nest.on) this._renderBoards();
+
     // ── 預覽 ──
     const n = Math.min(r.slices.length, PREVIEW_MAX);
     for (let i = 0; i < n; i++) this.body.appendChild(this._card(r.slices[i]));
@@ -347,6 +386,65 @@ export class SlicePanel {
     return wrap;
   }
 
+  /** 排版：照目前的設定把這一疊擺進板子裡（⛔ 存結果 —— 設定一改就重排）。畫面、SVG、DXF、列印共用 */
+  _sheets() {
+    const N = this.opt.nest;
+    const sheets = sliceBoards(this.result.slices,
+      { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate },
+      { pegsOf: s => this._pegsOf(s), pegD: this.opt.d });
+    return sheets.map((sh, i) => ({ ...sh, title: sliceBoardTitle(sh, i, sheets.length) }));
+  }
+
+  /** 🔴 排版預覽：放在每片卡片的上面 —— 先看要幾張板、每張擺了哪幾片 */
+  _renderBoards() {
+    const N = this.opt.nest;
+    const sheets = this._sheets();
+    const big = sheets.filter(x => x.board.oversize).length;
+    const normal = sheets.length - big;
+    /** 每種板厚各幾張 —— 上機時一種厚度鋪一次料 */
+    const byT = [];
+    for (const sh of sheets) {
+      if (sh.board.oversize) continue;
+      const g = byT.find(q => q.t === sh.t);
+      if (g) g.n++; else byT.push({ t: sh.t, n: 1 });
+    }
+    this.body.appendChild(box(big ? 'uwWarn' : 'uwSkip',
+      (normal ? `排版：需要 ${normal} 張 ${f(N.w)} × ${f(N.h)} cm 的板子`
+                + (byT.length > 1 ? `（${byT.map(g => `板厚 ${f(g.t)} cm ${g.n} 張`).join('、')}）` : '')
+              : `排版：沒有一片擺得進 ${f(N.w)} × ${f(N.h)} cm 的板子`)
+      + (big ? `　⚠ ${normal ? '另有 ' : ''}${big} 片比板子還大，各自單獨一張（要換大板或再切小）` : '')
+      + '　不同板厚的片放在不同張　存 SVG／DXF 時一張板一個檔'));
+    for (const sh of sheets) {
+      const card = document.createElement('div');
+      card.className = 'uwCard';
+      const h = document.createElement('div');
+      h.className = 'uwTitle';
+      h.innerHTML = sh.title.map((s, i) =>
+        `<div class="${s.startsWith('⚠') ? 'bad' : (i === 0 ? 'nm' : 'dim')}">${esc(s)}</div>`).join('');
+      card.appendChild(h);
+      card.appendChild(this._canvas(sh.prog, 300));
+      this.body.appendChild(card);
+    }
+  }
+
+  /** 一份「畫什麼」畫成 canvas */
+  _canvas(prog, maxH) {
+    const maxW = Math.min(1100, Math.max(360, this.body.clientWidth - 56));
+    const px = Math.max(0.5, Math.min(maxW / prog.box.w, maxH / prog.box.h));
+    const cv = document.createElement('canvas');
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.ceil(prog.box.w * px * dpr);
+    cv.height = Math.ceil(prog.box.h * px * dpr);
+    cv.style.width = Math.ceil(prog.box.w * px) + 'px';
+    cv.style.height = Math.ceil(prog.box.h * px) + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    renderCanvas(ctx, prog, px);
+    return cv;
+  }
+
   /** 一片一張小圖。共用框，所以孔在每張圖上都落在同一個位置。 */
   _card(slice) {
     const card = document.createElement('div');
@@ -404,6 +502,10 @@ export class SlicePanel {
 
   _print() {
     if (!this._has()) return;
+    if (this.opt.nest.on) {
+      printSVGs(this._sheets().map(sh => progSVG(sh.prog, sh.title)), '剖面排版');
+      return;
+    }
     const base = { ...this._progOpt(), head: this.app.head };
     printSVGs(
       this.result.slices.map(s => {
@@ -413,20 +515,53 @@ export class SlicePanel {
       '剖面分切');
   }
 
+  /**
+   * 🔴 **存 SVG**（2026-10-14 改，kang：「DXF 可以全部匯出，但是 SVG 只能匯出一個檔案」）。
+   * 原本只存第 1 片（理由：一片一個檔太多次下載）—— 現在：
+   * 排版開著 ⇒ **一張板一個檔**；關著 ⇒ **一片一個檔**（kang 選的）。
+   * 勾了「指定存放位置」只選一次資料夾（`saveMany()`）。內容一律先同步準備好才 await（手勢）。
+   */
   async _saveSVG() {
     if (!this._has()) return;
-    // 一疊全部裝在一張 SVG 裡沒有意義（每片都要單獨排版），
-    // 但一片一個檔在 45 片時是 45 次下載 —— 所以 SVG 走列印那條路，
-    // 這裡只存「整疊排開」的一張，當作對照用的總覽。
-    const s = this.result.slices[0];
-    const opt = { ...this._progOpt(), head: this.app.head, pegs: this._pegsOf(s) };
-    const blob = textBlob(progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt)),
-      'image/svg+xml');
-    await saveBlob(blob, `${this._base()}_第1片.svg`, TYPES.svg, this.opt.askPath);
+    if (this.opt.nest.on) {
+      const jobs = this._sheets().map((sh, i) => ({
+        name: `${this._base()}_板${String(i + 1).padStart(2, '0')}_t${f(sh.t)}.svg`,
+        blob: textBlob(progSVG(sh.prog, sh.title), 'image/svg+xml')
+      }));
+      const n = await saveMany(jobs, this.opt.askPath);
+      if (n > 1) this._say(`已存 ${n} 個 SVG（一張板一個檔）。`);
+      return;
+    }
+    const base = { ...this._progOpt(), head: this.app.head };
+    const jobs = this.result.slices.map(s => {
+      const opt = { ...base, pegs: this._pegsOf(s) };
+      return {
+        name: `${this._base()}_第${String(s.index).padStart(2, '0')}片.svg`,
+        blob: textBlob(progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt)), 'image/svg+xml')
+      };
+    });
+    const n = await saveMany(jobs, this.opt.askPath);
+    if (n > 1) this._say(`已存 ${n} 個 SVG（一片一個檔）。`);
   }
 
   async _saveDXF() {
     if (!this._has()) return;
+    if (this.opt.nest.on) {
+      // 🔴 排版開著：一張板一個檔（跟展開圖一樣）。標題只能英數（R12）
+      const sheets = this._sheets();
+      const jobs = sheets.map((sh, i) => ({
+        name: `${this._base()}_板${String(i + 1).padStart(2, '0')}_t${f(sh.t)}.dxf`,
+        blob: textBlob(sliceBoardDXF(sh, {
+          unit: this.opt.unit,
+          title: `SHEET ${i + 1}/${sheets.length}  t=${f(sh.t)}cm  ${f(sh.board.w)}x${f(sh.board.h)}cm`
+            + (sh.board.oversize ? '  OVERSIZE' : '')
+            + '  ' + sh.board.items.map(it => it.piece.no).join(' ')
+        }), 'application/dxf')
+      }));
+      const n = await saveMany(jobs, this.opt.askPath);
+      if (n > 1) this._say(`已存 ${n} 個 DXF（一張板一個檔）。`);
+      return;
+    }
     const fr = this.frame;
     const blob = textBlob(sliceDXF(this.result.slices, {
       unit: this.opt.unit,
@@ -448,6 +583,8 @@ export class SlicePanel {
   _has() {
     return !!(this.result && this.result.ok && this.result.slices.length);
   }
+
+  _say(msg) { this.sum.textContent = msg + '　' + this.sum.textContent; }
 }
 
 function box(cls, msg) {

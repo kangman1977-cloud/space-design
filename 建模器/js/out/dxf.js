@@ -255,16 +255,18 @@ export function toDXF(pieces, opt = {}) {
  *
  * @param {{box, items}} prog `boardProgram()` 的產物（cm，Y 朝上）
  * @param {object} opt `{ unit, title }`（title 會寫在板子下方，英數）
+ *   ＋ `layers`／`extraLayers`（2026-10-14 剖面分切加的）：線型 → 圖層的覆寫、要多登記的圖層。
+ *   🔴 剖面的定位孔（`peg`）⛔ 給的話會掉進 TEXT 層 —— 廠商只開切割層，孔就漏切、整疊串不起來。
  */
 export function boardDXF(prog, opt = {}) {
   const U = UNITS[opt.unit] || UNITS.mm;
   const s = U.scale;
   const LAYER = { ...OUTLINE_LAYER, ...NOTCH_LAYER, fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
-    num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM' };
+    num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM', ...(opt.layers || {}) };
   const out = new Writer();
   const { w, h } = prog.box;
   out.header(0, -4 * s, w * s, h * s);
-  out.tables([...Object.keys(COLOR).map(n => [n, COLOR[n]]), ['SHEET', 8]]);
+  out.tables([...Object.keys(COLOR).map(n => [n, COLOR[n]]), ['SHEET', 8], ...(opt.extraLayers || [])]);
   out.blocks();
   out.beginEntities();
   for (const it of prog.items) {
@@ -313,6 +315,22 @@ export function boardDXF(prog, opt = {}) {
 export function cutLayer(thicknessCm) {
   const mm = Math.round(thicknessCm * 100) / 10;      // cm → mm，留一位小數
   return 'CUT_T' + String(mm).replace('.', '_');
+}
+
+/**
+ * 🔴 **剖面排版的一張板 → DXF**（2026-10-14）。吃 `out/nest.js` 的 `sliceBoards()` 的其中一張。
+ * 圖層照剖面的規矩：輪廓、內孔、**定位孔**都在這張板的板厚那一層（`cutLayer()`），層號在 NUM ——
+ * 跟一整疊的 `sliceDXF()` 同一套，廠商開 CUT_T10 就切得到孔。
+ * @param {{t:number, prog:object}} sheet
+ * @param {{unit?:string, title?:string}} opt
+ */
+export function sliceBoardDXF(sheet, opt = {}) {
+  const L = cutLayer(sheet.t);
+  return boardDXF(sheet.prog, {
+    unit: opt.unit, title: opt.title,
+    layers: { cut: L, hole: L, peg: L, num: 'NUM' },
+    extraLayers: [[L, CUT_COLORS[0]], ['NUM', SLICE_COLOR.NUM]]
+  });
 }
 
 /**

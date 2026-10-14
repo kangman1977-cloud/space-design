@@ -29,7 +29,7 @@
  * 單位 cm。⛔ 不碰 DOM，Node 裡測得到。
  */
 
-import { drawProgram } from './sheet.js';
+import { drawProgram, sliceProgram } from './sheet.js';
 
 /** ⚠ 預設照 kang 2026-10-09 講的：120 × 240 橫放、轉 90° 關、間距 1 cm */
 export const NEST_DEFAULTS = { on: true, w: 240, h: 120, gap: 1, rotate: false };
@@ -129,6 +129,8 @@ export function packBoards(pieces, opt = {}) {
  * 一張板子的「畫什麼」—— 跟 `drawProgram()` 同一種格式（Y 朝上的 cm）。
  * @param {object} board `packBoards()` 回傳的其中一張
  * @param {object} opt 傳給 `drawProgram()` 的（rule、foldSummary…）＋ `label(piece)`
+ *   ＋ `draw(piece)`（2026-10-14 剖面分切加的）：給了就用它畫每一片，⛔ 走 `drawProgram()` ——
+ *   回傳一樣是「Y 朝上、從 (0,0) 到 (寬,高)」的那種格式（`sliceProgram()` 就是）
  */
 export function boardProgram(board, opt = {}) {
   const items = [];
@@ -141,7 +143,7 @@ export function boardProgram(board, opt = {}) {
 
   for (const it of board.items) {
     const p = it.piece;
-    const prog = drawProgram(p, { ...opt, showDims: false, showBendMarks: false });
+    const prog = opt.draw ? opt.draw(p) : drawProgram(p, { ...opt, showDims: false, showBendMarks: false });
     /** 片的座標（0..寬, 0..高）→ 板子座標；轉 90° ＝ 逆時針（(x, y) → (高 − y, x)） */
     const T = (x, y) => (it.rot
       ? { x: it.x + (p.height - y), y: it.y + x }
@@ -215,6 +217,61 @@ export function boardTitle(board, i, n, opt = {}) {
   const out = [`第 ${i + 1} 張／共 ${n} 張　${fmt(board.w)} × ${fmt(board.h)} cm　${board.items.length} 片`];
   if (board.oversize) out.push('⚠ 這一片比板子還大 —— 單獨一張、照它自己的大小（要換大板或再切小）');
   if (labels.length) out.push(labels.join('、'));
+  return out;
+}
+
+/**
+ * 🔴 **剖面分切的排版**（2026-10-14，kang：「展開圖有可以設定排版…剖面分切也要有」）。
+ *
+ * ⭐ 擺法、畫法⛔ 另寫：`packBoards()` ＋ `boardProgram()`（給 `draw` 換成 `sliceProgram()`）。
+ * 剖面分切多一條規矩：🔴 **不同板厚的片⛔ 放同一張板** —— 一張板就是一種厚度的料
+ * （原本 DXF 用圖層 CUT_T10／CUT_T20 分，排版時乾脆分在不同張）。
+ *
+ * 每一片照**它自己的外框**排（原本預覽與 DXF 是全部共用一個大框，孔才落在同一個位置好對照 ——
+ * 排在板子上那個框只會浪費料）。定位孔、層號跟著片走（`sliceProgram()` 本來就畫）。
+ * 層號已經畫在孔①下面 ⇒ 板子正中間⛔ 再印一次片號。
+ * ⚠ 層號離孔①往下一段，孔①很靠近下緣時字會超出外框一點 —— 它是文字（DXF 在 NUM 層），⛔ 是切割線。
+ *
+ * @param {object[]} slices section.js 的 slices
+ * @param {{w,h,gap,rotate}} nestOpt 跟 `packBoards()` 同一包
+ * @param {{pegsOf?:Function, pegD?:number}} o 每一片的孔、孔徑
+ * @returns {{t:number, board:object, prog:object}[]} 照板厚由薄到厚、同一種板厚照擺的順序
+ */
+export function sliceBoards(slices, nestOpt = {}, o = {}) {
+  const groups = [];
+  for (const sl of slices) {
+    const t = Math.round(sl.t * 100) / 100;
+    let g = groups.find(q => q.t === t);
+    if (!g) { g = { t, list: [] }; groups.push(g); }
+    g.list.push(sl);
+  }
+  groups.sort((a, b) => a.t - b.t);
+  const sheets = [];
+  for (const g of groups) {
+    g.list.sort((a, b) => a.index - b.index);
+    const pieces = g.list.map(sl => ({
+      slice: sl, width: sl.bounds.w, height: sl.bounds.h, qty: 1,
+      no: '#' + String(sl.index).padStart(2, '0')
+    }));
+    const draw = p => sliceProgram(p.slice, {
+      origin: { x: p.slice.bounds.minX, y: p.slice.bounds.minY },
+      frame: { w: p.width, h: p.height },
+      pegs: o.pegsOf ? (o.pegsOf(p.slice) || []) : [],
+      pegD: o.pegD, showDims: false
+    });
+    for (const board of packBoards(pieces, nestOpt).boards) {
+      sheets.push({ t: g.t, board, prog: boardProgram(board, { draw, label: () => '' }) });
+    }
+  }
+  return sheets;
+}
+
+/** 剖面排版一張板的標題：多一個「板厚」—— 上機時一張板鋪一種厚度的料 */
+export function sliceBoardTitle(sheet, i, n) {
+  const { board, t } = sheet;
+  const out = [`第 ${i + 1} 張／共 ${n} 張　板厚 ${fmt(t)} cm　${fmt(board.w)} × ${fmt(board.h)} cm　${board.items.length} 片`];
+  if (board.oversize) out.push('⚠ 這一片比板子還大 —— 單獨一張、照它自己的大小（要換大板或再切小）');
+  out.push(board.items.map(it => it.piece.no).join('、'));
   return out;
 }
 

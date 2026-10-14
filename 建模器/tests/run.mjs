@@ -14776,6 +14776,58 @@ section('排版：把很多片擺進一張一張板子（2026-10-09）');
   }
 }
 
+section('剖面分切：排版到板子上（2026-10-14）');
+{
+  /**
+   * kang 2026-10-14：「展開圖有可以設定排版…剖面分切也要有；DXF 可以全部匯出，但是 SVG 只能匯出一個檔案」。
+   * 擺法、畫法借展開圖的（packBoards／boardProgram）；多一條規矩：🔴 不同板厚的片⛔ 放同一張板。
+   */
+  const { sliceBoards, sliceBoardTitle } = await import('../js/out/nest.js');
+  const { sliceBoardDXF } = await import('../js/out/dxf.js');
+  const m = buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2);
+  const r = sect.sliceMesh(m, { axis: 'y', bands: [{ t: 1, n: 10 }, { t: 2, n: 'rest' }] });
+  const g = pegsMod.findPegs(r.slices, { d: 0.5, gap: 0.8, counts: [2, 2] });
+  ok('（前置）切得出來、找得到孔', r.ok && g.ok, g.reason || '');
+  const pegsOf = sl => pegsMod.pegsForSlice(g, sl);
+  const N = { w: 120, h: 240, gap: 10, rotate: true };
+  const sheets = sliceBoards(r.slices, N, { pegsOf, pegD: 0.5 });
+
+  const seen = new Map();
+  for (const sh of sheets) for (const it of sh.board.items) seen.set(it.piece.slice.index, (seen.get(it.piece.slice.index) || 0) + 1);
+  eq('★★ 每一片剛好出現一次', [...seen.values()].every(v => v === 1) && seen.size === r.slices.length, true);
+  ok('★★ 每張板只有一種板厚（⛔ 1 cm 與 2 cm 混在同一張）',
+     sheets.every(sh => sh.board.items.every(it => Math.abs(it.piece.slice.t - sh.t) < 1e-9)));
+  ok('　　板厚由薄到厚排', sheets.every((sh, i) => i === 0 || sheets[i - 1].t <= sh.t));
+  ok('★ 每一片都在板子裡、四周留間距',
+     sheets.every(sh => sh.board.oversize || sh.board.items.every(it =>
+       it.x >= N.gap - 1e-9 && it.y >= N.gap - 1e-9
+       && it.x + it.w <= N.w - N.gap + 1e-9 && it.y + it.h <= N.h - N.gap + 1e-9)));
+  ok('　　照每片自己的外框排（60×40，⛔ 用整疊共用的框）',
+     sheets.every(sh => sh.board.items.every(it => Math.abs(it.w * it.h - 60 * 40) < 1e-6)));
+
+  const want = r.slices.reduce((n, sl) => n + pegsOf(sl).length, 0);
+  const got = sheets.reduce((n, sh) => n + sh.prog.items.filter(i => i.t === 'circle' && i.style === 'peg').length, 0);
+  eq('★★ 定位孔一個都沒少（每片的孔都畫在板子上）', got, want);
+  const nums = sheets.reduce((n, sh) => n + sh.prog.items.filter(i => i.style === 'num').length, 0);
+  eq('　　層號每片一個（板子正中間⛔ 再印一次片號）', nums, r.slices.length);
+
+  const t1 = sheets.find(sh => sh.t === 1);
+  const dxf = sliceBoardDXF(t1, { unit: 'mm', title: 'SHEET 1' });
+  const circleLayers = [...dxf.matchAll(/CIRCLE\s*\r?\n\s*8\s*\r?\n([^\r\n]+)/g)].map(x => x[1].trim());
+  const pegOnBoard = t1.board.items.reduce((n, it) => n + pegsOf(it.piece.slice).length, 0);
+  eq('★★ 板子 DXF：孔的數量對', circleLayers.length, pegOnBoard);
+  ok('★★ 板子 DXF：定位孔在 CUT_T10 層（⛔ 掉進 TEXT 層 —— 廠商只開切割層會漏切）',
+     circleLayers.length > 0 && circleLayers.every(l => l === 'CUT_T10'), circleLayers.slice(0, 3).join(','));
+  ok('　　板子 DXF：層號在 NUM 層', /TEXT\s*\r?\n\s*8\s*\r?\nNUM/.test(dxf));
+
+  const title = sliceBoardTitle(t1, 0, sheets.length);
+  ok('　　標題寫出板厚', /板厚 1 cm/.test(title[0]), title[0]);
+
+  // 太大的片：單獨一張、標出來
+  const big = sliceBoards(r.slices.slice(0, 1), { w: 50, h: 50, gap: 1, rotate: false }, { pegsOf, pegD: 0.5 });
+  ok('★ 比板子還大的片 ⇒ 單獨一張、標 oversize', big.length === 1 && big[0].board.oversize);
+}
+
 section('程式自己剪的邊：貼在一起的⛔ 剪、張開的講出來（2026-10-12）');
 
 /**
