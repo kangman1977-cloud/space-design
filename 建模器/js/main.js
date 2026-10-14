@@ -764,6 +764,8 @@ $('selSimilar').onclick = () => selectSimilar();
 $('selChecker').onclick = () => selectChecker();
 $('inset').onclick = () => insetSelected();
 $('subdivFace').onclick = () => subdivideFacesSelected();
+/** ⚠ 「細分」的說明裡寫著幾等分 —— 欄位一改就要重寫，⛔ 不然說明停在舊的數字（線上先驗抓到的）*/
+$('subdivFaceN').oninput = () => updateBar();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();

@@ -10476,6 +10476,53 @@ section('細分：選到的面切成 n×n 塊，形狀不變（2026-10-14）');
     eq('　　頂面還是 1 個面、12 個點', r.mesh.faceLoop(topOf(r.mesh)).length, 12);
   }
   {
+    /**
+     * 🔴 **先細分一塊、再往旁邊細分**（2026-10-14 AI 線上先驗抓到的）：
+     * 前面的上緣被頂面的細分插了點 ⇒ 照「點」數它是多邊形，第一版被切成扇形
+     * （頂面 2 等分再 3 等分之後前面是 9 邊形 ⇒ 324 片細長三角形）。
+     * ⇒ 照「角」數：它還是 4 個角 ⇒ 格子。
+     */
+    const front = m => { m.computeNormals(); return m.faces.find(f => f.normal.z > 0.99); };
+    const tris = (m, fs) => fs.filter(f => m.faceLoop(f).length === 3).length;
+    let m = box();
+    let r = sd(m, [topOf(m)], 2);
+    m = r.mesh; edit.refreshAfterEdit(m);
+    eq('（前置）前面現在是 5 個點（上緣多一個中點）', m.faceLoop(front(m)).length, 5);
+    const m2 = sd(m, [front(m)], 2);
+    same('頂面細分過、再細分前面 2 等分', m, m2);
+    m2.mesh.computeNormals();
+    const fr2 = m2.mesh.faces.filter(f => f.normal.z > 0.99);
+    eq('★★ 前面切成 4 塊（格子，⛔ 扇形）、一片三角形都沒有', fr2.length * 10 + tris(m2.mesh, fr2), 40);
+    eq('　　上緣那個中點直接拿來用（⛔ 多插一個）：點 13 → 17', m2.mesh.verts.length, 17);
+
+    // 頂面 2 等分 → 頂面 4 塊再 3 等分 ⇒ 前面上緣有 5 個點（1/6…5/6）
+    r = sd(m, m.faces.filter(f => f.normal.y > 0.99), 3);
+    m = r.mesh; edit.refreshAfterEdit(m);
+    eq('（前置）前面現在是 9 個點', m.faceLoop(front(m)).length, 9);
+    const m6 = sd(m, [front(m)], 6);
+    same('前面 6 等分（上緣的點剛好都在格點上）', m, m6);
+    m6.mesh.computeNormals();
+    const fr6 = m6.mesh.faces.filter(f => f.normal.z > 0.99);
+    eq('★★ 前面是 6×6 ＝ 36 格、全部四邊形（第一版：324 片三角形）',
+       fr6.length * 1000 + fr6.filter(f => m6.mesh.faceLoop(f).length === 4).length, 36036);
+    const m2b = sd(m, [front(m)], 2);
+    same('前面 2 等分（上緣多的點⛔ 落在格點上）', m, m2b);
+    m2b.mesh.computeNormals();
+    const frb = m2b.mesh.faces.filter(f => f.normal.z > 0.99);
+    eq('★ 還是 4 格；上面兩格各接進原本的 2 個點（6 邊形）、一片三角形都沒有',
+       frb.map(f => m2b.mesh.faceLoop(f).length).sort().join(','), '4,4,6,6');
+  }
+  {
+    // 圓柱：蓋子細分過，側面上緣多了點 ⇒ 側面再細分還是格子
+    let m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    m = sd(m, [topOf(m)], 2).mesh; edit.refreshAfterEdit(m);
+    m.computeNormals();
+    const side = m.faces.find(f => Math.abs(f.normal.y) < 0.01);
+    const r = sd(m, [side], 2);
+    same('圓柱蓋子細分過、再細分一個側面', m, r);
+    eq('★ 側面切成 4 塊（格子）：面 161 → 164', r.mesh.faces.length, 164);
+  }
+  {
     // 標記：被切成兩段的邊，兩段都要帶著原本的標記
     const m = box();
     const e = m.faceLoop(topOf(m))[0];

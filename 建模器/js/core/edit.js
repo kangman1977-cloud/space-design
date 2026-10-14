@@ -3903,15 +3903,24 @@ export function subdivideEdges(mesh, hes, cuts = 1) {
  *
  * ── kang 2026-10-14 看樣板 `樣板-細分.html` 拍板的四件 ──────
  * ① 新點放在原本的面上（⛔ 往外鼓）② 旁邊的面只在共用的邊上多點
- * ③ 等分由呼叫端給（介面是數字欄）④ 5 邊以上：中心加一點切扇形；凹的只在邊上加點
+ * ③ 等分由呼叫端給（介面是數字欄）④ 5 個角以上：中心加一點切扇形；凹的只在邊上加點
  * → 權威版：`規格\建模器-細分.md`
  *
- * | 邊數 | 切法 |
+ * ── 🔴 照「角」數，⛔ 照「點」數（2026-10-14 線上先驗抓到的）──────
+ * ② 的結果是：旁邊的面邊上會多出點（跟兩旁連成一直線）。照點數算的話，
+ * 方塊的前面在頂面細分過兩次之後是「9 邊形」⇒ 被切成 324 片扇形，⛔ 不是 6×6 格子。
+ * ⇒ 先認出**真正的角**（共線的點不算），一個面由「角到角」的幾條**邊**組成：
+ *
+ * | 角數 | 切法 |
  * |---|---|
  * | 3 | 格子 ⇒ n² 個三角形 |
  * | 4（凸）| 雙線性格子 ⇒ n² 個四邊形 |
- * | 5 以上（凸）| 中心一點 ＋ 扇形，每片照 3 邊形切 ⇒ 邊數 × n² 個三角形 |
- * | 4 以上（凹）| ⛔ 不切，只在邊上加點（中心可能落在面外面）|
+ * | 5 以上（凸）| 中心一點 ＋ 扇形（每個角一條輻條），每片照 3 角切 ⇒ 角數 × n² 個三角形 |
+ * | 凹的 | ⛔ 不切，只在每條邊的 k/n 上加點（中心可能落在面外面）|
+ *
+ * 每條邊在 k/n 的位置要有一個點：原本就有點在附近（一格的 1/10 以內）就**直接用那個點**，
+ * 否則插一個新點進它落在的那一小段。邊上原本多出來、⛔ 落在 k/n 的點，**照樣接在那一格上**
+ * （那一格變成多一個點的多邊形，形狀不變）。
  *
  * ── ⭐ 後半段⛔ 另寫 ─────────────────────────────────────
  * 邊上的新點、旁邊的面插點、標記逐段繼承、重建，全部走 `rebuildWithInserts()`
@@ -3945,61 +3954,127 @@ export function subdivideFaces(mesh, faces, n, tolDeg = 0.5) {
   const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
   const points = mesh.verts.map(v => v.p.clone());
   const add = p => (points.push(p), points.length - 1);
-
-  /** 原本的邊：n−1 個新點（跟 `subdivideEdges()` 同一個帳本格式，`ids` 照 a → b）*/
-  const ins = new Map();
-  let short = null;
-  const edgePts = (a, b) => {
-    const k = kOf(a, b);
-    if (!ins.has(k)) {
-      const len = points[a].distanceTo(points[b]);
-      if (len / n < PLANAR_TOL_CM && !short) short = len;
-      const ids = [];
-      for (let i = 1; i < n; i++) ids.push(add(points[a].clone().lerp(points[b], i / n)));
-      ins.set(k, { a, b, ids });
-    }
-    const rec = ins.get(k);
-    return rec.a === a ? rec.ids : rec.ids.slice().reverse();
-  };
-
-  const replace = new Map();
-  const hard = [];
-  let cut = 0, concave = 0;
-
-  /** 凸不凸：沿面法向看，每個角的轉向都不可以反過來（共線的角允許）*/
   const sinTol = Math.sin(THREE.MathUtils.degToRad(tolDeg));
-  const isConvex = idx => {
+
+  // ── 1) 每一片：認出真正的角，切成「角到角」的幾條邊 ──
+  const plans = [];
+  for (const f of polys) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    const L = idx.length;
     const fn = new THREE.Vector3();
-    for (let i = 0; i < idx.length; i++) {
-      const a = points[idx[i]], b = points[idx[(i + 1) % idx.length]];
+    for (let i = 0; i < L; i++) {
+      const a = points[idx[i]], b = points[idx[(i + 1) % L]];
       fn.x += (a.y - b.y) * (a.z + b.z); fn.y += (a.z - b.z) * (a.x + b.x); fn.z += (a.x - b.x) * (a.y + b.y);
     }
-    if (fn.lengthSq() < 1e-20) return false;
     fn.normalize();
-    for (let i = 0; i < idx.length; i++) {
-      const p = points[idx[i]], q = points[idx[(i + 1) % idx.length]], r = points[idx[(i + 2) % idx.length]];
+    const K = [];
+    let concave = false;
+    for (let i = 0; i < L; i++) {
+      const p = points[idx[(i - 1 + L) % L]], q = points[idx[i]], r = points[idx[(i + 1) % L]];
       const e1 = q.clone().sub(p), e2 = r.clone().sub(q);
       const l = e1.length() * e2.length();
-      if (l < 1e-20) continue;
-      if (e1.cross(e2).dot(fn) / l < -sinTol) return false;
+      if (l < 1e-20) { K.push(i); continue; }
+      const s = e1.clone().cross(e2).dot(fn) / l, c = e1.dot(e2) / l;
+      if (Math.abs(s) < sinTol && c > 0) continue;            // 共線：⛔ 不算角
+      K.push(i);
+      if (s < -sinTol) concave = true;
     }
-    return true;
+    const corners = K.length >= 3 ? K : idx.map((_, i) => i);
+    const sides = corners.map((k, j) => {
+      const end = corners[(j + 1) % corners.length], chain = [];
+      for (let i = k; ; i = (i + 1) % L) { chain.push(idx[i]); if (i === end) break; }
+      return chain;
+    });
+    const kind = (concave || K.length < 3) ? 'edge' : K.length === 3 ? 'tri' : K.length === 4 ? 'quad' : 'fan';
+    plans.push({ f, sides, kind });
+  }
+
+  // ── 2) 每條邊在 k/n 的位置放一個點（附近原本有點就用它）──
+  const recs = new Map();       // 原本的一小段 → 插在上面的新點 {t（從 a 量）, id}
+  const lenOf = ch => {
+    const cum = [0];
+    for (let j = 1; j < ch.length; j++) cum.push(cum[j - 1] + points[ch[j - 1]].distanceTo(points[ch[j]]));
+    return cum;
+  };
+  let short = null;
+  for (const pl of plans) {
+    for (const ch of pl.sides) {
+      const cum = lenOf(ch), total = cum[cum.length - 1];
+      if (total / n < PLANAR_TOL_CM) { if (short === null) short = total; continue; }
+      const snap = Math.max(PLANAR_TOL_CM, 0.1 * total / n);
+      for (let k = 1; k < n; k++) {
+        const at = total * k / n;
+        if (cum.some(c => Math.abs(c - at) <= snap)) continue;
+        let j = 0;
+        while (cum[j + 1] < at) j++;
+        const a = ch[j], b = ch[j + 1], key = kOf(a, b);
+        if (!recs.has(key)) recs.set(key, { a, b, pts: [] });
+        const rec = recs.get(key), len = cum[j + 1] - cum[j];
+        const local = (at - cum[j]) / len, t = rec.a === a ? local : 1 - local;
+        if (rec.pts.some(q => Math.abs(q.t - t) * len <= snap)) continue;
+        rec.pts.push({ t, id: add(points[rec.a].clone().lerp(points[rec.b], t)) });
+      }
+    }
+  }
+  if (short !== null) {
+    return {
+      ok: false,
+      reason: `有一條邊只有 ${short.toFixed(2)} cm，切成 ${n} 等分之後`
+            + `每段不到 ${PLANAR_TOL_CM * 10} mm —— 會長出長度 0 的線`
+    };
+  }
+
+  /** 一條邊上所有的點（原本的 ＋ 任何一片插進來的），照位置排好，並找出 k/n 對到哪一個 */
+  const fullSide = ch => {
+    const ids = [ch[0]];
+    for (let j = 0; j + 1 < ch.length; j++) {
+      const rec = recs.get(kOf(ch[j], ch[j + 1]));
+      if (rec) {
+        const fwd = rec.a === ch[j];
+        const ps = rec.pts.map(q => ({ t: fwd ? q.t : 1 - q.t, id: q.id })).sort((x, y) => x.t - y.t);
+        ids.push(...ps.map(q => q.id));
+      }
+      ids.push(ch[j + 1]);
+    }
+    const cum = lenOf(ids), total = cum[cum.length - 1];
+    const g = [];
+    for (let k = 0; k <= n; k++) {
+      let best = 0;
+      for (let i = 1; i < ids.length; i++) {
+        if (Math.abs(cum[i] - total * k / n) < Math.abs(cum[best] - total * k / n)) best = i;
+      }
+      g.push(best);
+    }
+    return { ids, g };
+  };
+  const rev = S => ({ ids: S.ids.slice().reverse(), g: S.g.slice().reverse().map(i => S.ids.length - 1 - i) });
+  const withPos = S => Object.assign(S, { pos: new Map(S.ids.map((id, i) => [id, i])) });
+  /** 一格的外框：兩個格點都在同一條邊上、中間又夾著原本的點 ⇒ 把那些點接進來 */
+  const ring = (cs, sides) => {
+    const out = [];
+    for (let i = 0; i < cs.length; i++) {
+      const p = cs[i], q = cs[(i + 1) % cs.length];
+      out.push(p);
+      for (const S of sides) {
+        if (!S.pos.has(p) || !S.pos.has(q)) continue;
+        const x = S.pos.get(p), y = S.pos.get(q);
+        if (Math.abs(x - y) > 1) out.push(...(x < y ? S.ids.slice(x + 1, y) : S.ids.slice(y + 1, x).reverse()));
+        break;
+      }
+    }
+    return out;
   };
 
-  /**
-   * 三角形格子。`E(x, y)` 給「兩個角之間的 n−1 個點、照 x → y 排」——
-   * 原本的邊走帳本（旁邊的面要插同一批點），扇形的輻條走這個面自己的帳本。
-   * 邊界上的格子點一律從 `E` 拿，⛔ 自己再算一份（兩份點不會是同一個索引）。
-   */
-  const tri = (c0, c1, c2, E, out) => {
-    const e01 = E(c0, c1), e02 = E(c0, c2), e12 = E(c1, c2), inner = new Map();
+  /** 三角形格子：S01／S02／S12 ＝ c0→c1、c0→c2、c1→c2 那三條邊 */
+  const tri = (c0, c1, c2, S01, S02, S12, out) => {
+    const inner = new Map(), sides = [S01, S02, S12];
     const P = (a, b) => {
       if (a === 0 && b === 0) return c0;
       if (a === n && b === 0) return c1;
       if (a === 0 && b === n) return c2;
-      if (b === 0) return e01[a - 1];
-      if (a === 0) return e02[b - 1];
-      if (a + b === n) return e12[b - 1];
+      if (b === 0) return S01.ids[S01.g[a]];
+      if (a === 0) return S02.ids[S02.g[b]];
+      if (a + b === n) return S12.ids[S12.g[b]];
       const key = a * (n + 1) + b;
       if (!inner.has(key)) {
         inner.set(key, add(points[c0].clone().multiplyScalar((n - a - b) / n)
@@ -4008,17 +4083,18 @@ export function subdivideFaces(mesh, faces, n, tolDeg = 0.5) {
       return inner.get(key);
     };
     for (let a = 0; a < n; a++) for (let b = 0; a + b < n; b++) {
-      out.push([P(a, b), P(a + 1, b), P(a, b + 1)]);
-      if (a + b < n - 1) out.push([P(a + 1, b), P(a + 1, b + 1), P(a, b + 1)]);
+      out.push(ring([P(a, b), P(a + 1, b), P(a, b + 1)], sides));
+      if (a + b < n - 1) out.push(ring([P(a + 1, b), P(a + 1, b + 1), P(a, b + 1)], sides));
     }
   };
-  const quad = (c0, c1, c2, c3, out) => {
-    const b0 = edgePts(c0, c1), b1 = edgePts(c1, c2), b2 = edgePts(c3, c2), b3 = edgePts(c0, c3), inner = new Map();
+  /** 四邊形格子：B0 c0→c1、B1 c1→c2、B2 c3→c2、B3 c0→c3 */
+  const quad = (c0, c1, c2, c3, B0, B1, B2, B3, out) => {
+    const inner = new Map(), sides = [B0, B1, B2, B3];
     const P = (u, v) => {
       if (u === 0 && v === 0) return c0; if (u === n && v === 0) return c1;
       if (u === n && v === n) return c2; if (u === 0 && v === n) return c3;
-      if (v === 0) return b0[u - 1]; if (u === n) return b1[v - 1];
-      if (v === n) return b2[u - 1]; if (u === 0) return b3[v - 1];
+      if (v === 0) return B0.ids[B0.g[u]]; if (u === n) return B1.ids[B1.g[v]];
+      if (v === n) return B2.ids[B2.g[u]]; if (u === 0) return B3.ids[B3.g[v]];
       const key = u * (n + 1) + v;
       if (!inner.has(key)) {
         const s = u / n, t = v / n;
@@ -4029,52 +4105,48 @@ export function subdivideFaces(mesh, faces, n, tolDeg = 0.5) {
       return inner.get(key);
     };
     for (let u = 0; u < n; u++) for (let v = 0; v < n; v++) {
-      out.push([P(u, v), P(u + 1, v), P(u + 1, v + 1), P(u, v + 1)]);
+      out.push(ring([P(u, v), P(u + 1, v), P(u + 1, v + 1), P(u, v + 1)], sides));
     }
   };
 
-  for (const f of polys) {
-    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+  // ── 3) 每一片換成小面 ──
+  const replace = new Map();
+  const hard = [];
+  let cut = 0, concave = 0;
+  for (const pl of plans) {
+    const S = pl.sides.map(ch => withPos(fullSide(ch)));
+    const cs = pl.sides.map(ch => ch[0]);
     const out = [];
-    if (idx.length === 3) {
-      tri(idx[0], idx[1], idx[2], edgePts, out);
-    } else if (!isConvex(idx)) {
+    if (pl.kind === 'edge') {
       /** ④ 凹的：只在邊上加點（旁邊的面也一樣），⛔ 不切 */
-      const seq = [];
-      for (let i = 0; i < idx.length; i++) seq.push(idx[i], ...edgePts(idx[i], idx[(i + 1) % idx.length]));
-      replace.set(f, [seq]);
+      replace.set(pl.f, [S.flatMap(s => s.ids.slice(0, -1))]);
       concave++;
       continue;
-    } else if (idx.length === 4) {
-      quad(idx[0], idx[1], idx[2], idx[3], out);
+    }
+    if (pl.kind === 'tri') {
+      tri(cs[0], cs[1], cs[2], S[0], withPos(rev(S[2])), S[1], out);
+    } else if (pl.kind === 'quad') {
+      quad(cs[0], cs[1], cs[2], cs[3], S[0], S[1], withPos(rev(S[2])), withPos(rev(S[3])), out);
     } else {
-      /** 5 邊以上：中心一點 ＋ 扇形；輻條（中心 → 角）上的點由相鄰兩片共用 */
-      const c = idx.reduce((s, i) => s.add(points[i]), new THREE.Vector3()).divideScalar(idx.length);
+      /** 5 個角以上：中心一點 ＋ 扇形；輻條（中心 → 角）上的點由相鄰兩片共用 */
+      const c = cs.reduce((s, i) => s.add(points[i]), new THREE.Vector3()).divideScalar(cs.length);
       const ci = add(c);
-      const spokes = new Map();
-      const E = (x, y) => {
-        if (x !== ci && y !== ci) return edgePts(x, y);
-        const tip = x === ci ? y : x;
-        if (!spokes.has(tip)) {
-          const ids = [];
-          for (let i = 1; i < n; i++) ids.push(add(c.clone().lerp(points[tip], i / n)));
-          spokes.set(tip, ids);
-        }
-        const s = spokes.get(tip);
-        return x === ci ? s : s.slice().reverse();
-      };
-      for (let i = 0; i < idx.length; i++) tri(ci, idx[i], idx[(i + 1) % idx.length], E, out);
+      const spokes = cs.map(tip => {
+        const ids = [ci];
+        for (let i = 1; i < n; i++) ids.push(add(c.clone().lerp(points[tip], i / n)));
+        ids.push(tip);
+        return withPos({ ids, g: ids.map((_, i) => i) });
+      });
+      for (let j = 0; j < cs.length; j++) {
+        tri(ci, cs[j], cs[(j + 1) % cs.length], spokes[j], spokes[(j + 1) % cs.length], S[j], out);
+      }
     }
     /**
      * 新線 ＝ 小面的每一條邊，扣掉「落在原本的邊上」的那幾段
      * （那幾段由 `rebuildWithInserts()` 逐段繼承原本的標記）。
      */
     const onOld = new Set();
-    for (let i = 0; i < idx.length; i++) {
-      const a = idx[i], b = idx[(i + 1) % idx.length];
-      const chain = [a, ...edgePts(a, b), b];
-      for (let j = 0; j + 1 < chain.length; j++) onOld.add(kOf(chain[j], chain[j + 1]));
-    }
+    for (const s of S) for (let j = 0; j + 1 < s.ids.length; j++) onOld.add(kOf(s.ids[j], s.ids[j + 1]));
     const seen = new Set();
     for (const g of out) {
       for (let i = 0; i < g.length; i++) {
@@ -4084,18 +4156,14 @@ export function subdivideFaces(mesh, faces, n, tolDeg = 0.5) {
         hard.push([a, b]);
       }
     }
-    replace.set(f, out);
+    replace.set(pl.f, out);
     cut++;
   }
 
-  if (short !== null) {
-    return {
-      ok: false,
-      reason: `有一條邊只有 ${short.toFixed(2)} cm，切成 ${n} 等分之後`
-            + `每段不到 ${PLANAR_TOL_CM * 10} mm —— 會長出長度 0 的線`
-    };
+  const ins = new Map();
+  for (const [k, rec] of recs) {
+    ins.set(k, { a: rec.a, b: rec.b, ids: rec.pts.slice().sort((x, y) => x.t - y.t).map(q => q.id) });
   }
-
   return rebuildWithInserts(mesh, points, ins, { polys: cut, concave }, { replace, hard });
 }
 
