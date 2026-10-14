@@ -14776,6 +14776,78 @@ section('排版：把很多片擺進一張一張板子（2026-10-09）');
   }
 }
 
+section('排版擺得更緊：任何空位都能塞、兩個方向都試（2026-10-15）');
+{
+  /**
+   * kang 2026-10-15 看 `樣板-排版.html` 後同意。packBoards() 先照原本「一列一列」擺，再試新的擺法，**用板比較少才換**。
+   * 下面的張數就是樣板上那五個例子（「原本」那一欄是改之前量的，新的⛔ 可以比它多）。
+   */
+  const { packBoards } = await import('../js/out/nest.js');
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { seamLoopEdges } = await import('../js/core/selectops.js');
+  const torus = pick => {
+    const m = buildPrim('torus', { rOuter: 30, rInner: 15, seg: 32, segT: 12 });
+    for (const h of seamLoopEdges(m, [...m.edges()].find(pick), 'all')) setSeam(m, h, true);
+    return unfoldMesh(m, makeRule('paper', 0.05)).pieces;
+  };
+  const isRing = he => Math.abs(he.v.p.y - he.to.p.y) < 1e-6
+    && Math.abs(Math.hypot(he.v.p.x, he.v.p.z) - Math.hypot(he.to.p.x, he.to.p.z)) < 1e-6;
+  const isTube = he => Math.abs(Math.atan2(he.v.p.z, he.v.p.x) - Math.atan2(he.to.p.z, he.to.p.x)) < 1e-6;
+  const slices = sect.sliceMesh(buildPrim('box', { w: 60, h: 45, d: 40 }, 0.2), { axis: 'y', bands: [{ t: 1, n: 'rest' }] })
+    .slices.map(s => ({ width: s.bounds.w, height: s.bounds.h, qty: 1 }));
+  const cases = [
+    ['剖面：方塊 45 片', slices],
+    ['圓環 環帶', torus(isRing)],
+    ['圓環 西瓜皮', torus(isTube)],
+    ['圓柱 側面＋兩蓋', [{ width: 156.8, height: 70, qty: 1 }, { width: 50, height: 50, qty: 2 }]],
+    ['方塊六面', [{ width: 60, height: 45, qty: 2 }, { width: 60, height: 40, qty: 2 }, { width: 45, height: 40, qty: 2 }]]
+  ];
+  /** 每片都在板子裡、彼此⛔ 重疊（含間距）、一片都沒少、不准轉時⛔ 轉 */
+  const valid = (nest, pieces, opt) => {
+    const bad = []; let n = 0; const g = opt.gap;
+    nest.boards.forEach((b, bi) => b.items.forEach((it, i) => {
+      n++;
+      if (!b.oversize && (it.x < g - 1e-9 || it.y < g - 1e-9 || it.x + it.w > b.w - g + 1e-9 || it.y + it.h > b.h - g + 1e-9)) bad.push(`板${bi + 1} 出界`);
+      if (!opt.rotate && it.rot) bad.push(`板${bi + 1} 不准轉卻轉了`);
+      b.items.forEach((o, j) => {
+        if (j <= i) return;
+        const sep = it.x + it.w + g <= o.x + 1e-9 || o.x + o.w + g <= it.x + 1e-9
+          || it.y + it.h + g <= o.y + 1e-9 || o.y + o.h + g <= it.y + 1e-9;
+        if (!sep) bad.push(`板${bi + 1} 重疊`);
+      });
+    }));
+    const want = pieces.reduce((s, q) => s + (q.qty || 1), 0);
+    if (n !== want) bad.push(`片數 ${n}/${want}`);
+    return bad;
+  };
+  for (const [label, opt, want, was] of [
+    ['kang 的設定 120×240／間距 10／可轉', { w: 120, h: 240, gap: 10, rotate: true }, [8, 5, 2, 2, 1], [12, 5, 3, 2, 2]],
+    ['預設 240×120／間距 1／不轉', { w: 240, h: 120, gap: 1, rotate: false }, [9, 3, 1, 1, 1], [9, 3, 1, 2, 1]]
+  ]) {
+    cases.forEach(([name, ps], i) => {
+      const nest = packBoards(ps, opt);
+      eq(`★★ ${label}｜${name}：${want[i]} 張（原本 ${was[i]} 張）`, nest.boards.length, want[i]);
+      eq(`　　${label}｜${name}：每片都在板內、⛔ 重疊、片數對`, valid(nest, ps, opt).join(' / '), '');
+    });
+  }
+  // 比板子大的照舊：單獨一張、標 oversize（新擺法⛔ 吃掉它）
+  {
+    const nest = packBoards([{ width: 300, height: 50, qty: 1 }, { width: 50, height: 50, qty: 3 }], { w: 240, h: 120, gap: 1, rotate: false });
+    ok('★ 比板子大的：照舊單獨一張、標 oversize', nest.boards.filter(b => b.oversize).length === 1
+       && nest.boards.reduce((s, b) => s + b.items.length, 0) === 4);
+  }
+  // 速度：200 片
+  {
+    const many = [];
+    for (let i = 0; i < 200; i++) many.push({ width: 10 + (i * 37) % 70, height: 8 + (i * 53) % 90, qty: 1 });
+    const t0 = performance.now();
+    const nest = packBoards(many, { w: 120, h: 240, gap: 10, rotate: true });
+    const ms = performance.now() - t0;
+    ok('★ 200 片排得完、而且不到 1 秒', ms < 1000 && valid(nest, many, { w: 120, h: 240, gap: 10, rotate: true }).length === 0,
+       `${ms.toFixed(0)} ms、${nest.boards.length} 張`);
+  }
+}
+
 section('剖面分切：排版到板子上（2026-10-14）');
 {
   /**

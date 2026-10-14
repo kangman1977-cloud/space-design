@@ -53,12 +53,28 @@ export function fitsBoard(w, h, opt = {}) {
 }
 
 /**
+ * 🔴 **排版**：先照原本「一列一列」擺一次，再用「任何空位都能塞」擺幾次（`rectPack()`），
+ * **用的板子比較少才換**（打平 ⇒ 留原本的，畫面一格都不變）。〔2026-10-15，kang 看 `樣板-排版.html` 後同意〕
+ *
+ * 【沙箱量的，kang 的設定 120×240、間距 10、可以轉】剖面方塊 45 片 12 → 8 張、圓環西瓜皮 3 → 2、方塊六面 2 → 1；
+ * 【預設 240×120、間距 1、不轉】圓柱側面＋兩蓋 2 → 1。⇒ 「一列一列」浪費在兩個地方：
+ * 可以轉時每片**固定轉成比較扁的**（⛔ 試另一個方向）、列跟列之間的空位⛔ 拿來用。
+ *
+ * ⚠ **仍然⛔ 是「自動嵌套」**（照真正的形狀互相嵌進去）—— 一律照外框。
+ *
  * @param {object[]} pieces 展開好的片（`qty` 幾片就擺幾份）
  * @param {{w,h,gap,rotate}} opt 板子寬、高（cm）、片與片／片與板邊的間距、可不可以轉 90°
  * @returns {{boards: {w,h,oversize,items:{piece,copy,x,y,w,h,rot}[]}[], count:number}}
  *   `x, y` ＝ 這一片外框的左下角（板子座標，Y 朝上）；`rot` 0 或 90
  */
 export function packBoards(pieces, opt = {}) {
+  const shelf = shelfPack(pieces, opt);
+  const best = rectPackBest(pieces, { w: shelf.W, h: shelf.H, gap: shelf.gap, rotate: !!opt.rotate });
+  return best && best.boards.length < shelf.boards.length ? { ...best, W: shelf.W, H: shelf.H, gap: shelf.gap } : shelf;
+}
+
+/** 原本的擺法：一列一列、最高的先放（2026-10-09）。`packBoards()` 拿它當底，新的擺法要贏它才換 */
+function shelfPack(pieces, opt = {}) {
   const W = +opt.w > 0 ? +opt.w : NEST_DEFAULTS.w;
   const H = +opt.h > 0 ? +opt.h : NEST_DEFAULTS.h;
   const g = Math.max(0, Number.isFinite(+opt.gap) ? +opt.gap : NEST_DEFAULTS.gap);
@@ -123,6 +139,116 @@ export function packBoards(pieces, opt = {}) {
     });
   }
   return { boards: out, count: todo.length + oversize.length, W, H, gap: g };
+}
+
+// ── 新的擺法：任何空位都能塞（MaxRects）────────────────────────
+// 每張板記一份「還空著的長方形」清單；放一片就把被它蓋到的空位切開、再把被別的空位整個包住的拿掉。
+// 間距的算法跟原本一樣：每片往右、往上各多佔一個間距，空位從 (間距, 間距) 開始、到板子邊為止
+// ⇒ 片與板邊、片與片之間都至少一個間距（跟 `fitsBoard()` 同一個標準）。
+
+/** 這個空位放這個大小好不好（越小越好，兩個數字依序比）；放不下 ⇒ null */
+function fitScore(fr, w, h, how) {
+  if (w > fr.w + EPS || h > fr.h + EPS) return null;
+  const lw = fr.w - w, lh = fr.h - h;
+  if (how === 'bssf') return [Math.min(lw, lh), Math.max(lw, lh)];   // 剩下的短邊最短
+  if (how === 'baf') return [fr.w * fr.h - w * h, Math.min(lw, lh)];  // 剩下的面積最小
+  return [fr.y, fr.x];                                                // 越下面、越左邊
+}
+const better = (a, b) => a[0] < b[0] - EPS || (Math.abs(a[0] - b[0]) <= EPS && a[1] < b[1] - EPS);
+
+/** 在 (x, y) 放一塊 w × h（含間距）：切開被蓋到的空位，拿掉被包住的 */
+function takeRect(free, x, y, w, h) {
+  const out = [];
+  for (const f of free) {
+    if (x >= f.x + f.w - EPS || x + w <= f.x + EPS || y >= f.y + f.h - EPS || y + h <= f.y + EPS) { out.push(f); continue; }
+    if (x > f.x + EPS) out.push({ x: f.x, y: f.y, w: x - f.x, h: f.h });
+    if (x + w < f.x + f.w - EPS) out.push({ x: x + w, y: f.y, w: f.x + f.w - x - w, h: f.h });
+    if (y > f.y + EPS) out.push({ x: f.x, y: f.y, w: f.w, h: y - f.y });
+    if (y + h < f.y + f.h - EPS) out.push({ x: f.x, y: y + h, w: f.w, h: f.y + f.h - y - h });
+  }
+  const inside = (a, b) => a.x >= b.x - EPS && a.y >= b.y - EPS && a.x + a.w <= b.x + b.w + EPS && a.y + a.h <= b.y + b.h + EPS;
+  return out.filter((a, i) => !out.some((b, j) => j !== i && inside(a, b) && (!inside(b, a) || j < i)));
+}
+
+/**
+ * 照一種順序、一種挑法、一種轉法擺一次。
+ * `pol`：`'best'` 每片兩個方向都試、挑分數好的；`'tall'`／`'wide'` 整批先統一直放／橫放
+ * （統一方向放不進空板時，那一片才改試另一個方向）——
+ * 【沙箱實證】方塊六面在 120×240 只有「整批直放」排得進 1 張，每片各挑最好的反而排成 2 張。
+ */
+function rectPack(todo, W, H, g, rotate, how, pol) {
+  const boards = [];
+  for (const it of todo) {
+    const P = it.piece;
+    const all = [{ w: P.width, h: P.height, rot: 0 }];
+    if (rotate) all.push({ w: P.height, h: P.width, rot: 90 });
+    let ors = all;
+    if (rotate && pol === 'tall') ors = [all[0].h >= all[1].h ? all[0] : all[1]];
+    if (rotate && pol === 'wide') ors = [all[0].w >= all[1].w ? all[0] : all[1]];
+    const pick = (free, list) => {
+      let best = null;
+      for (const o of list) for (const f of free) {
+        const sc = fitScore(f, o.w + g, o.h + g, how);
+        if (sc && (!best || better(sc, best.sc))) best = { sc, f, o };
+      }
+      return best;
+    };
+    let bd = null, b = null;
+    for (const cand of boards) { b = pick(cand.free, ors); if (b) { bd = cand; break; } }
+    if (!bd) {
+      bd = { free: [{ x: g, y: g, w: W - g, h: H - g }], items: [] };
+      b = pick(bd.free, ors) || pick(bd.free, all);
+      if (!b) return null;                         // ⛔ 應該發生（`fitsBoard()` 已經篩過），保險
+      boards.push(bd);
+    }
+    bd.free = takeRect(bd.free, b.f.x, b.f.y, b.o.w + g, b.o.h + g);
+    bd.items.push({ ...it, x: b.f.x, y: b.f.y, w: b.o.w, h: b.o.h, rot: b.o.rot });
+  }
+  return boards;
+}
+
+/** 幾種順序 × 幾種挑法 × 幾種轉法各擺一次，留用板最少的（同樣多 ⇒ 先試到的）。格式跟 `shelfPack()` 一樣 */
+function rectPackBest(pieces, opt) {
+  const W = opt.w, H = opt.h, g = opt.gap;
+  const todo = [], oversize = [];
+  for (const piece of pieces) {
+    for (let copy = 0; copy < (piece.qty || 1); copy++) {
+      if (fitsBoard(piece.width, piece.height, opt)) todo.push({ piece, copy });
+      else oversize.push({ piece, copy });
+    }
+  }
+  const area = it => it.piece.width * it.piece.height;
+  const orders = [
+    (a, b) => area(b) - area(a),
+    (a, b) => Math.max(b.piece.width, b.piece.height) - Math.max(a.piece.width, a.piece.height),
+    (a, b) => Math.min(b.piece.width, b.piece.height) - Math.min(a.piece.width, a.piece.height),
+    (a, b) => (b.piece.width + b.piece.height) - (a.piece.width + a.piece.height),
+    (a, b) => b.piece.height - a.piece.height
+  ];
+  let best = null;
+  for (const pol of (opt.rotate ? ['best', 'tall', 'wide'] : ['best'])) {
+    for (const ord of orders) {
+      const list = todo.slice().sort(ord);
+      for (const how of ['bssf', 'baf', 'bl']) {
+        const bs = rectPack(list, W, H, g, opt.rotate, how, pol);
+        if (bs && (!best || bs.length < best.length)) best = bs;
+      }
+    }
+  }
+  if (!best) return null;
+  /** 跟原本一樣：第一列擺在板子**上緣**（Y 上下翻過來）；比板子大的照原本的規矩單獨一張 */
+  const out = best.map(bd => ({
+    w: W, h: H, oversize: false,
+    items: bd.items.map(it => ({ ...it, y: H - it.y - it.h }))
+  }));
+  for (const o of oversize) {
+    const p = o.piece;
+    out.push({
+      w: p.width + 2 * g, h: p.height + 2 * g, oversize: true,
+      items: [{ ...o, x: g, y: g, w: p.width, h: p.height, rot: 0 }]
+    });
+  }
+  return { boards: out, count: todo.length + oversize.length };
 }
 
 /**
