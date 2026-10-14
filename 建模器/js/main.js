@@ -22,7 +22,7 @@ import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
-import { Panel, fillPrimMenu, fieldNum } from './ui/toolbar.js';
+import { Panel, fillPrimMenu, fieldNum, clampNum } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
          setKeep, isKeep, markSignature, nearestFace }
@@ -35,7 +35,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
+         splitFaceByEdges, subdivideEdges, subdivideFaces, separateAlongEdges, solidCut,
          sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
@@ -763,6 +763,7 @@ $('selSharp').onclick = () => selectSharpEdges();
 $('selSimilar').onclick = () => selectSimilar();
 $('selChecker').onclick = () => selectChecker();
 $('inset').onclick = () => insetSelected();
+$('subdivFace').onclick = () => subdivideFacesSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
@@ -4766,6 +4767,50 @@ function insetSelected() {
 }
 
 /**
+ * 🔴 **細分：選到的面每一個都切成 n×n 塊，形狀不變**（2026-10-14，kang 看樣板拍板）。
+ * → 權威版 `規格\建模器-細分.md`；核心 `subdivideFaces()`。
+ *
+ * ── ⚠ 刻意⛔ 自動選中 ────────────────────────────────
+ * 自動選中的規則是「選你接下來八成要動的那個」（見下方導角那一則）。
+ * 細分之後要拉的是**一個點**，程式猜不到是哪一個 ⇒ 只在提示裡講下一步。
+ */
+function subdivideFacesSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length || els.some(e => e.kind !== 'face')) {
+    toast('先在編輯模式下選面（一個或好幾個都可以），再按「細分」', true);
+    return;
+  }
+  /** 等分 2～6：打超過被拉回來要講（`clampNum()` 那一則）；留空 ⛔ 不是 0 */
+  const raw = Math.round(fieldNum($('subdivFaceN').value));
+  const c = clampNum(Number.isFinite(raw) ? raw : 2, { min: 2, max: 6 });
+  const n = c.v;
+  if (c.clamped || String(n) !== $('subdivFaceN').value.trim()) $('subdivFaceN').value = String(n);
+
+  const obj = els[0].obj;
+  const oldMesh = obj.mesh();
+  const f0 = oldMesh.faces.length;
+  const r = subdivideFaces(oldMesh, els.map(e => e.face), n);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();      // 原本的邊被切成幾段，標過的線段也跟著分段
+  commit(`細分 ${n} 等分`);
+
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已細分（${n} 等分）：面 ${f0} → ${r.mesh.faces.length} 個　形狀沒有變`];
+  if (c.clamped) bits.push(`⚠ 等分只能 2～6，已改成 ${n}`);
+  if (r.concave) bits.push(`⚠ ${r.concave} 個凹進去的面只在邊上加點（中心會落在面外面，不切）`);
+  if (r.touched) bits.push(`旁邊 ${r.touched} 個面在共用的邊上多了點（形狀一樣）`);
+  bits.push('接下來：過濾器切到「點」選一個點，「影響半徑」填大一點再拉');
+  toast(bits.join('　'));
+}
+
+/**
  * 導角：把選到的邊換成一片斜切面，角落自己會長出來。
  *
  * ── ⚠ 刻意**不**自動選中新長出來的面 ──────────────────
@@ -6073,6 +6118,16 @@ function updateBar() {
         : '沿著這個面的外緣往面內長一圈邊。只加線、形狀不變，內圈那個面會自動選中')
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
                     : '先按「拉點線面」進入編輯模式，再選一個面');
+
+  /** 細分：**選到面就給按**（一個或好幾個都行，2026-10-14）*/
+  const faceSome = sel.editMode && sel.editCount > 0 && sel.editSels.every(e => e.kind === 'face');
+  $('subdivFace').hidden = !faceSome;
+  $('subdivFaceN').hidden = !faceSome;
+  $('subdivFace').title = faceSome
+    ? `把選到的 ${sel.editCount} 個面各切成 ${Math.max(2, Math.min(6, Math.round(+$('subdivFaceN').value) || 2))} 等分的小面，形狀不變。`
+      + '旁邊的面只在共用的邊上多點。切完用「影響半徑」拉一個點，就拉得出圓順的鼓包'
+    : (sel.editMode ? '先選面（把過濾器切到「面」比較好點），一個或好幾個都可以'
+                    : '先按「拉點線面」進入編輯模式，再選面');
 
   /**
    * 刪除面：**選到面就給按**（一個或多個都行）。

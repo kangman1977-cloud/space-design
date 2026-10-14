@@ -7814,6 +7814,16 @@ function marksSurvive(name, src, dst, remap) {
     marksSurvive('★ 擠出之後，原網格上還在的邊每一樣都還在', m, r.mesh);
   }
 
+  /** 細分（2026-10-14）：選到的面整個換掉、旁邊的面插點，走 `rebuildWithInserts()` 加 `replace` */
+  {
+    const m = base.clone();
+    m.computeNormals();
+    const fs = m.faces.filter(f => f.normal.y > 0.99 || Math.abs(f.normal.y) < 0.01).slice(0, 6);
+    const r = edit.subdivideFaces(m, fs, 2);
+    ok('　　（前置）細分成功', r.ok, r.reason || '');
+    marksSurvive('★ 細分之後，原網格上還在的邊每一樣都還在', m, r.mesh, r.remap);
+  }
+
   /** 環切自己：一條被切成 n+1 段，每一段都繼承 → 數量會變多，但不能變少 */
   {
     const m = base.clone();
@@ -10386,6 +10396,120 @@ section('邊上加點：只放點，什麼都不連');
 // ═══════════════════════════════════════════════════════
 //  多點連接（＝ 依序跑好幾次「連接兩點」）
 // ═══════════════════════════════════════════════════════
+
+section('細分：選到的面切成 n×n 塊，形狀不變（2026-10-14）');
+
+/**
+ * kang 2026-10-14 看樣板 `樣板-細分.html` 拍板：① 新點放在原本的面上 ② 旁邊的面只在邊上多點
+ * ③ 等分由欄位給 ④ 5 邊以上中心切扇形、凹的只在邊上加點。→ `規格\建模器-細分.md`
+ *
+ * 🔴 **最重要的斷言：體積、面積精確不變**（跟環切、內縮同一條）——
+ * 而那幾個點數、面數，跟樣板（另一份獨立寫的算法）量到的一模一樣。
+ */
+{
+  const sd = (m, fs, n) => edit.subdivideFaces(m, fs, n);
+  const same = (name, m0, r) => {
+    ok(`${name}：成功`, r.ok, r.reason || '');
+    rel(`★★ ${name}：體積精確不變`, r.mesh.volume(), m0.volume());
+    rel(`★★ ${name}：面積精確不變`, r.mesh.area(), m0.area());
+    ok(`　　${name}：封閉、χ 不變、結構沒問題`,
+       r.mesh.isClosed() === m0.isClosed() && chi(r.mesh) === chi(m0) && r.mesh.validate().ok);
+  };
+  const box = () => baked('box', { w: 60, h: 45, d: 40 });
+  const topOf = m => m.faces.find(f => f.normal.y > 0.99);
+
+  {
+    const m = box(), r = sd(m, [topOf(m)], 2);
+    same('方塊頂面 2 等分', m, r);
+    eq('★ 點 8 → 13（4 條邊各一個中點 ＋ 中心 1）', r.mesh.verts.length, 13);
+    eq('★ 面 6 → 9（頂面變 4 塊，四個側面各多一個點、還是 1 個面）', r.mesh.faces.length, 9);
+    eq('★ 新線 4 條，全部標 hard', r.hard, 4);
+    eq('　　hard 邊確實是 4 條', [...r.mesh.edges()].filter(he => he.hard).length, 4);
+    eq('旁邊被插點的面 4 個', r.touched, 4);
+    r.mesh.computeNormals();
+    const sub = r.mesh.faces.find(f => f.normal.y > 0.99);
+    eq('★★ 切出來的小面自成一區（hard 擋住了；⛔ 會連整片頂面一起選）',
+       edit.regionOf(r.mesh, sub).faces.length, 1);
+    near('★ 原網格完全沒被改', m.verts.length, 8, 0);
+  }
+  {
+    const m = box(), r = sd(m, [topOf(m)], 3);
+    same('方塊頂面 3 等分', m, r);
+    eq('★ 點 8 → 20、面 6 → 14', r.mesh.verts.length * 100 + r.mesh.faces.length, 2014);
+    eq('　　新線 12 條（裡面 2 橫 2 直、各 3 段）', r.hard, 12);
+  }
+  {
+    // 相鄰兩個面一起：共用的那條邊只切一次（樣板量到 17 點、12 面）
+    const m = box(); m.computeNormals();
+    const front = m.faces.find(f => f.normal.z > 0.99);
+    const r = sd(m, [topOf(m), front], 2);
+    same('方塊頂面＋前面', m, r);
+    eq('★★ 點 8 → 17（共用的邊只切一次）、面 6 → 12', r.mesh.verts.length * 100 + r.mesh.faces.length, 1712);
+  }
+  {
+    // ④ 圓柱頂蓋（32 邊形）：中心一點 ＋ 32 片扇形，每片再切 4 塊（樣板量到 129 點、161 面）
+    const m = baked('cylinder', { r: 25, h: 70, seg: 32 });
+    const r = sd(m, [topOf(m)], 2);
+    same('圓柱頂蓋 2 等分', m, r);
+    eq('★ 點 64 → 129（邊上 32 ＋ 中心 1 ＋ 輻條 32）、面 34 → 161', r.mesh.verts.length * 1000 + r.mesh.faces.length, 129161);
+    eq('　　32 個側面各多一個點', r.touched, 32);
+  }
+  {
+    // 整顆球：448 個四邊形 ＋ 64 個三角形全切（樣板量到側面一塊 36 個面 ⇒ 620 面）
+    const m = baked('sphere', { r: 30, segW: 32, segH: 16 });
+    const r = sd(m, m.faces, 2);
+    same('整顆球 2 等分', m, r);
+    eq('★ 面 512 → 2048（每個都變 4 塊）', r.mesh.faces.length, 2048);
+    eq('　　點 482 → 1922（＋992 條邊的中點 ＋448 個四邊形的中心）', r.mesh.verts.length, 1922);
+    eq('　　旁邊沒有面被插點（全選了）', r.touched, 0);
+  }
+  {
+    // ④ 凹的多邊形：⛔ 不切，只在邊上加點
+    const L = [0, 0, 40, 0, 40, 10, 10, 10, 10, 30, 0, 30];
+    const m = baked('extrude', { type: 'extrude', h: 5, shapes: [{ out: L, oc: [0, 1, 2, 3, 4, 5] }] });
+    const top = topOf(m);
+    eq('（前置）L 形的頂面是 1 個 6 邊形', m.faceLoop(top).length, 6);
+    const r = sd(m, [top], 2);
+    same('L 形頂面', m, r);
+    eq('★★ 凹的 ⇒ 只在邊上加點，回報 1 個', r.concave * 10 + r.polys, 10);
+    r.mesh.computeNormals();
+    eq('　　頂面還是 1 個面、12 個點', r.mesh.faceLoop(topOf(r.mesh)).length, 12);
+  }
+  {
+    // 標記：被切成兩段的邊，兩段都要帶著原本的標記
+    const m = box();
+    const e = m.faceLoop(topOf(m))[0];
+    m.setRole(e, EDGE_ROLE.CUT);
+    const r = sd(m, [topOf(m)], 2);
+    eq('★★ 標了「切開」的那條邊切成兩段，兩段都還是切開', 
+       [...r.mesh.edges()].filter(he => he.role === EDGE_ROLE.CUT).length, 2);
+  }
+  {
+    // 展開：新線都是平的 ⇒ 不會變成折線（片數、面積、補剪的總長都不變）
+    const { makeRule: mk, DEFAULT_MATERIAL: dm } = await import('../js/unfold/rules.js');
+    const len = es => es.reduce((s, h) => s + h.v.p.distanceTo(h.to.p), 0);
+    for (const [name, m, fs] of [['方塊頂面', box(), m => [topOf(m)]],
+                                 ['圓柱側面', baked('cylinder', { r: 25, h: 70, seg: 32 }), m => m.faces.filter(f => Math.abs(f.normal.y) < 0.01)]]) {
+      edit.refreshAfterEdit(m);
+      const a = unfoldMesh(m, mk(dm, 0.3));
+      const o = sd(m, fs(m), 2).mesh;
+      edit.refreshAfterEdit(o);
+      const b = unfoldMesh(o, mk(dm, 0.3));
+      eq(`★ ${name} 細分後展開：片數一樣`, b.stats.pieces, a.stats.pieces);
+      rel(`　　${name}：展開面積一樣`, b.stats.area, a.stats.area);
+      rel(`　　${name}：程式補剪的總長一樣`, len(b.autoEdges), len(a.autoEdges));
+      eq(`　　${name}：圓弧折彎一樣幾組`, b.stats.arcBends, a.stats.arcBends);
+    }
+  }
+  {
+    const m = box();
+    ok('等分 1 擋下來', !sd(m, [topOf(m)], 1).ok);
+    ok('沒選面 擋下來', !sd(m, [], 2).ok);
+    const tiny = baked('box', { w: 0.03, h: 1, d: 1 });
+    const r = sd(tiny, [topOf(tiny)], 6);
+    ok('★ 切出來比 0.1 mm 短 ⇒ 擋下來並講原因', !r.ok && /長度 0/.test(r.reason || ''), r.reason || '竟然通過');
+  }
+}
 
 section('多點連接：照選的順序一段一段連');
 

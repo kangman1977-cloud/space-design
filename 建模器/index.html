@@ -721,6 +721,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="insetW" type="number" min="0.1" step="0.1" value="1"
              title="內縮寬度（cm）：新的一圈離原本的邊多遠。四個角會自動做尖角接合（miter），實際牆距就是這個數字">
       <!--
+        細分（2026-10-14，kang 看「樣板-細分.html」拍板）：選到的面每一個切成 n×n 塊，形狀不變。
+        旁邊的面只在共用的邊上多點；5 邊以上的面中心加一點切扇形，凹的只在邊上加點。
+        → 規格\建模器-細分.md
+      -->
+      <button id="subdivFace" hidden title="細分：把選到的面各切成幾等分的小面，形狀不變。一個或好幾個面都可以。切完用「影響半徑」拉一個點，就拉得出圓順的鼓包">細分</button>
+      <input id="subdivFaceN" type="number" min="2" max="6" step="1" value="2" hidden
+             title="切幾等分（2～6）：2 ＝ 每個面變 4 塊、3 ＝ 9 塊、4 ＝ 16 塊。面越多，展開圖要黏的接縫也越多">
+      <!--
         導角：把選到的邊換成一片斜切面，角落自己會長出來。
         ⚠ 刻意不自動選中新面 —— 導角完形狀就完成了（寬度已經在輸入框給了），
         而且它可能一次產生很多片（12 條邊全導 ＝ 20 片），

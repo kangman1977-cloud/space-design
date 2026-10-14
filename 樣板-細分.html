@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>細分比較樣板</title>
+<!--
+  樣板：細分（一次細分整個選取）—— 2026-10-14 kang「樣板先做，再做後續的決策」。
+  推導與排序在 編輯功能設計方向.md 第 5、5.1 節（安全帽那一類形狀卡在「加密」）。
+  同一個模型、同一個視角，左邊細分前、右邊細分後，讓 kang 看結果挑四件事：
+    ① 新的點放哪：原本的面上（形狀不變）／往外鼓一點（照角落的法向推，Phong 那一套，係數 0.75）
+    ② 選取旁邊的面：只在共用的邊上多點（變成多邊形）／切成三角形連過去（從一個沒被切到的角拉扇形）
+    ③ 切幾等分：2／3／4
+    ④ 一整片的多邊形（圓柱蓋子）：中心加一點切成扇形／不切，只在邊上加點
+  「拉一下試試」＝ 找選取中間最近的點，用影響半徑沿法向往外拉 8 cm（衰減 (1-(d/R)²)²），看加密之後拉起來差多少。
+  模型尺寸照 js/build/prim.js 的 PRIM_DEFAULTS：球 r30 32×16、圓柱 r25 h70 32 邊、方塊 60×45×40。
+  ⚠ 這是樣板，程式是另外寫的；這裡的算法只是為了看結果，⛔ 不是規格。
+  three.js 跟建模器同一版（r185），從 CDN 載入（這個檔直接點開也看得到）。
+-->
+<style>
+  :root { --bg: #1b1e23; --panel: #23272e; --ink: #e6e9ee; --muted: #9aa3ae; --line: #343a44; --accent: #4a90e2; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; width: 100%; }
+  .grp { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .grp > span { color: var(--muted); }
+  button { background: #2c323b; color: var(--ink); border: 1px solid #3c444f; border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=range] { width: 110px; }
+  .note { color: var(--muted); font-size: 12px; width: 100%; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin: 0 3px 0 8px; }
+  #wrap { position: relative; flex: 1; min-height: 300px; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .tag { position: absolute; padding: 5px 10px; border-radius: 6px; background: rgba(20,23,28,.85);
+    border: 1px solid var(--line); font-size: 13px; pointer-events: none; max-width: 46%; }
+  .tag b { display: block; font-size: 14px; }
+  .tag .warn { color: #ffcf7a; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: #ffb4a8; }
+  @media (max-width: 700px) { .tag { font-size: 11px; max-width: 90%; } .tag b { font-size: 12px; } header { padding: 6px 10px; } }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>細分：左邊細分前、右邊細分後 —— 四件事切換著看</h1>
+  <div class="grp" data-k="model"><span>模型</span>
+    <button data-v="sphereSide" class="on">球・側面一塊</button>
+    <button data-v="sphereTop">球・頂端（含三角形）</button>
+    <button data-v="cylTop">圓柱・頂面</button>
+    <button data-v="boxTwo">方塊・頂面＋前面</button>
+  </div>
+  <div class="grp" data-k="bulge"><span>① 新的點放哪</span>
+    <button data-v="0" class="on">原本的面上（形狀不變）</button>
+    <button data-v="1">往外鼓一點</button>
+  </div>
+  <div class="grp" data-k="nb"><span>② 選取旁邊的面</span>
+    <button data-v="pts" class="on">只在共用的邊上多點</button>
+    <button data-v="tri">切成三角形連過去</button>
+  </div>
+  <div class="grp" data-k="n"><span>③ 切幾等分</span>
+    <button data-v="2" class="on">2</button>
+    <button data-v="3">3</button>
+    <button data-v="4">4</button>
+  </div>
+  <div class="grp" data-k="ngon"><span>④ 一整片的多邊形</span>
+    <button data-v="fan" class="on">中心加一點切成扇形</button>
+    <button data-v="edge">不切，只在邊上加點</button>
+  </div>
+  <div class="grp" data-k="pull"><span>拉一下試試</span>
+    <button data-v="0" class="on">關</button>
+    <button data-v="1">開（往外拉 8 cm）</button>
+    <span>影響半徑</span><input id="rad" type="range" min="8" max="30" step="1" value="18"><b id="radv">18 cm</b>
+  </div>
+  <div class="note">
+    <span class="legend"><i style="background:#f0b45a"></i>選到的面<i style="background:#8fd18f"></i>旁邊被改到的面<i style="background:#6fa8dc"></i>沒動到的面</span>
+    　｜　③ 另一種做法是「每按一次切成 2 等分，要更細就再按」—— 按兩次跟選 4 看起來一樣，差在要不要多一個數字欄。
+    　｜　拖曳轉視角、滾輪縮放（左右一起動）
+  </div>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="tag" id="tagA"></div>
+  <div class="tag" id="tagB"></div>
+  <div id="err"></div>
+</div>
+<script type="module">
+let THREE, OrbitControls;
+try {
+  THREE = await import('three');
+  ({ OrbitControls } = await import('three/addons/controls/OrbitControls.js'));
+} catch (e) {
+  const el = document.getElementById('err');
+  el.style.display = 'grid';
+  el.textContent = '載入 three.js 失敗（要連得上網路）：' + e.message;
+  throw e;
+}
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// ── 選項 ─────────────────────────────────────────────
+const opt = { model: 'sphereSide', bulge: '0', nb: 'pts', n: '2', ngon: 'fan', pull: '0' };
+document.querySelectorAll('.grp[data-k]').forEach(g => {
+  g.querySelectorAll('button').forEach(b => b.onclick = () => {
+    g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    opt[g.dataset.k] = b.dataset.v;
+    rebuild(g.dataset.k === 'model');
+  });
+});
+const rad = document.getElementById('rad');
+rad.oninput = () => { document.getElementById('radv').textContent = rad.value + ' cm'; rebuild(false); };
+
+// ── 模型（尺寸照 PRIM_DEFAULTS）─────────────────────────
+function newell(verts, f) {
+  const n = V(0, 0, 0);
+  for (let i = 0; i < f.length; i++) {
+    const a = verts[f[i]], b = verts[f[(i + 1) % f.length]];
+    n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return n;   // 長度 ＝ 面積 × 2
+}
+function centroid(verts, f) { const c = V(0, 0, 0); f.forEach(i => c.add(verts[i])); return c.divideScalar(f.length); }
+/** 凸的形狀：法向朝內的面翻過來（繞向統一朝外） */
+function orient(m) {
+  m.faces = m.faces.map(f => newell(m.verts, f).dot(centroid(m.verts, f)) < 0 ? f.slice().reverse() : f);
+  return m;
+}
+function sphere() {
+  const r = 30, S = 32, R = 16, verts = [V(0, r, 0)];
+  for (let j = 1; j < R; j++) for (let i = 0; i < S; i++) {
+    const ph = Math.PI * j / R, th = 2 * Math.PI * i / S;
+    verts.push(V(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th)));
+  }
+  verts.push(V(0, -r, 0));
+  const id = (j, i) => 1 + (j - 1) * S + ((i % S) + S) % S, bot = verts.length - 1;
+  const faces = [], tag = [];
+  for (let i = 0; i < S; i++) { faces.push([0, id(1, i + 1), id(1, i)]); tag.push({ j: 0, i }); }
+  for (let j = 1; j < R - 1; j++) for (let i = 0; i < S; i++) { faces.push([id(j, i), id(j, i + 1), id(j + 1, i + 1), id(j + 1, i)]); tag.push({ j, i }); }
+  for (let i = 0; i < S; i++) { faces.push([bot, id(R - 1, i), id(R - 1, i + 1)]); tag.push({ j: R - 1, i }); }
+  return { m: orient({ verts, faces }), tag };
+}
+function cylinder() {
+  const r = 25, h = 70, S = 32, verts = [];
+  for (const y of [-h / 2, h / 2]) for (let i = 0; i < S; i++) {
+    const th = 2 * Math.PI * i / S; verts.push(V(r * Math.cos(th), y, r * Math.sin(th)));
+  }
+  const faces = [];
+  for (let i = 0; i < S; i++) { const k = (i + 1) % S; faces.push([i, k, S + k, S + i]); }
+  faces.push([...Array(S).keys()].map(i => S + i));          // 頂蓋（32 邊形）
+  faces.push([...Array(S).keys()]);                           // 底蓋
+  return orient({ verts, faces });
+}
+function box() {
+  const w = 30, h = 22.5, d = 20, verts = [];
+  for (const x of [-w, w]) for (const y of [-h, h]) for (const z of [-d, d]) verts.push(V(x, y, z));
+  const at = (x, y, z) => (x > 0) * 4 + (y > 0) * 2 + (z > 0);
+  const faces = [
+    [at(0,1,0), at(0,1,1), at(1,1,1), at(1,1,0)],   // 頂 0
+    [at(0,0,1), at(1,0,1), at(1,1,1), at(0,1,1)],   // 前 1
+    [at(0,0,0), at(1,0,0), at(1,0,1), at(0,0,1)],   // 底
+    [at(0,0,0), at(0,1,0), at(1,1,0), at(1,0,0)],   // 後
+    [at(1,0,0), at(1,1,0), at(1,1,1), at(1,0,1)],   // 右
+    [at(0,0,0), at(0,0,1), at(0,1,1), at(0,1,0)]    // 左
+  ];
+  return orient({ verts, faces });
+}
+const MODELS = {
+  sphereSide: () => { const { m, tag } = sphere(); const pick = new Set([29, 30, 31, 0, 1, 2]);
+    return { m, sel: new Set(tag.map((t, k) => (t.j >= 5 && t.j <= 10 && pick.has(t.i)) ? k : -1).filter(k => k >= 0)), cam: [130, 35, 35] }; },
+  sphereTop: () => { const { m, tag } = sphere();
+    return { m, sel: new Set(tag.map((t, k) => t.j <= 1 ? k : -1).filter(k => k >= 0)), cam: [75, 100, 80] }; },
+  cylTop: () => { const m = cylinder(); return { m, sel: new Set([32]), cam: [135, 150, 160] }; },
+  boxTwo: () => { const m = box(); return { m, sel: new Set([0, 1]), cam: [95, 85, 140] }; }
+};
+
+// ── 細分（樣板用的算法，⛔ 不是規格）────────────────────────
+function vertNormals(m) {
+  const ns = m.verts.map(() => V(0, 0, 0));
+  m.faces.forEach(f => { const n = newell(m.verts, f); f.forEach(i => ns[i].add(n)); });
+  return ns.map(n => n.normalize());
+}
+/** 投影到角落那一點的切平面（Phong 那一套）：「往外鼓」就是幾個角落各自的切平面加權平均 */
+const proj = (p, c) => p.clone().sub(c.n.clone().multiplyScalar(p.clone().sub(c.pos).dot(c.n)));
+function blend(flat, corners, w, bulge) {
+  if (!bulge) return flat;
+  const s = V(0, 0, 0);
+  corners.forEach((c, k) => s.add(proj(flat, c).multiplyScalar(w[k])));
+  return flat.clone().lerp(s, 0.75);
+}
+
+function subdivide(src, sel, o) {
+  const n = +o.n, bulge = o.bulge === '1';
+  const vn = vertNormals(src);
+  const out = { verts: src.verts.map(v => v.clone()), faces: [], kind: [] };
+  const corner = i => ({ idx: i, key: 'v' + i, pos: src.verts[i], n: vn[i] });
+  const edges = new Map();     // 'ka|kb'（排序過）→ 從前一個到後一個的新點索引
+  const add = p => (out.verts.push(p), out.verts.length - 1);
+
+  function edgePts(A, B) {
+    const fwd = A.key < B.key, k = fwd ? A.key + '|' + B.key : B.key + '|' + A.key;
+    if (!edges.has(k)) {
+      const [P, Q] = fwd ? [A, B] : [B, A], arr = [];
+      for (let s = 1; s < n; s++) {
+        const t = s / n;
+        arr.push(add(blend(P.pos.clone().lerp(Q.pos, t), [P, Q], [1 - t, t], bulge)));
+      }
+      edges.set(k, arr);
+    }
+    const a = edges.get(k);
+    return fwd ? a : a.slice().reverse();
+  }
+  function tri(c0, c1, c2, kind) {
+    const e01 = edgePts(c0, c1), e02 = edgePts(c0, c2), e12 = edgePts(c1, c2), inner = new Map();
+    const P = (a, b) => {
+      if (a === 0 && b === 0) return c0.idx;
+      if (a === n && b === 0) return c1.idx;
+      if (a === 0 && b === n) return c2.idx;
+      if (b === 0) return e01[a - 1];
+      if (a === 0) return e02[b - 1];
+      if (a + b === n) return e12[b - 1];
+      const key = a + ',' + b;
+      if (!inner.has(key)) {
+        const w = [(n - a - b) / n, a / n, b / n];
+        const flat = c0.pos.clone().multiplyScalar(w[0]).add(c1.pos.clone().multiplyScalar(w[1])).add(c2.pos.clone().multiplyScalar(w[2]));
+        inner.set(key, add(blend(flat, [c0, c1, c2], w, bulge)));
+      }
+      return inner.get(key);
+    };
+    for (let a = 0; a < n; a++) for (let b = 0; a + b < n; b++) {
+      out.faces.push([P(a, b), P(a + 1, b), P(a, b + 1)]); out.kind.push(kind);
+      if (a + b < n - 1) { out.faces.push([P(a + 1, b), P(a + 1, b + 1), P(a, b + 1)]); out.kind.push(kind); }
+    }
+  }
+  function quad(c0, c1, c2, c3) {
+    const b0 = edgePts(c0, c1), b1 = edgePts(c1, c2), b2 = edgePts(c3, c2), b3 = edgePts(c0, c3), inner = new Map();
+    const P = (u, v) => {
+      if (u === 0 && v === 0) return c0.idx; if (u === n && v === 0) return c1.idx;
+      if (u === n && v === n) return c2.idx; if (u === 0 && v === n) return c3.idx;
+      if (v === 0) return b0[u - 1]; if (u === n) return b1[v - 1];
+      if (v === n) return b2[u - 1]; if (u === 0) return b3[v - 1];
+      const key = u + ',' + v;
+      if (!inner.has(key)) {
+        const s = u / n, t = v / n, w = [(1 - s) * (1 - t), s * (1 - t), s * t, (1 - s) * t];
+        const flat = V(0, 0, 0); [c0, c1, c2, c3].forEach((c, k) => flat.add(c.pos.clone().multiplyScalar(w[k])));
+        inner.set(key, add(blend(flat, [c0, c1, c2, c3], w, bulge)));
+      }
+      return inner.get(key);
+    };
+    for (let u = 0; u < n; u++) for (let v = 0; v < n; v++) {
+      out.faces.push([P(u, v), P(u + 1, v), P(u + 1, v + 1), P(u, v + 1)]); out.kind.push('sel');
+    }
+  }
+
+  // 1) 選到的面
+  src.faces.forEach((f, fi) => {
+    if (!sel.has(fi)) return;
+    const cs = f.map(corner);
+    if (f.length === 3) tri(cs[0], cs[1], cs[2], 'sel');
+    else if (f.length === 4) quad(cs[0], cs[1], cs[2], cs[3]);
+    else if (o.ngon === 'fan') {
+      const fn = newell(src.verts, f).normalize();
+      const flat = centroid(src.verts, f);
+      const cpos = blend(flat, cs, cs.map(() => 1 / cs.length), bulge);
+      const c = { idx: add(cpos), key: 'c' + fi, pos: cpos, n: fn };
+      for (let i = 0; i < cs.length; i++) tri(c, cs[i], cs[(i + 1) % cs.length], 'sel');
+    } else {
+      const loop = [];
+      for (let i = 0; i < cs.length; i++) { loop.push(cs[i].idx, ...edgePts(cs[i], cs[(i + 1) % cs.length])); }
+      out.faces.push(loop); out.kind.push('sel');
+    }
+  });
+
+  // 2) 旁邊的面：共用的邊上被切出新點
+  src.faces.forEach((f, fi) => {
+    if (sel.has(fi)) return;
+    const loop = [], touched = new Set();
+    for (let i = 0; i < f.length; i++) {
+      const a = f[i], b = f[(i + 1) % f.length];
+      loop.push(a);
+      const ka = 'v' + a, kb = 'v' + b, key = ka < kb ? ka + '|' + kb : kb + '|' + ka;
+      if (edges.has(key)) {
+        const arr = edges.get(key);
+        loop.push(...(ka < kb ? arr : arr.slice().reverse()));
+        touched.add(a); touched.add(b);
+      }
+    }
+    if (!touched.size) { out.faces.push(f.slice()); out.kind.push('base'); return; }
+    if (o.nb === 'pts') { out.faces.push(loop); out.kind.push('nb'); return; }
+    // 切成三角形：從一個沒被切到的角拉扇形；找不到就從中心拉
+    const apex = f.find(i => !touched.has(i));
+    if (apex !== undefined) {
+      const s = loop.indexOf(apex), L = loop.slice(s).concat(loop.slice(0, s));
+      for (let i = 1; i < L.length - 1; i++) { out.faces.push([L[0], L[i], L[i + 1]]); out.kind.push('nb'); }
+    } else {
+      const c = add(centroid(out.verts, loop));
+      for (let i = 0; i < loop.length; i++) { out.faces.push([c, loop[i], loop[(i + 1) % loop.length]]); out.kind.push('nb'); }
+    }
+  });
+  return out;
+}
+
+// ── 量測 ──────────────────────────────────────────────
+function volume(m) {
+  let s = 0;
+  m.faces.forEach(f => { const a = m.verts[f[0]];
+    for (let i = 1; i < f.length - 1; i++) s += a.dot(m.verts[f[i]].clone().cross(m.verts[f[i + 1]])); });
+  return s / 6;
+}
+/** 這個面平不平：所有點離「平均平面」最遠多少 */
+function flatness(m, f) {
+  if (f.length < 4) return 0;
+  const n = newell(m.verts, f).normalize(), c = centroid(m.verts, f);
+  return Math.max(...f.map(i => Math.abs(m.verts[i].clone().sub(c).dot(n))));
+}
+function pull(m, sel, srcSel, on) {
+  if (!on) return m;
+  const ctr = V(0, 0, 0); let cnt = 0;
+  srcSel.faces.forEach((f, fi) => { if (srcSel.sel.has(fi)) f.forEach(i => { ctr.add(srcSel.verts[i]); cnt++; }); });
+  ctr.divideScalar(cnt);
+  let best = 0, bd = Infinity;
+  m.verts.forEach((v, i) => { const d = v.distanceTo(ctr); if (d < bd) { bd = d; best = i; } });
+  const ns = vertNormals(m), dir = ns[best], o = m.verts[best].clone(), R = +rad.value;
+  const verts = m.verts.map(v => {
+    const d = v.distanceTo(o); if (d >= R) return v.clone();
+    const k = 1 - (d / R) ** 2; return v.clone().add(dir.clone().multiplyScalar(8 * k * k));
+  });
+  return { ...m, verts };
+}
+
+// ── 畫 ───────────────────────────────────────────────
+const cv = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setScissorTest(true);
+const camera = new THREE.PerspectiveCamera(35, 1, 1, 2000);
+const controls = new OrbitControls(camera, cv);
+controls.enableDamping = true;
+const COL = { sel: 0xf0b45a, nb: 0x8fd18f, base: 0x6fa8dc };
+function makeScene() {
+  const s = new THREE.Scene(); s.background = new THREE.Color(0x1b1e23);
+  s.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+  const d = new THREE.DirectionalLight(0xffffff, 1.6); d.position.set(60, 100, 80); s.add(d);
+  const g = new THREE.GridHelper(200, 20, 0x2b3038, 0x2b3038); g.position.y = -40; s.add(g);
+  const holder = new THREE.Group(); s.add(holder);
+  return { s, holder };
+}
+const A = makeScene(), B = makeScene();
+function draw(target, m, kinds) {
+  target.holder.clear();
+  const pos = [], col = [], c = new THREE.Color();
+  m.faces.forEach((f, k) => {
+    c.setHex(COL[kinds[k]]);
+    const a = m.verts[f[0]];
+    for (let i = 1; i < f.length - 1; i++) [a, m.verts[f[i]], m.verts[f[i + 1]]].forEach(p => { pos.push(p.x, p.y, p.z); col.push(c.r, c.g, c.b); });
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  target.holder.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: .8,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })));
+  const seen = new Set(), lp = [];
+  m.faces.forEach(f => f.forEach((a, i) => { const b = f[(i + 1) % f.length], k = Math.min(a, b) + '-' + Math.max(a, b);
+    if (seen.has(k)) return; seen.add(k); const p = m.verts[a], q = m.verts[b]; lp.push(p.x, p.y, p.z, q.x, q.y, q.z); }));
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+  target.holder.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x11151a })));
+}
+
+const fmt = x => x.toLocaleString('zh-Hant', { maximumFractionDigits: 1 });
+function rebuild(resetCam) {
+  const mod = MODELS[opt.model]();
+  const src = mod.m, sel = mod.sel;
+  const res = subdivide(src, sel, opt);
+  const pullOn = opt.pull === '1';
+  const srcSel = { ...src, sel };
+  const before = pull(src, sel, srcSel, pullOn);
+  const after = pull(res, sel, srcSel, pullOn);
+  draw(A, before, src.faces.map((f, i) => sel.has(i) ? 'sel' : 'base'));
+  draw(B, after, res.kind);
+
+  // 數字（⚠ 量的是「拉一下」之前的形狀，才看得出細分本身改了多少）
+  const v0 = volume(src), v1 = volume(res);
+  const nbIdx = res.kind.map((k, i) => k === 'nb' ? i : -1).filter(i => i >= 0);
+  const nbOrig = new Set();
+  src.faces.forEach((f, fi) => { if (!sel.has(fi) && f.some((a, i) => {
+    const b = f[(i + 1) % f.length]; return src.faces.some((g, gi) => sel.has(gi) && g.includes(a) && g.includes(b)); })) nbOrig.add(fi); });
+  const bent = nbIdx.filter(i => flatness(res, res.faces[i]) > 0.01);
+  const bentMax = Math.max(0, ...nbIdx.map(i => flatness(res, res.faces[i])));
+  let selBent = 0;
+  res.faces.forEach((f, i) => { if (res.kind[i] === 'sel' && flatness(res, f) > 0.01) selBent++; });
+
+  document.getElementById('tagA').innerHTML =
+    `<b>細分前</b>面 ${src.faces.length} 個（選到 ${sel.size} 個）<br>體積 ${fmt(v0)} cm³`;
+  const dv = v1 - v0;
+  document.getElementById('tagB').innerHTML =
+    `<b>細分後</b>面 ${src.faces.length} → <b style="display:inline">${res.faces.length}</b> 個　點 ${src.verts.length} → ${res.verts.length} 個<br>` +
+    `體積 ${fmt(v1)} cm³（${Math.abs(dv) < 0.05 ? '<b style="display:inline">完全沒變</b>' : '差 ' + (dv > 0 ? '+' : '') + fmt(dv)}）<br>` +
+    `旁邊被改到的面：原本 ${nbOrig.size} 個 → 現在 ${nbIdx.length} 個` +
+    (bent.length ? `<br><span class="warn">⚠ 旁邊有 ${bent.length} 個面變得不平（最多差 ${bentMax.toFixed(2)} cm）</span>` : '') +
+    (selBent ? `<br><span class="warn">⚠ 選到的那一塊有 ${selBent} 個面不平（往外鼓的結果）</span>` : '');
+  if (resetCam) { camera.position.set(...mod.cam); controls.target.set(0, 0, 0); controls.update(); }
+}
+
+function layout() {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  renderer.setSize(w, h, false);
+  const side = w >= h;                     // 寬的畫面左右排、高的畫面上下排
+  const rects = side ? [[0, 0, w / 2, h], [w / 2, 0, w / 2, h]] : [[0, h / 2, w, h / 2], [0, 0, w, h / 2]];
+  camera.aspect = rects[0][2] / rects[0][3]; camera.updateProjectionMatrix();
+  const tA = document.getElementById('tagA').style, tB = document.getElementById('tagB').style;
+  tA.left = '8px'; tA.top = '8px';
+  if (side) { tB.left = (w / 2 + 8) + 'px'; tB.top = '8px'; } else { tB.left = '8px'; tB.top = (h / 2 + 8) + 'px'; }
+  return rects;
+}
+let rects = layout();
+addEventListener('resize', () => { rects = layout(); });
+rebuild(true);
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  [A, B].forEach((sc, k) => {
+    const [x, y, w, h] = rects[k];
+    renderer.setViewport(x, y, w, h); renderer.setScissor(x, y, w, h);
+    renderer.render(sc.s, camera);
+  });
+})();
+</script>
+</body>
+</html>
