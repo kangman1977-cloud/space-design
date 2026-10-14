@@ -49,7 +49,48 @@ import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
 
-const $ = id => document.getElementById(id);
+/**
+ * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
+ *
+ * ── 撞過一次 ─────────────────────────────────────────
+ * 剛上傳的幾分鐘內，瀏覽器可能拿到**舊的主頁面 ＋ 新的程式**（兩個檔各自暫存）。
+ * 新程式要接一顆新按鈕（`$('curveThrough').onclick = …`），舊頁面上沒有它 ⇒ 碰到 null 丟錯 ⇒
+ * **後面的程式全部沒跑**，整個建模器按什麼都沒反應。〔2026-10-14 線上看到 → `HISTORY.md`「曲線刀具 第四步 切穿 結案」〕
+ *
+ * ── 做法 ────────────────────────────────────────────
+ * 找不到 ⇒ 回一個**沒放進畫面的替身**（同一個 id 永遠回同一個替身）：寫 onclick、hidden、value 都不會出錯，只是看不到；
+ * 同時在畫面最上面掛一條提示「畫面跟程式對不上 —— 按 F5」（提示條自己用程式做 —— 舊頁面上不會有它的位置）。
+ * ⚠ 這⛔ 是拿來掩蓋打錯字的：替身一出現就會掛提示、主控台也印出是哪幾個 id。
+ */
+const _stubs = new Map();
+const $ = id => {
+  const el = document.getElementById(id);
+  if (el) return el;
+  let stub = _stubs.get(id);
+  if (!stub) {
+    stub = document.createElement('input');   // input：value、checked、step、disabled 都有，寫什麼都不會丟錯
+    _stubs.set(id, stub);
+    if (_stubs.size === 1) setTimeout(reportMissingIds, 0);   // 第一個缺的 ⇒ 等這一輪跑完再一起報
+  }
+  return stub;
+};
+
+function reportMissingIds() {
+  const ids = [..._stubs.keys()];
+  console.warn('畫面上找不到這些元件（主頁面跟程式的版本對不上？）：', ids.join(', '));
+  if (document.getElementById('versionMismatch')) return;
+  const bar = document.createElement('div');
+  bar.id = 'versionMismatch';
+  bar.textContent = '畫面跟程式的版本對不上（多半是剛有新版、瀏覽器還留著舊的畫面）—— 按 F5 重新整理就好。'
+    + `在那之前有 ${ids.length} 顆按鈕或欄位不會出現。`;
+  Object.assign(bar.style, {
+    position: 'fixed', top: '0', left: '0', right: '0', zIndex: '9999', padding: '8px 12px',
+    background: '#8a3b12', color: '#fff', font: '14px/1.5 system-ui, sans-serif', textAlign: 'center', cursor: 'pointer'
+  });
+  bar.title = '點一下就重新整理';
+  bar.onclick = () => location.reload();
+  document.body.appendChild(bar);
+}
 
 // ═══════════════════════════════════════════════════════
 //  組裝
