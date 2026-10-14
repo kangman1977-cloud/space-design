@@ -4537,6 +4537,28 @@ section('擠出面：從一個面長出新的一段');
     const r = edit.extrudeFace(m, topOf(m), -10);
     ok('★ 管的端面往內：外圈、內孔兩圈都擋', !r.ok && r.badEdges === 32, r.reason || '竟然通過');
   }
+  {
+    /**
+     * ★ 往外擠出的鏡像（2026-10-14，kang 選「擋下來並提醒先內縮」）：
+     * 凹槽的底直接往外擠 ⇒ 新牆沿凹槽的牆長上去、疊在一起 ⇒ 擋；先內縮再擠 ⇒ 可以。
+     */
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const ins = edit.insetFaces(m, topOf(m), 5);
+    edit.refreshAfterEdit(ins.mesh);
+    const pit = edit.extrudeFace(ins.mesh, ins.innerFace, -15);
+    ok('（前置）內縮 5 → 往內 15 做出凹槽', pit.ok, pit.reason || '');
+    const m1 = pit.mesh; edit.refreshAfterEdit(m1);
+    const floor = m1.faces.find(f => f.normal.y > 0.999 && m1.faceVerts(f).every(v => Math.abs(v.p.y - 7.5) < 1e-9));
+    const r = edit.extrudeFace(m1, floor, 5);
+    ok('★★ 凹槽的底直接往外擠：擋下來（新牆會跟凹槽的牆疊在一起）', !r.ok && r.badEdges === 4, r.reason || '竟然通過');
+    ok('★ 原因講「先內縮」、⛔ 講成「往內擠出」', /內縮/.test(r.reason || '') && !/往內擠出/.test(r.reason || ''), r.reason || '');
+    const ins2 = edit.insetFaces(m1, floor, 3);
+    edit.refreshAfterEdit(ins2.mesh);
+    const r2 = edit.extrudeFace(ins2.mesh, ins2.innerFace, 5);
+    ok('★ 底先內縮 3 再往外擠 5：可以', r2.ok, r2.reason || '');
+    near('　　體積 ＋ 44×24×5（凹槽裡長出一根柱子）', r2.mesh.volume() - m1.volume(), 44 * 24 * 5, 1e-6);
+    ok('　　封閉、χ＝2', r2.mesh.isClosed() && chi(r2.mesh) === 2);
+  }
 
   // ── 連續擠出：做鹿角就是重複這個動作 ──
   {

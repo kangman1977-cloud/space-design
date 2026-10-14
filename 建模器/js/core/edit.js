@@ -7182,8 +7182,13 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
    *
    * ⚠ 只擋「邊緣那一圈」。**拉太深穿過底部**那一種這裡⛔ 不管 ——
    * 一開始只凹一格吸附值，之後是「拉面」在動，跟往外擠完再拉是同一條路。
+   *
+   * ── 🔴 往外擠出：鏡像的那一種（2026-10-14，kang 選「擋下來並提醒先內縮」）──
+   * 凹槽的**底**直接往外擠：新牆沿 ＋法向長，跟凹槽的牆疊在一起（凹角剛好 −90°），
+   * 或穿進實體（比 −90° 更凹，例如往外張開的凹槽）。⇒ 判準是同一張表反過來：**θ > −(90° − tolDeg)**。
+   * 凸角往外擠一律在實體外面，⛔ 擋（方塊頂面、圓柱側面照舊）。
    */
-  if (dist < 0) {
+  {
     const lim = Math.PI / 2 - THREE.MathUtils.degToRad(tolDeg);
     let bad = 0;
     for (const loop of loops) {
@@ -7191,14 +7196,15 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
         mesh.computeFaceNormal(he.face);
         mesh.computeFaceNormal(he.twin.face);
         const th = mesh.dihedral(he);
-        if (th === null || th >= lim) bad++;
+        if (th === null || (dist < 0 ? th >= lim : th <= -lim)) bad++;
       }
     }
     if (bad) {
+      const what = dist < 0 ? '往內擠出' : '擠出';
       return {
         ok: false, badEdges: bad,
-        reason: `這個面的邊緣直接接著旁邊的牆（${bad} 條邊），往內擠出的新牆會跟它疊在一起或穿出去。` +
-                '先按「內縮」留一圈邊，再往內擠出'
+        reason: `這個面的邊緣直接接著旁邊的牆（${bad} 條邊），${what}的新牆會跟它疊在一起或穿${dist < 0 ? '出' : '進'}去。` +
+                `先按「內縮」留一圈邊，再${what}`
       };
     }
   }
