@@ -15984,6 +15984,78 @@ section('曲線刀具 3d：一段一段打出來的直線折線（2026-10-14）'
   ok('★★★ 封閉折線 ⇒ 切得出來、裡面那塊 ＝ 20 × 10 ＝ 200', r2.ok && r2.mesh.isClosed() && !!inner, r2.reason);
 }
 
+section('曲線刀具 第四步：切穿（2026-10-14）');
+
+/**
+ * 規格：`規格\建模器-曲線刀具.md`「第四步」。刀柱（`curveCutterPrism()`）＋ 布林（`splitByCutter()`）⇒ 兩塊實心。
+ * 方塊 60 × 45 × 40（baked）：頂面 y ＝ 20、s ＝ x、t ＝ −z；整塊 108000。
+ */
+if (!csgOK) {
+  ok('（略過：布林函式庫沒載入）', true);
+} else {
+  const { splitByCutter } = await import('../js/build/bool.js');
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const Y = box.bounds().max.y;
+  const top = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.y - Y) < 1e-9));
+  const fr = edit.faceDimFrame(box.faceVerts(top).map(v => v.p.clone()));
+  const N = new THREE.Vector3(0, 1, 0);
+  const A = st => ({ p: fr.toWorld(st[0], st[1]), hin: null, hout: null });
+  const good = m => !!m && m.isClosed() && m.validate().ok;
+  const vols = r => [r.inside, r.outside].map(m => (m ? m.volume() : 0)).sort((a, b) => a - b);
+
+  // L 形折線（從前面那條邊往上 15、往右 20、往下到邊）⇒ 切下 20 × 15 × 40 ＝ 12000
+  const L = edit.sampleCurve([A([-20, -22.5]), A([-20, -7.5]), A([0, -7.5]), A([0, -22.5])], 1);
+  const pL = edit.curveCutterPrism(box, N, L, false);
+  ok('★★ 刀柱組得起來：封閉、體積 > 0', pL.ok && pL.cutter.isClosed() && pL.cutter.volume() > 0, pL.reason);
+  const cb = pL.ok ? pL.cutter.bounds() : null;
+  ok('★★ 　 刀柱高度蓋過整個物件（y 低於 −20、高於 20）', cb && cb.min.y < -20 && cb.max.y > 20);
+  const sL = splitByCutter(box, pL.cutter);
+  const vL = vols(sL);
+  ok('★★★ L 形切穿 ⇒ 兩塊實心：12000 ＋ 96000', good(sL.inside) && good(sL.outside) && Math.abs(vL[0] - 12000) < 1e-3 && Math.abs(vL[1] - 96000) < 1e-3, vL.join());
+
+  // 圓（封閉）⇒ 中間一根柱子 ＋ 帶一個貫穿孔的那塊
+  const circ = edit.sampleCurve(edit.circleAnchors(fr, 0, 0, 6), 1, true);
+  const pC = edit.curveCutterPrism(box, N, circ, true);
+  const sC = pC.ok ? splitByCutter(box, pC.cutter) : { inside: null, outside: null };
+  const ringArea = (() => { const q = circ.map(p => [p.x, p.z]); return Math.abs(q.reduce((s, a, i) => { const b = q[(i + 1) % q.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0)) / 2; })();
+  ok('★★★ 圓切穿 ⇒ 柱子 ＝ 圓的面積 × 40、剩下的 ＝ 108000 − 柱子，兩塊都封閉',
+    good(sC.inside) && good(sC.outside) && Math.abs(sC.inside.volume() - ringArea * 40) < 1e-3 && Math.abs(sC.outside.volume() + sC.inside.volume() - 108000) < 1e-3,
+    sC.inside && sC.inside.volume());
+  near('★★ 　 柱子 ≈ π × 6² × 40（分段近似略小）', sC.inside ? sC.inside.volume() : 0, Math.PI * 36 * 40, 40);
+
+  // 半圓缺口（3c）⇒ 半根柱子
+  const at = edit.notchAt(fr, 0, fr.tMin);
+  const pN = edit.curveCutterPrism(box, N, edit.sampleCurve(edit.notchAnchors(fr, at.edge, at.along, 5), 1), false);
+  const sN = pN.ok ? splitByCutter(box, pN.cutter) : { inside: null, outside: null };
+  const vN = vols(sN);
+  ok('★★ 半圓缺口切穿 ⇒ 兩塊、加起來 108000、小的 ≈ π × 5² ÷ 2 × 40',
+    good(sN.inside) && good(sN.outside) && Math.abs(vN[0] + vN[1] - 108000) < 1e-3 && Math.abs(vN[0] - Math.PI * 12.5 * 40) < 20, vN.join());
+
+  // 彎的曲線（從左邊到右邊的波浪）
+  const V3 = (x, z) => new THREE.Vector3(x, Y, z), H = (p, hin, hout) => ({ p, hin: hin || null, hout: hout || null });
+  const wave = edit.sampleCurve([H(V3(-30, 15), null, V3(-20, 5)), H(V3(0, 12), V3(-10, 18), V3(10, 6)), H(V3(30, 10), V3(20, 14), null)], 1);
+  const pW = edit.curveCutterPrism(box, N, wave, false);
+  const sW = pW.ok ? splitByCutter(box, pW.cutter) : { inside: null, outside: null };
+  const vW = vols(sW);
+  ok('★★★ 波浪線切穿 ⇒ 兩塊都封閉、加起來 108000', good(sW.inside) && good(sW.outside) && Math.abs(vW[0] + vW[1] - 108000) < 1e-3, vW.join());
+
+  // 延伸出去撞到線自己 ⇒ 擋
+  const bad = edit.sampleCurve([A([-10, -22.5]), A([-10, 0]), A([10, 0]), A([10, -10]), A([-5, -10])], 1);
+  const pB = edit.curveCutterPrism(box, N, bad, false);
+  ok('★★ 線的尾巴往內彎、延伸出去撞到線自己 ⇒ 擋下來、講原因', !pB.ok && /撞到線自己/.test(pB.reason), pB.reason);
+  ok('★ 原本的方塊沒被動到（108000、6 面）', Math.abs(box.volume() - 108000) < 1e-9 && box.faces.length === 6);
+
+  // 側面（前面，法向 +z）的圓 ⇒ 從前面打穿到後面：柱子長 45
+  const front = box.faces.find(f => box.faceVerts(f).every(v => Math.abs(v.p.z - 22.5) < 1e-9));
+  const ff = edit.faceDimFrame(box.faceVerts(front).map(v => v.p.clone()));
+  const cF = edit.sampleCurve(edit.circleAnchors(ff, 0, 0, 5), 1, true);
+  const pF = edit.curveCutterPrism(box, new THREE.Vector3(0, 0, 1), cF, true);
+  const sF = pF.ok ? splitByCutter(box, pF.cutter) : { inside: null, outside: null };
+  const zb = sF.inside ? sF.inside.bounds() : null;
+  ok('★★ 前面的圓切穿 ⇒ 柱子從前面穿到後面（長 45）、兩塊加起來 108000',
+    good(sF.inside) && good(sF.outside) && Math.abs(zb.max.z - zb.min.z - 45) < 1e-6 && Math.abs(sF.inside.volume() + sF.outside.volume() - 108000) < 1e-3, pF.reason);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -349,6 +349,32 @@ export function unionMeshes(meshes, labels = []) {
 }
 
 /**
+ * 🔴 **曲線刀具第四步 `切穿`：物件 ∩ 刀柱、物件 − 刀柱**（刀柱由 `edit.js` `curveCutterPrism()` 組）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ * ⚠ 平滑旗標與分片線會消失（布林的輸出是重新組的三角形，`fromManifold()`）—— 規格「切穿」那一段寫著要講。
+ *
+ * @returns {{inside: Mesh|null, outside: Mesh|null}} 空的那一塊回 null（線沒有真的把物件分開）
+ */
+export function splitByCutter(mesh, cutter, label = '物件') {
+  const { Manifold } = need();
+  const made = [];
+  try {
+    const a = toManifold(mesh, label); made.push(a);
+    const c = toManifold(cutter, '切穿的刀'); made.push(c);
+    const inn = Manifold.intersection(a, c); made.push(inn);
+    const out = Manifold.difference(a, c); made.push(out);
+    return {
+      inside: inn.isEmpty() ? null : fromManifold(inn),
+      outside: out.isEmpty() ? null : fromManifold(out)
+    };
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 只做結構檢查，不真的運算。介面在按鈕按下去之前先問一次，
  * 才能給「板件不能布林」這種看得懂的提示，而不是跳一堆英文。
  *

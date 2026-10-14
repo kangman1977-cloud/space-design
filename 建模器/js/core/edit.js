@@ -3512,6 +3512,122 @@ export function polyRayHit(frame, s, t, deg) {
 }
 
 /**
+ * 🔴 **曲線刀具第四步 `切穿`：把畫好的線變成一根「刀柱」**（kang 2026-10-14：切完是兩個獨立物件、封閉圈兩塊都留）。
+ * 之後由 `bool.js` `splitByCutter()` 做 物件 ∩ 刀柱（切下來的那塊）、物件 − 刀柱（剩下的）—— 這一支⛔ 碰布林引擎。
+ *
+ * ── 刀柱的底面（面的平面上的一個多邊形）────────────────
+ * - 封閉圈（圓、封閉折線、封閉曲線）⇒ 就是那一圈
+ * - 從邊到邊 ⇒ 線的**兩頭順著切線方向往外延伸**到一個很大的正方形（包住整個物件），
+ *   再沿著正方形繞回起頭 ⇒ 線的「某一邊」整片。哪一邊⛔ 重要：兩塊都會留下來。
+ *   ⚠ 延伸出去的那兩段要是撞到線自己（例如兩頭往內彎）⇒ 擋下來、講原因
+ * ── 刀柱的高度 ──────────────────────────────────────
+ * 沿著面的法向，從整個物件最低再低一點到最高再高一點 ⇒ **垂直切穿整個物件**（⛔ 只切那個面）。
+ *
+ * @param {Mesh} mesh 物件（物件座標）
+ * @param {THREE.Vector3} n 面的法向（單位向量，物件座標）
+ * @param {THREE.Vector3[]} ptsIn 切好的線（`sampleCurve()` 的結果，物件座標，在面的平面上）
+ * @param {boolean} closed 封閉圈（最後一點⛔ 重複第一點）
+ * @returns {{ok:boolean, reason?:string, cutter?:Mesh}}
+ */
+export function curveCutterPrism(mesh, n, ptsIn, closed) {
+  if (!mesh || !mesh.verts.length) return { ok: false, reason: '沒有網格' };
+  const pts = (ptsIn || []).filter((p, i, a) => i === 0 || p.distanceTo(a[i - 1]) > 1e-6);
+  if (closed && pts.length > 1 && pts[0].distanceTo(pts[pts.length - 1]) <= 1e-6) pts.pop();
+  if (pts.length < (closed ? 3 : 2)) return { ok: false, reason: closed ? '封閉圈至少要 3 個點' : '線至少要兩個點' };
+
+  const N = n.clone().normalize();
+  const ux = Math.abs(N.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const U = new THREE.Vector3().crossVectors(N, ux).normalize();
+  const V = new THREE.Vector3().crossVectors(N, U);           // (U, V, N) 右手 ⇒ 從 +N 看 U→V 是逆時針
+  const to2 = p => [p.dot(U), p.dot(V)];
+
+  const hs = mesh.verts.map(v => v.p.dot(N));
+  const span = Math.max(...hs) - Math.min(...hs);
+  const margin = 1 + span * 0.05;
+  const lo = Math.min(...hs) - margin, hi = Math.max(...hs) + margin;
+
+  let poly = pts.map(to2);
+  if (!closed) {
+    /** 很大的正方形：包住整個物件（投影到面上）＋ 線，再放大兩倍 */
+    const all = mesh.verts.map(v => to2(v.p)).concat(poly);
+    const xs = all.map(q => q[0]), ys = all.map(q => q[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const S = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) + 10;
+    const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); return [dx / L, dy / L]; };
+    /** 從裡面的點往 d 射到正方形邊上 */
+    const toSquare = (p, d) => {
+      let lam = Infinity;
+      if (d[0] > 1e-12) lam = Math.min(lam, (cx + S - p[0]) / d[0]);
+      if (d[0] < -1e-12) lam = Math.min(lam, (cx - S - p[0]) / d[0]);
+      if (d[1] > 1e-12) lam = Math.min(lam, (cy + S - p[1]) / d[1]);
+      if (d[1] < -1e-12) lam = Math.min(lam, (cy - S - p[1]) / d[1]);
+      return [p[0] + lam * d[0], p[1] + lam * d[1]];
+    };
+    /** 正方形邊上的點 ⇒ 繞一圈的位置（0～4，逆時針，從左下角起）*/
+    const perim = ([x, y]) => {
+      const e = 1e-7 * S;
+      if (Math.abs(y - (cy - S)) <= e) return (x - (cx - S)) / (2 * S);
+      if (Math.abs(x - (cx + S)) <= e) return 1 + (y - (cy - S)) / (2 * S);
+      if (Math.abs(y - (cy + S)) <= e) return 2 + ((cx + S) - x) / (2 * S);
+      return 3 + ((cy + S) - y) / (2 * S);
+    };
+    const E0 = toSquare(poly[0], unit(poly[1], poly[0]));
+    const En = toSquare(poly[poly.length - 1], unit(poly[poly.length - 2], poly[poly.length - 1]));
+    const corners = [[cx - S, cy - S], [cx + S, cy - S], [cx + S, cy + S], [cx - S, cy + S]];
+    const t0 = perim(E0), tn = perim(En);
+    const walk = [];
+    for (let k = 1; k <= 4; k++) {                              // 從 En 逆時針走到 E0，經過的角都放進去
+      const c = (Math.floor(tn) + k) % 4;
+      const along = ((c - tn) % 4 + 4) % 4, want = ((t0 - tn) % 4 + 4) % 4;
+      if (along > 0 && along < want) walk.push(corners[c]);
+    }
+    poly = [E0, ...poly, En, ...walk];
+  }
+
+  /** 底面要是簡單多邊形（⛔ 自己交叉）—— 開的線多半是延伸出去那兩段撞到線自己 */
+  const m = poly.length;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const hit = (A, B, C, D) => {
+    const d1 = cross(A, B, C), d2 = cross(A, B, D), d3 = cross(C, D, A), d4 = cross(C, D, B);
+    return ((d1 > 1e-9 && d2 < -1e-9) || (d1 < -1e-9 && d2 > 1e-9)) && ((d3 > 1e-9 && d4 < -1e-9) || (d3 < -1e-9 && d4 > 1e-9));
+  };
+  for (let i = 0; i < m; i++) {
+    for (let j = i + 2; j < m; j++) {
+      if (i === 0 && j === m - 1) continue;
+      if (hit(poly[i], poly[(i + 1) % m], poly[j], poly[(j + 1) % m])) {
+        return { ok: false, reason: closed ? '這一圈自己交叉了 —— 把打結的地方拉開再切穿'
+          : '線的兩頭往外延伸時撞到線自己（兩頭往內彎了）—— 讓線的頭尾直直地離開面的邊再切穿' };
+      }
+    }
+  }
+  const area = poly.reduce((s, p, i) => { const q = poly[(i + 1) % m]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+  if (Math.abs(area) < 1e-9) return { ok: false, reason: '圍出來的範圍是空的' };
+  if (area < 0) poly.reverse();
+
+  /** 組刀柱：底、頂、側牆（全部三角形 —— 交給布林引擎的不可以有凹的多邊形，`toManifold()` 那一則）*/
+  const tri = triangulateWithHoles(poly.map(([x, y]) => ({ x, y })), []);
+  if (!tri.tris.length) return { ok: false, reason: '圍出來的範圍切不成三角形' };
+  const P = ([x, y], h) => U.clone().multiplyScalar(x).addScaledVector(V, y).addScaledVector(N, h);
+  const points = [...poly.map(q => P(q, lo)), ...poly.map(q => P(q, hi))];
+  const faces = [];
+  for (const t3 of tri.tris) {
+    /** 每個三角形先轉成逆時針（從 +N 看）⇒ 頂面朝 +N、底面朝 −N，跟側牆一致 */
+    const [a, b, c] = cross(poly[t3[0]], poly[t3[1]], poly[t3[2]]) >= 0 ? t3 : [t3[0], t3[2], t3[1]];
+    faces.push([m + a, m + b, m + c]);
+    faces.push([c, b, a]);
+  }
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m;
+    faces.push([i, j, m + j], [i, m + j, m + i]);
+  }
+  let cutter = Mesh.fromFaceList(points, faces);
+  /** 繞向：耳切回來的三角形方向不保證 ⇒ 體積是負的就整個翻過來 */
+  if (cutter.volume() < 0) cutter = Mesh.fromFaceList(points, faces.map(f => f.slice().reverse()));
+  if (!cutter.isClosed() || !(cutter.volume() > 0)) return { ok: false, reason: '刀柱組不起來（網格沒封好）' };
+  return { ok: true, cutter };
+}
+
+/**
  * 🔴 **曲線刀具第二步：在一個平的面「中間」畫一個封閉的圈。**
  *
  * ── 難的是「一個面不能帶洞」────────────────────────────

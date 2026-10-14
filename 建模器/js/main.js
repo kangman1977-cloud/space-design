@@ -16,7 +16,7 @@ import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          penPathToWorld, penPathToLocal, GUIDE_AXES }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
-import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL }
+import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
   from './build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
@@ -37,7 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, separateAlongEdges, solidCut,
          sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
-         notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit,
+         notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
@@ -703,6 +703,7 @@ $('pen').onclick = () => togglePenMode();
  * 〔為什麼要有這顆：工具鈕搬到左側直條之後，它的名字固定是「刀具」「鋼筆」，
  * 　⛔ 不再能靠它的文字告訴使用者「現在按下去是切下去／完成」〕
  */
+$('curveThrough').onclick = () => curveThroughApply();
 $('toolDone').onclick = () => {
   if (sel.knifeMode) toggleKnifeMode();
   else if (sel.penMode) togglePenMode();
@@ -2457,19 +2458,89 @@ function drawCurve() {
   view.setCurveLabels(labels);
 }
 
-/** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
-function curveApply() {
+/** 「切下去」與「切穿」共用：還沒畫好、半圓放不下 ⇒ 講原因、回 true（⛔ 兩支各寫一份）*/
+function curveNotReady() {
   if (!curve || !curve.done) {
     toast(curve && curve.poly ? (curve.closed ? '折線還沒畫好 —— 最後按「接回起點」' : '折線還沒畫好 —— 最後按「延伸到邊」（或一段剛好走到邊上）')
       : curve && curve.closed ? '封閉圈還沒畫好 —— 最後要點回第一點' : '曲線還沒畫好 —— 最後一點要點在面的邊上', true);
-    return false;
+    return true;
   }
   /** 3c：半圓比那條邊還寬 ⇒ 兩頭會跨過角 —— 先講清楚（⛔ 讓核心講成「要從邊上開始」那種看不懂的話）*/
   const ne = curve.circle && curve.circle.edge;
   if (ne && !notchFits(ne, curve.circle.r)) {
     toast(`這條邊只有 ${curveShow(ne.len)} ${curveUnit}，放不下直徑 ${curveShow(2 * curve.circle.r)} 的半圓 —— 把半徑改小`, true);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 🔴 **第四步 `切穿`**（kang 2026-10-14：切完是兩個獨立物件；圓／封閉圈兩塊都留）。
+ * 線 ⇒ 刀柱（`edit.js` `curveCutterPrism()`，沿面的法向蓋過整個物件）⇒ 布林（`bool.js` `splitByCutter()`）。
+ * 建物件照 `切成實心`／`分離`（名字「－1／－2」、原點置中、原物件換掉、記一步）—— 理由見 `separateSelected()` 那一段。
+ */
+function curveThroughApply() {
+  if (curveNotReady()) return false;
+  if (!csgReady()) {
+    toast(csgError() ? '布林運算函式庫沒有載入成功 —— 切穿用不了（「切下去」照樣可以）'
+      : '布林運算函式庫還在載入中，等一下再按「切穿」', true);
     return false;
   }
+  const obj = curve.obj;
+  const mesh = obj.mesh();
+  if (!mesh.isClosed()) {
+    toast('這個物件不是封閉的實體（開放的面／板件）—— 切穿要分得出裡外；只想在面上切出線請按「切下去」', true);
+    return false;
+  }
+  const pts = sampleCurve(curve.anchors, curveStepCm(), curve.closed);
+  const pr = curveCutterPrism(mesh, curve.n, pts, curve.closed);
+  if (!pr.ok) { toast(pr.reason, true); return false; }
+  let r;
+  try { r = splitByCutter(mesh, pr.cutter, obj.name); } catch (e) { toast(e.message, true); return false; }
+  const empty = m => !m || Math.abs(m.volume()) < 1e-6;
+  if (empty(r.inside) || empty(r.outside)) {
+    toast('這條線沒有把物件分成兩塊 —— 切穿之後其中一邊是空的', true);
+    return false;
+  }
+
+  const wasClosed = curve.closed;
+  curve = null;
+  hideKnifeLine();
+  sel.setKnifeMode(false);
+  $('knife').classList.remove('on');
+
+  const meshes = [r.inside, r.outside];
+  for (const m of meshes) refreshAfterEdit(m);
+  const made = meshes.map((m, i) => new ModelObject({
+    name: `${obj.name}－${i + 1}`,
+    kind: obj.kind,
+    src: { type: 'mesh' },
+    mesh: m,
+    pos: obj.pos, rot: obj.rot, scale: obj.scale,
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+  }));
+  for (const o of made) recenterOrigin(o);
+
+  sel.clearEditSel();
+  doc.remove(obj);
+  for (const o of made) doc.add(o);
+  view.sync(doc);
+  sel.set(made.map(o => o.id));
+  panel.analysisCache.clear();
+  commit('切穿');
+  syncModeButtons();
+  panel.refresh();
+  updateBar();
+  toast(`已切穿成 2 個實心物件：` + (wasClosed
+      ? `「${made[0].name}」是圈裡面那塊、「${made[1].name}」是帶一個洞的那塊`
+      : `「${made[0].name}」「${made[1].name}」是線的兩邊`)
+      + '　⚠ 平滑與分片線的標記會消失');
+  return true;
+}
+
+/** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/
+function curveApply() {
+  if (curveNotReady()) return false;
   const obj = curve.obj;
   const pts = sampleCurve(curve.anchors, curveStepCm(), curve.closed);
   const r = curve.closed ? curveCutFaceLoop(obj.mesh(), curve.face, pts) : curveCutFace(obj.mesh(), curve.face, pts);
@@ -6162,6 +6233,8 @@ function updateBar() {
     : sel.penMode ? '完成' : null;
   $('toolDone').hidden = !收工;
   if (收工) $('toolDone').textContent = 收工;
+  /** 第四步：畫好了 ⇒ 「切下去」旁邊多一顆「切穿」（kang 2026-10-13：一顆獨立的按鈕，需要時再選）*/
+  $('curveThrough').hidden = !(sel.knifeMode && sel.knifeCurve && curve && curve.done);
   /**
    * 狀態字：**⛔ 只講「做到哪」，⛔ 不講「該按誰」** —— 該按誰是上面那顆的事。
    * ⚠ 刀具點不到兩個時 `#toolDone` 不出現，所以那句話要由這裡講。

@@ -867,6 +867,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         〔跟 `確定曲線`／右鍵那一對同一個做法：兩條路指向同一個狀態〕。
       -->
       <button id="toolDone" hidden title="把這個工具現在做的事收工">完成</button>
+      <!-- 曲線刀具第四步（kang 2026-10-14）：畫好之後跟「切下去」並排；切穿 ⇒ 兩個獨立的實心物件、封閉圈兩塊都留 -->
+      <button id="curveThrough" hidden title="切穿：沿著畫好的線（曲線、圓、半圓、折線都可以）垂直往下切穿整個物件，直接變成兩個獨立的實心物件（圓或封閉的圈：中間那塊和帶洞的那塊都留下）。⚠ 走布林運算 ⇒ 平滑與分片線的標記會消失。只想在面上切出線、形狀不變，請按旁邊的「切下去」">切穿</button>
       <span class="lbl" id="toolState" hidden>—</span>
       <!--
         刀具裡的「直線／曲線」（kang 2026-10-13 → 規格\建模器-曲線刀具.md）：⛔ 左側直條不加按鈕。
