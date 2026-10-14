@@ -724,6 +724,7 @@ $('mate').onclick = () => toggleMateMode();
 $('seam').onclick = () => toggleSeamMode();
 $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
+$('extrudeIn').onclick = () => extrudeSelected(-1);
 $('extrudeEdge').onclick = () => extrudeEdgesSelected();
 $('efBoundary').onclick = () => {
   sel.includeBoundary = !sel.includeBoundary;
@@ -3262,11 +3263,16 @@ function editCancelled() {
  * 容許值與預設值要挑一個講得出物理意義的量）。而且擠完馬上用同樣的
  * 格距拉，數字會很乾淨。它只是起點，不是最終值。
  * 吸附關掉時退回 1cm —— 總得有個數字，而 0 會被 `extrudeFace` 擋掉。
+ *
+ * ── `dir = -1` ＝「往內擠出」那顆（2026-10-14，kang 選「另一顆按鈕」）──
+ * 同一支、距離變負的。會跟旁邊的牆疊在一起的面由 `extrudeFace()` 擋掉，
+ * 擋的原因裡就帶著下一步（先內縮）。
  */
-function extrudeSelected() {
+function extrudeSelected(dir = 1) {
+  const name = dir < 0 ? '往內擠出' : '擠出';
   const el = sel.editSel;
   if (!el || el.kind !== 'face') {
-    toast('先在編輯模式下選一個面，再按「擠出」', true);
+    toast(`先在編輯模式下選一個面，再按「${name}」`, true);
     return;
   }
   /**
@@ -3276,20 +3282,20 @@ function extrudeSelected() {
    * 〔坑第 11 條：沉默地做別的事比不做更糟〕
    */
   if (sel.editCount > 1) {
-    toast(`擠出一次只能一個面（現在選了 ${sel.editCount} 個）。點一下那個面單獨選它`, true);
+    toast(`${name}一次只能一個面（現在選了 ${sel.editCount} 個）。點一下那個面單獨選它`, true);
     return;
   }
   const step = sel.snapStep > 0 ? sel.snapStep : 1;
   const obj = el.obj;
 
-  const r = extrudeFace(obj.mesh(), el.face, step);
+  const r = extrudeFace(obj.mesh(), el.face, dir * step);
   if (!r.ok) { toast(r.reason, true); return; }
 
   obj.setMesh(r.mesh);
   refreshAfterEdit(r.mesh);
   view.markGeomDirty();
   view.markSeamsDirty();      // 折線變了（多了四圈側牆的邊）
-  commit(`擠出面 ${step} cm`);
+  commit(dir < 0 ? `往內擠出 ${step} cm` : `擠出面 ${step} cm`);
 
   /**
    * ⚠ 一定要在 commit() 之後才重選。commit() 會走 revalidate()，
@@ -3302,9 +3308,9 @@ function extrudeSelected() {
   const got = sel.selectFace(obj, r.capFace);
   panel.refresh();
 
-  toast(got
-    ? `已擠出 ${step} cm（新增 ${r.walls} 面側牆）　用箭頭拉到想要的長度`
-    : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`);
+  const what = dir < 0 ? `已往內擠出 ${step} cm（新增 ${r.walls} 面牆）`
+                       : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`;
+  toast(got ? `${what}　用箭頭拉到想要的${dir < 0 ? '深度' : '長度'}` : what);
 }
 
 /**
@@ -6009,6 +6015,13 @@ function updateBar() {
   $('extrude').hidden = !face;
   $('extrude').title = face
     ? `從選到的面長出新的一段（先長 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，再用箭頭拉）`
+    : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
+                    : '先按「拉點線面」進入編輯模式，再選一個面');
+  /** 往內擠出：跟「擠出」同一個閘門（選到面才出現） */
+  $('extrudeIn').hidden = !face;
+  $('extrudeIn').title = face
+    ? `選到的面往物件裡面凹進去 ${sel.snapStep > 0 ? sel.snapStep : 1} cm，牆是直的，再用箭頭拉深淺。` +
+      '⚠ 面的邊緣直接接著直立的牆（例如整片頂面）時會擋下來 —— 先按「內縮」留一圈邊'
     : (sel.editMode ? '先選一個面（把過濾器切到「面」比較好點）'
                     : '先按「拉點線面」進入編輯模式，再選一個面');
 

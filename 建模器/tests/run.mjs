@@ -4480,12 +4480,62 @@ section('擠出面：從一個面長出新的一段');
     eq('凹坑沒有不平的面', r2.nonPlanar, 0);
   }
 
-  // ── 負值 ＝ 往內凹 ──
+  /**
+   * ── 負值 ＝ 往內擠出（2026-10-14 有了自己的按鈕）──
+   *
+   * 🔴 **舊的這一塊驗的是「方塊頂面直接 −15 ⇒ 72000、封閉、χ＝2」—— 三樣都對，形狀卻是壞的**：
+   * 新牆跟方塊的四面外牆疊在同一個平面上（法向相反，體積互相抵掉）。
+   * 現在那一種要擋，正確的做法是「內縮 → 往內擠出」。
+   */
   {
     const m = buildPrim('box', { w: 60, h: 45, d: 40 });
     const r = edit.extrudeFace(m, topOf(m), -15);
-    near('負值往內凹：108000 − 60×40×15', r.mesh.volume(), 72000, 1e-6);
-    ok('凹進去也還是封閉、χ＝2', r.mesh.isClosed() && chi(r.mesh) === 2);
+    ok('★★ 方塊頂面直接往內：擋下來（新牆會跟外牆疊在一起）', !r.ok, '竟然通過');
+    ok('★ 擋下來的原因要講「先內縮」', /內縮/.test(r.reason || ''), r.reason || '');
+    eq('　　四條邊都算進去', r.badEdges, 4);
+  }
+  {
+    // ★ 內縮 5 → 往內 15：直立的牆 ＋ 一圈平的邊框 ＝ 真的凹槽
+    const m = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const ins = edit.insetFaces(m, topOf(m), 5);
+    ok('（前置）內縮成功', ins.ok, ins.reason || '');
+    const m1 = ins.mesh;
+    edit.refreshAfterEdit(m1);
+    const r = edit.extrudeFace(m1, ins.innerFace, -15);
+    ok('★ 內縮之後往內擠出：可以', r.ok, r.reason || '');
+    const o = r.mesh;
+    near('★★ 體積 ＝ 108000 − 50×30×15（直壁，⛔ 不是內縮＋推的斜壁）', o.volume(), 108000 - 50 * 30 * 15, 1e-6);
+    ok('封閉、χ＝2', o.isClosed() && chi(o) === 2);
+    eq('側牆 4 面、1 個迴圈', r.walls * 10 + r.loops, 41);
+    r.mesh.computeNormals();
+    ok('★ 底（新的蓋子）法向仍然朝上', r.capFace.normal.y > 0.999, JSON.stringify(r.capFace.normal));
+    const vs = edit.elementVerts(o, { kind: 'face', face: r.capFace });
+    ok('★ 底的四個頂點都在 y ＝ 7.5（22.5−15），而且在內縮那一圈正下方（|x|＝25、|z|＝15）',
+       vs.length === 4 && vs.every(v => Math.abs(v.p.y - 7.5) < 1e-9
+         && Math.abs(Math.abs(v.p.x) - 25) < 1e-9 && Math.abs(Math.abs(v.p.z) - 15) < 1e-9),
+       vs.map(v => `${v.p.x},${v.p.y},${v.p.z}`).join(' '));
+    edit.refreshAfterEdit(o);
+    eq('沒有退化面', edit.degenerateFaces(o).length, 0);
+  }
+  {
+    // ★ 錐台：窄的那一端往內可以（牆長在裡面），寬的那一端擋（牆會穿出去）
+    const m = buildPrim('cone', { rTop: 10, rBottom: 30, h: 70, seg: 32 });
+    m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.999);
+    const bot = m.faces.find(f => f.normal.y < -0.999);
+    const r = edit.extrudeFace(m, top, -15);
+    ok('★ 錐台窄端（側牆往外斜下去）往內：可以', r.ok, r.reason || '');
+    const cap = 0.5 * 32 * 100 * Math.sin(2 * Math.PI / 32);
+    near('　　體積少掉 ＝ 32 邊形（r10）面積 × 15', m.volume() - r.mesh.volume(), cap * 15, 1e-4);   // 兩個十萬級的體積相減，1e-6 會被浮點雜訊打到
+    ok('　　封閉、χ＝2', r.mesh.isClosed() && chi(r.mesh) === 2);
+    const rb = edit.extrudeFace(m, bot, -15);
+    ok('★★ 錐台寬端往內：擋（新牆會穿出側面）', !rb.ok && rb.badEdges === 32, rb.reason || '竟然通過');
+    ok('　　往外照樣可以（只擋往內）', edit.extrudeFace(m, bot, 15).ok);
+  }
+  {
+    const m = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 16 });
+    const r = edit.extrudeFace(m, topOf(m), -10);
+    ok('★ 管的端面往內：外圈、內孔兩圈都擋', !r.ok && r.badEdges === 32, r.reason || '竟然通過');
   }
 
   // ── 連續擠出：做鹿角就是重複這個動作 ──

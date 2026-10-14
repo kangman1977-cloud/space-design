@@ -6863,6 +6863,48 @@ export function extrudeFace(mesh, face, dist, opt = {}) {
 
   const n = mesh.computeFaceNormal(face).clone();
   if (n.lengthSq() < 1e-12) return { ok: false, reason: '算不出這個面的法向' };
+
+  /**
+   * 🔴 **往內擠出：新牆會不會跟旁邊的牆疊在一起（或穿出去）**（2026-10-14，kang 選「擋下來並說怎麼做」）
+   *
+   * 新牆是從邊界邊**沿 −法向**直直長進去的。它跟隔壁那片面的關係只看那條邊的轉折角 θ：
+   *
+   * | θ（`dihedral()`，凸為正） | 新牆在哪 |
+   * |---|---|
+   * | 凹角、共面（內縮留的那一圈邊）、凸但小於 90° | 在**實體裡面** ✓ |
+   * | **剛好 90°**（方塊頂面、圓柱頂面） | **跟隔壁的牆疊在同一個平面上** ✗ |
+   * | 大於 90°（往下收的錐台的寬端） | **穿出實體外面** ✗ |
+   *
+   * ⇒ 判準 **θ < 90° − tolDeg**。容許值沿用「共面」那個 0.5 度 ——
+   * 差不到 0.5 度的兩片面，這個程式在別處本來就當成同一個平面。
+   *
+   * ⚠ **⛔ 不擋的話體積照樣算得對**（疊在一起的兩片法向相反，互相抵掉），
+   * 封閉、尤拉數也都對 —— 舊測試「負值 −15 ⇒ 72000」就是這樣過的。
+   * 但那其實是一個主體 ＋ 一圈零厚度的雙層裙邊，⛔ 不是凹槽；
+   * 真的只想讓面往下退，用「拉點線面」拉那個面就是了。
+   *
+   * ⚠ 只擋「邊緣那一圈」。**拉太深穿過底部**那一種這裡⛔ 不管 ——
+   * 一開始只凹一格吸附值，之後是「拉面」在動，跟往外擠完再拉是同一條路。
+   */
+  if (dist < 0) {
+    const lim = Math.PI / 2 - THREE.MathUtils.degToRad(tolDeg);
+    let bad = 0;
+    for (const loop of loops) {
+      for (const he of loop) {
+        mesh.computeFaceNormal(he.face);
+        mesh.computeFaceNormal(he.twin.face);
+        const th = mesh.dihedral(he);
+        if (th === null || th >= lim) bad++;
+      }
+    }
+    if (bad) {
+      return {
+        ok: false, badEdges: bad,
+        reason: `這個面的邊緣直接接著旁邊的牆（${bad} 條邊），往內擠出的新牆會跟它疊在一起或穿出去。` +
+                '先按「內縮」留一圈邊，再往內擠出'
+      };
+    }
+  }
   const off = n.clone().multiplyScalar(dist);
 
   // ── 頂點：既有的保持原索引，新的往後追加 ──
