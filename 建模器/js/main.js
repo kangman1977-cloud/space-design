@@ -832,8 +832,8 @@ for (const id of ['penLen', 'penAng']) {
     $(id).blur();
     toast(sel.penFixLen > 0
       ? (Number.isFinite(sel.penFixAng)
-          ? `長度 ${sel.penFixLen} cm、斜 ${sel.penFixAng}°：在畫面上點一下，會往四個方向裡最靠近滑鼠的那一個放；`
-            + `按「照長度放點」就照 ${sel.penFixAng}° 本身`
+          ? `長度 ${sel.penFixLen} cm、角度 ${sel.penFixAng}°：在畫面上點 ＝ 每 ${sel.penFixAng}° 一格、`
+            + `繞一整圈，停在最靠近滑鼠的那一格；按「照長度放點」＝ 照 ${sel.penFixAng}° 本身`
           : `長度固定 ${sel.penFixLen} cm：在畫面上往哪個方向點，新的點就離上一點剛好 ${sel.penFixLen} cm`)
       : '長度清空了：回到點哪裡放哪裡');
   });

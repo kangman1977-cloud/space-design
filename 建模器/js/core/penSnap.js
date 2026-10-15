@@ -103,24 +103,22 @@ export function dirFromAngle(deg) {
 }
 
 /**
- * 🔴 **角度只管「斜多少」，往哪一邊看滑鼠**（kang 2026-10-15：「角度是不是不應該鎖死方向」→ 選「四個方向」）。
- * 打 45 ⇒ 右上、左上、左下、右下這四個斜 45° 的方向裡，挑**最靠近 `toward`** 的那一個
- * （＝ 角度、180−角度、180＋角度、360−角度；0／90 這種只剩兩個方向，重複的不影響）。
- * ⚠ `toward` 是長度 0（滑鼠疊在上一個點上）⇒ 照打的數字本身。
+ * 🔴 **角度：一個數字兩種用法**（kang 2026-10-15 第三次：要「360 度的方向」，⛔ 只有上下左右）。
+ * 這一支是「在畫面上點」那一半：打的數字當**每隔幾度一格**，繞一整圈，
+ * 停在**最靠近 `toward`（滑鼠）**的那一格 —— 打 30 ⇒ 0、30、60…330 共 12 格；打 1 ⇒ 幾乎自由。
+ * ⭐ 打的數字本身一定是格子之一（30 是 30 的倍數），所以跟「按按鈕照數字本身」⛔ 會打架。
+ * ⚠ 0、或超過 180（一整圈放不下兩格）⇒ ⛔ 成格子，**照數字本身**；滑鼠疊在上一個點上也照數字本身。
+ * ⚠ 上一版是「四個方向」（角度、180−角度…）—— kang 驗收 OK 但「效果跟我想要的有落差」，被這一支取代。
  * @param {{dx:number, dz:number}} toward 上一個點 → 滑鼠
  * @returns {{dx:number, dz:number}} 單位向量
  */
-export function dirFromAngleNear(deg, toward) {
-  const a = +deg;
-  const cands = [a, 180 - a, 180 + a, -a].map(dirFromAngle);
+export function dirFromAngleStep(deg, toward) {
+  const step = Math.abs(+deg) % 360;
   const tx = toward ? +toward.dx : 0, tz = toward ? +toward.dz : 0;
-  if (!(Math.hypot(tx, tz) > 1e-9)) return cands[0];
-  let best = cands[0], bd = -Infinity;
-  for (const c of cands) {
-    const d = c.dx * tx + c.dz * tz;
-    if (d > bd + 1e-12) { bd = d; best = c; }
-  }
-  return best;
+  if (!(step > 1e-9 && step <= 180) || !(Math.hypot(tx, tz) > 1e-9)) return dirFromAngle(deg);
+  /** 滑鼠的方向（跟 `dirFromAngle()` 同一套：0° 往右、90° 往畫面上方 ＝ −Z） */
+  const m = Math.atan2(-tz, tx) * 180 / Math.PI;
+  return dirFromAngle(Math.round(m / step) * step);
 }
 
 /**
