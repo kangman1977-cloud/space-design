@@ -14213,6 +14213,16 @@ section('鋼筆的智慧參考線：對齊、交集、吸參考線、打數字�
     const r = ps.pointAtLength({ x: 0, z: 0 }, { x: 3, z: 4 }, 25);
     ok('★★★ 打 25 ⇒ 沿著游標方向（3,4）走 25 ＝ (15, 20)', r.ok && Math.abs(r.x - 15) < 1e-12 && Math.abs(r.z - 20) < 1e-12);
     ok('★★ 打 0 ⇒ 擋下來講原因', !ps.pointAtLength({ x: 0, z: 0 }, { x: 1, z: 0 }, 0).ok);
+    /** 🔴 角度 → 方向（kang 2026-10-15「兩種都要」）：0° 往右、90° 往上視圖的畫面上方（−Z） */
+    const d0 = ps.dirFromAngle(0), d90 = ps.dirFromAngle(90), d180 = ps.dirFromAngle(180), dm90 = ps.dirFromAngle(-90);
+    ok('★★★ 0° ＝ 往右 (1, 0)', d0.dx === 1 && d0.dz === 0, JSON.stringify(d0));
+    ok('★★★ 90° ＝ 往畫面上方 (0, −1)（⛔ 是 +1：上視圖的畫面上方是 −Z）', d90.dx === 0 && d90.dz === -1, JSON.stringify(d90));
+    ok('★★ 180° ＝ 往左、−90° ＝ 往畫面下方', d180.dx === -1 && d180.dz === 0 && dm90.dx === 0 && dm90.dz === 1);
+    const d30 = ps.dirFromAngle(30);
+    const p30 = ps.pointAtLength({ x: 10, z: 10 }, { x: 10 + d30.dx, z: 10 + d30.dz }, 20);
+    ok('★★★ 長度 20、角度 30° ⇒ (10 ＋ 20·cos30°, 10 − 20·sin30°) ＝ (27.32, 0)',
+       Math.abs(p30.x - (10 + 20 * Math.cos(Math.PI / 6))) < 1e-12 && Math.abs(p30.z - 0) < 1e-12,
+       JSON.stringify(p30));
     ok('★★ 游標疊在上一個點上 ⇒ 擋下來（看不出方向）',
        /看不出方向/.test(ps.pointAtLength({ x: 1, z: 1 }, { x: 1, z: 1 }, 5).reason || ''));
   }

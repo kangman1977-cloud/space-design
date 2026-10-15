@@ -996,8 +996,11 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="penSmart" hidden title="智慧參考線：游標旁顯示這一段多長（D: ○○ cm），靠近跟別的點同一個 X 或 Z 時吸過去並畫粉紅線（兩個方向都對齊 ＝「交集」），靠近參考線就吸上去。對齊的對象：這條線自己的點、參考線、別的物件外框的四個角與中心。⚠ 按住 Shift（或開著「鎖角度」）時先鎖角度、不吸對齊。跟 Illustrator 的 Ctrl＋U 一樣，預設開著">智慧參考線</button>
       <span class="lbl" id="penLenLbl" hidden>長度</span>
       <input id="penLen" type="number" min="0" step="0.5" hidden style="width:64px" placeholder="cm"
-             title="打數字定長度：從最後一個點、朝游標的方向，走剛好這麼長放下一個點（單位 cm）。打完按 Enter 或右邊那顆。⭐ 桌機不用點這一格 —— 畫的時候直接打數字再按 Enter 就行">
-      <button id="penLenGo" hidden title="照左邊的長度放下一個點：從最後一個點、朝游標現在的方向">照長度放點</button>
+             title="固定長度（cm）：這一格有數字時，在畫面上往哪個方向點，新的點就落在那個方向、離上一個點剛好這麼長（預覽線也先畫在那裡）。會一直留著，可以連續點；清空就回到「點哪裡放哪裡」。⚠ 有數字時不吸對齊（長度定死了，對齊點通常不在那個距離上）。⭐ 桌機也可以畫的時候直接打數字再按 Enter">
+      <span class="lbl" id="penAngLbl" hidden>角度</span>
+      <input id="penAng" type="number" step="1" hidden style="width:56px" placeholder="度"
+             title="角度（度）：配合左邊的長度，方向照這個數字、不看點在哪。0 ＝ 往右、90 ＝ 往上（上視圖的畫面上方）、180 ＝ 往左、270（或 −90）＝ 往下，跟 Illustrator 一樣逆時針為正。清空就回到照滑鼠的方向">
+      <button id="penLenGo" hidden title="照左邊的長度與角度放下一個點 —— 滑鼠完全不必碰畫面。⚠ 要兩格都有數字；只有長度的話，直接在畫面上點方向就好">照長度放點</button>
       <button id="penPark" hidden title="確定曲線：把這一段固定下來，線就不會再跟著游標跑。⚠ 桌機也可以直接【按一下右鍵】—— 這顆是平板唯一的路（平板沒有右鍵）">確定曲線</button>
       <button id="penUndo" hidden title="退掉剛才放的最後一個點">退一點</button>
       <button id="penCancel" hidden title="離開鋼筆，剛才畫的全部不算">取消</button>

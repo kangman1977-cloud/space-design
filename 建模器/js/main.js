@@ -808,18 +808,50 @@ $('penSmart').onclick = () => {
     ? '智慧參考線：開。游標旁顯示這一段多長；靠近跟別的點同一個 X 或 Z、或靠近參考線時會吸過去（粉紅線）'
     : '智慧參考線：關。點放在哪就是哪，不吸對齊（這一段多長照樣顯示，打數字定長度也照樣能用）');
 };
-/** 平板打長度的路；桌機直接打數字＋Enter 走的是同一支 `penPlaceLength()` */
+/**
+ * 🔴 **固定長度／角度：工具列那兩格就是狀態本身**（kang 2026-10-15：「兩種都要」）。
+ * ⚠ 一改就寫進 `sel`，⛔ 等按鈕 —— 「長度」有數字時，在畫面上點方向就照長度放
+ * （舊版要先放點、再把滑鼠移去工具列，**路上就把方向改掉了** —— kang 驗收時抓到的）。
+ */
+function syncPenFix() {
+  const L = parseFloat($('penLen').value);
+  sel.penFixLen = Number.isFinite(L) && L > 0 ? L : 0;
+  const a = $('penAng').value.trim() === '' ? NaN : parseFloat($('penAng').value);
+  sel.penFixAng = Number.isFinite(a) ? a : null;
+}
+$('penLen').addEventListener('input', syncPenFix);
+$('penAng').addEventListener('input', syncPenFix);
+/** ⚠ 重新整理時瀏覽器可能把格子的舊值填回來（⛔ 觸發 input）—— 一開始就對一次，兩端才一致〔鐵律二〕 */
+syncPenFix();
+/** 格子裡按 Enter：講一句現在是什麼狀態（⛔ 安靜地生效 —— 坑第 21 條） */
+for (const id of ['penLen', 'penAng']) {
+  $(id).addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    syncPenFix();
+    $(id).blur();
+    toast(sel.penFixLen > 0
+      ? (Number.isFinite(sel.penFixAng)
+          ? `長度 ${sel.penFixLen} cm、角度 ${sel.penFixAng}°：按「照長度放點」，或在畫面上點一下（點哪都一樣）`
+          : `長度固定 ${sel.penFixLen} cm：在畫面上往哪個方向點，新的點就離上一點剛好 ${sel.penFixLen} cm`)
+      : '長度清空了：回到點哪裡放哪裡');
+  });
+}
+/** 按鈕：長度＋角度都有才放得了（滑鼠完全不碰畫面那條路） */
 function penLenGo() {
-  const v = parseFloat($('penLen').value);
-  const r = sel.penPlaceLength(v);
+  syncPenFix();
+  if (!(sel.penFixLen > 0)) { toast('先在「長度」打一個大於 0 的數字', true); return; }
+  if (!Number.isFinite(sel.penFixAng)) {
+    toast(`沒有打角度：直接在畫面上往要的方向點一下，就會照 ${sel.penFixLen} cm 放點`
+      + '（要完全不碰畫面的話，「角度」也打一個數字）', true);
+    return;
+  }
+  const r = sel.penPlaceLength(sel.penFixLen, sel.penFixAng);
   if (!r.ok) { toast(r.reason, true); return; }
   updateBar();
-  toast(`照長度放了一個點：${v} cm`);
+  toast(`照長度放了一個點：${sel.penFixLen} cm、${sel.penFixAng}°`);
 }
 $('penLenGo').onclick = () => penLenGo();
-$('penLen').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); penLenGo(); }
-});
 $('penSnap').onclick = () => {
   sel.penSnapAngle = !sel.penSnapAngle;
   updateBar();
@@ -6508,7 +6540,7 @@ function updateBar() {
   $('penSnapDeg').hidden = !sel.penMode;
   $('penSmart').hidden = !sel.penMode;
   $('penSmart').classList.toggle('on', !!sel.penSmart);
-  for (const id of ['penLenLbl', 'penLen', 'penLenGo']) $(id).hidden = !penDrawing;
+  for (const id of ['penLenLbl', 'penLen', 'penAngLbl', 'penAng', 'penLenGo']) $(id).hidden = !penDrawing;
   $('penPark').hidden = !penDrawing;
   $('penPark').disabled = sel.penCount === 0;
   $('penUndo').hidden = !penDrawing;

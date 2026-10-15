@@ -90,6 +90,19 @@ export function footprintPoints(box) {
 }
 
 /**
+ * 🔴 **角度 → 地板上的方向**（kang 2026-10-15：「照長度放點」要能打角度）。
+ * **0° ＝ 往右（＋X）、90° ＝ 往上視圖的畫面上方（−Z）**，逆時針為正 —— 跟 Illustrator 一樣。
+ * ⚠ 上視圖的畫面上方是 −Z（`scene.js` `setView('top')`），所以 90° 的 dz 是 **−1**，⛔ 是 +1。
+ * @returns {{dx:number, dz:number}} 單位向量
+ */
+export function dirFromAngle(deg) {
+  const r = (+deg) * Math.PI / 180;
+  const dx = Math.cos(r), dz = -Math.sin(r);
+  /** 0°／90°／180° 這種整數角要剛好是 0，⛔ 留 6e-17 這種尾巴（不然對齊、量長度會差一點點） */
+  return { dx: Math.abs(dx) < 1e-12 ? 0 : dx, dz: Math.abs(dz) < 1e-12 ? 0 : dz };
+}
+
+/**
  * 打數字定長度：從 `from` 朝 `toward` 的方向，走剛好 `len`。
  * ⚠ 方向看「游標吸過去之後」的位置 —— 鎖角度、對齊都已經算進去了。
  * @returns {{ok:boolean, x?:number, z?:number, reason?:string}}

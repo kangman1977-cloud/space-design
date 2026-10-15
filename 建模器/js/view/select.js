@@ -24,7 +24,7 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
-import { penSmartSnap, footprintPoints, pointAtLength } from '../core/penSnap.js';
+import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle } from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -331,6 +331,16 @@ export class Selection {
     this._penCursor = null;
     /** 打到一半的長度（字串，Enter 才放點） */
     this._penTyped = '';
+    /**
+     * 🔴 **固定長度／角度**（kang 2026-10-15：「兩種都要」）——
+     * 工具列「長度」有數字 ⇒ 點哪個方向，新點就落在那個方向剛好這麼長；
+     * 「角度」也有數字 ⇒ 方向照角度，⛔ 管點在哪。
+     * ⚠ 病因（kang 驗收時抓到的）：舊版「照長度放點」的方向取「游標最後停在畫面上的位置」，
+     * 　 而滑鼠從畫面移去工具列的**路上**就把那個位置改掉了。
+     * ⭐ 狀態跟工具列那兩格**同一份**（`main.js` 只負責把格子的值寫過來，⛔ 自己再記一份）。
+     */
+    this.penFixLen = 0;
+    this.penFixAng = null;
     /** 別的物件外框的角與中心 —— 進鋼筆時算一次（⛔ 每移一下就算，那會隨模型變大而變慢） */
     this._penFoot = null;
     /** 游標旁那個「D: ○○ cm」的小框 */
@@ -2177,6 +2187,21 @@ export class Selection {
    */
   _penSnapPoint(x, z, e) {
     this._penSnapInfo = null;
+    /**
+     * 🔴 **固定長度優先**：它是使用者打在工具列上明講的。
+     * ⚠ 這時候**⛔ 吸對齊** —— 長度定死了，對齊點通常不在那個圓上，兩個不能同時滿足。
+     * ⭐ 方向：有角度 ＝ 照角度；沒有 ＝ 朝游標（按 Shift／鎖角度時先鎖方向）。
+     * ⭐ 預覽與放點都走這一支，所以**看到的位置就是點下去的位置**（坑第 31 條）。
+     */
+    if (this.penFixLen > 0 && this._pen && this._pen.a.length >= 2) {
+      const n = Math.floor(this._pen.a.length / 2);
+      const last = { x: this._pen.a[(n - 1) * 2], z: this._pen.a[(n - 1) * 2 + 1] };
+      let d;
+      if (Number.isFinite(this.penFixAng)) d = dirFromAngle(this.penFixAng);
+      else d = this._snapIf(e, x - last.x, z - last.z);
+      const r = pointAtLength(last, { x: last.x + d.dx, z: last.z + d.dz }, this.penFixLen);
+      return r.ok ? { x: r.x, z: r.z } : { x, z };
+    }
     if (this._wantPenSnap(e) && this._pen && this._pen.a.length >= 2) {
       const n = Math.floor(this._pen.a.length / 2);
       const px = this._pen.a[(n - 1) * 2], pz = this._pen.a[(n - 1) * 2 + 1];
@@ -2262,6 +2287,10 @@ export class Selection {
     }
     const lab = this._penSnapInfo && this._penSnapInfo.label;
     if (lab) rows.push(`<span style="color:#c0189c">${lab}</span>`);
+    if (this.penFixLen > 0 && n >= 1) {
+      rows.push(`長度固定 ${this.penFixLen} cm`
+        + (Number.isFinite(this.penFixAng) ? `　角度 ${this.penFixAng}°` : ''));
+    }
     if (this._penTyped) rows.push(`長度 ${this._penTyped} cm　Enter 放點`);
     if (!rows.length) { el.style.display = 'none'; return; }
     el.innerHTML = rows.join('<br>');
@@ -2279,22 +2308,37 @@ export class Selection {
    * ⇒ 鎖角度、對齊都已經算進方向裡了。
    * @returns {{ok:boolean, reason?:string}}
    */
-  penPlaceLength(len) {
+  penPlaceLength(len, ang = null) {
     if (!this.penMode || this.penEdit) return { ok: false, reason: '要在鋼筆畫線的時候才能用' };
     const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;
     if (n < 1) return { ok: false, reason: '先在畫面上放第一個點，再打長度' };
     if (this._penParked) return { ok: false, reason: '這一段已經「確定」了 —— 先在畫面上放下一個點' };
-    if (!this._penCursor) return { ok: false, reason: '先把游標移到畫面上，決定往哪個方向' };
     const last = { x: this._pen.a[(n - 1) * 2], z: this._pen.a[(n - 1) * 2 + 1] };
-    const r = pointAtLength(last, this._penCursor, len);
+    /**
+     * ⭐ **有角度就照角度**（⛔ 看游標）—— 工具列那顆按鈕走這條，滑鼠完全不必碰畫面。
+     * 沒有角度才朝游標（鍵盤打數字＋Enter 那條：滑鼠一直停在畫面上，方向是對的）。
+     */
+    let toward;
+    if (Number.isFinite(ang)) {
+      const d = dirFromAngle(ang);
+      toward = { x: last.x + d.dx, z: last.z + d.dz };
+    } else {
+      if (!this._penCursor) return { ok: false, reason: '先把游標移到畫面上，決定往哪個方向' };
+      toward = this._penCursor;
+    }
+    const r = pointAtLength(last, toward, len);
     if (!r.ok) return r;
     this._penTyped = '';
     this._penAddAnchor(r.x, r.z, 0, 0);
     if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
-    /** ⭐ 游標沒動，所以方向照舊 —— 預覽那一段從新的點畫到游標 */
-    const tip = new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z);
-    this._drawPenPreview(tip);
-    this._penAssist(tip);
+    /** ⭐ 游標沒動，所以方向照舊 —— 預覽那一段從新的點畫到游標（沒有游標就只畫線） */
+    if (this._penCursor) {
+      const tip = new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z);
+      this._drawPenPreview(tip);
+      this._penAssist(tip);
+    } else {
+      this._drawPenPreview();
+    }
     return { ok: true };
   }
 
@@ -2313,7 +2357,7 @@ export class Selection {
     } else if (key === 'Escape' && this._penTyped) {
       this._penTyped = '';
     } else if (key === 'Enter' && this._penTyped) {
-      const r = this.penPlaceLength(parseFloat(this._penTyped));
+      const r = this.penPlaceLength(parseFloat(this._penTyped), this.penFixAng);
       if (!r.ok) {
         this._penTyped = '';
         if (this.hooks.onPenMsg) this.hooks.onPenMsg(r.reason, true);
