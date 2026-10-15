@@ -5736,7 +5736,13 @@ let guideAxis = 'x';
 /** 這一條的座標；`null` ＝ 下拉停在「（新的）」 */
 let guidePicked = null;
 
-const GUIDE_AXIS_LABEL = { x: 'X 左右', y: 'Y 上下', z: 'Z 前後' };
+/**
+ * 🔴 **照「看到的」命名，字母照留**（kang 2026-10-15 自己提的：「前後線X」「高度Y」「左右線Z」）。
+ * ⚠ 舊的「X 左右」講的是**位置量在哪個軸**，而 X 參考線在上視圖其實是一條**前後方向**的線 ——
+ * 　 名字跟看到的方向對不起來，正是 kang 覺得「搞不太懂」的原因之一。
+ * ⭐ 字母留著：位置欄打的就是那個座標（前後線 X ＝ 50 ⇒ 那條線在 X 50 的地方）。
+ */
+const GUIDE_AXIS_LABEL = { x: '前後線 X', y: '高度 Y', z: '左右線 Z' };
 
 /**
  * 🔴 **哪個視角看得出這個軸**（第 3 階段，2026-09-01）。
@@ -5942,6 +5948,18 @@ $('showGuides').onclick = function () {
   toast(on
     ? `顯示參考線（現在有 ${doc.guideCount()} 條）`
     : `參考線隱藏了 —— ⚠ 線還在、存檔也還在（共 ${doc.guideCount()} 條），⛔ 不是刪掉`);
+};
+
+/**
+ * 🔴 **參考線畫成面**（kang 2026-10-15：原本的畫法不變，加一顆可以切換「丙」的）。
+ * ⭐ 放在「檢視」：只管看得見什麼，⛔ 改模型、⛔ 進存檔、⛔ 影響吸附。
+ */
+$('guideFaces').onclick = function () {
+  const on = view.setGuideFaces(!view.guideFaces);
+  this.classList.toggle('on', on);
+  toast(on
+    ? '參考線畫成面：每一條畫成很淡的牆（前後線、左右線）或樓板（高度），外加一圈邊線，不畫十字'
+    : '參考線回到原本的畫法：方框＋十字');
 };
 
 $('marquee').onclick = function () {

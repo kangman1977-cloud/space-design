@@ -1190,9 +1190,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     -->
     <div class="grp" id="gGuide" hidden>
       <span class="lbl">參考線</span>
-      <button class="gaBtn on" data-ga="x" title="X ＝ 左右。這條線在【前視】與【上視】都看得到（直的）">X</button>
-      <button class="gaBtn" data-ga="y" title="Y ＝ 上下（高度）。這條線在【前視】與【側視】都看得到（橫的）">Y</button>
-      <button class="gaBtn" data-ga="z" title="Z ＝ 前後。這條線在【上視】（橫的）與【側視】（直的）都看得到">Z</button>
+      <button class="gaBtn on" data-ga="x" title="前後線 X：一條前後方向的線，位置用 X（左右）表示 —— 打 50 就是在 X 50 的地方。在【上視】與【前視】看得到（都是直的）">前後線 X</button>
+      <button class="gaBtn" data-ga="y" title="高度 Y：一層水平的高度，位置用 Y（離地板多高）表示。在【前視】與【側視】看得到（都是橫的）；上視看不到">高度 Y</button>
+      <button class="gaBtn" data-ga="z" title="左右線 Z：一條左右方向的線，位置用 Z（前後）表示。在【上視】（橫的）與【側視】（直的）看得到">左右線 Z</button>
       <select id="guideList" title="這個方向現有的參考線。選一條，位置欄就會填上它的值 —— 接著可以改數字挪它，或按「刪這條」">
         <option value="">（新的）</option>
       </select>
@@ -1246,6 +1246,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         所以 title 與提示訊息都要把這句講出來（看不見 ≠ 不存在）。
       -->
       <button id="showGuides" class="on" title="顯示參考線：把三個方向的參考線畫出來（青色）。⚠ 關掉只是【看不到】—— 線還在、存檔也還在，⛔ 不是刪掉。要真的刪請用左邊「參考線」那一組">顯示參考線</button>
+      <button id="guideFaces" title="參考線畫成面：每一條參考線畫成很淡的半透明牆（前後線、左右線）或樓板（高度），外加一圈邊線、不畫十字 —— 斜著看比較分得出誰是誰。⚠ 只改畫法：線的位置、存檔、吸附都不變。關著（預設）＝ 原本的方框＋十字">參考線畫成面</button>
       <button id="edges" class="on">稜線</button>
       <button id="wire">線框</button>
       <button id="frame">全部入鏡</button>

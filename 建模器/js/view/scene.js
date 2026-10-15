@@ -156,6 +156,15 @@ export class SceneView {
      * 線本身的家在 `doc.guides`，這裡只管**畫不畫**。
      */
     this.guidesVisible = true;
+    /**
+     * 🔴 **參考線畫成面**（kang 2026-10-15 選的「丙」，⭐ 預設關 ＝ 原本的方框＋十字）。
+     * 開著時：很淡的半透明面 ＋ 一圈邊線，⛔ 十字。
+     * ⚠ **邊線一定要留**：在前／側／上視角，牆與樓板是從正側面看過去的 ——
+     * 　 半透明的面薄到看不見，只剩邊線變成一條線（kang 看互動示範時切到「上」就看得出來）。
+     */
+    this.guideFaces = false;
+    /** 上一次畫的參考線（切換畫法時要重畫，⛔ 等下一次 sync） */
+    this._lastGuides = null;
     this._guides = null;
     /**
      * 拖曳中「**現在正吸著這幾條**」的高亮（第 2 階段，2026-09-01）。
@@ -907,7 +916,7 @@ export class SceneView {
    * 而症狀是「亮起來的那條跟原本那條差了一點點」。
    * 〔坑第 31 條：與其讓兩條路對齊，不如只留一條路〕
    */
-  _guideSegments(g) {
+  _guideSegments(g, cross = true) {
     const R = 300;                       // ＝ 地板 600cm 的一半
     const seg = [];                      // ⚠ LineSegments：每兩點一段
     const push = (a, b) => { seg.push(a, b); };
@@ -922,6 +931,8 @@ export class SceneView {
       push(at(R, -R), at(R, R));
       push(at(R, R), at(-R, R));
       push(at(-R, R), at(-R, -R));
+      /** ⚠ 「畫成面」時⛔ 十字 —— 面本身已經看得出是一片，十字只會讓畫面更亂 */
+      if (!cross) return;
       push(at(-R, 0), at(R, 0));         // 十字：橫
       push(at(0, -R), at(0, R));         // 十字：直
     };
@@ -942,6 +953,7 @@ export class SceneView {
   syncGuides(doc) {
     this.clearGuides();
     const g = doc && doc.guides;
+    this._lastGuides = g || null;
     this._pruneGuideHot(g);
     this._buildGuideLines(g);
     this._rebuildGuideHot();
@@ -961,11 +973,12 @@ export class SceneView {
   _buildGuideLines(g) {
     if (!g) return;
 
-    const seg = this._guideSegments(g);
+    const seg = this._guideSegments(g, !this.guideFaces);
 
     if (!seg.length) return;
     this._guides = this._buildLineOverlay('guides', seg, null, 0x2ad4d4);
     if (!this._guides) return;
+    if (this.guideFaces) this._addGuideFaces(g);
     /**
      * ⚠ **`renderOrder` 要比另外那幾種預覽低**（它們是 7／8）——
      * 參考線是**一直都在**的東西，⛔ 不可以蓋住「你現在正在做的那件事」。
@@ -994,6 +1007,34 @@ export class SceneView {
      * 但那個節點會**被登記兩次**，移除時只清掉一份 —— 線會留在畫面上。
      */
     this._guides.visible = this.guidesVisible;
+  }
+
+  /**
+   * 「畫成面」的那幾片：跟邊線同一個大小（600 × 600）、很淡、兩面都看得到。
+   * ⚠ ⛔ 寫進深度 —— 不然後面的物件會被一片看不見的牆擋掉一半。
+   * ⚠ 點不到（raycast 關掉）—— 參考線本來就⛔ 是靠射線點的（`select.js` 用螢幕像素）。
+   */
+  _addGuideFaces(g) {
+    const R = 300;
+    const mk = () => new THREE.Mesh(new THREE.PlaneGeometry(2 * R, 2 * R),
+      new THREE.MeshBasicMaterial({ color: 0x2ad4d4, transparent: true, opacity: 0.1,
+        side: THREE.DoubleSide, depthWrite: false }));
+    const add = m => { m.renderOrder = 4; m.raycast = () => {}; this._guides.add(m); };
+    for (const v of (g && g.x) || []) { const m = mk(); m.rotation.y = Math.PI / 2; m.position.set(v, 0, 0); add(m); }
+    for (const v of (g && g.y) || []) { const m = mk(); m.rotation.x = -Math.PI / 2; m.position.set(0, v, 0); add(m); }
+    for (const v of (g && g.z) || []) { const m = mk(); m.position.set(0, 0, v); add(m); }
+  }
+
+  /**
+   * 切換「參考線畫成面」。⭐ 當場重畫（用上一次的參考線），⛔ 等下一次 sync。
+   * ⚠ 高亮（吸中的那幾條）跟著同一個畫法（有沒有十字），⛔ 兩種長相。
+   */
+  setGuideFaces(on) {
+    this.guideFaces = !!on;
+    this.clearGuides();
+    this._buildGuideLines(this._lastGuides);
+    this._rebuildGuideHot();
+    return this.guideFaces;
   }
 
   /**
@@ -1068,7 +1109,7 @@ export class SceneView {
     const g = { x: [], y: [], z: [] };
     for (const h of hits) if (g[h.ax]) g[h.ax].push(h.v);
 
-    const seg = this._guideSegments(g);
+    const seg = this._guideSegments(g, !this.guideFaces);
     if (!seg.length) return;
 
     this._guidesHot = this._buildLineOverlay('guidesHot', seg, null, 0x9ffcfc);
