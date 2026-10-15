@@ -1910,6 +1910,27 @@ export class SceneView {
   }
 
   /**
+   * 🔴 **鋼筆的對齊線（粉紅色）**（2026-10-15，照 Illustrator 的智慧參考線）。
+   * 每兩個點一段：從「讓它對齊的那個點」畫到「游標吸過去的位置」。
+   * ⭐ 顏色照 Illustrator 的洋紅 —— kang 看 Illustrator 看慣了，一眼認得出是「對齊」。
+   * ⚠ 跟預覽線分開一組：預覽線每一下都重建，這一組沒吸到時要能**單獨收掉**。
+   * @param {THREE.Vector3[]|null} segPts 沒有東西就收掉
+   */
+  setPenSnapLines(segPts) {
+    if (this._penSnapOv) {
+      this.scene.remove(this._penSnapOv);
+      this._penSnapOv.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      this._penSnapOv = null;
+    }
+    if (segPts && segPts.length >= 2) {
+      this._penSnapOv = this._buildLineOverlay('penSnap', segPts, null, 0xff4fd8);
+    }
+  }
+
+  /**
    * 🔴 **把「畫」的手勢整組換掉：左鍵／單指空出來給畫，轉視角換到右鍵／兩指。**
    *
    * ⚠ **⛔ 這一支原本叫 `setKnifeInput()`**（2026-08-29 改名）——

@@ -14159,6 +14159,66 @@ section('D 組 bug：矩形、圓形這些基本圖形⛔ 不可以消失');
 }
 
 // ═══════════════════════════════════════════════════════
+section('鋼筆的智慧參考線：對齊、交集、吸參考線、打數字定長度 —— 2026-10-15');
+// ═══════════════════════════════════════════════════════
+{
+  const ps = await import('../js/core/penSnap.js');
+  const pts = [{ x: 0, z: 0 }, { x: 30, z: 0 }];
+  const g = { x: [50], y: [7], z: [] };
+  const tol = 2;
+
+  {
+    const r = ps.penSmartSnap(31.5, 20, { points: pts, guides: g, tol });
+    eq('★★★ 跟點同一個 X（差 1.5，容許 2）⇒ X 吸到 30', r.x, 30);
+    eq('★★ Z 沒對到 ⇒ 照游標', r.z, 20);
+    eq('★★ 標字「對齊」', r.label, '對齊');
+    ok('★★ 粉紅線從那個點畫過來', r.fromX && r.fromX.x === 30 && r.fromX.z === 0);
+  }
+  {
+    const r = ps.penSmartSnap(1, 1.2, { points: [{ x: 0, z: 9 }, { x: 9, z: 0 }], guides: g, tol });
+    eq('★★★ 兩個方向各對到不同的點 ⇒「交集」', r.label, '交集');
+    ok('★★ 交叉處 ＝ (0, 0)', r.x === 0 && r.z === 0);
+  }
+  {
+    const r = ps.penSmartSnap(29, 1, { points: pts, guides: g, tol });
+    eq('★★ 剛好落在一個點上 ⇒「錨點」', r.label, '錨點');
+  }
+  {
+    const r = ps.penSmartSnap(49, 15, { points: pts, guides: g, tol });
+    eq('★★★ 靠近參考線 X 50 ⇒ 吸上去', r.x, 50);
+    eq('★★ 標字「參考線」', r.label, '參考線');
+    eq('★★ 參考線⛔ 畫粉紅線（它自己看得到）', r.fromX, null);
+  }
+  {
+    /** 🔴 Y 參考線跟地板平行，交不出線 ⇒ ⛔ 吸 */
+    const r = ps.penSmartSnap(10, 7.5, { points: [], guides: g, tol });
+    eq('★★ Y 參考線⛔ 拿來吸 Z', r.z, 7.5);
+    eq('★ 什麼都沒吸 ⇒ ⛔ 標字', r.label, '');
+  }
+  {
+    const r = ps.penSmartSnap(10, 10, { points: pts, guides: g, tol });
+    ok('★★ 太遠（超過容許）⇒ 原樣', r.x === 10 && r.z === 10 && !r.label);
+  }
+  {
+    /** 兩個都在範圍內時挑近的那一個 */
+    const r = ps.penSmartSnap(29.5, 20, { points: [{ x: 28, z: 0 }, { x: 30, z: 5 }], guides: g, tol });
+    eq('★★ 兩個點都在範圍內 ⇒ 吸近的（30）', r.x, 30);
+  }
+  {
+    const f = ps.footprintPoints({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 99, z: 4 } });
+    eq('★★ 別的物件外框：四個角 ＋ 中心 ＝ 5 個點', f.length, 5);
+    ok('★ 中心 ＝ (5, 2)（高度⛔ 管）', f[4].x === 5 && f[4].z === 2);
+  }
+  {
+    const r = ps.pointAtLength({ x: 0, z: 0 }, { x: 3, z: 4 }, 25);
+    ok('★★★ 打 25 ⇒ 沿著游標方向（3,4）走 25 ＝ (15, 20)', r.ok && Math.abs(r.x - 15) < 1e-12 && Math.abs(r.z - 20) < 1e-12);
+    ok('★★ 打 0 ⇒ 擋下來講原因', !ps.pointAtLength({ x: 0, z: 0 }, { x: 1, z: 0 }, 0).ok);
+    ok('★★ 游標疊在上一個點上 ⇒ 擋下來（看不出方向）',
+       /看不出方向/.test(ps.pointAtLength({ x: 1, z: 1 }, { x: 1, z: 1 }, 5).reason || ''));
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 section('匯入線稿：沒封口的線保留 Illustrator 的錨點與把手（變成鋼筆用）—— 2026-10-15');
 // ═══════════════════════════════════════════════════════
 {

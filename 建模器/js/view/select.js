@@ -24,6 +24,7 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
+import { penSmartSnap, footprintPoints, pointAtLength } from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -317,6 +318,23 @@ export class Selection {
      * 〔坑第 31 條：與其讓兩條路對齊，不如換一個只有一條路的定義〕
      */
     this._penDone = [];
+    /**
+     * 🔴 **智慧參考線**（kang 2026-10-15：鋼筆操作要跟 Illustrator 一致）——
+     * 對齊別的點、吸到參考線、顯示這一段多長、打數字定長度。
+     * ⭐ 一顆開關、預設開著（kang 拍板；跟 Illustrator 的 Ctrl＋U 一樣）。
+     * 數學在 `core/penSnap.js`；這裡只管接進放點、畫粉紅線、標字。
+     */
+    this.penSmart = true;
+    /** 上一次 `_penSnapPoint()` 為什麼吸過去（畫粉紅線、標字用）；沒吸 ＝ null */
+    this._penSnapInfo = null;
+    /** 游標那一段「吸過去之後」的位置 {x, z} —— 打數字定長度時看它決定方向 */
+    this._penCursor = null;
+    /** 打到一半的長度（字串，Enter 才放點） */
+    this._penTyped = '';
+    /** 別的物件外框的角與中心 —— 進鋼筆時算一次（⛔ 每移一下就算，那會隨模型變大而變慢） */
+    this._penFoot = null;
+    /** 游標旁那個「D: ○○ cm」的小框 */
+    this._penTipEl = null;
     /** 按下去的當下記起來的東西（⛔ 不可以事後從 e 補算，鍵與位置都是初始狀態） */
     this._penDown = null;
     /** 上一次鋼筆輕點的時間與位置，用來認「快點兩下」＝ 收尾 */
@@ -1327,6 +1345,9 @@ export class Selection {
             if (sp.x !== g.x || sp.z !== g.z) tip = new THREE.Vector3(sp.x, 0, sp.z);
           }
           this._drawPenPreview(this._penParked ? null : tip);
+          /** ⭐ 長度、對齊線、標字 —— 跟預覽用**同一個** tip（坑第 31 條） */
+          if (!this._penParked) this._penAssist(tip, e);
+          else { this._penSnapInfo = null; this._penAssist(null); }
         }
       }
 
@@ -2155,13 +2176,154 @@ export class Selection {
    * ⚠ **第一個點沒有「上一個」**，所以⛔ 不鎖。
    */
   _penSnapPoint(x, z, e) {
-    if (!this._wantPenSnap(e) || !this._pen || this._pen.a.length < 2) {
-      return { x, z };
+    this._penSnapInfo = null;
+    if (this._wantPenSnap(e) && this._pen && this._pen.a.length >= 2) {
+      const n = Math.floor(this._pen.a.length / 2);
+      const px = this._pen.a[(n - 1) * 2], pz = this._pen.a[(n - 1) * 2 + 1];
+      const s2 = this._snapAngle(x - px, z - pz);
+      return { x: px + s2.dx, z: pz + s2.dz };
     }
-    const n = Math.floor(this._pen.a.length / 2);
-    const px = this._pen.a[(n - 1) * 2], pz = this._pen.a[(n - 1) * 2 + 1];
-    const s2 = this._snapAngle(x - px, z - pz);
-    return { x: px + s2.dx, z: pz + s2.dz };
+    /**
+     * 🔴 **鎖角度優先，⛔ 兩個一起吸**：鎖角度是使用者**按著 Shift／開著那顆**明講要的，
+     * 對齊是「順手幫你」—— 兩個打架時聽明講的那個（Illustrator 按 Shift 也是先鎖角度）。
+     * ⚠ 第一個點沒有「上一個」可以鎖，所以照樣吸對齊。
+     */
+    if (!this.penSmart) return { x, z };
+    const pxPer = this.view && this.view.pxPerWorld
+      ? this.view.pxPerWorld(new THREE.Vector3(x, 0, z)) : 0;
+    if (!(pxPer > 0)) return { x, z };
+    const r = penSmartSnap(x, z, {
+      points: this._penSnapTargets(),
+      guides: this._doc && this._doc.guides,
+      tol: GUIDE_SNAP_PX / pxPer
+    });
+    if (r.label) this._penSnapInfo = r;
+    return { x: r.x, z: r.z };
+  }
+
+  /**
+   * 可以對齊的點：**這支鋼筆所有的錨點**（每一條）＋ **別的物件外框的四個角與中心**
+   * （kang 2026-10-15 拍板）。
+   * ⚠ **正在改的那個物件自己⛔ 算** —— 它這時候是半透明的影子，
+   * 它的錨點已經在 `_pen` 裡了，再算一次外框只會多出一堆吸不準的角。
+   */
+  _penSnapTargets() {
+    const out = [];
+    for (const p of [...this._penDone, this._pen]) {
+      if (!p) continue;
+      for (let i = 0; i + 1 < p.a.length; i += 2) out.push({ x: p.a[i], z: p.a[i + 1] });
+    }
+    if (!this._penFoot) {
+      this._penFoot = [];
+      const ghost = this.view && this.view._ghostId;
+      for (const o of (this._doc && this._doc.objects) || []) {
+        if (ghost && o.id === ghost) continue;
+        const b = worldBounds(o);
+        if (!b.isEmpty()) this._penFoot.push(...footprintPoints(b));
+      }
+    }
+    return out.concat(this._penFoot);
+  }
+
+  /**
+   * 🔴 **游標旁的小框 ＋ 粉紅對齊線**（Illustrator 的「D: 4.89 cm」與洋紅參考線）。
+   * @param {THREE.Vector3|null} tip 游標那一段吸過去之後的位置；null ＝ 全部收掉
+   * @param {PointerEvent} [e] 用來決定小框擺在哪（⛔ 給就留在原地）
+   */
+  _penAssist(tip, e) {
+    const show = !!(tip && this.penMode && !this.penEdit);
+    this._penCursor = show ? { x: tip.x, z: tip.z } : null;
+    if (this.view && this.view.setPenSnapLines) {
+      const info = show ? this._penSnapInfo : null;
+      const segs = [];
+      if (info) {
+        for (const f of [info.fromX, info.fromZ]) {
+          if (f) segs.push(new THREE.Vector3(f.x, 0, f.z), new THREE.Vector3(tip.x, 0, tip.z));
+        }
+      }
+      this.view.setPenSnapLines(segs.length ? segs : null);
+    }
+    if (!this._penTipEl && show && this.view && this.view.canvas && this.view.canvas.parentElement) {
+      const d = document.createElement('div');
+      d.style.cssText = 'position:absolute;z-index:5;pointer-events:none;white-space:nowrap;'
+        + 'font-size:12px;line-height:1.5;padding:1px 6px;border-radius:3px;'
+        + 'background:rgba(225,225,225,.92);color:#222;display:none';
+      this.view.canvas.parentElement.appendChild(d);
+      this._penTipEl = d;
+    }
+    const el = this._penTipEl;
+    if (!el) return;
+    if (!show) { el.style.display = 'none'; return; }
+    const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;
+    const rows = [];
+    if (n >= 1) {
+      const lx = this._pen.a[(n - 1) * 2], lz = this._pen.a[(n - 1) * 2 + 1];
+      rows.push(`D: ${(Math.round(Math.hypot(tip.x - lx, tip.z - lz) * 100) / 100).toFixed(2)} cm`);
+    }
+    const lab = this._penSnapInfo && this._penSnapInfo.label;
+    if (lab) rows.push(`<span style="color:#c0189c">${lab}</span>`);
+    if (this._penTyped) rows.push(`長度 ${this._penTyped} cm　Enter 放點`);
+    if (!rows.length) { el.style.display = 'none'; return; }
+    el.innerHTML = rows.join('<br>');
+    if (e) {
+      const pr = this.view.canvas.parentElement.getBoundingClientRect();
+      el.style.left = (e.clientX - pr.left + 16) + 'px';
+      el.style.top = (e.clientY - pr.top + 16) + 'px';
+    }
+    el.style.display = 'block';
+  }
+
+  /**
+   * 🔴 **打數字定長度**（kang 2026-10-15 拍板；鍵盤與工具列「長度」那一格共用這一支）。
+   * 從最後一個錨點、朝**游標吸過去之後**的方向，走剛好 `len` 放一個尖角的點
+   * ⇒ 鎖角度、對齊都已經算進方向裡了。
+   * @returns {{ok:boolean, reason?:string}}
+   */
+  penPlaceLength(len) {
+    if (!this.penMode || this.penEdit) return { ok: false, reason: '要在鋼筆畫線的時候才能用' };
+    const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;
+    if (n < 1) return { ok: false, reason: '先在畫面上放第一個點，再打長度' };
+    if (this._penParked) return { ok: false, reason: '這一段已經「確定」了 —— 先在畫面上放下一個點' };
+    if (!this._penCursor) return { ok: false, reason: '先把游標移到畫面上，決定往哪個方向' };
+    const last = { x: this._pen.a[(n - 1) * 2], z: this._pen.a[(n - 1) * 2 + 1] };
+    const r = pointAtLength(last, this._penCursor, len);
+    if (!r.ok) return r;
+    this._penTyped = '';
+    this._penAddAnchor(r.x, r.z, 0, 0);
+    if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
+    /** ⭐ 游標沒動，所以方向照舊 —— 預覽那一段從新的點畫到游標 */
+    const tip = new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z);
+    this._drawPenPreview(tip);
+    this._penAssist(tip);
+    return { ok: true };
+  }
+
+  /**
+   * 鍵盤打長度：數字與小數點累積、Backspace 退一格、Enter 放點、Esc 放棄。
+   * ⚠ **只有正在打的時候才吃 Backspace／Enter／Esc** —— 沒在打時讓給原本的快捷鍵
+   * （Backspace ＝ 刪物件、Esc ＝ 清選取）。
+   * @returns {boolean} 這一鍵有沒有被用掉（用掉了呼叫端就⛔ 再往下傳）
+   */
+  penTypeKey(key) {
+    if (!this.penMode || this.penEdit || !this._pen || this._pen.a.length < 2) return false;
+    if (/^[0-9]$/.test(key) || (key === '.' && !this._penTyped.includes('.'))) {
+      if (this._penTyped.length < 9) this._penTyped += key;
+    } else if (key === 'Backspace' && this._penTyped) {
+      this._penTyped = this._penTyped.slice(0, -1);
+    } else if (key === 'Escape' && this._penTyped) {
+      this._penTyped = '';
+    } else if (key === 'Enter' && this._penTyped) {
+      const r = this.penPlaceLength(parseFloat(this._penTyped));
+      if (!r.ok) {
+        this._penTyped = '';
+        if (this.hooks.onPenMsg) this.hooks.onPenMsg(r.reason, true);
+      }
+      return true;
+    } else {
+      return false;
+    }
+    if (this._penCursor) this._penAssist(new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z));
+    return true;
   }
 
   // ── 指到哪就亮哪（hover）────────────────────────────
@@ -3919,6 +4081,11 @@ export class Selection {
     if (!this.penMode && this.view && this.view.clearPenPreview) {
       this.view.clearPenPreview();
     }
+    this._penSnapInfo = null;
+    this._penCursor = null;
+    this._penTyped = '';
+    this._penFoot = null;
+    this._penAssist(null);
     this._pen = null;
     this._penDown = null;
     this._lastPenTap = null;

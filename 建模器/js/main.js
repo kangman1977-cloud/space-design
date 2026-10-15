@@ -161,6 +161,8 @@ const sel = new Selection(view, {
    * 目前這條明明是 0 個點，按鈕卻還停在「鋼筆 4」（實測照出來的）。
    */
   onPenAdd: () => updateBar(),
+  /** 打數字定長度放不下去時（還沒有點、看不出方向…）講原因 */
+  onPenMsg: (msg, bad) => toast(msg, bad),
   onPenFinish: () => finishPen(),
   /**
    * 🔴 **指到第一個錨點時要講一句** —— Adobe 是用「游標旁出現小圓圈」，
@@ -794,6 +796,30 @@ $('penSnapDeg').oninput = () => {
   const d = +$('penSnapDeg').value;
   if (Number.isFinite(d) && d > 0) sel.penSnapDeg = d;
 };
+/**
+ * 🔴 **智慧參考線**（kang 2026-10-15 拍板：一顆開關、預設開著）。
+ * ⭐ 狀態放在 `select.js`（`penSmart`）：它會改變**畫的時候點落在哪**，
+ * 照 `penUp` 那一則的判準，畫的行為歸 `select.js`。
+ */
+$('penSmart').onclick = () => {
+  sel.penSmart = !sel.penSmart;
+  updateBar();
+  toast(sel.penSmart
+    ? '智慧參考線：開。游標旁顯示這一段多長；靠近跟別的點同一個 X 或 Z、或靠近參考線時會吸過去（粉紅線）'
+    : '智慧參考線：關。點放在哪就是哪，不吸對齊（這一段多長照樣顯示，打數字定長度也照樣能用）');
+};
+/** 平板打長度的路；桌機直接打數字＋Enter 走的是同一支 `penPlaceLength()` */
+function penLenGo() {
+  const v = parseFloat($('penLen').value);
+  const r = sel.penPlaceLength(v);
+  if (!r.ok) { toast(r.reason, true); return; }
+  updateBar();
+  toast(`照長度放了一個點：${v} cm`);
+}
+$('penLenGo').onclick = () => penLenGo();
+$('penLen').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); penLenGo(); }
+});
 $('penSnap').onclick = () => {
   sel.penSnapAngle = !sel.penSnapAngle;
   updateBar();
@@ -5932,6 +5958,16 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  /**
+   * 🔴 **鋼筆畫線時打數字定長度**（kang 2026-10-15）—— 一定要排在快捷鍵前面：
+   * 正在打長度時的 Backspace 是「退一格」，⛔ 是「刪物件」；Esc 是「不打了」，⛔ 是「清選取」。
+   * ⚠ 沒在打的時候 `penTypeKey()` 回 false，原本的快捷鍵照舊。
+   */
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && sel.penTypeKey(e.key)) {
+    e.preventDefault();
+    return;
+  }
+
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === 'z') {
     e.preventDefault();
@@ -6470,6 +6506,9 @@ function updateBar() {
   $('penSnap').classList.toggle('on', !!sel.penSnapAngle);
   $('penSnapDegLbl').hidden = !sel.penMode;
   $('penSnapDeg').hidden = !sel.penMode;
+  $('penSmart').hidden = !sel.penMode;
+  $('penSmart').classList.toggle('on', !!sel.penSmart);
+  for (const id of ['penLenLbl', 'penLen', 'penLenGo']) $(id).hidden = !penDrawing;
   $('penPark').hidden = !penDrawing;
   $('penPark').disabled = sel.penCount === 0;
   $('penUndo').hidden = !penDrawing;
