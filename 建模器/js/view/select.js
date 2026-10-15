@@ -24,7 +24,8 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
-import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle } from '../core/penSnap.js';
+import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleNear }
+  from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -334,7 +335,8 @@ export class Selection {
     /**
      * 🔴 **固定長度／角度**（kang 2026-10-15：「兩種都要」）——
      * 工具列「長度」有數字 ⇒ 點哪個方向，新點就落在那個方向剛好這麼長；
-     * 「角度」也有數字 ⇒ 方向照角度，⛔ 管點在哪。
+     * 「角度」也有數字 ⇒ 斜度照角度、**往四個方向的哪一個看滑鼠**
+     * 　（kang 2026-10-15 第二次改：「角度是不是不應該鎖死方向」）。
      * ⚠ 病因（kang 驗收時抓到的）：舊版「照長度放點」的方向取「游標最後停在畫面上的位置」，
      * 　 而滑鼠從畫面移去工具列的**路上**就把那個位置改掉了。
      * ⭐ 狀態跟工具列那兩格**同一份**（`main.js` 只負責把格子的值寫過來，⛔ 自己再記一份）。
@@ -2190,14 +2192,14 @@ export class Selection {
     /**
      * 🔴 **固定長度優先**：它是使用者打在工具列上明講的。
      * ⚠ 這時候**⛔ 吸對齊** —— 長度定死了，對齊點通常不在那個圓上，兩個不能同時滿足。
-     * ⭐ 方向：有角度 ＝ 照角度；沒有 ＝ 朝游標（按 Shift／鎖角度時先鎖方向）。
+     * ⭐ 方向：有角度 ＝ 那個斜度的四個方向裡最靠近游標的；沒有 ＝ 朝游標（按 Shift／鎖角度時先鎖方向）。
      * ⭐ 預覽與放點都走這一支，所以**看到的位置就是點下去的位置**（坑第 31 條）。
      */
     if (this.penFixLen > 0 && this._pen && this._pen.a.length >= 2) {
       const n = Math.floor(this._pen.a.length / 2);
       const last = { x: this._pen.a[(n - 1) * 2], z: this._pen.a[(n - 1) * 2 + 1] };
       let d;
-      if (Number.isFinite(this.penFixAng)) d = dirFromAngle(this.penFixAng);
+      if (Number.isFinite(this.penFixAng)) d = dirFromAngleNear(this.penFixAng, { dx: x - last.x, dz: z - last.z });
       else d = this._snapIf(e, x - last.x, z - last.z);
       const r = pointAtLength(last, { x: last.x + d.dx, z: last.z + d.dz }, this.penFixLen);
       return r.ok ? { x: r.x, z: r.z } : { x, z };
@@ -2308,19 +2310,24 @@ export class Selection {
    * ⇒ 鎖角度、對齊都已經算進方向裡了。
    * @returns {{ok:boolean, reason?:string}}
    */
-  penPlaceLength(len, ang = null) {
+  penPlaceLength(len, ang = null, near = false) {
     if (!this.penMode || this.penEdit) return { ok: false, reason: '要在鋼筆畫線的時候才能用' };
     const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;
     if (n < 1) return { ok: false, reason: '先在畫面上放第一個點，再打長度' };
     if (this._penParked) return { ok: false, reason: '這一段已經「確定」了 —— 先在畫面上放下一個點' };
     const last = { x: this._pen.a[(n - 1) * 2], z: this._pen.a[(n - 1) * 2 + 1] };
     /**
-     * ⭐ **有角度就照角度**（⛔ 看游標）—— 工具列那顆按鈕走這條，滑鼠完全不必碰畫面。
-     * 沒有角度才朝游標（鍵盤打數字＋Enter 那條：滑鼠一直停在畫面上，方向是對的）。
+     * ⭐ **有角度**：
+     * - 工具列那顆按鈕（`near` 關）⇒ **照打的數字本身**（45 往右上、135 往左上）——
+     * 　 滑鼠在工具列上，⛔ 能拿來決定往哪邊（kang 第一次抓到的就是這個）
+     * - 鍵盤打數字＋Enter（`near` 開，滑鼠一直停在畫面上）⇒ 四個方向裡最靠近游標的，跟點下去一樣
+     * 沒有角度才朝游標。
      */
     let toward;
     if (Number.isFinite(ang)) {
-      const d = dirFromAngle(ang);
+      const d = near && this._penCursor
+        ? dirFromAngleNear(ang, { dx: this._penCursor.x - last.x, dz: this._penCursor.z - last.z })
+        : dirFromAngle(ang);
       toward = { x: last.x + d.dx, z: last.z + d.dz };
     } else {
       if (!this._penCursor) return { ok: false, reason: '先把游標移到畫面上，決定往哪個方向' };
@@ -2357,7 +2364,7 @@ export class Selection {
     } else if (key === 'Escape' && this._penTyped) {
       this._penTyped = '';
     } else if (key === 'Enter' && this._penTyped) {
-      const r = this.penPlaceLength(parseFloat(this._penTyped), this.penFixAng);
+      const r = this.penPlaceLength(parseFloat(this._penTyped), this.penFixAng, true);
       if (!r.ok) {
         this._penTyped = '';
         if (this.hooks.onPenMsg) this.hooks.onPenMsg(r.reason, true);

@@ -14223,6 +14223,18 @@ section('鋼筆的智慧參考線：對齊、交集、吸參考線、打數字�
     ok('★★★ 長度 20、角度 30° ⇒ (10 ＋ 20·cos30°, 10 − 20·sin30°) ＝ (27.32, 0)',
        Math.abs(p30.x - (10 + 20 * Math.cos(Math.PI / 6))) < 1e-12 && Math.abs(p30.z - 0) < 1e-12,
        JSON.stringify(p30));
+    /** 🔴 角度只管斜多少、往哪邊看滑鼠（kang 2026-10-15「四個方向，看滑鼠在哪」） */
+    const s2 = Math.SQRT1_2;
+    const near = (deg, dx, dz) => ps.dirFromAngleNear(deg, { dx, dz });
+    const eqDir = (d, x, z) => Math.abs(d.dx - x) < 1e-12 && Math.abs(d.dz - z) < 1e-12;
+    ok('★★★ 45、滑鼠在右上 ⇒ 右上', eqDir(near(45, 5, -5), s2, -s2));
+    ok('★★★ 45、滑鼠在左上 ⇒ 左上', eqDir(near(45, -5, -4), -s2, -s2));
+    ok('★★★ 45、滑鼠在左下 ⇒ 左下', eqDir(near(45, -3, 6), -s2, s2));
+    ok('★★★ 45、滑鼠在右下 ⇒ 右下', eqDir(near(45, 9, 1), s2, s2));
+    ok('★★ 0、滑鼠在左邊 ⇒ 往左（只剩左右兩個）', eqDir(near(0, -2, -1), -1, 0));
+    ok('★★ 90、滑鼠在下面 ⇒ 往下（只剩上下兩個）', eqDir(near(90, 1, 3), 0, 1));
+    ok('★★ 滑鼠疊在上一個點上 ⇒ 照打的數字本身（45 ＝ 右上）', eqDir(near(45, 0, 0), s2, -s2));
+    ok('★★ 打 135 跟打 45 是同一組四個方向（滑鼠在右上 ⇒ 右上）', eqDir(near(135, 5, -5), s2, -s2));
     ok('★★ 游標疊在上一個點上 ⇒ 擋下來（看不出方向）',
        /看不出方向/.test(ps.pointAtLength({ x: 1, z: 1 }, { x: 1, z: 1 }, 5).reason || ''));
   }

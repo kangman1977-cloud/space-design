@@ -103,6 +103,27 @@ export function dirFromAngle(deg) {
 }
 
 /**
+ * 🔴 **角度只管「斜多少」，往哪一邊看滑鼠**（kang 2026-10-15：「角度是不是不應該鎖死方向」→ 選「四個方向」）。
+ * 打 45 ⇒ 右上、左上、左下、右下這四個斜 45° 的方向裡，挑**最靠近 `toward`** 的那一個
+ * （＝ 角度、180−角度、180＋角度、360−角度；0／90 這種只剩兩個方向，重複的不影響）。
+ * ⚠ `toward` 是長度 0（滑鼠疊在上一個點上）⇒ 照打的數字本身。
+ * @param {{dx:number, dz:number}} toward 上一個點 → 滑鼠
+ * @returns {{dx:number, dz:number}} 單位向量
+ */
+export function dirFromAngleNear(deg, toward) {
+  const a = +deg;
+  const cands = [a, 180 - a, 180 + a, -a].map(dirFromAngle);
+  const tx = toward ? +toward.dx : 0, tz = toward ? +toward.dz : 0;
+  if (!(Math.hypot(tx, tz) > 1e-9)) return cands[0];
+  let best = cands[0], bd = -Infinity;
+  for (const c of cands) {
+    const d = c.dx * tx + c.dz * tz;
+    if (d > bd + 1e-12) { bd = d; best = c; }
+  }
+  return best;
+}
+
+/**
  * 打數字定長度：從 `from` 朝 `toward` 的方向，走剛好 `len`。
  * ⚠ 方向看「游標吸過去之後」的位置 —— 鎖角度、對齊都已經算進去了。
  * @returns {{ok:boolean, x?:number, z?:number, reason?:string}}
