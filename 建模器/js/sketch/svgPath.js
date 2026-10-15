@@ -55,7 +55,15 @@ const MAX_DEPTH = 20;
  * @param {string} d
  * @param {object} opt { tol } 弦高誤差
  * @returns {{subpaths:Array, cmds:string, errors:Array}}
- *   subpaths 每個是 { pts:[{x,y}], closed:boolean }
+ *   subpaths 每個是 { pts:[{x,y}], closed:boolean, bez }
+ *
+ * 🔴 **`bez`：Illustrator 原本的錨點與把手，⛔ 沒有拉直**（2026-10-15 加）。
+ * 形狀跟鋼筆的 `paths` 一樣：`a` 錨點、`hi` 進來的把手、`ho` 出去的把手，
+ * 都是扁平陣列，**把手存相對錨點的位移**（兩邊都是 0 ＝ 尖角）。
+ * ⭐ 用途：匯入時**沒封口的線直接變成一支鋼筆**（kang 2026-10-15 拍板）——
+ * 　 拉直的 `pts` 留給預覽與擠出；要「編輯路徑」的話一定要原本的錨點，
+ * 　 ⛔ 不然 Illustrator 裡 4 個點的線，進來會變成幾十個點。
+ * ⚠ 直線兩端的把手是 0；二次曲線、圓弧都換成三次曲線（圓弧每 90° 以內一段）。
  */
 export function parsePath(d, opt = {}) {
   const tol = opt.tol > 0 ? opt.tol : DEFAULT_TOL;
@@ -72,7 +80,8 @@ export function parsePath(d, opt = {}) {
   let lastCmd = '';
 
   const start = (nx, ny) => {
-    cur = { pts: [{ x: nx, y: ny, corner: false }], closed: false, anch: [] };
+    cur = { pts: [{ x: nx, y: ny, corner: false }], closed: false, anch: [],
+            bez: { a: [nx, ny], hi: [0, 0], ho: [0, 0] } };
     cur.anch.push({ i: 0, inT: null, outT: null });
     subpaths.push(cur);
     sx = nx; sy = ny;
@@ -100,6 +109,22 @@ export function parsePath(d, opt = {}) {
   const segIn = (tx, ty) => {
     if (!cur) return;
     cur.anch.push({ i: cur.pts.length - 1, inT: [tx, ty], outT: null });
+  };
+
+  /**
+   * 錨點與把手（`bez`）：從目前位置 (x, y) 接一段三次曲線到 (ex, ey)。
+   * 直線就是兩根把手都在端點上（＝ 0）。⚠ 長度 0 的直線⛔ 加錨點（跟 `push()` 同一條理由）。
+   */
+  const bezTo = (c1x, c1y, c2x, c2y, ex, ey) => {
+    if (!cur) start(x, y);
+    const b = cur.bez, n = b.a.length;
+    const lx = b.a[n - 2], ly = b.a[n - 1];
+    const line = c1x === lx && c1y === ly && c2x === ex && c2y === ey;
+    if (line && Math.abs(ex - lx) < 1e-12 && Math.abs(ey - ly) < 1e-12) return;
+    b.ho[n - 2] = c1x - lx; b.ho[n - 1] = c1y - ly;
+    b.a.push(ex, ey);
+    b.hi.push(c2x - ex, c2y - ey);
+    b.ho.push(0, 0);
   };
 
   let i = 0;
@@ -160,6 +185,7 @@ export function parsePath(d, opt = {}) {
         else if (C === 'H') { const a = num(); nx = rel ? x + a : a; }
         else { const b = num(); ny = rel ? y + b : b; }
         segOut(nx - x, ny - y);
+        bezTo(x, y, nx, ny, nx, ny);
         push(nx, ny);
         segIn(nx - x, ny - y);       // 直線的進出切線是同一個方向
         x = nx; y = ny;
@@ -182,6 +208,7 @@ export function parsePath(d, opt = {}) {
         const ex = rel ? x + a3 : a3, ey = rel ? y + b3 : b3;
         // 控制點跟端點重合時（直線化的貝茲）退而用弦當切線
         segOut(...pick(c1x - x, c1y - y, c2x - x, c2y - y, ex - x, ey - y));
+        bezTo(c1x, c1y, c2x, c2y, ex, ey);
         for (const p of flattenCubic(x, y, c1x, c1y, c2x, c2y, ex, ey, tol)) push(p.x, p.y);
         segIn(...pick(ex - c2x, ey - c2y, ex - c1x, ey - c1y, ex - x, ey - y));
         px = c2x; py = c2y;
@@ -201,6 +228,9 @@ export function parsePath(d, opt = {}) {
         const a2 = num(), b2 = num();
         const ex = rel ? x + a2 : a2, ey = rel ? y + b2 : b2;
         segOut(...pick(cx - x, cy - y, ex - x, ey - y));
+        /** 二次曲線換成三次：兩根把手各是二次控制點方向的 2/3（精確相等，⛔ 是近似） */
+        bezTo(x + 2 / 3 * (cx - x), y + 2 / 3 * (cy - y),
+              ex + 2 / 3 * (cx - ex), ey + 2 / 3 * (cy - ey), ex, ey);
         for (const p of flattenQuad(x, y, cx, cy, ex, ey, tol)) push(p.x, p.y);
         segIn(...pick(ex - cx, ey - cy, ex - x, ey - y));
         px = cx; py = cy;
@@ -219,6 +249,7 @@ export function parsePath(d, opt = {}) {
          */
         const t = arcTangents(x, y, rx, ry, rot, large, sweep, ex, ey);
         segOut(t.t0[0], t.t0[1]);
+        for (const c of arcToCubics(x, y, rx, ry, rot, large, sweep, ex, ey)) bezTo(...c);
         for (const p of flattenArc(x, y, rx, ry, rot, large, sweep, ex, ey, tol)) {
           push(p.x, p.y);
         }
@@ -247,6 +278,17 @@ export function parsePath(d, opt = {}) {
            * 不交的話，起點永遠沒有 inT，就會被當成開放端點、一律算轉角。
            * 一個閉合的圓因此會多出一個假的折線。
            */
+          /**
+           * `bez` 也一樣：最後一個錨點跟起點重合就收掉，它的「進來的把手」交給起點。
+           * ⚠ 隱含的那段直線（⛔ 跟起點重合時）⛔ 不必加錨點 —— 封口的鋼筆本來就會接回起點。
+           */
+          {
+            const b = cur.bez, n = b.a.length;
+            if (n > 2 && Math.abs(b.a[n - 2] - sx) < 1e-9 && Math.abs(b.a[n - 1] - sy) < 1e-9) {
+              b.hi[0] = b.hi[n - 2]; b.hi[1] = b.hi[n - 1];
+              b.a.length = b.hi.length = b.ho.length = n - 2;
+            }
+          }
           if (cur.pts.length > 1) {
             const f = cur.pts[0], l2 = cur.pts[cur.pts.length - 1];
             if (Math.abs(f.x - l2.x) < 1e-9 && Math.abs(f.y - l2.y) < 1e-9) {
@@ -514,6 +556,32 @@ export function flattenArc(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1, tol) {
   for (let k = 1; k <= n; k++) out.push(arcPoint(A, A.th0 + A.dth * (k / n)));
   // 收尾用給定的終點，避免浮點誤差讓路徑接不起來
   out[out.length - 1] = { x: x1, y: y1 };
+  return out;
+}
+
+/**
+ * 圓弧（A 指令）換成幾段三次曲線 —— 給 `bez` 用（匯入的線要變成鋼筆，⛔ 拉直）。
+ * ⭐ 每段最多 90°：那樣的近似誤差在半徑的萬分之三以內（標準做法）。
+ * ⚠ 把手長 ＝ 4/3 · tan(Δθ/4) × 那一點的切線（對角度的導數）。
+ * @returns {number[][]} 每段 [c1x, c1y, c2x, c2y, ex, ey]
+ */
+export function arcToCubics(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1) {
+  const A = arcCenter(x0, y0, rx, ry, rotDeg, large, sweep, x1, y1);
+  if (!A) return [[x0, y0, x1, y1, x1, y1]];          // 半徑 0 ＝ 直線
+  const n = Math.max(1, Math.ceil(Math.abs(A.dth) / (Math.PI / 2) - 1e-9));
+  const d = A.dth / n;
+  const k = 4 / 3 * Math.tan(d / 4);
+  const deriv = t => {
+    const dx = -A.rx * Math.sin(t), dy = A.ry * Math.cos(t);
+    return [A.cosP * dx - A.sinP * dy, A.sinP * dx + A.cosP * dy];
+  };
+  const out = [];
+  for (let j = 0; j < n; j++) {
+    const t0 = A.th0 + d * j, t1 = t0 + d;
+    const p0 = arcPoint(A, t0), p3 = j === n - 1 ? { x: x1, y: y1 } : arcPoint(A, t1);
+    const g0 = deriv(t0), g1 = deriv(t1);
+    out.push([p0.x + k * g0[0], p0.y + k * g0[1], p3.x - k * g1[0], p3.y - k * g1[1], p3.x, p3.y]);
+  }
   return out;
 }
 

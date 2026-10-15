@@ -24,7 +24,7 @@
 import { readSVG, UNIT_KEYS } from '../sketch/profile.js';
 import { flatPts, cornerIdx, shapeBounds, shapesBounds, shiftShape }
   from '../build/prim.js';
-import { ModelObject, KIND } from '../core/io.js';
+import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
 
 const LS_KEY = 'modeler_import';
 
@@ -169,8 +169,10 @@ export class ImportPanel {
 
     const pieces = r.loops.length;
     const holes = r.loops.reduce((n, l) => n + l.holes.length, 0);
+    const nLines = (r.lines || []).length;
     this.sum.textContent = `${pieces} 個形狀　內孔 ${holes} 個　`
-      + `淨面積 ${f(r.area)} cm²`;
+      + `淨面積 ${f(r.area)} cm²`
+      + (nLines ? `　${nLines} 條線（會變成鋼筆）` : '');
 
     // ── 主角：換算後的實際大小 ──
     this.body.appendChild(this._sizeCard(r));
@@ -178,7 +180,7 @@ export class ImportPanel {
     for (const e of r.errors) this.body.appendChild(box('uwWarn', '⚠ ' + e));
     for (const n of r.notes) this.body.appendChild(box('uwSkip', n));
 
-    if (r.loops.length) this.body.appendChild(this._preview(r));
+    if (r.loops.length || nLines) this.body.appendChild(this._preview(r));
 
     // ── 一形狀一列 ──
     const tb = document.createElement('table');
@@ -190,6 +192,16 @@ export class ImportPanel {
         return `<tr><td>${esc(l.name)}</td><td>${esc(l.layer)}</td>`
           + `<td>${l.pts.length}</td><td>${l.holes.length}</td>`
           + `<td>${f(Math.abs(l.area) - l.holes.reduce((s, h) => s + Math.abs(h.area), 0))}</td>`
+          + `<td>${f(b.w)} × ${f(b.h)}</td></tr>`;
+      }).join('')
+      /**
+       * ⭐ 線也列出來（2026-10-15）—— 「點數」寫的是**錨點**（Illustrator 裡看得到的那幾個），
+       * ⛔ 不是拉直出來的點：進來之後「編輯路徑」看到的就是這個數字。
+       */
+      + (r.lines || []).map(l => {
+        const b = bnds(l.pts);
+        return `<tr><td>${esc(l.name)}（線 → 鋼筆）</td><td>${esc(l.layer)}</td>`
+          + `<td>${l.bez.a.length / 2}</td><td>—</td><td>—</td>`
           + `<td>${f(b.w)} × ${f(b.h)}</td></tr>`;
       }).join('');
     const wrap = document.createElement('div');
@@ -297,9 +309,26 @@ export class ImportPanel {
       draw(l.pts, 'cut');
       for (const h of l.holes) draw(h.pts, 'hole');
     }
+    /** 線：藍色、⛔ 接回起點；錨點畫小圓點 —— 進來之後就是這幾個點可以拖 */
+    for (const l of r.lines || []) {
+      ctx.beginPath();
+      l.pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y)));
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#2f7fd8';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.fillStyle = '#2f7fd8';
+      for (let j = 0; j + 1 < l.bez.a.length; j += 2) {
+        ctx.beginPath();
+        ctx.arc(X(l.bez.a[j]), Y(l.bez.a[j + 1]), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
 
     card.innerHTML = '<div class="uwTitle"><div class="dim">'
-      + '外框實線、內孔紅色虛線。洞沒被認出來的話這裡看得到</div></div>';
+      + '外框實線、內孔紅色虛線。洞沒被認出來的話這裡看得到'
+      + ((r.lines || []).length ? '　藍色 ＝ 沒封口的線（會變成鋼筆，圓點是錨點）' : '')
+      + '</div></div>';
     card.appendChild(cv);
     return card;
   }
@@ -322,6 +351,7 @@ export class ImportPanel {
     const r = this.result;
     if (!r || !r.ok) return;
 
+    const lines = r.lines || [];
     const shapes = r.loops.map(l => ({
       name: l.layer || l.name,
       out: flatPts(l.pts),
@@ -329,7 +359,21 @@ export class ImportPanel {
       holes: l.holes.map(h => flatPts(h.pts)),
       hc: l.holes.map(h => cornerIdx(h.pts))
     }));
-    const all = shapesBounds(shapes);
+    const sAll = shapesBounds(shapes);
+    const all = { ...sAll };
+    /**
+     * ⚠ 有線的話，整份稿的中心要**連線一起算** —— ⛔ 不然線跟形狀的相對位置會跑掉。
+     * 沒有線時一個數字都不變（照舊只看形狀）。
+     */
+    if (lines.length) {
+      const lb = bnds(lines.flatMap(l => l.pts));
+      const minX = shapes.length ? Math.min(all.minX, lb.minX) : lb.minX;
+      const maxX = shapes.length ? Math.max(all.maxX, lb.maxX) : lb.maxX;
+      const minY = shapes.length ? Math.min(all.minY, lb.minY) : lb.minY;
+      const maxY = shapes.length ? Math.max(all.maxY, lb.maxY) : lb.maxY;
+      all.cx = (minX + maxX) / 2;
+      all.cy = (minY + maxY) / 2;
+    }
 
     /**
      * 一個形狀一個物件（預設）vs 合成一個。
@@ -341,9 +385,13 @@ export class ImportPanel {
      * 兩種都留著，是因為兩種需求都真的存在：招牌字要個別調，
      * 一個 logo 內部好幾塊則不希望被拆開。
      */
-    const objs = this.opt.split === false
+    const objs = !shapes.length ? [] : this.opt.split === false
+      /**
+       * ⚠ 合成的那一個：幾何對**形狀自己的中心**置中，位置放在「形狀中心 − 整份稿中心」——
+       * 沒有線時這兩個中心一樣（＝ 以前的 0, 0）；有線時⛔ 這樣做原點會偏到旁邊。
+       */
       ? [this._makeObj(baseName(this.fileName) || '匯入線稿',
-          shapes.map(s => shiftShape(s, -all.cx, -all.cy)), 0, 0)]
+          shapes.map(s => shiftShape(s, -sAll.cx, -sAll.cy)), sAll.cx - all.cx, sAll.cy - all.cy)]
       : shapes.map((s, i) => {
         const b = shapeBounds(s);
         return this._makeObj(
@@ -351,6 +399,26 @@ export class ImportPanel {
           [shiftShape(s, -b.cx, -b.cy)],
           b.cx - all.cx, b.cy - all.cy);
       });
+
+    /**
+     * 🔴🔴 **沒封口的線：一條一支鋼筆（不封口）**（kang 2026-10-15 拍板）。
+     * ⚠ **⛔ 管「一個形狀一個物件」有沒有勾** —— 旋轉成形一次只轉一條線，
+     * 　 合在一起的話一勾就擋下來（「這支鋼筆有 N 條線」）。
+     * ⭐ 錨點與把手照 Illustrator 的（`bez`），所以「編輯路徑」看到的點跟原稿一樣。
+     * ⭐ 原點照鋼筆收工的規矩置中（`recenterOrigin()`，搬的是錨點）。
+     */
+    const base = baseName(this.fileName);
+    lines.forEach((l, i) => {
+      const a = l.bez.a.map((v, k) => v - (k % 2 ? all.cy : all.cx));
+      const o = new ModelObject({
+        name: l.name ? `${base ? base + '－' : ''}${l.name}` : `${base || '線'} 線 ${i + 1}`,
+        kind: KIND.SHEET,
+        src: { type: 'pen', h: this.opt.h, open: true, up: false,
+               paths: [{ closed: true, a, hi: l.bez.hi.slice(), ho: l.bez.ho.slice() }] }
+      });
+      recenterOrigin(o);
+      objs.push(o);
+    });
 
     for (const o of objs) {
       try {
@@ -367,7 +435,11 @@ export class ImportPanel {
     this.app.onEdit(`匯入線稿（${objs.length} 個物件）`);
     if (this.app.toast) {
       this.app.toast(`已匯入 ${objs.length} 個物件、${r.loops.length} 個形狀，`
-        + `${f(r.size.w)} × ${f(r.size.h)} × ${f(this.opt.h)} cm`);
+        + `${f(r.size.w)} × ${f(r.size.h)} × ${f(this.opt.h)} cm`
+        + (lines.length
+          ? `　⭐ ${lines.length} 條沒封口的線變成鋼筆（平躺的帶子）：`
+            + '右側面板可以「編輯路徑」、勾「旋轉成形」'
+          : ''));
     }
     this.close();
   }

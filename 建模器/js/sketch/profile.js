@@ -110,10 +110,27 @@ export function readSVG(text, opt = {}) {
          */
         return { x: w.x * scale.cmPerUnit, y: w.y * scale.cmPerUnit, corner: !!q.corner };
       });
+      /**
+       * 🔴 **錨點與把手也換成公分**（沒封口的線要變成鋼筆，2026-10-15）。
+       * ⚠ 把手是「相對錨點的位移」⇒ 要用**變換之後的兩點相減**，
+       * ⛔ 不可以只乘比例 —— `transform` 裡有旋轉或斜切時方向會錯。
+       */
+      const c = scale.cmPerUnit, m = p.matrix, bz = sp.bez;
+      const bez = { a: [], hi: [], ho: [] };
+      for (let j = 0; j + 1 < bz.a.length; j += 2) {
+        const ax = bz.a[j], ay = bz.a[j + 1];
+        const A = apply(m, ax, ay);
+        const I = apply(m, ax + bz.hi[j], ay + bz.hi[j + 1]);
+        const O = apply(m, ax + bz.ho[j], ay + bz.ho[j + 1]);
+        bez.a.push(A.x * c, A.y * c);
+        bez.hi.push((I.x - A.x) * c, (I.y - A.y) * c);
+        bez.ho.push((O.x - A.x) * c, (O.y - A.y) * c);
+      }
       shapes.push({
         name: p.name || `路徑 ${i + 1}`,
         layer: p.layer || '',
         pts,
+        bez,
         closed: sp.closed,
         area: polyArea(pts),
         length: polyLength(pts, sp.closed)
@@ -126,10 +143,14 @@ export function readSVG(text, opt = {}) {
   const tiny = shapes.filter(s => s.closed && Math.abs(s.area) < 1e-6);
   const usable = shapes.filter(s => s.closed && Math.abs(s.area) >= 1e-6);
 
-  if (open.length) {
-    errors.push(`有 ${open.length} 條路徑沒有封閉（${listNames(open)}），擠不出實體。`
-      + '請在 Illustrator 裡把它們接起來，或改用「加厚成板」。');
-  }
+  /**
+   * 🔴🔴 **沒封口的線⛔ 再擋，變成鋼筆**（kang 2026-10-15 拍板）。
+   * ⚠ 以前這裡擋下來，訊息還叫人「改用『加厚成板』」——
+   * **而匯入根本沒有那個功能**（那是鋼筆的）⇒ 指向一條走不通的路〔鐵律六〕。
+   * ⭐ 現在：一條線一支鋼筆（不封口），錨點與把手照 Illustrator 的（`bez`），
+   * 　 之後能「編輯路徑」、能勾「旋轉成形」。封口的形狀照舊擠出。
+   */
+  const lines = open.filter(s => s.bez.a.length >= 4);
   if (tiny.length) notes.push(`有 ${tiny.length} 條路徑面積接近 0，已略過。`);
 
   const selfHits = [];
@@ -145,16 +166,17 @@ export function readSVG(text, opt = {}) {
 
   // ── 四、分外框與內孔 ──
   const loops = classify(usable);
-  const box = bounds(usable.flatMap(s => s.pts));
+  /** ⚠ 大小要連線一起算 —— 只有線的檔，尺寸卡不可以是 0 × 0 */
+  const box = bounds([...usable, ...lines].flatMap(s => s.pts));
 
   return {
-    ok: errors.length === 0 && loops.length > 0,
+    ok: errors.length === 0 && (loops.length > 0 || lines.length > 0),
     errors, notes,
-    reason: errors[0] || (loops.length ? '' : '沒有任何封閉的輪廓。'),
+    reason: errors[0] || (loops.length || lines.length ? '' : '沒有任何封閉的輪廓，也沒有線。'),
     scale,
     tolMm,
     cmds: [...cmds].join(''),
-    shapes, loops,
+    shapes, loops, lines,
     box,
     /** 換算後的實際外框（cm）—— 這是給人核對的那個數字 */
     size: { w: box.maxX - box.minX, h: box.maxY - box.minY },
@@ -319,9 +341,6 @@ function bounds(pts) {
   if (minX > maxX) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   return { minX, minY, maxX, maxY };
 }
-
-const listNames = arr => arr.slice(0, 5).map(s => s.name).join('、')
-  + (arr.length > 5 ? ` 等 ${arr.length} 條` : '');
 
 // ═══════════════════════════════════════════════════════
 //  掃標籤

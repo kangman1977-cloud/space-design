@@ -3836,12 +3836,22 @@ const SVG_A = `<?xml version="1.0" encoding="UTF-8"?>
 }
 
 {
-  // 沒封閉的路徑擠不出實體，但畫面上看不出來 —— 一定要擋下來並講清楚
+  /**
+   * 🔴 **2026-10-15 改了規則（kang 拍板）**：沒封閉的路徑⛔ 再擋下來，
+   * 變成「線」—— 匯入時一條線一支鋼筆（不封口）。
+   * ⚠ 以前擋下來時訊息叫人「改用『加厚成板』」，而匯入根本沒有那個功能。
+   */
   const s = `<svg width="10cm" height="10cm" viewBox="0 0 100 100">`
     + `<path d="M0,0 H50 V50"/></svg>`;
   const r = prof.readSVG(s, { tolMm: 0.2 });
-  ok('沒封閉的路徑會被擋下來', !r.ok);
-  ok('而且講得出是「沒有封閉」', r.errors.join('').includes('封閉'), r.errors.join('|'));
+  ok('★★★ 沒封閉的路徑⛔ 再被擋下來', r.ok, r.reason);
+  eq('★★★ 它變成一條「線」', r.lines.length, 1);
+  eq('★★ 封閉的形狀 0 個', r.loops.length, 0);
+  eq('★★★ 錨點照 Illustrator 的：3 個（⛔ 拉直出來的點數）', r.lines[0].bez.a.length / 2, 3);
+  near('★★ 錨點換成公分（100 單位 ＝ 10 cm）：第 2 個點 X ＝ 5', r.lines[0].bez.a[2], 5, 1e-12);
+  ok('★★ 直線的把手都是 0（＝ 尖角）', r.lines[0].bez.hi.every(v => v === 0) && r.lines[0].bez.ho.every(v => v === 0));
+  near('★ 尺寸卡要連線一起算：寬 5 cm', r.size.w, 5, 1e-12);
+  ok('★★ ⛔ 再出現「加厚成板」這條走不通的路', !JSON.stringify(r).includes('加厚成板'));
 }
 
 section('匯入線稿：擠出');
@@ -14144,7 +14154,77 @@ section('D 組 bug：矩形、圓形這些基本圖形⛔ 不可以消失');
   ok('★★ 只有一個矩形的檔案 ⛔ 不再說「沒有任何路徑」', onlyRect.ok, onlyRect.reason);
 
   const open = prof.readSVG(`<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100"><polyline points="0,0 50,0 50,50"/></svg>`);
-  ok('對照組：折線（開放的）照規矩報「沒有封閉」', open.errors.some(e => e.includes('沒有封閉')));
+  ok('★★ 折線（開放的）2026-10-15 起變成一條線，⛔ 報錯', open.ok && open.lines.length === 1
+     && !open.errors.length, open.errors.join('|'));
+}
+
+// ═══════════════════════════════════════════════════════
+section('匯入線稿：沒封口的線保留 Illustrator 的錨點與把手（變成鋼筆用）—— 2026-10-15');
+// ═══════════════════════════════════════════════════════
+{
+  const sp = await import('../js/sketch/svgPath.js');
+  const prim = await import('../js/build/prim.js');
+  const svg = (body, extra = '') => `<svg width="100cm" height="100cm" viewBox="0 0 100 100"${extra}>${body}</svg>`;
+
+  {
+    /** 一段三次曲線：錨點 2 個、把手照檔案（⛔ 被拉直成幾十個點） */
+    const r = sp.parsePath('M0,0 C10,0 20,10 20,20');
+    const b = r.subpaths[0].bez;
+    eq('★★★ 一段曲線 ＝ 2 個錨點', b.a.length / 2, 2);
+    ok('★★★ 拉直的點遠多於錨點（證明 bez ⛔ 是拉直出來的）', r.subpaths[0].pts.length > 4,
+       String(r.subpaths[0].pts.length));
+    eq('★★ 起點出去的把手 ＝ (10, 0)', b.ho.slice(0, 2).join(','), '10,0');
+    eq('★★ 終點進來的把手 ＝ (0, −10)', b.hi.slice(2, 4).join(','), '0,-10');
+  }
+  {
+    /** 二次曲線換成三次：曲線上的點⛔ 可以變 */
+    const r = sp.parsePath('M0,0 Q10,20 20,0');
+    const b = r.subpaths[0].bez;
+    const c = sp.cubicAt(b.a[0], b.a[1], b.a[0] + b.ho[0], b.a[1] + b.ho[1],
+                         b.a[2] + b.hi[2], b.a[3] + b.hi[3], b.a[2], b.a[3], 0.5);
+    near('★★ 二次曲線換三次：中點 ＝ (10, 10)（二次曲線的中點）', Math.hypot(c.x - 10, c.y - 10), 0, 1e-12);
+  }
+  {
+    /** 半圓（A）：180° ⇒ 2 段三次曲線 ⇒ 3 個錨點；每段中點貼在圓上 */
+    const r = sp.parsePath('M0,0 A10,10 0 0 1 20,0');
+    const b = r.subpaths[0].bez;
+    eq('★★ 半圓 ＝ 3 個錨點（每 90° 一段）', b.a.length / 2, 3);
+    let worst = 0;
+    for (let j = 0; j + 3 < b.a.length; j += 2) {
+      const m = sp.cubicAt(b.a[j], b.a[j + 1], b.a[j] + b.ho[j], b.a[j + 1] + b.ho[j + 1],
+                           b.a[j + 2] + b.hi[j + 2], b.a[j + 3] + b.hi[j + 3], b.a[j + 2], b.a[j + 3], 0.5);
+      worst = Math.max(worst, Math.abs(Math.hypot(m.x - 10, m.y) - 10));
+    }
+    ok('★★ 每段中點離圓心 10（誤差 < 半徑的萬分之三）', worst < 10 * 3e-4, String(worst));
+  }
+  {
+    const r = sp.parsePath('M0,0 H50 V50 H0 Z');
+    eq('★★ 封口的方形：4 個錨點（Z 回到起點的那一個⛔ 多算）', r.subpaths[0].bez.a.length / 2, 4);
+  }
+  {
+    /** 🔴 transform 有旋轉時，把手的方向也要跟著轉（⛔ 只乘比例） */
+    const r = prof.readSVG(svg('<path transform="rotate(90)" d="M0,0 C10,0 20,10 20,20"/>'));
+    const b = r.lines[0].bez;
+    near('★★★ 轉 90° 之後，出去的把手 ＝ (0, 10)', Math.hypot(b.ho[0] - 0, b.ho[1] - 10), 0, 1e-9);
+  }
+  {
+    /**
+     * 🔴🔴 **端到端：匯入的線 → 鋼筆 → 旋轉成形**（kang 要的就是這一條）。
+     * 碗的半邊：從中心線出發往右、再往上彎（畫面上方 ＝ SVG 的 y 變小）。
+     */
+    const r = prof.readSVG(svg('<path d="M10,60 L40,60 C48,60 52,40 54,10"/>'));
+    ok('★★★ 匯入讀得到', r.ok && r.lines.length === 1, r.reason);
+    const L = r.lines[0].bez;
+    const src = { type: 'pen', h: 3, open: true, up: false,
+                  paths: [{ closed: true, a: L.a, hi: L.hi, ho: L.ho }] };
+    ok('★★ 當成鋼筆擠得出一條帶子（旋轉成形還沒開）', io.buildSrc(src).faces.length > 0);
+    src.rev = { dir: 'z', at: prim.penRevAutoAt(src, 'z'), seg: 32, stand: true };
+    const rv = prim.penRevolve(src);
+    ok('★★★ 勾旋轉成形 ⇒ 轉得出碗', rv.ok, rv.reason);
+    near('★★ 中心線自動放在線的起點（X 10）', src.rev.at, 10, 1e-9);
+    eq('★★ 一端碰到中心線 ⇒ 板件', io.penKind(src), io.KIND.SHEET);
+    near('★★ 碗高 ＝ 60 − 10 ＝ 50', rv.mesh.bounds().max.y - rv.mesh.bounds().min.y, 50, 1e-6);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
