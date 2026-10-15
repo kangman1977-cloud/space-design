@@ -950,6 +950,9 @@ function fromRevolve(pts, seg) {
  * - 前後方向：**畫面上方朝上**（上視圖的畫面上方 ＝ −Z，`scene.js` 的 `setView('top')`）
  * - 左右方向：**畫面右邊朝上**（⚠ 這個方向⛔ 沒有自然的答案，挑了一個；反了就把物件轉 180°）
  * ⭐ 做法是**先把輪廓立起來、再繞直立的軸轉** —— `revolve()` 一行都不用知道「立起來」。
+ *
+ * ── 🔴 躺著（`stand` 關）：整個抬起來，最低點貼地板（kang 2026-10-15 拍板）──
+ * 中心線畫在地板上，轉出來上下各一半 ⇒ 下面那一半會鑽到地板底下。形狀⛔ 不變，只往上搬。
  */
 export const PEN_REV_DEFAULTS = { dir: 'z', seg: 32, stand: true };
 
@@ -1002,9 +1005,21 @@ export function penRevolve(p) {
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
   if (!rv.stand) {
-    return dir === 'z'
+    const r = dir === 'z'
       ? revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'z', a: at, b: 0, seg })
       : revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'x', a: 0, b: at, seg });
+    /**
+     * 🔴 **躺著的碗整個往上抬，最低點貼地板**（kang 2026-10-15 拍板）。
+     * ⚠ 中心線畫在地板上 ⇒ 繞它轉出來的東西**上下各一半**，下面那一半鑽到地板底下。
+     * ⭐ 抬的量**看轉出來的網格量**，⛔ 不用「離中心線最遠」去算 ——
+     * 　 `轉幾格` 不是 4 的倍數時，最低的那一格⛔ 剛好在正下方，用半徑算會浮起來一點。
+     * ⚠ 走 `transformed()` 搬，平滑邊與折線的標記才會一起帶過去。
+     */
+    if (r.ok) {
+      const lo = r.mesh.bounds().min.y;
+      r.mesh = r.mesh.transformed(new THREE.Matrix4().makeTranslation(0, -lo, 0));
+    }
+    return r;
   }
   /**
    * 立起來：輪廓搬到一個直立的平面上，底（往下那一頭）貼地板。

@@ -13340,6 +13340,16 @@ section('旋轉成形 接回（第 1 輪）：鋼筆物件自己變成碗 ——
     eq('★★★ 兩端都碰到中心線 → 實體', io.penKind(s), io.KIND.SOLID);
     const b = r.mesh.bounds();
     near('★★ 躺著：中心線是 Z 方向 ⇒ 長度 70 落在 Z', b.max.z - b.min.z, H, 1e-6);
+    /** 🔴 kang 2026-10-15：躺著的碗整個抬起來，⛔ 一半鑽到地板下面 */
+    near('★★★ 躺著：最低點貼地板（Y ＝ 0）', b.min.y, 0, 1e-9);
+    near('★★ 躺著：高 ＝ 直徑 50（形狀沒變，只是往上搬）', b.max.y, 2 * R, 1e-9);
+    const smooth = [...r.mesh.edges()].filter(he => he.smooth).length;
+    ok('★★ 躺著：往上搬之後平滑邊的標記還在', smooth > 0, String(smooth));
+  }
+  {
+    /** ⚠ `轉幾格` 不是 4 的倍數：最低的那一格⛔ 在正下方 —— 用半徑算的話會浮起來 */
+    const r = prim.penRevolve(pen([cyl], { dir: 'x', at: -5, seg: 30, stand: false }));
+    near('★★ 轉 30 格、左右方向躺著：最低點照樣貼地板', r.mesh.bounds().min.y, 0, 1e-9);
   }
   {
     const s = pen([cyl], { dir: 'z', at: 0, seg: SEG, stand: true });
