@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
-         penPathToWorld, penPathToLocal, GUIDE_AXES }
+         penPathToWorld, penPathToLocal, penKind, GUIDE_AXES }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -823,7 +823,8 @@ function penFlagsToObject() {
   if (!obj || !obj.src) return;
   obj.src.open = !!sel.penNoClose;
   obj.src.up = !!penUpFlag;
-  obj.kind = obj.src.open ? KIND.SHEET : KIND.SOLID;
+  /** ⚠ 種類一律問 `penKind()` —— 旋轉成形開著時，封不封閉要看轉出來的東西 */
+  obj.kind = penKind(obj.src) ?? obj.kind;
   obj.invalidate();
   view.sync(doc);
   panel.refresh();
@@ -1748,6 +1749,11 @@ function applyPenEdit() {
   /** ⚠ 有任何一條換不出本地座標就整批放棄，⛔ 不要寫一半進去 */
   if (loc.some(l => !l)) return;
   obj.src.paths = loc;
+  /**
+   * 🔴 **旋轉成形的碗：拖錨點可能讓端點碰到／離開中心線** ⇒ 實體與板件會換
+   * （鐵律二：種類記在物件上，形狀記在 src 上，⛔ 只改一端 ＝ 沒改）。
+   */
+  if (obj.src.rev) obj.kind = penKind(obj.src) ?? obj.kind;
   obj.invalidate();
   view.sync(doc);
   updateBar();
@@ -1772,6 +1778,7 @@ function endPenEdit(save) {
       if (loc && !loc.some(l => !l)) next = loc;
     }
     obj.src.paths = next;
+    if (save && obj.src.rev) obj.kind = penKind(obj.src) ?? obj.kind;
     /** 🔴 取消 ＝ 兩顆開關與種類也回到進來時的樣子（⛔ 不可以只還原路徑） */
     if (!save) {
       obj.src.open = st.open; obj.src.up = st.up; obj.kind = st.kind;

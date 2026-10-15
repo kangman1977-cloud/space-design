@@ -8,8 +8,9 @@
  */
 
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
-         bendAllowance, neutralRadius } from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin } from '../core/io.js';
+         bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
+  from '../build/prim.js';
+import { KIND, canExplodeShapes, recenterOrigin, penKind } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -323,13 +324,14 @@ export class Panel {
              * ⚠ **⛔ 不要只改 `src`** —— 那正是「性質由兩端決定，
              * 只改一端 ＝ 沒改」（鐵律二）。
              */
-            if (t.key === 'open') obj.kind = v ? KIND.SHEET : KIND.SOLID;
+            if (t.key === 'open') obj.kind = penKind(obj.src) ?? obj.kind;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + t.label);
           }, t.hint);
         }
         for (const f of spec.fields) {
+          if (f.when && !f.when(obj.src)) continue;
           const lab = f.labelOf ? f.labelOf(obj.src) : f.label;
           this._rowNum(lab, obj.src[f.key], f, v => {
             obj.src[f.key] = f.int ? Math.round(v) : v;
@@ -338,6 +340,7 @@ export class Panel {
             this._edit('改' + lab);
           }, f.hintOf ? f.hintOf(obj.src) : f.hint);
         }
+        if (obj.src.type === 'pen') this._penRevBox(obj);
         /**
          * ⭐ **看得到的用法說明**（2026-10-08 為齒輪加的）。
          * ⚠ ⛔ 不可以只靠 `hint` —— 那是滑鼠移上去才出現的提示，平板上看不到。
@@ -587,6 +590,111 @@ export class Panel {
     }, '鎖定後不給縮放把手。帶料表的精確件應該鎖住，避免圖面與實際用料不符');
 
     this._rowColor('顏色', obj.color, v => { obj.color = v; this._edit('改顏色'); });
+  }
+
+  /**
+   * 🔴🔴 **鋼筆物件的「旋轉成形」**（2026-10-15，第 1 輪接回）。
+   *
+   * ⭐ **放在右側面板，⛔ 不放回工具列**（2026-09-02 收起來的那 8 個控制項還註解在
+   * `index.html`）：它現在是**這支鋼筆自己的一個模式**（丙-1.5），⛔ 不是
+   * 「選一串東西 → 按一顆鈕 → 長出新物件」 —— 跟 `編輯路徑`、`原點置中`
+   * 同一條理由：是這個物件的事，而工具列在平板橫向已經吃掉一半高度。
+   *
+   * ⚠ **中心線那一格是【世界座標】**，跟參考線同一套 ——
+   * 放一條參考線、在這裡打同一個數字，中心線就在那條線上（第 2 輪才會「綁住」）。
+   * 換算照 `penPathToWorld()`：**只算位置與縮放，⛔ 不算旋轉**（同一個已知限制）。
+   *
+   * ⚠ 改中心線／方向／立起來之後**原點重新置中**（對碗，⛔ 不是對線）——
+   * ⛔ 不置中的話箭頭與旋轉中心會落在碗的邊上。
+   */
+  _penRevBox(obj) {
+    const src = obj.src;
+    const rev = src.rev;
+    const after = (label, msg) => {
+      obj.kind = penKind(src) ?? obj.kind;
+      obj.invalidate();
+      if (label !== '改轉幾格') recenterOrigin(obj);
+      this.analysisCache.delete(obj.id);
+      this._edit(label);
+      if (msg) this.app.toast(msg);
+    };
+
+    this.form.appendChild(head('旋轉成形'));
+    this._rowCheck('旋轉成形', !!rev, on => {
+      if (on) src.rev = { ...PEN_REV_DEFAULTS, at: penRevAutoAt(src, PEN_REV_DEFAULTS.dir) };
+      else delete src.rev;
+      after(on ? '開旋轉成形' : '關旋轉成形', on
+        ? '旋轉成形：開。這條線繞著中心線轉一圈 —— 中心線先自動放在線的最左邊，'
+          + '底下可以改。線還留著：按「編輯路徑」改線，碗會跟著變'
+        : '旋轉成形：關。回到原本的板／牆／實心塊（線沒有動）');
+    }, '開 ＝ 這條線繞一根中心線轉一圈，長成碗、罩、瓶、燈罩、圓頂。'
+      + '線還留著，按「編輯路徑」改線，碗會跟著變。'
+      + '關 ＝ 回到原本的板／牆／實心塊');
+    if (!rev) return;
+
+    const isZ = rev.dir !== 'x';
+    const s = isZ ? obj.scale.x : obj.scale.z;
+    const p0 = isZ ? obj.pos.x : obj.pos.z;
+
+    this._rowSelect('中心線方向', isZ ? 'z' : 'x', [
+      ['z', '前後（Z 方向）'],
+      ['x', '左右（X 方向）']
+    ], v => {
+      rev.dir = v === 'x' ? 'x' : 'z';
+      /** ⚠ 換方向之後舊的位置⛔ 沒有意義（量的是另一個座標）⇒ 重新自動放一次 */
+      rev.at = penRevAutoAt(src, rev.dir);
+      after('改中心線方向', '中心線換成' + (rev.dir === 'x' ? '左右' : '前後')
+        + '方向，位置重新自動放在線的最' + (rev.dir === 'x' ? '上面' : '左邊'));
+    }, '中心線一定躺在地板上（線畫在地板上，中心線要跟它在同一個平面才轉得出東西）。'
+      + '從上面看：前後 ＝ 畫面上下那個方向，左右 ＝ 畫面左右那個方向');
+
+    this._rowNum(isZ ? '中心線在 X ＝' : '中心線在 Z ＝', +rev.at * s + p0, { step: 0.5 }, v => {
+      if (Math.abs(s) < 1e-9) {
+        this.app.toast('這個物件有一軸的縮放是 0，中心線放不上去 —— 先把縮放改回來', true);
+        return;
+      }
+      rev.at = (v - p0) / s;
+      after('改中心線位置');
+    }, '單位 cm，跟參考線同一套座標：放一條參考線、在這裡打同一個數字，'
+      + '中心線就在那條參考線上。⚠ 物件轉過角度時這一格不準');
+
+    this._rowNum('轉幾格', rev.seg, { min: 3, max: 360, step: 1, int: true }, v => {
+      rev.seg = Math.round(v);
+      after('改轉幾格');
+    }, '轉一圈分成幾格。跟圓柱的「分段」同一個意思：越多越圓、面越多');
+
+    this._rowCheck('立起來', !!rev.stand, on => {
+      rev.stand = !!on;
+      after(on ? '立起來' : '躺下', on
+        ? '立起來：開。中心線轉成直立、底貼地板 —— '
+          + (isZ ? '畫面上方那一頭朝上' : '畫面右邊那一頭朝上')
+        : '立起來：關。照畫的樣子躺在地板上轉');
+    }, '開 ＝ 中心線轉成直立、底貼地板。前後方向時，上視圖畫面上方那一頭朝上；'
+      + '左右方向時，畫面右邊那一頭朝上（反了就把物件轉 180 度）。'
+      + '關 ＝ 照畫的樣子躺著。這個選擇會記住：之後改線還是一樣');
+
+    /**
+     * 🔴 **結果講給他看，⛔ 不要讓他按了才知道**（照 `切一刀` 的 `bisectRange` 那條理由）。
+     * ⭐ 判準跟 `penKind()` 讀的是**同一份** `penRevolve()` 回傳 ——
+     * 「碰到幾端」與「實體還是板件」⛔ 不各算一次〔2026-09-02 兩句話打架的教訓〕。
+     */
+    const r = penRevolve(src);
+    if (!r.ok) {
+      this.form.appendChild(note(`轉不出來：${r.reason}`));
+      return;
+    }
+    const k = Math.abs(s);
+    const f = x => round(x * k);
+    this.form.appendChild(note(`離中心線 ${f(r.profileR.min)} ～ ${f(r.profileR.max)} cm`));
+    const [h0, h1] = r.endsOnAxis;
+    this.form.appendChild(note(
+      r.closedProfile
+        ? '「不封口」關著：頭尾接起來轉成一個環 → 實體（可以 3D 列印）'
+        : (h0 && h1)
+          ? '兩端都碰到中心線 → 封閉的實體（可以 3D 列印）'
+          : (h0 || h1)
+            ? '只有一端碰到中心線 → 有底的碗（板件，厚薄用上面的「板厚」）'
+            : '兩端都沒碰到中心線 → 兩頭開口，像燈罩（板件，厚薄用上面的「板厚」）'));
   }
 
   _edit(label) {

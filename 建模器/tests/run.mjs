@@ -13296,6 +13296,150 @@ section('旋轉成形（Spin／車床）—— 2026-09-02');
     near('★★★ 軸搬到 x＝100，體積跟搬之前一模一樣',
          r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
   }
+
+  /**
+   * 🔴🔴 **輪廓倒過來給，法向⛔ 不可以跟著翻**（2026-10-15 補）。
+   * 【實證 2026-10-15】補之前倒過來的圓柱體積是 **−136563.225** ——
+   * 以前的呼叫端輪廓都寫死，剛好都是對的那一種走法；手畫的線從哪一頭開始都有可能。
+   */
+  {
+    const P = [V(0,0,0), V(R,0,0), V(R,H,0), V(0,H,0)];
+    const r = revolve([...P].reverse(), { axis:'y', a:0, b:0, seg:SEG });
+    near('★★★ 輪廓倒過來給：體積照樣是【正】的', r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+    /** 開放的（碗）：兩個方向轉出來的面要朝同一邊 ⇒ 帶正負號的體積一模一樣 */
+    const B = [V(0,0,0), V(R,0,0), V(R,H,0)];
+    const f = revolve(B, { axis:'y', a:0, b:0, seg:SEG }).mesh.volume();
+    const g = revolve([...B].reverse(), { axis:'y', a:0, b:0, seg:SEG }).mesh.volume();
+    near('★★ 開口的碗倒過來給：面朝同一邊（帶正負號的量一樣）', g, f, 1e-6);
+    /** 封口的環（兩端都沒碰到軸）也一樣 */
+    const Q = [V(10,0,0), V(20,0,0), V(20,10,0), V(10,10,0), V(10,0,0)];
+    ok('★★ 環倒過來給：體積照樣是正的',
+       revolve([...Q].reverse(), { axis:'y', a:0, b:0, seg:SEG }).mesh.volume() > 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+section('旋轉成形 接回（第 1 輪）：鋼筆物件自己變成碗 —— 2026-10-15');
+// ═══════════════════════════════════════════════════════
+{
+  const prim = await import('../js/build/prim.js');
+  const SEG = 32, R = 25, H = 70;
+  const prismVol = (r, h, n) => 0.5 * n * Math.sin(2 * Math.PI / n) * r * r * h;
+  /** 一條全是尖角的路徑（把手都是 0）。形狀座標 (x, y) ＝ 本地的 (x, z) */
+  const path = (...xy) => ({ closed: true, a: xy, hi: xy.map(() => 0), ho: xy.map(() => 0) });
+  const pen = (paths, rev, open = true) => ({ type: 'pen', h: 3, paths, open, rev });
+
+  /** 圓柱的輪廓：從中心線出發、往外、往下（畫面上往下 ＝ +Z）、回到中心線 */
+  const cyl = path(0,0, R,0, R,H, 0,H);
+
+  {
+    const s = pen([cyl], { dir: 'z', at: 0, seg: SEG, stand: false });
+    const r = prim.penRevolve(s);
+    ok('★★★ 前後方向、躺著：轉得出來', r.ok, r.reason);
+    near('★★★ 體積 ＝ 正 32 邊形柱，而且是正的', r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+    eq('★★★ 兩端都碰到中心線 → 實體', io.penKind(s), io.KIND.SOLID);
+    const b = r.mesh.bounds();
+    near('★★ 躺著：中心線是 Z 方向 ⇒ 長度 70 落在 Z', b.max.z - b.min.z, H, 1e-6);
+  }
+  {
+    const s = pen([cyl], { dir: 'z', at: 0, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    near('★★★ 立起來：體積一樣', r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+    const b = r.mesh.bounds();
+    near('★★★ 立起來：底貼地板（最低 Y ＝ 0）', b.min.y, 0, 1e-9);
+    near('★★★ 立起來：高 ＝ 70（中心線變成直立）', b.max.y, H, 1e-9);
+    near('★★ 立起來：碗站在線最前面那一頭（Z ＝ 70）', (b.min.z + b.max.z) / 2, H, 1e-9);
+    near('★★ 立起來：中心線還在 X ＝ 0', (b.min.x + b.max.x) / 2, 0, 1e-9);
+  }
+  {
+    /** 左右方向：同一個輪廓轉 90°（沿 X 走 70） */
+    const s = pen([path(0,0, 0,R, H,R, H,0)], { dir: 'x', at: 0, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    near('★★★ 左右方向、立起來：體積一樣', r.mesh.volume(), prismVol(R, H, SEG), 1e-6);
+    const b = r.mesh.bounds();
+    near('★★ 左右方向、立起來：底貼地板、高 70', b.max.y - b.min.y, H, 1e-9);
+    near('★★ 左右方向、立起來：最低 Y ＝ 0', b.min.y, 0, 1e-9);
+  }
+  {
+    /** 🔴 同一條線從另一頭畫 —— 法向⛔ 不可以翻（2026-10-15 那個補丁在守的） */
+    const s = pen([path(0,H, R,H, R,0, 0,0)], { dir: 'z', at: 0, seg: SEG, stand: true });
+    near('★★★ 從另一頭畫：體積照樣是正的', prim.penRevolve(s).mesh.volume(), prismVol(R, H, SEG), 1e-6);
+  }
+
+  /** 碗：從中心線出發，另一端開口 */
+  const bowl = path(0,50, 30,50, 38,40, 42,20, 44,0);
+  {
+    const s = pen([bowl], { dir: 'z', at: 0, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    ok('★★★ 碗轉得出來', r.ok, r.reason);
+    eq('★★★ 只有一端碰到中心線 → 板件', io.penKind(s), io.KIND.SHEET);
+    ok('★★ 碰到的是頭那一端', r.endsOnAxis[0] === true && r.endsOnAxis[1] === false);
+    eq('★★ 自動放中心線 ＝ 線的最小 X ＝ 0', prim.penRevAutoAt(s, 'z'), 0);
+    eq('★ 左右方向的自動位置 ＝ 線的最小 Y（畫面最上面）＝ 0', prim.penRevAutoAt(s, 'x'), 0);
+  }
+  {
+    const s = pen([bowl], { dir: 'z', at: -10, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    eq('★★ 中心線往左挪 10：兩端都沒碰到 → 板件', io.penKind(s), io.KIND.SHEET);
+    near('★★ 離中心線最近 ＝ 10', r.profileR.min, 10, 1e-9);
+    near('★★ 離中心線最遠 ＝ 54', r.profileR.max, 54, 1e-9);
+  }
+  {
+    const s = pen([bowl], { dir: 'z', at: 35, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    ok('★★★ 中心線放到線的中間 → 擋下來（跨過中心線）',
+       !r.ok && /跨過中心線/.test(r.reason), r.reason);
+    eq('★★ 擋下來時種類⛔ 不判（回 null，呼叫端不動原本的）', io.penKind(s), null);
+    const o = new io.ModelObject({ kind: io.KIND.SHEET, src: s });
+    o.mesh();
+    ok('★★ 物件上看得到那一句原因，⛔ 畫面不會掛掉', /跨過中心線/.test(o.error || ''), o.error);
+  }
+  {
+    /** 「不封口」關著：頭尾接起來 → 環 */
+    const s = pen([path(10,0, 20,0, 20,10, 10,10)], { dir: 'z', at: 0, seg: SEG, stand: false }, false);
+    const r = prim.penRevolve(s);
+    ok('★★★ 封口的線轉成環：封閉', r.ok && r.closed, r.reason);
+    ok('★★ 環的體積是正的', r.mesh.volume() > 0, String(r.mesh.volume()));
+    eq('★★★ 環的頂點數 ＝ 4 × 32（⛔ 頭尾那個點⛔ 疊兩份）', r.mesh.verts.length, 4 * SEG);
+    eq('★★ 環 → 實體', io.penKind(s), io.KIND.SOLID);
+  }
+  {
+    const s = pen([bowl, path(100,0, 110,0)], { dir: 'z', at: 0, seg: SEG, stand: true });
+    const r = prim.penRevolve(s);
+    ok('★★ 兩條線 → 擋下來，講出條數', !r.ok && /2 條線/.test(r.reason), r.reason);
+  }
+  {
+    const s = pen([cyl], { dir: 'z', at: 0, seg: SEG, stand: true });
+    near('★★★ 存檔再讀（src 走 JSON）：形狀一樣',
+         io.buildSrc(io.cloneSrc(s)).volume(), prismVol(R, H, SEG), 1e-6);
+    const s2 = pen([cyl], undefined);
+    delete s2.rev;
+    ok('★★ 沒有 rev ＝ 原本的行為（板，⛔ 不是旋轉體）',
+       Math.abs(io.buildSrc(s2).volume() - prismVol(R, H, SEG)) > 1);
+  }
+
+  /**
+   * 🔴🔴 **原點置中：碗在世界裡一格都不能動，中心線也不能動**。
+   * ⚠ 路徑挪了、`rev.at` ⛔ 沒跟著挪的話，碗會變粗變細 —— 畫面上看得出來，
+   * 但「只差一點」時看不出來，所以要量。
+   */
+  {
+    const o = new io.ModelObject({ kind: io.KIND.SHEET,
+      src: pen([path(0,50, 30,50, 38,40, 42,20, 44,0)], { dir: 'z', at: -5, seg: SEG, stand: true }) });
+    o.pos.set(100, 0, 20);
+    const world = () => o.mesh().bounds().clone().applyMatrix4(o.matrix());
+    const before = world();
+    const axisBefore = o.src.rev.at * o.scale.x + o.pos.x;
+    const res = io.recenterOrigin(o);
+    ok('★★ 原點置中有動', res.ok && res.moved, res.reason);
+    const after = world();
+    near('★★★ 置中前後：世界裡的碗一格都沒動（最小角）', after.min.distanceTo(before.min), 0, 1e-6);
+    near('★★★ 置中前後：世界裡的碗一格都沒動（最大角）', after.max.distanceTo(before.max), 0, 1e-6);
+    near('★★★ 置中前後：中心線的世界位置一樣', o.src.rev.at * o.scale.x + o.pos.x, axisBefore, 1e-9);
+    const lb = o.mesh().bounds();
+    near('★★ 置中之後：原點在碗的正中（X）', (lb.min.x + lb.max.x) / 2, 0, 1e-9);
+    near('★★ 置中之後：原點在碗的正中（Z）', (lb.min.z + lb.max.z) / 2, 0, 1e-9);
+  }
 }
 
 // ═══════════════════════════════════════════════════════

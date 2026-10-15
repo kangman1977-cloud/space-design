@@ -137,6 +137,8 @@ export const PRIM_SPECS = {
     label: '鋼筆',
     fields: [
       { key: 'h', label: '高 Y', min: 0.05, step: 0.5,
+        /** ⚠ 旋轉成形開著時這個數字⛔ 沒有用到 ⇒ 不顯示〔鐵律三〕 */
+        when: src => !src || !src.rev,
         /**
          * 🔴 **同一個數字，三種意思 —— 標籤跟著換**
          * （kang 2026-08-30 拍板：**共用一個欄位**，2026-08-31 實作）。
@@ -170,7 +172,7 @@ export const PRIM_SPECS = {
         hint: '關（預設）＝ 頭尾接起來、圍成形狀，往上擠成【實心塊】。'
             + '開 ＝ 就是一條線，拿去做【板】或【牆】 —— '
             + '厚薄改走上面的「板厚」，種類會自動變成板件' },
-      { key: 'up', label: '往上長', when: src => !!src && !!src.open,
+      { key: 'up', label: '往上長', when: src => !!src && !!src.open && !src.rev,
         hint: '開 ＝ 沿著線【立成一道牆】（數字是高度）。'
             + '關 ＝ 沿著線【加厚成一片板】平躺在地上（數字是寬度，兩側各一半）' }
     ]
@@ -925,6 +927,98 @@ function fromRevolve(pts, seg) {
   return r.mesh;
 }
 
+/**
+ * 🔴🔴 **鋼筆物件的「旋轉成形」模式**（2026-10-15，第 1 輪接回）。
+ *
+ * ⭐ **kang 2026-09-02 拍板的「丙-1.5」**：線留在 `src` 裡、改了東西跟著變 ——
+ * ⇒ ⛔ **不另外生一個物件**，是**這支鋼筆自己變成碗**；
+ * 　 回頭 `編輯路徑` 拖錨點，碗當場跟著變。
+ * ⭐ 資料只多一格：`src.rev = { dir, at, seg, stand }`；**沒有 `rev` ＝ 原本的行為**。
+ *
+ * ── 🔴 中心線只有兩種方向，⛔ 不是三種 ─────────────────
+ * 鋼筆的線**躺在地板上**（形狀的 (x, y) ＝ 本地的 (x, z)），
+ * 而中心線要跟線**在同一個平面**才轉得出立體 ⇒ 只能是地板上的一條線：
+ * - `dir:'z'`：前後方向（平行 Z），在 **x ＝ at**
+ * - `dir:'x'`：左右方向（平行 X），在 **z ＝ at**
+ * ⚠ 所以**只要一個數字**（另一個座標就是地板）——
+ * 　 規格裡「軸要兩個座標」講的是任意一串邊，⛔ 不是這裡。
+ * ⚠ `at` 是**這個物件自己的座標**（跟 `paths` 同一套）⇒ 搬物件時碗整個跟著走、形狀不變。
+ *
+ * ── 🔴 立起來（kang 2026-10-15 拍板：記在物件上）───────────
+ * 躺著轉出來的碗中心線是橫的；`stand` 開著就把中心線轉成**直立**、底貼地板。
+ * ⚠ **哪一頭朝上是定死的規則，⛔ 不猜**（上視圖畫的時候）：
+ * - 前後方向：**畫面上方朝上**（上視圖的畫面上方 ＝ −Z，`scene.js` 的 `setView('top')`）
+ * - 左右方向：**畫面右邊朝上**（⚠ 這個方向⛔ 沒有自然的答案，挑了一個；反了就把物件轉 180°）
+ * ⭐ 做法是**先把輪廓立起來、再繞直立的軸轉** —— `revolve()` 一行都不用知道「立起來」。
+ */
+export const PEN_REV_DEFAULTS = { dir: 'z', seg: 32, stand: true };
+
+/** 輪廓拉直成點串（形狀座標 {x,y}）；不只一條就講出來 */
+function penRevProfile(p) {
+  const tol = num(p.tol, DEFAULT_TOL);
+  const paths = (p.paths || []).filter(path => path && (path.a || []).length >= 4);
+  if (!paths.length) return { ok: false, reason: '這支鋼筆還沒有畫出任何一條線' };
+  if (paths.length > 1) {
+    return { ok: false, reason: `這支鋼筆有 ${paths.length} 條線 —— 旋轉成形一次只轉一條` };
+  }
+  /**
+   * ⚠ **封口的線要把第一個點再接到最後** —— `revolve()` 是靠
+   * 「頭尾同一個點」認出封閉輪廓的（它自己會收掉重複的那一個，⛔ 不會疊兩個頂點）。
+   * ⛔ 不接的話會少一段，轉出來的環**缺一圈**，而畫面上很難看出來。
+   */
+  const pts = p.open
+    ? flattenPenPath({ ...paths[0], closed: false }, tol)
+    : flattenPenPath(paths[0], tol);
+  if (!p.open && pts.length) pts.push({ ...pts[0] });
+  if (pts.length < 2) return { ok: false, reason: '至少要有 2 個點才轉得出東西' };
+  return { ok: true, pts };
+}
+
+/**
+ * 中心線的自動位置：**輪廓在那個方向的最小值**。
+ * 〔理由照 `規格\建模器-旋轉成形.md`「軸的座標欄：自動填那個座標的最小值」——
+ * 　所有點都在同一側（⛔ 永遠不會誤擋），而從中心線出發畫的碗剛好封底〕
+ */
+export function penRevAutoAt(p, dir) {
+  const pr = penRevProfile(p);
+  if (!pr.ok) return 0;
+  return Math.min(...pr.pts.map(q => (dir === 'x' ? q.y : q.x)));
+}
+
+/**
+ * @param {object} p 鋼筆的 src（要有 `rev`）
+ * @returns `revolve()` 的回傳（`ok:false` 時有 `reason`）——
+ *          介面的「離中心線」與「實體還是板件」都讀這一份，⛔ 不各算一次
+ */
+export function penRevolve(p) {
+  const rv = p && p.rev;
+  if (!rv) return { ok: false, reason: '這支鋼筆沒有開旋轉成形' };
+  const pr = penRevProfile(p);
+  if (!pr.ok) return pr;
+  const pts = pr.pts;
+  const dir = rv.dir === 'x' ? 'x' : 'z';
+  const at = num(rv.at, 0);
+  const seg = int(rv.seg, PEN_REV_DEFAULTS.seg);
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  if (!rv.stand) {
+    return dir === 'z'
+      ? revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'z', a: at, b: 0, seg })
+      : revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'x', a: 0, b: at, seg });
+  }
+  /**
+   * 立起來：輪廓搬到一個直立的平面上，底（往下那一頭）貼地板。
+   * ⚠ 碗的中心落在**原本那一頭的位置**（前後方向：輪廓最前面那一頭；
+   * 左右方向：最左邊那一頭）—— 從上面看，碗就站在你畫線的那一端。
+   */
+  if (dir === 'z') {
+    const ymax = Math.max(...pts.map(q => q.y));
+    return revolve(pts.map(q => V(q.x, ymax - q.y, ymax)), { axis: 'y', a: at, b: ymax, seg });
+  }
+  const xmin = Math.min(...pts.map(q => q.x));
+  return revolve(pts.map(q => V(xmin, q.x - xmin, q.y)), { axis: 'y', a: xmin, b: at, seg });
+}
+
 const num = (v, dflt) => (Number.isFinite(+v) ? +v : dflt);
 const int = (v, dflt, min = 3) => Math.max(min, Math.round(num(v, dflt)));
 
@@ -999,6 +1093,18 @@ const BUILDERS = {
    * 它沒辦法從零生成（要有人先畫），放進選單就是一個按了會壞的項目。
    */
   pen(p) {
+    /**
+     * 🔴 **開了旋轉成形就走 `penRevolve()`**（2026-10-15）——
+     * `h`（高／寬）與 `up`（往上長）這時候⛔ 沒有意義，面板也把它們藏起來。
+     * ⚠ 擋關（跨過中心線、不只一條線…）照樣 `throw` ⇒ 變成物件上的那一行錯誤，
+     * ⛔ 不會讓整個畫面掛掉（`ModelObject.mesh()` 接得住）。
+     */
+    if (p.rev) {
+      const r = penRevolve(p);
+      if (!r.ok) throw new Error(r.reason);
+      r.mesh.autoMarkFolds();
+      return r.mesh;
+    }
     const tol = num(p.tol, DEFAULT_TOL);
     /**
      * 🔴🔴 **`不封口`：整個物件一個旗標，⛔ 不是每條路徑各存一份**

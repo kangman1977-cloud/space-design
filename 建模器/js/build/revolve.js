@@ -40,6 +40,10 @@
  * ⛔ 沒有一步是問「這個建模器缺什麼」。
  * ⇒ 真正缺的是**草圖**那一層 —— 見 `草圖與造型-設計方向.md`。
  *
+ * 🔴 **2026-10-15 介面接回來了（第 1 輪），⚠ 但⛔ 不是原本那一組**：
+ * 鋼筆物件自己變成碗（`prim.js` 的 `penRevolve()`，面板在 `toolbar.js` 的 `_penRevBox()`）。
+ * 同一天補了一件這一支的事：**輪廓倒過來給，法向⛔ 不翻**（見 `flip` 那一則）。
+ *
  * 🔴 **2026-10-08 起它又有人用了**：「新增」的 `圓環`、`半球` 走這一支
  * （`prim.js` 的 `fromRevolve()`）⇒ **改這一支會動到那兩種形狀**，
  * 測試在 `tests/run.mjs`「新增四種基本體」那一節。
@@ -202,6 +206,32 @@ export function revolve(pts, opt = {}) {
   const sweepPairs = [];
   /** 封閉的輪廓要多接一段（`m−1` 回到 `0`）—— 那一段正是「環」的內圈 */
   const segsAlong = closedProfile ? m : m - 1;
+
+  /**
+   * 🔴🔴 **輪廓是從哪一頭畫的，⛔ 不可以影響法向**（2026-10-15 補）。
+   *
+   * 【實證 2026-10-15 沙箱】同一個圓柱輪廓**倒過來給** →
+   * 體積 **−136563.225** ＝ 整個模型法向朝內。
+   * ⚠ 底下那個面的順序只對「一種走法」是對的 —— 以前的呼叫端
+   * （`prim.js` 的 `圓環`／`半球`）輪廓都是寫死的，**剛好都是那一種**，
+   * 所以 22 項測試全過；⛔ 而手畫的線，從哪一頭開始畫都有可能。
+   *
+   * ⭐ **判準：輪廓在「沿軸距離 t × 離軸距離 r」那張平面上圍出來的面積是正是負**
+   * （開放的線用中心線把頭尾接起來再算）。
+   * 量過的那一種走法面積是**負**的 ⇒ 正的就把每一面的順序倒過來。
+   * ⚠ 面積幾乎是 0（一條跟中心線垂直的線 → 一片圓板）時⛔ 不翻 —— 那時候⛔ 沒有裡外。
+   */
+  let area2 = 0;
+  {
+    const ring = parts.slice(0, m).map(q => [q.t, q.r]);
+    if (!closedProfile) ring.push([parts[m - 1].t, 0], [parts[0].t, 0]);
+    for (let i = 0; i < ring.length; i++) {
+      const [t1, r1] = ring[i], [t2, r2] = ring[(i + 1) % ring.length];
+      area2 += t1 * r2 - t2 * r1;
+    }
+  }
+  const flip = area2 > ON_AXIS_TOL;
+  const put = f => faces.push(flip ? f.reverse() : f);
   for (let k = 0; k < seg; k++) {
     const k2 = (k + 1) % seg;
     for (let i = 0; i < segsAlong; i++) {
@@ -217,9 +247,9 @@ export function revolve(pts, opt = {}) {
        * 列印前檢查才抓得到〔`extrude.js` 檔頭記著同一個坑〕。
        */
       if (pole[i] && pole[i2]) continue;             // 整段都在軸上 → 沒有面
-      if (pole[i]) faces.push([c, b, a]);            // 這一端收成一個尖
-      else if (pole[i2]) faces.push([d, b, a]);      // 另一端收成一個尖
-      else faces.push([d, c, b, a]);
+      if (pole[i]) put([c, b, a]);                   // 這一端收成一個尖
+      else if (pole[i2]) put([d, b, a]);             // 另一端收成一個尖
+      else put([d, c, b, a]);
 
       /** 每一格只標自己這一側（`a→b`）；下一格會標到 `d→c`，⛔ 不必重複 */
       if (Math.abs(parts[i].t - parts[i2].t) > ON_AXIS_TOL) sweepPairs.push([a, b]);

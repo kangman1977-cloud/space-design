@@ -22,8 +22,8 @@
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
 import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin } from './edit.js';
-import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths }
-  from '../build/prim.js';
+import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths,
+         penRevolve } from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
   from '../build/bool.js';
 import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
@@ -39,6 +39,25 @@ export const KIND = {
   SOLID: 'solid',
   SHEET: 'sheet'
 };
+
+/**
+ * 🔴🔴 **鋼筆物件該是實體還是板件 —— 只在這裡判一次**（2026-10-15）。
+ *
+ * ⚠ 種類記在物件上（`obj.kind`），形狀記在 `src` 上 ——
+ * **性質由兩端決定，只改一端 ＝ 沒改**（鐵律二）。改了 `不封口`、
+ * 開關旋轉成形、拖了錨點、挪了中心線，**都要回來問這一支**。
+ * - 沒開旋轉成形：`不封口` ＝ 板件，否則實體（原本的規則）
+ * - 開了：**轉出來封閉 ＝ 實體**（兩端都碰到中心線，或封口的線轉成環），
+ * 　否則板件〔kang 2026-09-02 拍板「看輪廓自己決定」〕
+ * ⚠ 擋關中（算不出碗）回 `null` ⇒ 呼叫端**⛔ 不動**原本的種類。
+ */
+export function penKind(src) {
+  if (!src || src.type !== 'pen') return null;
+  if (!src.rev) return src.open ? KIND.SHEET : KIND.SOLID;
+  const r = penRevolve(src);
+  if (!r.ok) return null;
+  return r.closed ? KIND.SOLID : KIND.SHEET;
+}
 
 let _oid = 1;
 
@@ -565,10 +584,28 @@ export function recenterOrigin(obj) {
   if (obj.src && obj.src.type === 'pen') {
     const b = penBounds(obj.src.paths);
     if (!b.ok) return { ok: false, reason: '這支鋼筆還沒有畫出任何點' };
+    /**
+     * 🔴 **旋轉成形開著時，中心要對【碗】，⛔ 不是對那條線**（2026-10-15）。
+     * ⚠ 碗是繞中心線長出來的，**線只在碗的一側** —— 照線置中的話，
+     * 原點（箭頭、旋轉的中心）會落在碗的邊上。
+     * ⭐ 搬的照樣是參數：路徑與 `rev.at` **一起**挪 ⇒ 碗在本地座標整個平移，
+     * 而立起來的碗（底貼地的那一頭、中心線的位置）也都是從路徑算出來的，⛔ 一起跟著走。
+     * ⚠ 算不出碗（擋關中）就退回照線置中，⛔ 不卡住。
+     */
+    if (obj.src.rev) {
+      const m = obj.mesh();
+      if (!obj.error && m && m.verts.length) {
+        const box = m.bounds();
+        b.cx = (box.min.x + box.max.x) / 2;
+        b.cy = (box.min.z + box.max.z) / 2;
+      }
+    }
     if (Math.abs(b.cx) < 1e-9 && Math.abs(b.cy) < 1e-9) {
       return { ok: true, moved: false, offset: new THREE.Vector3() };
     }
     shiftPenPaths(obj.src.paths, -b.cx, -b.cy);
+    /** ⚠ 中心線跟著路徑挪，⛔ 不挪的話碗會變粗變細（線跟中心線的距離變了） */
+    if (obj.src.rev) obj.src.rev.at = +obj.src.rev.at - (obj.src.rev.dir === 'x' ? b.cy : b.cx);
     obj.invalidate();
     const off = new THREE.Vector3(b.cx, 0, b.cy);
     const full = new THREE.Matrix4().multiplyMatrices(
