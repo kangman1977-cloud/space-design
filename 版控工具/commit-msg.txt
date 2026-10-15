@@ -1,41 +1,29 @@
-鋼筆輔助（智慧參考線）—— 跟 Illustrator 一致：游標旁顯示這一段多長、跟別的點對齊（粉紅線／交集）、吸到參考線、打數字定長度；一顆開關預設開著
+鋼筆輔助（智慧參考線）結案 —— kang 驗收通過（「驗收OK」），清單與 AI 線上先驗逐字搬進 HISTORY.md；記下 kang 驗收時提出的「照長度放點」操作邏輯問題
 
-動到 11 個檔：
-  ?? 建模器/js/core/penSnap.js     新檔：penSmartSnap()（對齊／交集／錨點／參考線，挑最近的）、footprintPoints()（外框四角＋中心）、
-                                   pointAtLength()（朝游標方向走剛好那麼長）—— 純數學，Node 測得到
-  M  建模器/js/view/select.js      _penSnapPoint() 接上智慧參考線（鎖角度優先）；_penSnapTargets()（這支鋼筆的點＋別的物件外框，外框進鋼筆時算一次）；
-                                   _penAssist()（游標旁 D／標字／打到一半的長度、粉紅線）；penPlaceLength()；penTypeKey()
-  M  建模器/js/view/scene.js       setPenSnapLines()：粉紅對齊線（單獨一組，沒吸到就收掉）
-  M  建模器/js/main.js             智慧參考線開關、長度欄與「照長度放點」、onPenMsg；鍵盤先問 penTypeKey()（打數字時 Backspace／Esc 被借走）
-  M  建模器/index.html             鋼筆工具列加 penSmart／penLenLbl／penLen／penLenGo（hidden，由 updateBar 管）
-  M  建模器/tests/run.mjs          ＋19 項：對齊、交集、錨點、參考線（Y 不算）、太遠不吸、挑近的、外框 5 點、照長度放點與兩種擋關
-  ?? 規格/建模器-鋼筆輔助.md       新檔：kang 原話、拍板、畫的時候會看到什麼、程式在哪、⛔ 沒做的、⏳ 實測清單 11 項
-  M  規格/建模器-旋轉成形.md       更正那一則改指到新規格
-  M  草圖與造型-設計方向.md        兩處更正改成「同一天補上了」
-  M  STATUS.md                     ⏳ 加這一件；真待辦「鋼筆輔助」那一條換成指標
+動到 4 個檔：
+  M  HISTORY.md                    新增一節「鋼筆輔助（智慧參考線）結案（2026-10-15 從 `規格\建模器-鋼筆輔助.md` 搬入）」：經過、老實話、
+                                   逐字搬入（38 行，一字未改；md5 c60f2b1a…）；重跑目次
+  M  規格/建模器-鋼筆輔助.md       ⏳ 清單＋先驗換成「實測：已結案」＋ 指到 HISTORY ＋ 指到新的待辦
+  M  STATUS.md                     ⏳ 回到「目前沒有」；順序那一行標「② 結案」；真待辦換成「照長度放點的操作邏輯」
   M  版控工具/commit-msg.txt
 
 ════════════════════════════════════════════════
 【動手前檢查表】
 
 【這次要做什麼】
-  鋼筆畫線時：顯示長度、對齊別的點與別的物件外框、吸參考線、打數字定長度；一顆開關
+  結案：清單與先驗逐字搬 HISTORY、規格與 STATUS 只留指標；記下新問題
 
 【依賴哪些事實】
-  1. kang 拍板：四種都要、對齊含別的物件、開關預設開、照示意圖              【已查證 · 對話 2026-10-15】
-  2. 預覽與放點共用 _penSnapPoint()                                            【已查證 · select.js 放點與 pointermove 兩處】
-  3. 參考線容許 8 px、view.pxPerWorld() 換算                                   【已查證 · select.js GUIDE_SNAP_PX、_applyGuideSnap()】
-  4. 參考線存在 Doc.guides {x,y,z}，select 用 this._doc 拿得到                  【已查證 · io.js Doc、select.js _applyGuideSnap()】
-  5. 全域鍵盤：Backspace ＝ 刪物件、Esc ＝ 清選取                              【已查證 · main.js window keydown】
-  6. 編輯路徑時物件是影子（view._ghostId）                                      【已查證 · scene.js setGhost()】
+  1. kang 原話「驗收OK」＋ 照長度放點的問題                     【已查證 · 對話 2026-10-15】
+  2. 結案格式：上一節「匯入線稿：沒封口的線變成鋼筆 結案」       【已查證 · HISTORY.md】
 
 【會動到哪幾個檔】
-  上面 11 個。
+  上面 4 個。
 
 【怎麼知道做對了】
-  · 測試：通過 3604　失敗 0（＋19 項）
-  · 模組解析：45 支全部解析通過、接得上；兩端檢查全部通過；目次 --all --check 全部最新；換行 CR 0
-  · 狀態行數：會長大的兩節合計 77 行（警報線 90）
-  · ⚠ 畫面那一半（小框、粉紅線、鍵盤）要 DOM —— 上傳後 AI 先上線上版畫一遍，再交 kang 照清單驗
+  · 搬的那一塊在 HISTORY 裡找得到整塊（程式比對過）
+  · 沒動程式；目次 --all --check 全部最新；CR 0
+  · 狀態行數：會長大的兩節合計 76 行（警報線 90）
+  · 沒動程式，⛔ 不需要線上先驗
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
