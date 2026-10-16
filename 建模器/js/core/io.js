@@ -59,6 +59,153 @@ export function penKind(src) {
   return r.closed ? KIND.SOLID : KIND.SHEET;
 }
 
+/**
+ * 🔴🔴 **旋轉成形 第 2 輪：中心線綁參考線**（kang 2026-09-02 拍板「參考線優先、綁著、刪的時候脫鉤」；
+ * 　2026-10-15 拍板搬碗與刪線的規則；2026-10-16 同意「右側面板下拉」的綁法）。
+ *
+ * ── 資料 ─────────────────────────────────────────
+ * `src.rev.bind` ＝ 它跟著的那條參考線的**位置**（世界座標，cm）；`null`／沒有 ＝ 不跟。
+ * ⚠ 參考線**沒有編號**（`Doc.guides` 只是三串數字，已查證）⇒ 用「位置」認是哪一條；
+ * 　拖參考線時，跟著它的碗**同一步**把 `bind` 改成新位置。
+ * ⚠ `rev.at`（網格自己的座標）仍是形狀的真相；`bind` 只是「它跟著誰」。
+ *
+ * ── 哪一種參考線 ─────────────────────────────────
+ * 中心線前後方向（`dir:'z'`）⇒ 跟「前後線 X」；左右方向（`dir:'x'`）⇒ 跟「左右線 Z」。
+ *
+ * ── 三條規則 ────────────────────────────────────
+ * 1. 拖／改參考線 ⇒ 跟著它的碗當場變粗變細（`revFollowGuide`）
+ * 2. 搬或轉碗之後中心線**還在那條參考線上** ⇒ 繼續綁；**離開了** ⇒ 自動脫鉤（`revCheckBinds`，kang 2026-10-15）
+ * 3. 刪參考線 ⇒ 直接刪，跟著它的碗脫鉤、形狀不變（`revDetachGuide`，kang 2026-10-15）
+ */
+export const REV_GUIDE_AX = { z: 'x', x: 'z' };
+const BIND_TOL = 1e-3;
+
+/** 這支鋼筆的中心線跟哪一種參考線（'x' ＝ 前後線 X、'z' ＝ 左右線 Z） */
+export function revGuideAx(src) {
+  return REV_GUIDE_AX[src && src.rev && src.rev.dir === 'x' ? 'x' : 'z'];
+}
+
+/** 中心線在世界裡的兩個點（算不出碗 ⇒ `ok:false`） */
+export function revAxisWorld(obj) {
+  const src = obj && obj.src;
+  if (!src || src.type !== 'pen' || !src.rev) return { ok: false };
+  const r = penRevolve(src);
+  if (!r.ok || !r.axisLocal) return { ok: false };
+  const m = obj.matrix();
+  const p = new THREE.Vector3(...r.axisLocal.p);
+  const q = p.clone().add(new THREE.Vector3(...r.axisLocal.d).multiplyScalar(100));
+  return { ok: true, p1: p.applyMatrix4(m), p2: q.applyMatrix4(m) };
+}
+
+/** 中心線整條都在 `ax ＝ c` 那條參考線上嗎 */
+export function revOnGuide(obj, c) {
+  const w = revAxisWorld(obj);
+  if (!w.ok) return false;
+  const ax = revGuideAx(obj.src);
+  return Math.abs(w.p1[ax] - c) <= BIND_TOL && Math.abs(w.p2[ax] - c) <= BIND_TOL;
+}
+
+/**
+ * 要讓中心線落在 `ax ＝ c` 那條參考線上，`rev.at` 該是多少。
+ * ⚠ 物件轉過角度、中心線跟參考線**不平行**時綁不上 —— 講原因，⛔ 硬塞。
+ * ⭐ 用「改 `at` 一單位，中心線在那個方向移多少」反推；躺著時抬高的量跟著 `at` 變，
+ * 　所以多算兩次讓它收斂（只有物件轉過 X／Z 軸才會用到）。
+ * @returns {{ok:boolean, at?:number, reason?:string}}
+ */
+export function revAtForGuide(obj, c) {
+  const src = obj && obj.src;
+  if (!src || !src.rev) return { ok: false, reason: '這支鋼筆沒有開旋轉成形' };
+  const ax = revGuideAx(src);
+  const save = src.rev.at;
+  let w = revAxisWorld(obj);
+  if (!w.ok) return { ok: false, reason: '現在轉不出碗，綁不上參考線（先把中心線調到線的一邊）' };
+  if (Math.abs(w.p1[ax] - w.p2[ax]) > BIND_TOL) {
+    return { ok: false, reason: '這個物件轉過角度，中心線跟參考線不平行，綁不上 —— 先把旋轉改回 0' };
+  }
+  const e = new THREE.Vector3(src.rev.dir === 'x' ? 0 : 1, 0, src.rev.dir === 'x' ? 1 : 0)
+    .transformDirection(obj.matrix());
+  const k = e[ax] * (src.rev.dir === 'x' ? obj.scale.z : obj.scale.x);
+  if (!(Math.abs(k) > 1e-9)) return { ok: false, reason: '這個物件的中心線挪不到那條參考線上（縮放是 0？）' };
+  let at = +save;
+  for (let i = 0; i < 3; i++) {
+    src.rev.at = at;
+    w = revAxisWorld(obj);
+    if (!w.ok) break;
+    const err = c - w.p1[ax];
+    if (Math.abs(err) <= BIND_TOL * 0.01) break;
+    at += err / k;
+  }
+  src.rev.at = save;
+  return { ok: true, at };
+}
+
+/**
+ * 規則 1：參考線從 `from` 挪到 `to` ⇒ 跟著它的碗一起改。
+ * @returns {ModelObject[]} 跟著改了的物件（呼叫端要重畫）
+ */
+export function revFollowGuide(doc, ax, from, to) {
+  const moved = [];
+  for (const o of (doc && doc.objects) || []) {
+    const rv = o.src && o.src.type === 'pen' && o.src.rev;
+    if (!rv || rv.bind === null || rv.bind === undefined) continue;
+    if (revGuideAx(o.src) !== ax || Math.abs(rv.bind - from) > BIND_TOL) continue;
+    /**
+     * ⚠ **⛔ 靠「算得出碗」**：拖參考線經過輪廓中間時，碗會暫時擋下來（跨過中心線）——
+     * 　 那時候要照樣跟著走，拖回來才接得上。⇒ 只用「改 at 一單位，中心線移多少」換算。
+     * 　 綁著的碗中心線一定跟參考線平行（綁的時候檢查過、搬走不平行就脫鉤）。
+     */
+    const e = new THREE.Vector3(rv.dir === 'x' ? 0 : 1, 0, rv.dir === 'x' ? 1 : 0)
+      .transformDirection(o.matrix());
+    const k = e[ax] * (rv.dir === 'x' ? o.scale.z : o.scale.x);
+    if (!(Math.abs(k) > 1e-9)) { rv.bind = null; continue; }
+    rv.at = +rv.at + (to - from) / k;
+    rv.bind = to;
+    o.invalidate();
+    moved.push(o);
+  }
+  return moved;
+}
+
+/**
+ * 規則 3：參考線被刪了 ⇒ 跟著它的碗脫鉤（形狀一格都不動 —— `at` 本來就記著）。
+ * @returns {ModelObject[]} 脫鉤的物件（呼叫端講「有 N 個」）
+ */
+export function revDetachGuide(doc, ax, v) {
+  const out = [];
+  for (const o of (doc && doc.objects) || []) {
+    const rv = o.src && o.src.type === 'pen' && o.src.rev;
+    if (!rv || rv.bind === null || rv.bind === undefined) continue;
+    if (ax && revGuideAx(o.src) !== ax) continue;
+    if (v !== undefined && Math.abs(rv.bind - v) > BIND_TOL) continue;
+    rv.bind = null;
+    out.push(o);
+  }
+  return out;
+}
+
+/**
+ * 規則 2：每一步存檔前問一次 —— 中心線還在它跟著的參考線上嗎？
+ * 不在了（搬走、轉了、參考線被別的路刪了）⇒ 脫鉤。
+ * ⭐ 沿著中心線推、往上抬：中心線還在參考線上 ⇒ 繼續綁（kang 2026-10-15 同意的那條）。
+ * @returns {ModelObject[]} 這一次脫鉤的物件
+ */
+export function revCheckBinds(doc) {
+  const out = [];
+  for (const o of (doc && doc.objects) || []) {
+    const rv = o.src && o.src.type === 'pen' && o.src.rev;
+    if (!rv || rv.bind === null || rv.bind === undefined) continue;
+    const ax = revGuideAx(o.src);
+    const exists = ((doc.guides && doc.guides[ax]) || []).some(g => Math.abs(g - rv.bind) <= BIND_TOL);
+    /** ⚠ 算不出碗（擋關中）⇒ 判斷不了 ⇒ **照樣綁著**，⛔ 因為「算不出來」就脫鉤 */
+    const w = exists ? revAxisWorld(o) : null;
+    if (exists && (!w.ok || (Math.abs(w.p1[ax] - rv.bind) <= BIND_TOL
+                             && Math.abs(w.p2[ax] - rv.bind) <= BIND_TOL))) continue;
+    rv.bind = null;
+    out.push(o);
+  }
+  return out;
+}
+
 let _oid = 1;
 
 // ═══════════════════════════════════════════════════════

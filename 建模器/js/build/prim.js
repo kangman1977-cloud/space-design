@@ -1018,6 +1018,10 @@ export function penRevolve(p) {
     if (r.ok) {
       const lo = r.mesh.bounds().min.y;
       r.mesh = r.mesh.transformed(new THREE.Matrix4().makeTranslation(0, -lo, 0));
+      /** 中心線也跟著往上搬了 `−lo`（第 2 輪「綁參考線」要知道它在哪） */
+      r.axisLocal = dir === 'z'
+        ? { p: [at, -lo, 0], d: [0, 0, 1] }
+        : { p: [0, -lo, at], d: [1, 0, 0] };
     }
     return r;
   }
@@ -1026,12 +1030,20 @@ export function penRevolve(p) {
    * ⚠ 碗的中心落在**原本那一頭的位置**（前後方向：輪廓最前面那一頭；
    * 左右方向：最左邊那一頭）—— 從上面看，碗就站在你畫線的那一端。
    */
+  /**
+   * ⭐ `axisLocal`：中心線在**網格自己的座標**裡的一點 `p` 與方向 `d` ——
+   * 第 2 輪「綁參考線」用它判斷「中心線還在不在那條參考線上」，⛔ 另外再推一次（坑第 31 條）。
+   */
   if (dir === 'z') {
     const ymax = Math.max(...pts.map(q => q.y));
-    return revolve(pts.map(q => V(q.x, ymax - q.y, ymax)), { axis: 'y', a: at, b: ymax, seg });
+    const r = revolve(pts.map(q => V(q.x, ymax - q.y, ymax)), { axis: 'y', a: at, b: ymax, seg });
+    if (r.ok) r.axisLocal = { p: [at, 0, ymax], d: [0, 1, 0] };
+    return r;
   }
   const xmin = Math.min(...pts.map(q => q.x));
-  return revolve(pts.map(q => V(xmin, q.x - xmin, q.y)), { axis: 'y', a: xmin, b: at, seg });
+  const r = revolve(pts.map(q => V(xmin, q.x - xmin, q.y)), { axis: 'y', a: xmin, b: at, seg });
+  if (r.ok) r.axisLocal = { p: [xmin, 0, at], d: [0, 1, 0] };
+  return r;
 }
 
 const num = (v, dflt) => (Number.isFinite(+v) ? +v : dflt);

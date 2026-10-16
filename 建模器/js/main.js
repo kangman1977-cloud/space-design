@@ -13,7 +13,8 @@
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
-         penPathToWorld, penPathToLocal, penKind, GUIDE_AXES }
+         penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
+         revFollowGuide, revDetachGuide, revCheckBinds }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -315,6 +316,8 @@ const sel = new Selection(view, {
       guidePicked = to;
       syncGuideRow();
       commit('挪參考線');
+      /** ⭐ 跟著這條線的碗，右側面板「中心線在 X ＝」那一格要換成新位置 */
+      panel.refresh();
       toast(`參考線 ${GUIDE_AXIS_LABEL[ax]} → ${fmtGuide(to)} cm`);
       return true;
     }
@@ -324,6 +327,8 @@ const sel = new Selection(view, {
       return false;
     }
     guidePicked = to;
+    /** 🔴 旋轉成形 第 2 輪 規則 1：跟著這條線的碗**當場**變粗變細（拖曳中就跟，⛔ 等放手） */
+    if (revFollowGuide(doc, ax, from, to).length) view.sync(doc);
     view.syncGuides(doc);
     if (document.activeElement !== $('guideNum')) $('guideNum').value = fmtGuide(to);
     return true;
@@ -428,11 +433,23 @@ const importWin = new ImportPanel(app);
 // ═══════════════════════════════════════════════════════
 
 function commit(label) {
+  /**
+   * 🔴 **旋轉成形 第 2 輪 規則 2**：每一步存檔前問一次「中心線還在它跟著的參考線上嗎」——
+   * 搬走、轉了 ⇒ 自動脫鉤（kang 2026-10-15）。⭐ 放在這裡 ＝ 搬物件的每一條路（拉箭頭、打數字、對齊…）都管得到，
+   * ⛔ 一條一條去改。⚠ 提示延後一拍：呼叫端接著會跳自己的提示，⛔ 延後的話會被蓋掉。
+   */
+  const det = revCheckBinds(doc);
+  if (det.length) {
+    setTimeout(() => toast(`${det.map(o => `「${o.name}」`).join('、')}的中心線離開了它跟著的參考線，`
+      + '已經脫鉤（形狀不變；之後拖那條參考線不會再影響它）'), 0);
+  }
   hist.commit(label);
   view.sync(doc);
   sel.revalidate();
   autosave(doc);
   updateBar();
+  /** ⚠ 脫鉤了 ⇒ 右側面板那個「中心線跟著」要跟著變（⛔ 等下次點物件才更新） */
+  if (det.length) panel.refresh();
 }
 
 function addPrim(type) {
@@ -5891,7 +5908,15 @@ $('guideNum').addEventListener('change', () => {
     return;
   }
   guidePicked = v;
+  /** 🔴 旋轉成形 第 2 輪 規則 1：打數字挪線，跟著它的碗一起改 */
+  const fol = revFollowGuide(doc, guideAxis, from, v);
   commit('挪參考線');
+  if (fol.length) panel.refresh();
+  if (fol.length) {
+    toast(`參考線 ${GUIDE_AXIS_LABEL[guideAxis]}：${fmtGuide(from)} → ${fmtGuide(v)} cm　`
+      + `跟著它的碗 ${fol.length} 個一起改了`);
+    return;
+  }
   toast(`參考線 ${GUIDE_AXIS_LABEL[guideAxis]}：${fmtGuide(from)} → ${fmtGuide(v)} cm`);
 });
 
@@ -5920,8 +5945,17 @@ $('guideDel').onclick = () => {
   const v = guidePicked;
   if (!doc.removeGuide(guideAxis, v)) { syncGuideRow(); return; }
   guidePicked = null;
+  /**
+   * 🔴 **旋轉成形 第 2 輪 規則 3**（kang 2026-10-15：直接刪，跳一句說明）——
+   * 跟著它的碗脫鉤、形狀一格都不動（位置本來就記著）；Undo 救得回來。
+   */
+  const det = revDetachGuide(doc, guideAxis, v);
   commit('刪參考線');
+  if (det.length) panel.refresh();
   toast(`刪掉 ${GUIDE_AXIS_LABEL[guideAxis]} ＝ ${fmtGuide(v)} cm　`
+    + (det.length
+      ? `有 ${det.length} 個碗原本跟著它，已改成固定在 ${fmtGuide(v)} cm（形狀不變）　`
+      : '')
     + `這個方向還有 ${doc.guides[guideAxis].length} 條`);
 };
 
@@ -5930,7 +5964,14 @@ $('guideClear').onclick = () => {
   if (!n) { toast('現在⛔ 沒有任何參考線'); return; }
   doc.clearGuides();
   guidePicked = null;
+  const detAll = revDetachGuide(doc);
   commit('清掉全部參考線');
+  if (detAll.length) panel.refresh();
+  if (detAll.length) {
+    toast(`三個方向的參考線全部清掉了（共 ${n} 條）。有 ${detAll.length} 個碗原本跟著參考線，`
+      + '已改成固定在原來的位置（形狀不變）。按「復原」可以救回來');
+    return;
+  }
   /**
    * ⚠ **要講「三個方向都清了」** —— 使用者眼前只看得到目前這個方向的下拉，
    * 很容易以為只清了這一個。⭐ 而且要提醒 Undo 救得回來。

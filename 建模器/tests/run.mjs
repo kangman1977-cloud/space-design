@@ -14159,6 +14159,110 @@ section('D 組 bug：矩形、圓形這些基本圖形⛔ 不可以消失');
 }
 
 // ═══════════════════════════════════════════════════════
+section('旋轉成形 第 2 輪：中心線綁參考線（拖線碗跟著變、搬走脫鉤、刪線脫鉤）—— 2026-10-16');
+// ═══════════════════════════════════════════════════════
+{
+  const prim = await import('../js/build/prim.js');
+  const xy = [0,50, 30,50, 38,40, 42,20, 44,0];
+  const mkBowl = (rev, pos = [0, 0, 0]) => {
+    const o = new io.ModelObject({ kind: io.KIND.SHEET,
+      src: { type: 'pen', h: 3, open: true, up: false,
+             paths: [{ closed: true, a: xy.slice(), hi: xy.map(() => 0), ho: xy.map(() => 0) }], rev } });
+    o.pos.set(...pos);
+    return o;
+  };
+  const worldAxisX = o => io.revAxisWorld(o).p1.x;
+  const radius = o => { const b = o.mesh().bounds(); return (b.max.x - b.min.x) / 2; };
+
+  {
+    const o = mkBowl({ dir: 'z', at: 0, seg: 32, stand: true }, [100, 0, 20]);
+    eq('★★ 前後方向的中心線跟「前後線 X」', io.revGuideAx(o.src), 'x');
+    near('★★ 中心線在世界 X ＝ 100（at 0 ＋ 物件在 100）', worldAxisX(o), 100, 1e-9);
+    const r = io.revAtForGuide(o, 95);
+    ok('★★★ 綁到 X 95：算得出 at', r.ok, r.reason);
+    o.src.rev.at = r.at; o.src.rev.bind = 95; o.invalidate();
+    near('★★★ 綁上之後中心線就在 X 95', worldAxisX(o), 95, 1e-6);
+    ok('★★ 在線上', io.revOnGuide(o, 95));
+    const R0 = radius(o);
+
+    const doc = new io.Doc(); doc.add(o); doc.addGuide('x', 95);
+    /** 規則 1：拖參考線 95 → 90，碗跟著變粗（中心線離線遠了 5） */
+    doc.removeGuide('x', 95); doc.addGuide('x', 90);
+    const moved = io.revFollowGuide(doc, 'x', 95, 90);
+    eq('★★★ 拖參考線：跟著它的碗 1 個', moved.length, 1);
+    near('★★★ 中心線跟到 X 90', worldAxisX(o), 90, 1e-6);
+    eq('★★ bind 也跟著改成 90', o.src.rev.bind, 90);
+    near('★★★ 碗變粗 5（半徑 ＋5）', radius(o) - R0, 5, 1e-6);
+
+    /** 規則 2：沿著中心線推（立起來 ⇒ 中心線是直的；往上抬、前後推都還在 X 90）⇒ 繼續綁 */
+    o.pos.y += 7; o.pos.z += 13;
+    eq('★★★ 往上抬、前後推：中心線還在線上 ⇒ ⛔ 脫鉤', io.revCheckBinds(doc).length, 0);
+    eq('★★ bind 還在', o.src.rev.bind, 90);
+    /** 往左右搬 ⇒ 離開參考線 ⇒ 脫鉤，形狀不變 */
+    const R1 = radius(o);
+    o.pos.x += 4;
+    const det = io.revCheckBinds(doc);
+    eq('★★★ 往旁邊搬：脫鉤 1 個', det.length, 1);
+    eq('★★ bind 變成 null', o.src.rev.bind, null);
+    near('★★ 脫鉤時形狀一格都不變', radius(o), R1, 1e-9);
+    /** 脫鉤之後再拖參考線 ⇒ ⛔ 跟 */
+    doc.removeGuide('x', 90); doc.addGuide('x', 80);
+    eq('★★ 脫鉤的碗：拖參考線⛔ 跟', io.revFollowGuide(doc, 'x', 90, 80).length, 0);
+  }
+  {
+    /** ⚠ 拖參考線經過輪廓中間（碗暫時轉不出來）⇒ 照樣跟著、⛔ 脫鉤；拖回來就恢復 */
+    const o = mkBowl({ dir: 'z', at: 0, seg: 32, stand: true, bind: 0 });
+    const doc = new io.Doc(); doc.add(o); doc.addGuide('x', 0);
+    doc.removeGuide('x', 0); doc.addGuide('x', 20);
+    io.revFollowGuide(doc, 'x', 0, 20);
+    o.mesh();
+    ok('★★ 參考線拖到線的中間 ⇒ 碗擋下來（跨過中心線）', /跨過中心線/.test(o.error || ''), o.error);
+    eq('★★★ 擋下來時⛔ 脫鉤', io.revCheckBinds(doc).length, 0);
+    doc.removeGuide('x', 20); doc.addGuide('x', -3);
+    io.revFollowGuide(doc, 'x', 20, -3);
+    o.invalidate(); o.mesh();
+    ok('★★★ 拖回來 ⇒ 碗又轉得出來，還綁著', !o.error && o.src.rev.bind === -3, o.error);
+    near('★★ 中心線在 X −3', io.revAxisWorld(o).p1.x, -3, 1e-6);
+  }
+  {
+    /** 規則 3：刪參考線 ⇒ 直接刪、跟著它的碗脫鉤，形狀不變 */
+    const doc = new io.Doc();
+    const a = mkBowl({ dir: 'z', at: 0, seg: 32, stand: true, bind: 0 });
+    const b = mkBowl({ dir: 'z', at: 0, seg: 32, stand: false, bind: 0 });
+    const c = mkBowl({ dir: 'x', at: 0, seg: 32, stand: true, bind: 0 });
+    doc.add(a); doc.add(b); doc.add(c); doc.addGuide('x', 0); doc.addGuide('z', 0);
+    const R = radius(a);
+    doc.removeGuide('x', 0);
+    const det = io.revDetachGuide(doc, 'x', 0);
+    eq('★★★ 刪掉前後線 X 0：跟著它的 2 個脫鉤（左右方向那個跟的是左右線 Z，⛔ 動）', det.length, 2);
+    ok('★★ 左右方向那個還綁著', c.src.rev.bind === 0);
+    near('★★ 形狀不變', radius(a), R, 1e-9);
+  }
+  {
+    /** 轉過角度、中心線跟參考線不平行 ⇒ 綁不上，講原因 */
+    const o = mkBowl({ dir: 'z', at: 0, seg: 32, stand: false });
+    o.rot.y = Math.PI / 6;
+    const r = io.revAtForGuide(o, 10);
+    ok('★★ 轉 30° 的躺著的碗：綁不上，講原因', !r.ok && /轉過角度/.test(r.reason), r.reason);
+    /** 立起來的碗中心線是直的：繞 Y 轉幾度都還平行 ⇒ 綁得上 */
+    const s = mkBowl({ dir: 'z', at: 0, seg: 32, stand: true }, [5, 0, 5]);
+    s.rot.y = Math.PI / 6;
+    const r2 = io.revAtForGuide(s, 10);
+    ok('★★ 立起來的碗轉 30°：照樣綁得上', r2.ok, r2.reason);
+    s.src.rev.at = r2.at; s.invalidate();
+    near('★★ 綁上之後中心線在 X 10', worldAxisX(s), 10, 1e-6);
+  }
+  {
+    /** 存檔往返：bind 留著 */
+    const o = mkBowl({ dir: 'z', at: 0, seg: 32, stand: true, bind: 0 });
+    const doc = new io.Doc(); doc.add(o); doc.addGuide('x', 0);
+    const d2 = new io.Doc(); d2.loadJSON ? d2.loadJSON(doc.toJSON()) : null;
+    const back = d2.objects && d2.objects[0];
+    ok('★★ 存檔再讀：bind 還在', back ? back.src.rev.bind === 0 : io.cloneSrc(o.src).rev.bind === 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 section('鋼筆的智慧參考線：對齊、交集、吸參考線、打數字定長度 —— 2026-10-15');
 // ═══════════════════════════════════════════════════════
 {

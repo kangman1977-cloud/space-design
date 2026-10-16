@@ -10,7 +10,7 @@
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
   from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin, penKind } from '../core/io.js';
+import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -641,22 +641,56 @@ export class Panel {
       ['x', '左右（X 方向）']
     ], v => {
       rev.dir = v === 'x' ? 'x' : 'z';
-      /** ⚠ 換方向之後舊的位置⛔ 沒有意義（量的是另一個座標）⇒ 重新自動放一次 */
+      /** ⚠ 換方向之後舊的位置⛔ 沒有意義（量的是另一個座標）⇒ 重新自動放一次；跟著的參考線也換了一種 ⇒ 脫鉤 */
       rev.at = penRevAutoAt(src, rev.dir);
+      rev.bind = null;
       after('改中心線方向', '中心線換成' + (rev.dir === 'x' ? '左右' : '前後')
         + '方向，位置重新自動放在線的最' + (rev.dir === 'x' ? '上面' : '左邊'));
     }, '中心線一定躺在地板上（線畫在地板上，中心線要跟它在同一個平面才轉得出東西）。'
       + '從上面看：前後 ＝ 畫面上下那個方向，左右 ＝ 畫面左右那個方向');
+
+    /**
+     * 🔴 **第 2 輪：中心線跟著一條參考線**（kang 2026-10-16 同意「右側面板多一個下拉」）。
+     * ⭐ 跟參考線工具列那個下拉同一種用法：列出同方向的參考線，選一條就綁上、選「不跟」就脫鉤。
+     * ⚠ 前後方向的中心線只能跟「前後線 X」、左右方向只能跟「左右線 Z」—— 另一種跟它垂直，綁不上。
+     */
+    const gax = isZ ? 'x' : 'z';
+    const gname = isZ ? '前後線 X' : '左右線 Z';
+    const glist = (this.app.doc && this.app.doc.guides && this.app.doc.guides[gax]) || [];
+    const bound = rev.bind !== null && rev.bind !== undefined;
+    this._rowSelect('中心線跟著', bound ? String(rev.bind) : '', [
+      ['', '不跟（打數字）'],
+      ...glist.map(g => [String(g), `${gname} ＝ ${round(g)}`])
+    ], v => {
+      if (v === '') {
+        rev.bind = null;
+        after('中心線不跟參考線', '中心線不跟參考線了：之後拖參考線不會再影響這個碗（形狀不變）');
+        return;
+      }
+      const c = +v;
+      const r = revAtForGuide(obj, c);
+      if (!r.ok) { this.app.toast(r.reason, true); this.refresh(); return; }
+      rev.at = r.at;
+      rev.bind = c;
+      after('中心線綁參考線', `中心線跟著 ${gname} ＝ ${round(c)}：拖那條參考線，碗會當場跟著變粗變細；`
+        + '把碗搬離那條線（或刪掉那條線）就自動脫鉤，形狀不變');
+    }, glist.length
+      ? `選一條 ${gname}，中心線就放到那條線上並跟著它：拖那條參考線，碗會當場跟著變粗變細。`
+        + '沿著中心線推、往上抬都還跟著；搬離那條線、或刪掉那條線就自動脫鉤（形狀不變）'
+      : `還沒有 ${gname} 參考線 —— 先按左側「參考線」加一條，這裡就選得到`);
 
     this._rowNum(isZ ? '中心線在 X ＝' : '中心線在 Z ＝', +rev.at * s + p0, { step: 0.5 }, v => {
       if (Math.abs(s) < 1e-9) {
         this.app.toast('這個物件有一軸的縮放是 0，中心線放不上去 —— 先把縮放改回來', true);
         return;
       }
+      /** ⚠ 自己打數字 ＝ 不跟參考線了（兩個地方各管一份位置，遲早不一致 —— 坑第 31 條） */
+      const was = bound;
+      rev.bind = null;
       rev.at = (v - p0) / s;
-      after('改中心線位置');
-    }, '單位 cm，跟參考線同一套座標：放一條參考線、在這裡打同一個數字，'
-      + '中心線就在那條參考線上。⚠ 物件轉過角度時這一格不準');
+      after('改中心線位置', was ? '自己打了中心線的位置：已經不跟參考線了' : undefined);
+    }, '單位 cm，跟參考線同一套座標。⚠ 自己打數字就不跟參考線了（要跟就用上面那個下拉）。'
+      + '⚠ 物件轉過角度時這一格不準');
 
     this._rowNum('轉幾格', rev.seg, { min: 3, max: 360, step: 1, int: true }, v => {
       rev.seg = Math.round(v);
