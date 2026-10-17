@@ -29,6 +29,7 @@ import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
 import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 import { saveBlob, textBlob, safeName, TYPES } from '../out/save.js';
+import { penPlaneFrame } from './penSnap.js';
 
 export const DOC_TYPE = 'model-doc';
 export const DOC_VERSION = 4;
@@ -895,6 +896,38 @@ export function penPathToLocal(p, obj) {
     ho.push(p.ho[i] / sx, p.ho[i + 1] / sz);
   }
   return { closed: true, a, hi, ho };
+}
+
+/**
+ * 🔴 **乙 第 1 輪：把「當成畫在地板上」做好的鋼筆物件，整個搬上它畫的那一片平面。**
+ *
+ * ⭐ 做法：鋼筆照原本的路在地板上建好物件（形狀、置中原點都一樣），最後這一步
+ * 把它**整個**轉上去 —— 存起來就是一個**轉了角度、換了位置的普通鋼筆物件**，
+ * 存檔格式⛔ 變（`pos`／`rot` 本來就存）。
+ * ⚠ 厚度方向（本地 +Y）會朝著轉正時的鏡頭（kang 2026-10-17：「厚度朝看過去的那一側長」）。
+ *
+ * @param {ModelObject} obj  剛建好、還躺在地板上的物件（`rot` 是 0）
+ * @param {{ax, v}|null} plane  `penPlaneFrame()` 吃的那個；`null` ＝ 地板，什麼都不做
+ */
+export function penPlaceOnPlane(obj, plane) {
+  const f = penPlaneFrame(plane);
+  if (!f.ax) return obj;
+  const B = f.basis;
+  const R = new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(...B.a), new THREE.Vector3(...B.b), new THREE.Vector3(...B.c));
+  const M = new THREE.Matrix4().makeTranslation(...B.o).multiply(R).multiply(obj.matrix());
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  M.decompose(obj.pos, q, s);
+  obj.rot.setFromQuaternion(q);
+  /** ⚠ 浮點尾巴（−0、1e−16）清掉，免得右側面板印出 −0 或 89.99999 */
+  for (const k of ['x', 'y', 'z']) {
+    if (Math.abs(obj.pos[k]) < 1e-9) obj.pos[k] = 0;
+    if (Math.abs(obj.rot[k]) < 1e-9) obj.rot[k] = 0;
+  }
+  obj.rot.set(obj.rot.x, obj.rot.y, obj.rot.z);
+  obj.invalidate();
+  return obj;
 }
 
 export function explodeArray(obj) {

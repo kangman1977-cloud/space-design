@@ -24,8 +24,8 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
 import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
-import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleStep }
-  from '../core/penSnap.js';
+import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleStep,
+  penPlaneFrame } from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
@@ -331,6 +331,13 @@ export class Selection {
      * 數學在 `core/penSnap.js`；這裡只管接進放點、畫粉紅線、標字。
      */
     this.penSmart = true;
+    /**
+     * 🔴 **乙 第 1 輪：鋼筆畫在哪一片**（kang 2026-10-17）。`null` ＝ 地板（預設，跟以前一樣）；
+     * `{ax, v}` ＝ 那條參考線那一片。⭐ 鋼筆裡記的兩個數字照舊叫 x、z，意思換成「這一片上的右、下」
+     *（`core/penSnap.js` `penPlaneFrame()`）。⚠ 只透過 `setPenPlane()` 改 —— 外框快取要跟著清。
+     */
+    this.penPlane = null;
+    this._pf = penPlaneFrame(null);
     /** 上一次 `_penSnapPoint()` 為什麼吸過去（畫粉紅線、標字用）；沒吸 ＝ null */
     this._penSnapInfo = null;
     /** 游標那一段「吸過去之後」的位置 {x, z} —— 打數字定長度時看它決定方向 */
@@ -1289,9 +1296,7 @@ export class Selection {
             g.x - this._penConvert.g.x, g.z - this._penConvert.g.z);
           this._pen.ho[cvi * 2] = hh.dx;
           this._pen.ho[cvi * 2 + 1] = hh.dz;
-          const av = this._penWorld(cvi);
-          this._drawPenPreview(null,
-            new THREE.Vector3(av.x + hh.dx, 0, av.z + hh.dz), { handleAt: cvi });
+          this._drawPenPreview(null, this._penOff(cvi, hh.dx, hh.dz), { handleAt: cvi });
         }
         else if (this._penClosing) {
           /**
@@ -1318,9 +1323,8 @@ export class Selection {
            * ⚠ **把手的端點是「游標所在」，⛔ 不是錨點自己**（那長度會是 0）。
            * 按下去的位置就在錨點上，所以「錨點 → 游標」正好就是這根把手。
            */
-          const b0 = this._penWorld(0);
           this._drawPenPreview(null,
-            new THREE.Vector3(b0.x + hc.dx, 0, b0.z + hc.dz),
+            this._penOff(0, hc.dx, hc.dz),
             { closed: true, handleAt: 0 });
         }
         else if (this._penDown) {
@@ -1334,9 +1338,8 @@ export class Selection {
            * ⚠ **鎖住之後預覽的把手也要畫在鎖住的位置**，
            * ⛔ 不可以還畫在游標上 —— 那會讓人以為沒鎖到。
            */
-          const a0 = this._penWorld(Math.floor(this._pen.a.length / 2) - 1);
           this._drawPenPreview(null,
-            new THREE.Vector3(a0.x + h.dx, 0, a0.z + h.dz));
+            this._penOff(Math.floor(this._pen.a.length / 2) - 1, h.dx, h.dz));
         } else {
           const h = this._penHitAnchor(e.clientX, e.clientY);
           if (h !== this._penHover) {
@@ -1359,7 +1362,7 @@ export class Selection {
           let tip = g.world;
           if (!this._penParked) {
             const sp = this._penSnapPoint(g.x, g.z, e);
-            if (sp.x !== g.x || sp.z !== g.z) tip = new THREE.Vector3(sp.x, 0, sp.z);
+            if (sp.x !== g.x || sp.z !== g.z) tip = this._penW(sp.x, sp.z);
           }
           this._drawPenPreview(this._penParked ? null : tip);
           /** ⭐ 長度、對齊線、標字 —— 跟預覽用**同一個** tip（坑第 31 條） */
@@ -2240,11 +2243,12 @@ export class Selection {
      */
     if (!this.penSmart) return { x, z };
     const pxPer = this.view && this.view.pxPerWorld
-      ? this.view.pxPerWorld(new THREE.Vector3(x, 0, z)) : 0;
+      ? this.view.pxPerWorld(this._penW(x, z)) : 0;
     if (!(pxPer > 0)) return { x, z };
     const r = penSmartSnap(x, z, {
       points: this._penSnapTargets(),
-      guides: this._doc && this._doc.guides,
+      /** 🔴 乙：只算跟這一片交成直線的參考線，換成這一片上的座標（地板 ＝ 跟以前一樣的 X、Z） */
+      guides: this._penFrame().guides(this._doc && this._doc.guides),
       tol: GUIDE_SNAP_PX / pxPer
     });
     if (r.label) this._penSnapInfo = r;
@@ -2269,7 +2273,8 @@ export class Selection {
       for (const o of (this._doc && this._doc.objects) || []) {
         if (ghost && o.id === ghost) continue;
         const b = worldBounds(o);
-        if (!b.isEmpty()) this._penFoot.push(...footprintPoints(b));
+        /** 🔴 乙：外框投影到這一片上（側視看到的是 Z 與高度，⛔ 是 X 與 Z） */
+        if (!b.isEmpty()) this._penFoot.push(...footprintPoints(this._penFrame().box2(b)));
       }
     }
     return out.concat(this._penFoot);
@@ -2282,13 +2287,15 @@ export class Selection {
    */
   _penAssist(tip, e) {
     const show = !!(tip && this.penMode && !this.penEdit);
-    this._penCursor = show ? { x: tip.x, z: tip.z } : null;
+    /** ⚠ `tip` 是世界座標；游標要記「這一片上」的兩個數字（地板時就是 x、z） */
+    const tp = show ? this._penPQ(tip) : null;
+    this._penCursor = tp;
     if (this.view && this.view.setPenSnapLines) {
       const info = show ? this._penSnapInfo : null;
       const segs = [];
       if (info) {
         for (const f of [info.fromX, info.fromZ]) {
-          if (f) segs.push(new THREE.Vector3(f.x, 0, f.z), new THREE.Vector3(tip.x, 0, tip.z));
+          if (f) segs.push(this._penW(f.x, f.z), tip.clone());
         }
       }
       this.view.setPenSnapLines(segs.length ? segs : null);
@@ -2308,7 +2315,7 @@ export class Selection {
     const rows = [];
     if (n >= 1) {
       const lx = this._pen.a[(n - 1) * 2], lz = this._pen.a[(n - 1) * 2 + 1];
-      rows.push(`D: ${(Math.round(Math.hypot(tip.x - lx, tip.z - lz) * 100) / 100).toFixed(2)} cm`);
+      rows.push(`D: ${(Math.round(Math.hypot(tp.x - lx, tp.z - lz) * 100) / 100).toFixed(2)} cm`);
     }
     const lab = this._penSnapInfo && this._penSnapInfo.label;
     if (lab) rows.push(`<span style="color:#c0189c">${lab}</span>`);
@@ -2363,7 +2370,7 @@ export class Selection {
     if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
     /** ⭐ 游標沒動，所以方向照舊 —— 預覽那一段從新的點畫到游標（沒有游標就只畫線） */
     if (this._penCursor) {
-      const tip = new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z);
+      const tip = this._penW(this._penCursor.x, this._penCursor.z);
       this._drawPenPreview(tip);
       this._penAssist(tip);
     } else {
@@ -2396,7 +2403,7 @@ export class Selection {
     } else {
       return false;
     }
-    if (this._penCursor) this._penAssist(new THREE.Vector3(this._penCursor.x, 0, this._penCursor.z));
+    if (this._penCursor) this._penAssist(this._penW(this._penCursor.x, this._penCursor.z));
     return true;
   }
 
@@ -4471,7 +4478,7 @@ export class Selection {
     const h = side === 'in' ? this._pen.hi : this._pen.ho;
     const dx = h[i * 2], dz = h[i * 2 + 1];
     if (Math.hypot(dx, dz) < 1e-9) return null;
-    return new THREE.Vector3(this._pen.a[i * 2] + dx, 0, this._pen.a[i * 2 + 1] + dz);
+    return this._penW(this._pen.a[i * 2] + dx, this._pen.a[i * 2 + 1] + dz);
   }
 
   /**
@@ -4545,7 +4552,7 @@ export class Selection {
     if (!this._pen || !g) return null;
     const r = penNearestOnPath(this._pen, g.x, g.z);
     if (!r) return null;
-    const w = new THREE.Vector3(r.p.x, 0, r.p.y).project(this.view.camera);
+    const w = this._penW(r.p.x, r.p.y).project(this.view.camera);
     const c = this._toCanvasPx(clientX, clientY);
     const px = (w.x + 1) / 2 * c.w, py = (-w.y + 1) / 2 * c.h;
     return Math.hypot(px - c.x, py - c.y) <= 12 ? r : null;
@@ -4785,7 +4792,7 @@ export class Selection {
     if (handleAt) {
       const a = this._penWorld(opt.handleAt === undefined ? n - 1 : opt.handleAt);
       hpts.push(a, handleAt);
-      hpts.push(a, new THREE.Vector3(2 * a.x - handleAt.x, 0, 2 * a.z - handleAt.z));
+      hpts.push(a, a.clone().multiplyScalar(2).sub(handleAt));
       hdots.push(handleAt);
     }
     /**
@@ -4903,7 +4910,15 @@ export class Selection {
   _groundAt(clientX, clientY) {
     if (!this.view || !this.view.groundPoint) return null;
     const r = this._toCanvasPx(clientX, clientY);
-    return this.view.groundPoint((r.x / r.w) * 2 - 1, -(r.y / r.h) * 2 + 1);
+    const nx = (r.x / r.w) * 2 - 1, ny = -(r.y / r.h) * 2 + 1;
+    /** 🔴 乙：畫在參考線那一片 ⇒ 打那一片；地板照舊走 `groundPoint()`（一個字都不變） */
+    const f = this._pf;
+    if (!f.ax) return this.view.groundPoint(nx, ny);
+    if (!this.view.planePoint) return null;
+    const w = this.view.planePoint(nx, ny, f.n, f.v);
+    if (!w) return null;
+    const [x, z] = f.fromWorld(w.x, w.y, w.z);
+    return { x, z, world: w };
   }
 
   /**
@@ -4928,7 +4943,31 @@ export class Selection {
   }
 
   _penWorld(i) {
-    return new THREE.Vector3(this._pen.a[i * 2], 0, this._pen.a[i * 2 + 1]);
+    return this._penW(this._pen.a[i * 2], this._pen.a[i * 2 + 1]);
+  }
+
+  /**
+   * 🔴 **乙 第 1 輪：鋼筆的兩個數字 ↔ 世界座標，一律走這幾支**（⛔ 再寫 `new Vector3(x, 0, z)`）。
+   * 地板時跟以前一模一樣（`(x, 0, z)`）。
+   */
+  _penFrame() { return this._pf; }
+  _penW(p, q) { return new THREE.Vector3(...this._pf.toWorld(p, q)); }
+  _penPQ(w) { const [x, z] = this._pf.fromWorld(w.x, w.y, w.z); return { x, z }; }
+  /** 第 i 個錨點再加一段 (dx, dz) 的世界座標（把手的端點） */
+  _penOff(i, dx, dz) {
+    return this._penW(this._pen.a[i * 2] + dx, this._pen.a[i * 2 + 1] + dz);
+  }
+
+  /**
+   * 換一片畫。⚠ **畫到一半⛔ 換**（已經放的點會整串跑到另一片上）—— 呼叫端先擋。
+   * @param {{ax, v}|null} plane
+   */
+  setPenPlane(plane) {
+    this.penPlane = plane && ['x', 'y', 'z'].includes(plane.ax) && Number.isFinite(+plane.v)
+      ? { ax: plane.ax, v: +plane.v } : null;
+    this._pf = penPlaneFrame(this.penPlane);
+    this._penFoot = null;          // 外框投影跟著換
+    return this.penPlane;
   }
 
   /** 把目前這一條拉直成世界座標的點串（預覽用；⛔ 不影響存下來的資料） */
@@ -4940,7 +4979,7 @@ export class Selection {
      */
     return flattenPenPath(
       { closed: !!closed, a: this._pen.a, hi: this._pen.hi, ho: this._pen.ho }
-    ).map(p => new THREE.Vector3(p.x, 0, p.y));
+    ).map(p => this._penW(p.x, p.y));
   }
 
   setSeamMode(on) {

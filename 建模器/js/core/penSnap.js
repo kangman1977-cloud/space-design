@@ -133,3 +133,58 @@ export function pointAtLength(from, toward, len) {
   if (n < 1e-9) return { ok: false, reason: '游標跟上一個點疊在一起，看不出方向 —— 先把游標移開' };
   return { ok: true, x: from.x + dx / n * len, z: from.z + dz / n * len };
 }
+
+/**
+ * 🔴 **乙 第 1 輪：鋼筆畫在哪一片平面上**（kang 2026-10-17 拍板：「畫在」下拉預設地板、
+ * 視角自動轉正、厚度朝看過去的那一側長、畫好不跟著參考線、編輯照現在放平）。
+ *
+ * ⭐ **鋼筆裡面照舊只記兩個數字 (p, q)**（變數名仍叫 x、z），意思換成「在這一片上」：
+ * **p ＝ 轉正之後畫面的右邊、q ＝ 畫面的下面** —— 跟地板（上視圖：右 ＝ +X、下 ＝ +Z）同一套，
+ * 所以對齊、鎖角度（0° 往右、90° 往畫面上方）、打長度**一行都不用改**。
+ *
+ * | 平面 | 轉正成 | 畫面右 p | 畫面下 q | 厚度往（朝鏡頭）|
+ * |---|---|---|---|---|
+ * | 地板（`null`）| 不轉 | +X | +Z | +Y |
+ * | 高度 Y ＝ v | 上視 | +X | +Z | +Y |
+ * | 前後線 X ＝ v | 側視（鏡頭在 +X）| −Z | −Y | +X |
+ * | 左右線 Z ＝ v | 前視（鏡頭在 +Z）| +X | −Y | +Z |
+ *
+ * `basis`：把「當成畫在地板上」做好的物件**整個搬上這一片**用的 —— 地板的 X／Y／Z 各變成哪個方向、
+ * 原點搬到哪（`io.js` `penPlaceOnPlane()`）。三組都是**轉動、⛔ 鏡射**（行列式 ＋1，測試釘著）。
+ *
+ * @param {{ax:'x'|'y'|'z', v:number}|null} plane  `null` ＝ 地板
+ */
+export function penPlaneFrame(plane) {
+  const ax = plane && ['x', 'y', 'z'].includes(plane.ax) && Number.isFinite(+plane.v) ? plane.ax : null;
+  const v = ax ? +plane.v : 0;
+  if (ax === 'x') {
+    return {
+      ax, v, view: 'right', n: [1, 0, 0],
+      toWorld: (p, q) => [v, -q, -p],
+      fromWorld: (x, y, z) => [-z, -y],
+      basis: { a: [0, 0, -1], b: [1, 0, 0], c: [0, -1, 0], o: [v, 0, 0] },
+      /** 跟這一片交成直線的參考線：左右線 Z（直的，p ＝ −z）、高度 Y（橫的，q ＝ −y） */
+      guides: g => ({ x: ((g && g.z) || []).map(c => -c), z: ((g && g.y) || []).map(c => -c) }),
+      box2: b => ({ min: { x: -b.max.z, z: -b.max.y }, max: { x: -b.min.z, z: -b.min.y } })
+    };
+  }
+  if (ax === 'z') {
+    return {
+      ax, v, view: 'front', n: [0, 0, 1],
+      toWorld: (p, q) => [p, -q, v],
+      fromWorld: (x, y, z) => [x, -y],
+      basis: { a: [1, 0, 0], b: [0, 0, 1], c: [0, -1, 0], o: [0, 0, v] },
+      guides: g => ({ x: ((g && g.x) || []).slice(), z: ((g && g.y) || []).map(c => -c) }),
+      box2: b => ({ min: { x: b.min.x, z: -b.max.y }, max: { x: b.max.x, z: -b.min.y } })
+    };
+  }
+  /** 地板與「高度 Y」：同一套，只差高度 */
+  return {
+    ax, v, view: ax === 'y' ? 'top' : null, n: [0, 1, 0],
+    toWorld: (p, q) => [p, v, q],
+    fromWorld: (x, y, z) => [x, z],
+    basis: { a: [1, 0, 0], b: [0, 1, 0], c: [0, 0, 1], o: [0, v, 0] },
+    guides: g => ({ x: ((g && g.x) || []).slice(), z: ((g && g.z) || []).slice() }),
+    box2: b => ({ min: { x: b.min.x, z: b.min.z }, max: { x: b.max.x, z: b.max.z } })
+  };
+}

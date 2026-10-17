@@ -16910,6 +16910,122 @@ section('參考線 甲：從物件的面放（2026-10-17）');
   ok('★ 存進去的值跟算出來的一樣（下拉選得回它）', doc.guides.y[0] === g1.v, String(doc.guides.y[0]));
 }
 
+section('鋼筆 乙 第 1 輪：畫在參考線那一片（2026-10-17）');
+{
+  const ps = await import('../js/core/penSnap.js');
+  const near3 = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+  const det = B => {
+    const [a, b, c] = [B.a, B.b, B.c];
+    return a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1]) + c[0] * (a[1] * b[2] - a[2] * b[1]);
+  };
+  const planes = [null, { ax: 'y', v: 30 }, { ax: 'x', v: 50 }, { ax: 'z', v: -40 }];
+  const camSide = { y: [0, 1, 0], x: [1, 0, 0], z: [0, 0, 1] };
+  for (const pl of planes) {
+    const f = ps.penPlaneFrame(pl);
+    const nm = pl ? `${pl.ax} ＝ ${pl.v}` : '地板';
+    ok(`★★★ ${nm}：搬上去是轉動、不是鏡射（行列式 ＋1）`, Math.abs(det(f.basis) - 1) < 1e-12, String(det(f.basis)));
+    let allOn = true, back = true, same = true;
+    for (const [p, q] of [[0, 0], [12.5, -7], [-30, 44]]) {
+      const w = f.toWorld(p, q);
+      if (pl && Math.abs(w['xyz'.indexOf(pl.ax)] - pl.v) > 1e-12) allOn = false;
+      if (!pl && Math.abs(w[1]) > 1e-12) allOn = false;
+      const [p2, q2] = f.fromWorld(...w);
+      if (Math.abs(p2 - p) > 1e-12 || Math.abs(q2 - q) > 1e-12) back = false;
+      /** 放點用的 toWorld 跟「搬上去」用的 basis 是同一件事（地板上的 (p,0,q) 搬過去）—— 兩條路⛔ 可以不一致 */
+      const B = f.basis, viaB = [0, 1, 2].map(i => B.o[i] + B.a[i] * p + B.c[i] * q);
+      if (!near3(w, viaB)) same = false;
+    }
+    ok(`★★ ${nm}：點都落在那一片上`, allOn);
+    ok(`★★ ${nm}：世界 → 這一片 → 世界，一個數字都不差`, back);
+    ok(`★★★ ${nm}：放點（toWorld）跟搬物件（basis）同一套`, same);
+    if (pl) ok(`★★ ${nm}：厚度朝轉正時的鏡頭那一側長`, near3(f.basis.b, camSide[pl.ax]), JSON.stringify(f.basis.b));
+  }
+  ok('★ 地板：視角不轉；高度 Y → 上視；前後線 X → 側視；左右線 Z → 前視',
+    ps.penPlaneFrame(null).view === null && ps.penPlaneFrame({ ax: 'y', v: 1 }).view === 'top'
+    && ps.penPlaneFrame({ ax: 'x', v: 1 }).view === 'right' && ps.penPlaneFrame({ ax: 'z', v: 1 }).view === 'front');
+  /** 0° 往畫面右、90° 往畫面上 —— 側視時畫面右 ＝ −Z、畫面上 ＝ +Y（鏡頭在 +X 往 −X 看） */
+  {
+    const f = ps.penPlaneFrame({ ax: 'x', v: 50 });
+    const d0 = ps.dirFromAngle(0), d90 = ps.dirFromAngle(90);
+    const o = f.toWorld(0, 0), r0 = f.toWorld(d0.dx, d0.dz), r90 = f.toWorld(d90.dx, d90.dz);
+    ok('★★ 側視畫：0° 往畫面右（−Z）、90° 往畫面上（＋Y）',
+      near3([r0[0] - o[0], r0[1] - o[1], r0[2] - o[2]], [0, 0, -1]) && near3([r90[0] - o[0], r90[1] - o[1], r90[2] - o[2]], [0, 1, 0]));
+    const fz = ps.penPlaneFrame({ ax: 'z', v: -40 });
+    const s0 = fz.toWorld(d0.dx, d0.dz), s90 = fz.toWorld(d90.dx, d90.dz), oz = fz.toWorld(0, 0);
+    ok('★★ 前視畫：0° 往畫面右（＋X）、90° 往畫面上（＋Y）',
+      near3([s0[0] - oz[0], s0[1] - oz[1], s0[2] - oz[2]], [1, 0, 0]) && near3([s90[0] - oz[0], s90[1] - oz[1], s90[2] - oz[2]], [0, 1, 0]));
+  }
+  /** 參考線：只留跟這一片交成直線的，換成這一片上的座標 */
+  {
+    const g = { x: [50, 10], y: [30], z: [-40] };
+    const gx = ps.penPlaneFrame({ ax: 'x', v: 50 }).guides(g);
+    ok('★★ 側視那一片：左右線 Z −40 變成直的 p ＝ 40、高度 Y 30 變成橫的 q ＝ −30；前後線 X ⛔ 算',
+      JSON.stringify(gx) === JSON.stringify({ x: [40], z: [-30] }), JSON.stringify(gx));
+    const gz = ps.penPlaneFrame({ ax: 'z', v: -40 }).guides(g);
+    ok('★★ 前視那一片：前後線 X 照舊、高度 Y 30 變成 q ＝ −30；左右線 Z ⛔ 算',
+      JSON.stringify(gz) === JSON.stringify({ x: [50, 10], z: [-30] }), JSON.stringify(gz));
+    const g0 = ps.penPlaneFrame(null).guides(g);
+    ok('★ 地板：跟以前一樣只看 X、Z', JSON.stringify(g0) === JSON.stringify({ x: [50, 10], z: [-40] }));
+    const bx = ps.penPlaneFrame({ ax: 'x', v: 50 }).box2({ min: { x: -30, y: 0, z: -20 }, max: { x: 30, y: 45, z: 20 } });
+    ok('★ 側視那一片：方塊外框投影成 p −20..20、q −45..0', bx.min.x === -20 && bx.max.x === 20 && bx.min.z === -45 && bx.max.z === -0 + 0, JSON.stringify(bx));
+  }
+
+  /** 整條路：照地板那條路建好 → 置中 → 搬上去（跟 main.js finishPen 同一個順序） */
+  const mk = (pl, h = 5) => {
+    /** 這一片上的正方形：p 10..30、q −30..−10（畫面上方 ＝ 離地 10..30） */
+    const o = new io.ModelObject({
+      name: '鋼筆', kind: 'solid',
+      src: { type: 'pen', h, paths: [{ closed: true, a: [10, -30, 30, -30, 30, -10, 10, -10], hi: [0, 0, 0, 0, 0, 0, 0, 0], ho: [0, 0, 0, 0, 0, 0, 0, 0] }] }
+    });
+    io.recenterOrigin(o);
+    io.penPlaceOnPlane(o, pl);
+    return o;
+  };
+  const wb = o => {
+    const b = o.mesh().bounds(), M = o.matrix(), out = new THREE.Box3();
+    for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+      out.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(M));
+    }
+    return out;
+  };
+  const bxw = b => [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z].map(v => Math.round(v * 1e6) / 1e6);
+  {
+    const o = mk({ ax: 'x', v: 50 });
+    const b = bxw(wb(o));
+    ok('★★★ 畫在前後線 X ＝ 50：立在那片牆上，厚度往 +X（50..55）、離地 10..30、Z −30..−10',
+      JSON.stringify(b) === JSON.stringify([50, 55, 10, 30, -30, -10]), JSON.stringify(b));
+    ok('★★ 　體積跟畫在地板上一樣（20×20×5 ＝ 2000）', Math.abs(o.mesh().volume() - 2000) < 1e-6, String(o.mesh().volume()));
+    ok('★★ 　物件矩陣沒有鏡射（行列式 ＞ 0）', o.matrix().determinant() > 0);
+  }
+  {
+    const o = mk({ ax: 'z', v: -40 });
+    const b = bxw(wb(o));
+    ok('★★★ 畫在左右線 Z ＝ −40：厚度往 +Z（−40..−35）、離地 10..30、X 10..30',
+      JSON.stringify(b) === JSON.stringify([10, 30, 10, 30, -40, -35]), JSON.stringify(b));
+  }
+  {
+    const o = mk({ ax: 'y', v: 30 });
+    const b = bxw(wb(o));
+    ok('★★★ 畫在高度 Y ＝ 30：浮在 30..35、X 10..30、Z −30..−10（跟地板一樣，只是抬高）',
+      JSON.stringify(b) === JSON.stringify([10, 30, 30, 35, -30, -10]), JSON.stringify(b));
+    ok('★ 　沒有轉', o.rot.x === 0 && o.rot.y === 0 && o.rot.z === 0);
+  }
+  {
+    const o = mk(null);
+    const b = bxw(wb(o));
+    ok('★★ 地板：跟以前一模一樣（沒轉、沒抬）', JSON.stringify(b) === JSON.stringify([10, 30, 0, 5, -30, -10]) && o.rot.x === 0 && o.pos.y === 0, JSON.stringify(b));
+  }
+  {
+    /** 存讀檔往返：轉上牆的物件讀回來還在牆上（⭐ 存檔格式沒變，靠的是本來就存的 pos／rot） */
+    const doc = new io.Doc(); doc.add(mk({ ax: 'x', v: 50 }));
+    const back = io.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+    const b = bxw(wb(back.objects[0]));
+    /** ⚠ 存檔的角度只留 6 位小數（`io.js` `r6`，原本就是這樣）⇒ 90° 存成 1.570796，邊角會差到 0.000003 cm —— 容許 0.0001 */
+    const want = [50, 55, 10, 30, -30, -10];
+    ok('★★ 存讀檔往返：讀回來還立在前後線 X ＝ 50 那片牆上（差不到 0.0001 cm）', b.every((v, i) => Math.abs(v - want[i]) < 1e-4), JSON.stringify(b));
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

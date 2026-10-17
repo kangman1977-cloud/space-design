@@ -1840,6 +1840,21 @@ export class SceneView {
    *
    * @returns {{x:number, z:number, world:THREE.Vector3}|null}
    */
+  /**
+   * 🔴 **乙 第 1 輪：螢幕上的一點 → 某一片平面上的一點**（`n·p ＝ c`，n 是 X／Y／Z 其中一軸）。
+   * ⚠ **視線跟那一片幾乎平行（斜到 2° 以內）就回 null** —— 那時候滑鼠動一點點，點會飛到很遠
+   *（自動轉正就是為了避開這個；他自己轉回去斜看時，寧可⛔ 放點也不要放一個亂飛的點）。
+   */
+  planePoint(ndcX, ndcY, n, c) {
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+    const nv = new THREE.Vector3(...n);
+    if (Math.abs(ray.ray.direction.dot(nv)) < 0.035) return null;
+    const p = new THREE.Vector3();
+    const hit = ray.ray.intersectPlane(new THREE.Plane(nv, -c), p);
+    return hit ? p.clone() : null;
+  }
+
   groundPoint(ndcX, ndcY) {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);

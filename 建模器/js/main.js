@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
-         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace }
+         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -864,6 +864,56 @@ $('penSmart').onclick = () => {
  * ⚠ 一改就寫進 `sel`，⛔ 等按鈕 —— 「長度」有數字時，在畫面上點方向就照長度放
  * （舊版要先放點、再把滑鼠移去工具列，**路上就把方向改掉了** —— kang 驗收時抓到的）。
  */
+/**
+ * 🔴 **乙 第 1 輪：「畫在」下拉**（kang 2026-10-17 拍板：分兩輪先做參考線那一片；預設地板；
+ * 視角自動轉正；厚度朝看過去的那一側長；畫好不跟著參考線；編輯照現在放平）。
+ * ⭐ 選項照現有的參考線長出來；選中的那條不見了（刪掉、Undo）⇒ 回到地板。
+ */
+const PEN_PLANE_VIEW = { x: 'vRight', z: 'vFront', y: 'vTop' };
+const PEN_PLANE_VIEW_NAME = { x: '側視', z: '前視', y: '上視' };
+
+function penPlaneName(p) {
+  return p ? `「${GUIDE_AXIS_LABEL[p.ax]} ＝ ${fmtGuide(p.v)}」那一片` : '地板';
+}
+
+function syncPenPlane() {
+  const box = $('penPlane');
+  const p = sel.penPlane;
+  if (p && !(doc.guides[p.ax] || []).some(g => Math.abs(g - p.v) < 5e-4)) sel.setPenPlane(null);
+  box.innerHTML = '';
+  box.appendChild(new Option('地板', ''));
+  for (const ax of ['x', 'z', 'y']) {
+    for (const v of doc.guides[ax] || []) {
+      box.appendChild(new Option(`${GUIDE_AXIS_LABEL[ax]} ＝ ${fmtGuide(v)}`, `${ax}:${v}`));
+    }
+  }
+  const cur = sel.penPlane;
+  box.value = cur ? `${cur.ax}:${(doc.guides[cur.ax] || []).find(g => Math.abs(g - cur.v) < 5e-4)}` : '';
+  if (box.selectedIndex < 0) box.value = '';
+  box.disabled = sel.penPathCount > 0;
+}
+
+$('penPlane').onchange = () => {
+  /** ⚠ 畫到一半換 ⇒ 已經放的點整串跑到另一片 —— 擋下來講原因（disabled 之外的保險） */
+  if (sel.penPathCount > 0) {
+    toast('畫到一半不能換畫的那一片 —— 先「完成」或「取消」這一筆', true);
+    syncPenPlane();
+    return;
+  }
+  const raw = $('penPlane').value;
+  if (!raw) {
+    sel.setPenPlane(null);
+    toast('鋼筆畫在地板上（跟以前一樣，視角不動）');
+    return;
+  }
+  const [ax, v] = [raw.split(':')[0], Number(raw.split(':')[1])];
+  sel.setPenPlane({ ax, v });
+  /** 🔴 視角自動轉正（kang 拍板；Fusion、Shapr3D 也這樣）—— 走工具列那顆的同一條路（含正交） */
+  $(PEN_PLANE_VIEW[ax]).onclick();
+  toast(`鋼筆畫在${penPlaneName(sel.penPlane)}上：視角自動轉成${PEN_PLANE_VIEW_NAME[ax]}，正對那一片。`
+    + '點下去的點都落在那一片上；畫完的形狀立在那一片上，厚度朝你看過去的那一側長');
+};
+
 function syncPenFix() {
   const L = parseFloat($('penLen').value);
   sel.penFixLen = Number.isFinite(L) && L > 0 ? L : 0;
@@ -1817,8 +1867,14 @@ function editPenPath(obj) {
      * ⭐ 這跟 `鎖角度` 不一樣：那顆一直是他自己按的，所以才可以黏著。
      */
     open: !!obj.src.open, up: !!obj.src.up, kind: obj.kind,
-    barOpen: !!sel.penNoClose, barUp: !!penUpFlag
+    barOpen: !!sel.penNoClose, barUp: !!penUpFlag,
+    /**
+     * 🔴 **乙：編輯時物件是攤平在地板上的 ⇒ 點要落在地板**（kang：編輯照現在放平）。
+     * 「畫在」下拉是他自己選的 ⇒ 收工還原，⛔ 偷偷改掉。
+     */
+    plane: sel.penPlane
   };
+  sel.setPenPlane(null);
   obj.rot.set(0, 0, 0);
   obj.pos.y = 0;
   view.sync(doc);
@@ -1900,6 +1956,7 @@ function endPenEdit(save) {
   /** 🔴 工具列那兩顆回到**進來之前**的樣子（見 `penEditing` 那則） */
   sel.penNoClose = st.barOpen;
   penUpFlag = st.barUp;
+  sel.setPenPlane(st.plane);
   sel.takePen();
   sel.setPenMode(false);
   view.setGhost(null);
@@ -1934,10 +1991,15 @@ function togglePenMode() {
   panel.refresh();
   updateBar();
   /**
+   * 🔴 乙：上次選的「畫在」是一片參考線（他自己選的，所以留著）⇒ 進來一樣自動轉正，
+   * ⛔ 讓他在斜看裡對著一片牆放點（`updateBar()` 已經先確認那條線還在）。
+   */
+  if (sel.penPlane) $(PEN_PLANE_VIEW[sel.penPlane.ax]).onclick();
+  /**
    * ⚠ **一定要把「轉視角換手勢了」講出來** —— 跟刀具同一條理由：
    * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
    */
-  toast('鋼筆：在地板上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。'
+  toast(`鋼筆：在${penPlaneName(sel.penPlane)}上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。`
       + '【右鍵按一下】＝ 確定這一段曲線（平板按「確定曲線」）。'
       + '【按住 Shift】＝ 鎖角度（度數在旁邊調，平板按「鎖角度」）。'
       + '畫完【回到第一個點按下去】就接起來（想讓最後那段也彎就按住拖）。'
@@ -1995,6 +2057,12 @@ function finishPen() {
    */
   doc.add(obj);
   recenterOrigin(obj);
+  /**
+   * 🔴 **乙 第 1 輪：畫在參考線那一片 ⇒ 整個轉上去**（形狀、置中都照地板那條路做好了，最後一步才搬）。
+   * ⭐ 存起來就是一個轉了角度的普通鋼筆物件；之後挪參考線，它⛔ 跟著（kang：畫好不跟）。
+   */
+  const where = penPlaneName(sel.penPlane);
+  penPlaceOnPlane(obj, sel.penPlane);
   view.sync(doc);
   sel.set([obj.id]);
   commit('鋼筆');
@@ -2012,12 +2080,13 @@ function finishPen() {
     /** ⚠ `mesh()` 是**函式**⛔ 不是屬性；剛建好縮放還是 1，所以這就是真值 */
     const m = obj.mesh();
     const area = m ? m.area() : 0;
-    toast(`已建立「${obj.name}」：${paths.length} 條線、${n} 個點、`
+    toast(`已建立「${obj.name}」（畫在${where}）：${paths.length} 條線、${n} 個點、`
         + `${up ? '牆高' : '板寬'} ${h} cm　`
         + `⭐ 這是【板件】，面積 ${area.toFixed(2)} cm²（＝ 線長 × ${h}）—— `
         + '厚薄請改右側的「板厚」');
   } else {
-    toast(`已建立「${obj.name}」：${paths.length} 條路徑、${n} 個點、高 ${h} cm　`
+    toast(`已建立「${obj.name}」（畫在${where}）：${paths.length} 條路徑、${n} 個點、`
+        + `${sel.penPlane ? '厚' : '高'} ${h} cm　`
         + (paths.length > 1
             ? '⭐ 包在裡面的那條已經變成【洞】'
             : '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）'));
@@ -6638,6 +6707,9 @@ function updateBar() {
    * 🔴 **而 2026-08-31 起那個標籤還會跟著開關換**（厚度／高度／寬度）——
    * 同一個欄位三種意思，⛔ 不換的話使用者會拿「厚度」去打牆高。
    */
+  /** 🔴 乙：「畫在」—— 編輯既有路徑時⛔ 出現（那時候一律攤平在地板上改） */
+  $('penPlaneLbl').hidden = $('penPlane').hidden = !(sel.penMode && !penEditing);
+  if (sel.penMode && !penEditing) syncPenPlane();
   $('penHLbl').hidden = !sel.penMode;
   $('penHLbl').textContent = !sel.penNoClose ? '厚度' : (penUpFlag ? '高度' : '寬度');
   $('penH').hidden = !sel.penMode;

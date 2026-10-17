@@ -940,6 +940,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
           右鍵／兩指轉視角），而那一層跟刀具是同一支 setDrawInput()。
         🔴 「尖角」那顆是 Alt 的替代品 —— 平板上沒有 Alt（kang 2026-08-29 選的）。
       -->
+      <!--
+        🔴 乙 第 1 輪：畫在哪一片（kang 2026-10-17 拍板：預設地板；選一條參考線 ⇒ 視角自動轉正、
+           畫好的形狀立在那一片上，厚度朝看過去的那一側長；畫好不跟著參考線）
+      -->
+      <span class="lbl" id="penPlaneLbl" hidden>畫在</span>
+      <select id="penPlane" hidden title="畫在哪一片：地板（預設，跟以前一樣），或某一條參考線那一片。選了參考線，視角會自動轉正（前後線 X → 側視、左右線 Z → 前視、高度 Y → 上視），點下去的點都落在那一片上；畫完的形狀立在那一片上，厚度朝你看過去的那一側長。⚠ 畫到一半不能換（先完成或取消這一筆）。畫好的形狀不跟著參考線 —— 之後挪參考線，它不會動">
+        <option value="">地板</option>
+      </select>
       <button id="penCorner" hidden title="尖角：按下去之後，接下來放的點一律是尖角（就算你用拖的）。⚠ Illustrator 是按 Alt，而平板上沒有 Alt —— 這顆是它的替代品。⭐ 開著「改點」的時候，它管的是【選到的那個點】">尖角</button>
       <!--
         改點（第 2 階段，kang 2026-08-29 拍板）：回頭拉點、拉把手。
