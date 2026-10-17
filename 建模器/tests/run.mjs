@@ -17024,6 +17024,66 @@ section('鋼筆 乙 第 1 輪：畫在參考線那一片（2026-10-17）');
     const want = [50, 55, 10, 30, -30, -10];
     ok('★★ 存讀檔往返：讀回來還立在前後線 X ＝ 50 那片牆上（差不到 0.0001 cm）', b.every((v, i) => Math.abs(v - want[i]) < 1e-4), JSON.stringify(b));
   }
+
+  /** ── 乙 第 2 輪：物件的面 —— 朝 −X／−Z 的那一面從另一側看、往那一側長 ── */
+  for (const pl of [{ ax: 'x', v: -30, s: -1 }, { ax: 'z', v: -20, s: -1 }]) {
+    const f = ps.penPlaneFrame(pl);
+    const nm = `${pl.ax} ＝ ${pl.v}（朝 −${pl.ax.toUpperCase()}）`;
+    ok(`★★★ ${nm}：轉動不鏡射（行列式 ＋1）`, Math.abs(det(f.basis) - 1) < 1e-12, String(det(f.basis)));
+    let allOn = true, back = true, same = true;
+    for (const [p, q] of [[0, 0], [12.5, -7], [-30, 44]]) {
+      const w = f.toWorld(p, q);
+      if (Math.abs(w['xyz'.indexOf(pl.ax)] - pl.v) > 1e-12) allOn = false;
+      const [p2, q2] = f.fromWorld(...w);
+      if (Math.abs(p2 - p) > 1e-12 || Math.abs(q2 - q) > 1e-12) back = false;
+      const B = f.basis, viaB = [0, 1, 2].map(i => B.o[i] + B.a[i] * p + B.c[i] * q);
+      if (!near3(w, viaB)) same = false;
+    }
+    ok(`★★ ${nm}：點都落在那一片上、往返不差、放點與搬物件同一套`, allOn && back && same);
+    const want = pl.ax === 'x' ? [-1, 0, 0] : [0, 0, -1];
+    ok(`★★★ ${nm}：厚度往外（朝 −${pl.ax.toUpperCase()}）、從那一側看`, near3(f.basis.b, want) && f.view === (pl.ax === 'x' ? 'left' : 'back'),
+      JSON.stringify(f.basis.b) + f.view);
+    /** 0° 往畫面右、90° 往畫面上：左視畫面右 ＝ +Z、後視畫面右 ＝ −X；畫面上一律 ＋Y */
+    const d0 = ps.dirFromAngle(0), d90 = ps.dirFromAngle(90), o = f.toWorld(0, 0);
+    const r0 = f.toWorld(d0.dx, d0.dz), r90 = f.toWorld(d90.dx, d90.dz);
+    const right = pl.ax === 'x' ? [0, 0, 1] : [-1, 0, 0];
+    ok(`★★ ${nm}：0° 往畫面右、90° 往畫面上（＋Y）`,
+      near3([r0[0] - o[0], r0[1] - o[1], r0[2] - o[2]], right) && near3([r90[0] - o[0], r90[1] - o[1], r90[2] - o[2]], [0, 1, 0]));
+  }
+  ok('★ 高度 Y 給 s −1 也當 ＋1（底面不收）', ps.penPlaneFrame({ ax: 'y', v: 5, s: -1 }).s === 1);
+  {
+    const gx = ps.penPlaneFrame({ ax: 'x', v: -30, s: -1 }).guides({ x: [50], y: [30], z: [-40] });
+    ok('★★ 左視那一片：左右線 Z −40 變成 p ＝ −40、高度 Y 30 變成 q ＝ −30', JSON.stringify(gx) === JSON.stringify({ x: [-40], z: [-30] }), JSON.stringify(gx));
+    const gz = ps.penPlaneFrame({ ax: 'z', v: -20, s: -1 }).guides({ x: [50], y: [30], z: [-40] });
+    ok('★★ 後視那一片：前後線 X 50 變成 p ＝ −50', JSON.stringify(gz) === JSON.stringify({ x: [-50], z: [-30] }), JSON.stringify(gz));
+  }
+  {
+    const o = mk({ ax: 'x', v: -30, s: -1 });
+    const b = bxw(wb(o));
+    ok('★★★ 畫在左側面 X ＝ −30：往外（−X）長 −35..−30、離地 10..30、Z 10..30',
+      JSON.stringify(b) === JSON.stringify([-35, -30, 10, 30, 10, 30]), JSON.stringify(b));
+    ok('★ 　沒有鏡射', o.matrix().determinant() > 0 && Math.abs(o.mesh().volume() - 2000) < 1e-6);
+    const o2 = mk({ ax: 'z', v: -20, s: -1 });
+    const b2 = bxw(wb(o2));
+    ok('★★★ 畫在後面 Z ＝ −20：往外（−Z）長 −25..−20、離地 10..30、X −30..−10',
+      JSON.stringify(b2) === JSON.stringify([-30, -10, 10, 30, -25, -20]), JSON.stringify(b2));
+    /** 立在牆上的判斷（右側面板改字、編輯時先切上視都問它） */
+    ok('★★ penWallSide：右牆 x+、左側面 x−、後面 z−、高度 Y 與地板 ⇒ 不是牆',
+      io.penWallSide(mk({ ax: 'x', v: 50 })) === 'x+' && io.penWallSide(o) === 'x-' && io.penWallSide(o2) === 'z-'
+      && io.penWallSide(mk({ ax: 'z', v: -40 })) === 'z+'
+      && io.penWallSide(mk({ ax: 'y', v: 30 })) === null && io.penWallSide(mk(null)) === null);
+  }
+  {
+    /** 右側面板的字：立在牆上 ⇒ 厚度／伸出／往外長；地板照舊 */
+    const { PRIM_SPECS: PS } = await import('../js/build/prim.js');
+    const hf = PS.pen.fields.find(f => f.key === 'h'), up = PS.pen.toggles.find(t => t.key === 'up');
+    ok('★★ 牆上：封口 ＝「厚度」、不封口往外 ＝「伸出」、開關 ＝「往外長」',
+      hf.labelOf({}, { wall: true }) === '厚度' && hf.labelOf({ open: true, up: true }, { wall: true }) === '伸出'
+      && up.labelOf({ open: true }, { wall: true }) === '往外長');
+    ok('★★ 地板照舊：「高 Y」「高度」「寬度」「往上長」',
+      hf.labelOf({}, { wall: false }) === '高 Y' && hf.labelOf({ open: true, up: true }) === '高度'
+      && hf.labelOf({ open: true }) === '寬度' && up.labelOf({ open: true }) === '往上長');
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

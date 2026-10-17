@@ -152,14 +152,41 @@ export function pointAtLength(from, toward, len) {
  * `basis`：把「當成畫在地板上」做好的物件**整個搬上這一片**用的 —— 地板的 X／Y／Z 各變成哪個方向、
  * 原點搬到哪（`io.js` `penPlaceOnPlane()`）。三組都是**轉動、⛔ 鏡射**（行列式 ＋1，測試釘著）。
  *
- * @param {{ax:'x'|'y'|'z', v:number}|null} plane  `null` ＝ 地板
+ * 🔴 **乙 第 2 輪：物件的面**（kang 2026-10-17：從外面看、厚度往外長、底面不收）——
+ * 面朝 −X／−Z 的那一面要從**另一側**看（左視、後視），厚度也往 −X／−Z 長 ⇒ `s ＝ −1`。
+ * | 前後線 X ＝ v、s −1（左側面）| 左視（鏡頭在 −X）| +Z | −Y | −X |
+ * | 左右線 Z ＝ v、s −1（後面）| 後視（鏡頭在 −Z）| −X | −Y | −Z |
+ * ⚠ 高度 Y 只有 s ＋1（底面不收 —— 沒有「從下面看」的視角）。
+ *
+ * @param {{ax:'x'|'y'|'z', v:number, s?:1|-1}|null} plane  `null` ＝ 地板；`s` 不給 ＝ ＋1
  */
 export function penPlaneFrame(plane) {
   const ax = plane && ['x', 'y', 'z'].includes(plane.ax) && Number.isFinite(+plane.v) ? plane.ax : null;
   const v = ax ? +plane.v : 0;
+  const neg = !!ax && ax !== 'y' && plane.s === -1;
+  if (ax === 'x' && neg) {
+    return {
+      ax, v, s: -1, view: 'left', n: [1, 0, 0],
+      toWorld: (p, q) => [v, -q, p],
+      fromWorld: (x, y, z) => [z, -y],
+      basis: { a: [0, 0, 1], b: [-1, 0, 0], c: [0, -1, 0], o: [v, 0, 0] },
+      guides: g => ({ x: ((g && g.z) || []).slice(), z: ((g && g.y) || []).map(c => -c) }),
+      box2: b => ({ min: { x: b.min.z, z: -b.max.y }, max: { x: b.max.z, z: -b.min.y } })
+    };
+  }
+  if (ax === 'z' && neg) {
+    return {
+      ax, v, s: -1, view: 'back', n: [0, 0, 1],
+      toWorld: (p, q) => [-p, -q, v],
+      fromWorld: (x, y, z) => [-x, -y],
+      basis: { a: [-1, 0, 0], b: [0, 0, -1], c: [0, -1, 0], o: [0, 0, v] },
+      guides: g => ({ x: ((g && g.x) || []).map(c => -c), z: ((g && g.y) || []).map(c => -c) }),
+      box2: b => ({ min: { x: -b.max.x, z: -b.max.y }, max: { x: -b.min.x, z: -b.min.y } })
+    };
+  }
   if (ax === 'x') {
     return {
-      ax, v, view: 'right', n: [1, 0, 0],
+      ax, v, s: 1, view: 'right', n: [1, 0, 0],
       toWorld: (p, q) => [v, -q, -p],
       fromWorld: (x, y, z) => [-z, -y],
       basis: { a: [0, 0, -1], b: [1, 0, 0], c: [0, -1, 0], o: [v, 0, 0] },
@@ -170,7 +197,7 @@ export function penPlaneFrame(plane) {
   }
   if (ax === 'z') {
     return {
-      ax, v, view: 'front', n: [0, 0, 1],
+      ax, v, s: 1, view: 'front', n: [0, 0, 1],
       toWorld: (p, q) => [p, -q, v],
       fromWorld: (x, y, z) => [x, -y],
       basis: { a: [1, 0, 0], b: [0, 0, 1], c: [0, -1, 0], o: [0, 0, v] },
@@ -180,7 +207,7 @@ export function penPlaneFrame(plane) {
   }
   /** 地板與「高度 Y」：同一套，只差高度 */
   return {
-    ax, v, view: ax === 'y' ? 'top' : null, n: [0, 1, 0],
+    ax, v, s: 1, view: ax === 'y' ? 'top' : null, n: [0, 1, 0],
     toWorld: (p, q) => [p, v, q],
     fromWorld: (x, y, z) => [x, z],
     basis: { a: [1, 0, 0], b: [0, 1, 0], c: [0, 0, 1], o: [0, v, 0] },

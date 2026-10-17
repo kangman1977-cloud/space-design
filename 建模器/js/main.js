@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
-         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane }
+         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -373,6 +373,7 @@ const sel = new Selection(view, {
   },
 
   /** 「點物件的面放線」開著、點到空的地方、而這個視角又看不出位置 */
+  onPenFacePick: el => onPenFacePick(el),
   onGuideFaceMiss: ax => toast(
     '沒點到物件的面　「點物件的面放線」開著時，要點在物件上；'
     + `想點空的地方放 ${GUIDE_AXIS_LABEL[ax]}，切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
@@ -869,17 +870,51 @@ $('penSmart').onclick = () => {
  * 視角自動轉正；厚度朝看過去的那一側長；畫好不跟著參考線；編輯照現在放平）。
  * ⭐ 選項照現有的參考線長出來；選中的那條不見了（刪掉、Undo）⇒ 回到地板。
  */
-const PEN_PLANE_VIEW = { x: 'vRight', z: 'vFront', y: 'vTop' };
-const PEN_PLANE_VIEW_NAME = { x: '側視', z: '前視', y: '上視' };
+/**
+ * 🔴 **乙 第 2 輪：物件的面**（kang 2026-10-17 拍板：下拉多「點物件的面…」；從外面看、厚度往外長、
+ * 是獨立物件；底面不收；斜面不收；畫完留在「畫在」裡，寫成「物件的面：X ＝ 30（右側）」）。
+ * ⭐ 面朝 −X／−Z 的那一面要從另一側看（左視、後視）—— 那兩個視角工具列沒有按鈕，直接叫 `setView()`。
+ */
+const PEN_PLANE_VIEW = { 'x+': 'right', 'x-': 'left', 'z+': 'front', 'z-': 'back', 'y+': 'top' };
+const PEN_PLANE_VIEW_BTN = { right: 'vRight', front: 'vFront', top: 'vTop' };
+const PEN_PLANE_VIEW_NAME = { right: '側視', left: '左視', front: '前視', back: '後視', top: '上視' };
+const PEN_FACE_SIDE = { 'x+': '右側', 'x-': '左側', 'z+': '前面', 'z-': '後面', 'y+': '上面' };
+function penPlaneKey(p) { return `${p.ax}${p.s === -1 ? '-' : '+'}`; }
 
+/** 正在畫的那一片是不是立著的（前後線 X、左右線 Z、物件的側面）—— 工具列的字跟著換 */
+function penWallPlane() { return !!(sel.penPlane && sel.penPlane.ax !== 'y'); }
+
+/** 上次點的那個面（留在「畫在」下拉裡；⛔ 存檔 —— 那是操作方式，⛔ 是模型） */
+let penFaceOpt = null;
+
+function penPlaneLabel(p) {
+  if (!p) return '地板';
+  if (p.face) return `物件的面：${p.ax.toUpperCase()} ＝ ${fmtGuide(p.v)}（${PEN_FACE_SIDE[penPlaneKey(p)]}）`;
+  return `${GUIDE_AXIS_LABEL[p.ax]} ＝ ${fmtGuide(p.v)}`;
+}
 function penPlaneName(p) {
-  return p ? `「${GUIDE_AXIS_LABEL[p.ax]} ＝ ${fmtGuide(p.v)}」那一片` : '地板';
+  return p ? `「${penPlaneLabel(p)}」那一片` : '地板';
+}
+
+/**
+ * 🔴 **視角自動轉正**（kang 拍板；Fusion、Shapr3D 也這樣）。
+ * 有按鈕的（側／前／上）走那顆按鈕的同一條路（含正交）；左視、後視自己來一次同樣的事。
+ * @returns {string} 視角的名字（講話用）
+ */
+function penTurnView(p) {
+  const v = PEN_PLANE_VIEW[penPlaneKey(p)];
+  if (PEN_PLANE_VIEW_BTN[v]) { $(PEN_PLANE_VIEW_BTN[v]).onclick(); return PEN_PLANE_VIEW_NAME[v]; }
+  if (!view.isOrtho) setOrtho(true);
+  view.setView(v);
+  for (const k of ['vFront', 'vRight', 'vTop', 'vIso']) $(k).classList.remove('on');
+  return PEN_PLANE_VIEW_NAME[v];
 }
 
 function syncPenPlane() {
   const box = $('penPlane');
   const p = sel.penPlane;
-  if (p && !(doc.guides[p.ax] || []).some(g => Math.abs(g - p.v) < 5e-4)) sel.setPenPlane(null);
+  /** 選中的參考線不見了 ⇒ 回到地板（物件的面⛔ 去參考線裡找 —— 它本來就不在那裡） */
+  if (p && !p.face && !(doc.guides[p.ax] || []).some(g => Math.abs(g - p.v) < 5e-4)) sel.setPenPlane(null);
   box.innerHTML = '';
   box.appendChild(new Option('地板', ''));
   for (const ax of ['x', 'z', 'y']) {
@@ -887,10 +922,25 @@ function syncPenPlane() {
       box.appendChild(new Option(`${GUIDE_AXIS_LABEL[ax]} ＝ ${fmtGuide(v)}`, `${ax}:${v}`));
     }
   }
+  if (penFaceOpt) box.appendChild(new Option(penPlaneLabel(penFaceOpt), 'face'));
+  box.appendChild(new Option('點物件的面…', 'pick'));
   const cur = sel.penPlane;
-  box.value = cur ? `${cur.ax}:${(doc.guides[cur.ax] || []).find(g => Math.abs(g - cur.v) < 5e-4)}` : '';
+  box.value = sel.penPickFace ? 'pick'
+    : !cur ? ''
+    : cur.face ? 'face'
+    : `${cur.ax}:${(doc.guides[cur.ax] || []).find(g => Math.abs(g - cur.v) < 5e-4)}`;
   if (box.selectedIndex < 0) box.value = '';
   box.disabled = sel.penPathCount > 0;
+}
+
+/** 選好一片之後的共同收尾：轉正、講一句 */
+function penPlaneChosen() {
+  const vn = penTurnView(sel.penPlane);
+  syncPenPlane();
+  toast(`鋼筆畫在${penPlaneName(sel.penPlane)}上：視角自動轉成${vn}，`
+    + (sel.penPlane.face ? '從外面正對那個面。' : '正對那一片。')
+    + '點下去的點都落在那一片上；畫完的形狀'
+    + (sel.penPlane.face ? '貼著那個面往外長（是一個新的獨立物件）' : '立在那一片上，厚度朝你看過去的那一側長'));
 }
 
 $('penPlane').onchange = () => {
@@ -901,18 +951,50 @@ $('penPlane').onchange = () => {
     return;
   }
   const raw = $('penPlane').value;
+  sel.penPickFace = false;
+  if (raw === 'pick') {
+    sel.penPickFace = true;
+    toast('點一個物件的面：下一下點畫面是「選面」，不是放點。'
+      + '朝上、正前後、正左右的面才行（斜面、底面畫不上去）；背面、左側面看不到時先轉一下視角');
+    return;
+  }
   if (!raw) {
     sel.setPenPlane(null);
     toast('鋼筆畫在地板上（跟以前一樣，視角不動）');
     return;
   }
+  if (raw === 'face') { sel.setPenPlane(penFaceOpt); penPlaneChosen(); return; }
   const [ax, v] = [raw.split(':')[0], Number(raw.split(':')[1])];
   sel.setPenPlane({ ax, v });
-  /** 🔴 視角自動轉正（kang 拍板；Fusion、Shapr3D 也這樣）—— 走工具列那顆的同一條路（含正交） */
-  $(PEN_PLANE_VIEW[ax]).onclick();
-  toast(`鋼筆畫在${penPlaneName(sel.penPlane)}上：視角自動轉成${PEN_PLANE_VIEW_NAME[ax]}，正對那一片。`
-    + '點下去的點都落在那一片上；畫完的形狀立在那一片上，厚度朝你看過去的那一側長');
+  penPlaneChosen();
 };
+
+/**
+ * 🔴 **乙 第 2 輪：選面的那一下**（`select.js` 鋼筆放開那一段交過來的）。
+ * 跟甲（點物件的面放參考線）同一條路：`faceFrame` → `guideFromFace` —— 斜面一樣擋。
+ */
+function onPenFacePick(el) {
+  if (!el) {
+    toast('沒點到物件的面 —— 再點一次（還在「選面」）', true);
+    return;
+  }
+  const fr = faceFrame(el.obj, el.face);
+  const r = guideFromFace(fr, 0);
+  if (!r.ok) {
+    toast('這個面是斜的（物件轉過角度、或是圓弧面的一小片），畫不上去 —— 沒有選。'
+      + '　朝上、正前後、正左右的面才行（還在「選面」）', true);
+    return;
+  }
+  const s = Math.sign(fr.dir[r.ax]) || 1;
+  if (r.ax === 'y' && s < 0) {
+    toast('這是底面（朝下），這一輪畫不上去 —— 沒有選（沒有「從下面看」的視角）　還在「選面」', true);
+    return;
+  }
+  sel.penPickFace = false;
+  penFaceOpt = { ax: r.ax, v: r.v, s, face: true };
+  sel.setPenPlane(penFaceOpt);
+  penPlaneChosen();
+}
 
 function syncPenFix() {
   const L = parseFloat($('penLen').value);
@@ -1003,10 +1085,15 @@ $('penUp').onclick = () => {
   penUpFlag = !penUpFlag;
   penFlagsToObject();
   updateBar();
-  toast(penUpFlag
-    ? '往上長：開。沿著線【立成一道牆】—— 旁邊的數字是【高度】'
-    : '往上長：關。沿著線【加厚成一片板】平躺在地上 —— '
-      + '旁邊的數字是【寬度】，線在正中間、兩側各一半');
+  /** 🔴 乙 第 2 輪：畫在牆上（或物件的側面）時「上」其實是往外 */
+  toast(penWallPlane()
+    ? (penUpFlag
+        ? '往外長：開。沿著線往外伸出一片 —— 旁邊的數字是【伸出多遠】'
+        : '往外長：關。沿著線在那一片上加寬成一條帶子 —— 旁邊的數字是【寬度】，線在正中間、兩側各一半')
+    : (penUpFlag
+        ? '往上長：開。沿著線【立成一道牆】—— 旁邊的數字是【高度】'
+        : '往上長：關。沿著線【加厚成一片板】平躺在地上 —— '
+          + '旁邊的數字是【寬度】，線在正中間、兩側各一半'));
 };
 $('penPark').onclick = () => {
   if (!sel.parkPen()) toast('還沒有畫任何點', true);
@@ -1872,7 +1959,12 @@ function editPenPath(obj) {
      * 🔴 **乙：編輯時物件是攤平在地板上的 ⇒ 點要落在地板**（kang：編輯照現在放平）。
      * 「畫在」下拉是他自己選的 ⇒ 收工還原，⛔ 偷偷改掉。
      */
-    plane: sel.penPlane
+    plane: sel.penPlane,
+    /**
+     * 🔴 **乙 第 2 輪（第 1 輪沒處理的第 4 件）**：立在牆上的鋼筆攤平之後，停在側視／前視只看得到一條線 ⇒
+     * 進來先切上視，收工再轉回「正對它」的視角。⚠ 一定要在攤平（`rot` 歸 0）**之前**問。
+     */
+    wall: penWallSide(obj)
   };
   sel.setPenPlane(null);
   obj.rot.set(0, 0, 0);
@@ -1893,8 +1985,10 @@ function editPenPath(obj) {
   $('pen').classList.add('on');
   panel.refresh();
   updateBar();
+  if (penEditing.wall) $('vTop').onclick();
   const np = list.reduce((s, p) => s + Math.floor(p.a.length / 2), 0);
   toast(`編輯「${obj.name}」的路徑（${list.length} 條、${np} 個點）　`
+      + (penEditing.wall ? '（它立在牆上，攤平之後先切到上視給你改）　' : '')
       + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線、點線上＝加一個點。'
       + '⭐ 按「加一條」可以再畫一條 —— **包在裡面的那條就是洞**。'
       + '⚠ 這個物件暫時被【攤平】而且變半透明，按「完成」就轉回原本的角度');
@@ -1957,6 +2051,8 @@ function endPenEdit(save) {
   sel.penNoClose = st.barOpen;
   penUpFlag = st.barUp;
   sel.setPenPlane(st.plane);
+  /** 🔴 乙 第 2 輪：轉回正對它的視角（進來時切了上視） */
+  if (st.wall) penTurnView({ ax: st.wall[0], v: 0, s: st.wall[1] === '-' ? -1 : 1 });
   sel.takePen();
   sel.setPenMode(false);
   view.setGhost(null);
@@ -1994,7 +2090,7 @@ function togglePenMode() {
    * 🔴 乙：上次選的「畫在」是一片參考線（他自己選的，所以留著）⇒ 進來一樣自動轉正，
    * ⛔ 讓他在斜看裡對著一片牆放點（`updateBar()` 已經先確認那條線還在）。
    */
-  if (sel.penPlane) $(PEN_PLANE_VIEW[sel.penPlane.ax]).onclick();
+  if (sel.penPlane) penTurnView(sel.penPlane);
   /**
    * ⚠ **一定要把「轉視角換手勢了」講出來** —— 跟刀具同一條理由：
    * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
@@ -6711,7 +6807,9 @@ function updateBar() {
   $('penPlaneLbl').hidden = $('penPlane').hidden = !(sel.penMode && !penEditing);
   if (sel.penMode && !penEditing) syncPenPlane();
   $('penHLbl').hidden = !sel.penMode;
-  $('penHLbl').textContent = !sel.penNoClose ? '厚度' : (penUpFlag ? '高度' : '寬度');
+  $('penHLbl').textContent = !sel.penNoClose ? '厚度' : (penUpFlag ? (penWallPlane() ? '伸出' : '高度') : '寬度');
+  /** 🔴 乙 第 2 輪：畫在牆上時「往上長」其實是往外（第 1 輪沒處理的第 2 件） */
+  $('penUp').textContent = penWallPlane() ? '往外長' : '往上長';
   $('penH').hidden = !sel.penMode;
   $('penSnap').hidden = !sel.penMode;
   $('penSnap').classList.toggle('on', !!sel.penSnapAngle);

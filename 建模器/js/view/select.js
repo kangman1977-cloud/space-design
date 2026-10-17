@@ -338,6 +338,11 @@ export class Selection {
      */
     this.penPlane = null;
     this._pf = penPlaneFrame(null);
+    /**
+     * 🔴 **乙 第 2 輪：正在「選面」**（「畫在」選了「點物件的面…」）——
+     * 下一下點畫面是**選面**，⛔ 放點（`onPenFacePick`）。⚠ `setPenMode()` 會把它放掉。
+     */
+    this.penPickFace = false;
     /** 上一次 `_penSnapPoint()` 為什麼吸過去（畫粉紅線、標字用）；沒吸 ＝ null */
     this._penSnapInfo = null;
     /** 游標那一段「吸過去之後」的位置 {x, z} —— 打數字定長度時看它決定方向 */
@@ -1138,7 +1143,7 @@ export class Selection {
        * ⚠ 判準跟刀具同一條（`TAP_MOVE`／`TAP_TIME`），
        * ⛔ 不要在這裡就決定 —— 那等於逼使用者先宣告他要做哪一種。
        */
-      if (this.penMode && !this.tc.dragging && e.button === DRAW_BUTTON) {
+      if (this.penMode && !this.penPickFace && !this.tc.dragging && e.button === DRAW_BUTTON) {
         const g = this._groundAt(e.clientX, e.clientY);
         this._penDown = g
           ? { x: e.clientX, y: e.clientY, t: performance.now(), g }
@@ -1607,6 +1612,18 @@ export class Selection {
        * ⚠ **右鍵「拖」仍然是轉視角** —— 用移動距離分。
        */
       if (this.penMode) {
+        /**
+         * 🔴 **乙 第 2 輪：選面 ＝ 輕點一下點到哪個面**（跟甲的「點物件的面放線」同一支 `pickElement`）。
+         * 拖的話是轉視角，⛔ 算選面；沒點到面也交給 main 講一句（⛔ 安靜地沒反應）。
+         */
+        if (this.penPickFace && !this.penEdit) {
+          this._penDown = null;
+          if (d.button === DRAW_BUTTON && dist <= TAP_MOVE && this.hooks.onPenFacePick) {
+            const el = this.pickElement(e.clientX, e.clientY, { only: 'face', requireMarkable: false });
+            this.hooks.onPenFacePick(el && el.kind === 'face' ? el : null);
+          }
+          return;
+        }
         /**
          * 🔴 **`改點` 模式：這一支只負責結束拖曳**，
          * ⛔ 完全不碰放點／閉合／收尾那一整套。
@@ -4166,6 +4183,7 @@ export class Selection {
     this._penCursor = null;
     this._penTyped = '';
     this._penFoot = null;
+    this.penPickFace = false;
     this._penAssist(null);
     this._pen = null;
     this._penDown = null;
@@ -4964,7 +4982,14 @@ export class Selection {
    */
   setPenPlane(plane) {
     this.penPlane = plane && ['x', 'y', 'z'].includes(plane.ax) && Number.isFinite(+plane.v)
-      ? { ax: plane.ax, v: +plane.v } : null;
+      ? {
+          ax: plane.ax, v: +plane.v,
+          /** 第 2 輪：面朝 −X／−Z ⇒ −1（從另一側看、往那一側長）；高度 Y 一律 ＋1 */
+          s: plane.ax !== 'y' && plane.s === -1 ? -1 : 1,
+          /** 第 2 輪：這一片是點物件的面來的（下拉要顯示成「物件的面：…」，⛔ 去參考線裡找） */
+          face: !!plane.face
+        }
+      : null;
     this._pf = penPlaneFrame(this.penPlane);
     this._penFoot = null;          // 外框投影跟著換
     return this.penPlane;

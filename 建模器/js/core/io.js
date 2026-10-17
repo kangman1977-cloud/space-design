@@ -930,6 +930,18 @@ export function penPlaceOnPlane(obj, plane) {
   return obj;
 }
 
+/**
+ * 🔴 **乙 第 2 輪（第 1 輪沒處理的第 1、2、4 件）：這支鋼筆是不是立在牆上**（本地的「上」⛔ 是世界的上）。
+ * 右側面板的字（厚度／往外長）、編輯路徑要不要先切上視，都問這一支 —— ⛔ 各自再推一次〔坑第 31 條〕。
+ * @returns {'x+'|'x-'|'z+'|'z-'|null}  本地 +Y（厚度方向）朝世界哪一邊；`null` ＝ 朝上或朝下（地板那一類）
+ */
+export function penWallSide(obj) {
+  if (!obj || !obj.rot) return null;
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion().setFromEuler(obj.rot));
+  if (Math.abs(up.y) > 0.5) return null;
+  return Math.abs(up.x) >= Math.abs(up.z) ? (up.x > 0 ? 'x+' : 'x-') : (up.z > 0 ? 'z+' : 'z-');
+}
+
 export function explodeArray(obj) {
   if (!obj.isArray) throw new Error('這個物件不是陣列');
 

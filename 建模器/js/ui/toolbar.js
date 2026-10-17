@@ -10,7 +10,7 @@
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
   from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide } from '../core/io.js';
+import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide, penWallSide } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -313,9 +313,11 @@ export class Panel {
          * （鋼筆：厚度／高度／寬度）。⛔ 反過來的話使用者是先看到
          * 一個標籤，改了上面的開關才發現它變了。
          */
+        /** 🔴 乙 第 2 輪：鋼筆立在牆上 ⇒ 欄位名字換成「厚度／往外長」（`io.js` `penWallSide()`） */
+        const ctx = { wall: obj.src && obj.src.type === 'pen' && !!penWallSide(obj) };
         for (const t of spec.toggles || []) {
           if (t.when && !t.when(obj.src)) continue;
-          this._rowCheck(t.label, obj.src[t.key], v => {
+          this._rowCheck(t.labelOf ? t.labelOf(obj.src, ctx) : t.label, obj.src[t.key], v => {
             obj.src[t.key] = !!v;
             /**
              * 🔴🔴 **`不封口` 一開，這個物件就⛔ 不再是實體了。**
@@ -332,13 +334,13 @@ export class Panel {
         }
         for (const f of spec.fields) {
           if (f.when && !f.when(obj.src)) continue;
-          const lab = f.labelOf ? f.labelOf(obj.src) : f.label;
+          const lab = f.labelOf ? f.labelOf(obj.src, ctx) : f.label;
           this._rowNum(lab, obj.src[f.key], f, v => {
             obj.src[f.key] = f.int ? Math.round(v) : v;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + lab);
-          }, f.hintOf ? f.hintOf(obj.src) : f.hint);
+          }, f.hintOf ? f.hintOf(obj.src, ctx) : f.hint);
         }
         if (obj.src.type === 'pen') this._penRevBox(obj);
         /**
