@@ -6966,6 +6966,92 @@ export function applyElementTransform(verts, base, start, now, weights = null) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  平滑頂點：把選到的那一塊順一順（三顆的第三顆）
+// ═══════════════════════════════════════════════════════
+
+/** 一次往鄰點的平均走多少（Blender「Smooth Vertices」的預設 0.5）。⛔ 不給使用者調，理由見 `smoothVerts()` */
+export const SMOOTH_LAMBDA = 0.5;
+/** 走完再往回推多少（Taubin 1995：μ ＝ −λ ／（1 − 0.1 λ））。⭐ 這一步就是「不縮」 */
+export const SMOOTH_MU = -SMOOTH_LAMBDA / (1 - 0.1 * SMOOTH_LAMBDA);
+
+/**
+ * 🔴 **平滑頂點：選到的點各自往「有一條邊連著的那幾個點」的平均走，按一次 ＝ 順一次。**
+ * kang 2026-10-18 看 `樣板-平滑頂點.html` 拍板四題，⇒ 權威版 `規格\建模器-平滑頂點.md`。
+ *
+ * ── ① 「不縮」：走一步、再往回推一點 ────────────────────
+ * 只走那一步（Blender 的 Smooth Vertices）每按一次東西就小一圈：
+ * 球全選按 10 次體積剩約 78%，拉起來的一塊按 10 次會變成**凹洞**（比原本的球面還低）。
+ * ⇒ 同一批鄰點再走一次 μ（負的、比 λ 大一點點）把縮掉的推回來（Taubin 1995）。
+ * 　凹凸照樣變平，球的大小幾乎不變。⚠ 代價：方角會往外鼓（方塊每面切 3×3、按一次 60 → 61.3）。
+ *
+ * ── ② 開口的邊上的點⛔ 動（帽緣不動）───────────────────
+ * 帽緣是頭圍那一類「要套得進去」的尺寸；讓它跟著動，整圈會翹起 2.5 cm（樣板量的）。
+ * 判準跟 `remarkFolds()` 同一條：沒有對面、或對面沒有面的邊 ＝ 開口。
+ *
+ * ── ③ λ 固定，⛔ 不給欄位 ─────────────────────────────
+ * 「不縮」的 λ 一超過 0.5 就不穩：λ ＝ 1 按 10 次整個爆開（樣板與沙箱都量到）。
+ * 要更順就再按 —— kang 原話「按幾次由使用者決定」，每按一次可以單獨復原。
+ *
+ * ── ④ 稜角⛔ 另外保護 ───────────────────────────────
+ * 選到的就順；不想磨圓的地方不要選。程式分不出「故意做的稜角」跟「拉出來的隆起」——
+ * 樣板試過「夾角大的點不動」，拉起那塊最尖的點被鎖住，結果更尖（48° → 53.9°）。
+ *
+ * ⚠ **鄰點包含沒選到的點**（它們當參考、⛔ 不會動）—— 這樣選到的那一塊才會跟外面接得順。
+ * ⚠ 兩半步都是**同時更新**（先算完全部的新位置再一起寫）：一個一個寫的話，結果跟點的順序有關。
+ *
+ * @param {Mesh} mesh **就地修改**（跟拉點、壓平一樣只動座標，⛔ 不改拓撲、⛔ 不碰任何標記）
+ * @param {Vertex[]} verts 選到的那些點
+ * @returns {{ok:boolean, reason?:string, moved:number, rim:number, maxMove:number}}
+ *          moved ＝ 真的有動的點數；rim ＝ 因為在開口的邊上而沒動的點數；maxMove ＝ 挪最多的那一點挪了幾 cm
+ */
+export function smoothVerts(mesh, verts) {
+  const list = [...new Set((verts || []).filter(v => v && v.he))];
+  if (!mesh || !list.length) return { ok: false, reason: '沒有選到點', moved: 0, rim: 0, maxMove: 0 };
+
+  /** 誰跟誰有一條邊連著、誰在開口的邊上 —— 走一次所有的邊，O(邊數) */
+  const want = new Set(list);
+  const nb = new Map(list.map(v => [v, new Set()]));
+  const rimSet = new Set();
+  for (const he of mesh.edges()) {
+    const a = he.v, b = he.to;
+    if (a === b) continue;
+    if (nb.has(a)) nb.get(a).add(b);
+    if (nb.has(b)) nb.get(b).add(a);
+    if (!he.twin || !he.face || !he.twin.face) {
+      if (want.has(a)) rimSet.add(a);
+      if (want.has(b)) rimSet.add(b);
+    }
+  }
+  const movable = list.filter(v => !rimSet.has(v) && nb.get(v).size);
+  if (!movable.length) {
+    return { ok: false, rim: rimSet.size, moved: 0, maxMove: 0,
+      reason: rimSet.size ? '選到的都是開口那一圈邊上的點 —— 那一圈不會動（帽緣、頭圍那類尺寸要保住）'
+                          : '選到的點沒有跟任何點連著，沒有東西可以順' };
+  }
+
+  const start = movable.map(v => v.p.clone());
+  const half = f => {
+    const next = movable.map(v => {
+      const c = new THREE.Vector3();
+      for (const u of nb.get(v)) c.add(u.p);
+      c.multiplyScalar(1 / nb.get(v).size);
+      return v.p.clone().lerp(c, f);
+    });
+    movable.forEach((v, i) => v.p.copy(next[i]));
+  };
+  half(SMOOTH_LAMBDA);
+  half(SMOOTH_MU);
+
+  let moved = 0, maxMove = 0;
+  movable.forEach((v, i) => {
+    const d = v.p.distanceTo(start[i]);
+    if (d > 1e-9) moved++;
+    if (d > maxMove) maxMove = d;
+  });
+  return { ok: true, moved, rim: rimSet.size, maxMove };
+}
+
+// ═══════════════════════════════════════════════════════
 //  平面性檢查
 // ═══════════════════════════════════════════════════════
 

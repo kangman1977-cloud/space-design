@@ -36,7 +36,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, subdivideEdges, subdivideFaces, separateAlongEdges, solidCut,
+         splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut,
          sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
@@ -820,6 +820,7 @@ $('inset').onclick = () => insetSelected();
 $('subdivFace').onclick = () => subdivideFacesSelected();
 /** ⚠ 「細分」的說明裡寫著幾等分 —— 欄位一改就要重寫，⛔ 不然說明停在舊的數字（線上先驗抓到的）*/
 $('subdivFaceN').oninput = () => updateBar();
+$('smoothVerts').onclick = () => smoothVertsSelected();
 $('bevel').onclick = () => bevelSelected();
 $('delFace').onclick = () => deleteFacesSelected();
 $('fillHoles').onclick = () => fillHolesOnSelected();
@@ -5095,6 +5096,47 @@ function subdivideFacesSelected() {
 }
 
 /**
+ * 🔴 **平滑頂點：選到的那一塊順一次**（2026-10-18，kang 看樣板拍板）。
+ * → 權威版 `規格\建模器-平滑頂點.md`；核心 `smoothVerts()`（不縮、開口的邊不動都在那裡）。
+ *
+ * 點、邊、面都可以選 —— 動的是「選到的東西上的點」（面 ＝ 整個共面區域，跟拉面同一個 `elementVerts()`）。
+ * ⚠ 只動座標，⛔ 換網格 ⇒ 選取原封不動留著，**再按一次就是再順一次**（kang：「按幾次由使用者決定」）。
+ * ⚠ 沒有東西可以順就⛔ 記一步（跟壓平「本來就平」同一條：悶著記一步什麼都沒改的 Undo，會以為壞掉了）。
+ */
+function smoothVertsSelected() {
+  const els = sel.editSels;
+  if (!sel.editMode || !els.length) {
+    toast('先在編輯模式下選點、邊或面（要順的那一塊），再按「平滑頂點」', true);
+    return;
+  }
+  const obj = els[0].obj;
+  const mesh = obj.mesh();
+  const r = smoothVerts(mesh, elementVerts(mesh, els));
+  if (!r.ok) { toast(r.reason, true); return; }
+  if (!r.moved) { toast('選到的這一塊已經是平順的，沒有東西要順'); return; }
+
+  const rf = refreshAfterEdit(mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit('平滑頂點');
+
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  /** 講挪了多少 —— 那是他驗得出來的數字（跟壓平講「原本偏離多少」同一條） */
+  /**
+   * ⚠ ⛔ 寫「整體大小不變」—— 曲面是，方角⛔ 是（會往外鼓，拍板時講過的代價）。
+   * ⚠ 這一句會在每按一次都跳，⛔ 寫太長：本機先驗時第一版整句被切掉一截。
+   */
+  const bits = [`已順一次：動了 ${r.moved} 個點，最多挪 ${r.maxMove.toFixed(2)} cm`];
+  if (r.rim) bits.push(`開口那一圈 ${r.rim} 個點沒動`);
+  if (rf.nonPlanar) bits.push(`${rf.nonPlanar} 個面不再是平的（展開會變近似）`);
+  bits.push('不夠順再按一次');
+  toast(bits.join('　'));
+}
+
+/**
  * 導角：把選到的邊換成一片斜切面，角落自己會長出來。
  *
  * ── ⚠ 刻意**不**自動選中新長出來的面 ──────────────────
@@ -6477,6 +6519,10 @@ function updateBar() {
       + '旁邊的面只在共用的邊上多點。切完用「影響半徑」拉一個點，就拉得出圓順的鼓包'
     : (sel.editMode ? '先選面（把過濾器切到「面」比較好點），一個或好幾個都可以'
                     : '先按「拉點線面」進入編輯模式，再選面');
+
+  /** 平滑頂點：**點、邊、面選到什麼都給按**（動的是它們上面的點，2026-10-18）*/
+  const anySome = sel.editMode && sel.editCount > 0;
+  $('smoothVerts').hidden = !anySome;
 
   /**
    * 刪除面：**選到面就給按**（一個或多個都行）。

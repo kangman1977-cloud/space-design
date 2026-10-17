@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>平滑頂點比較樣板</title>
+<!--
+  樣板：平滑頂點（三顆的第三顆）—— 2026-10-18 kang 從真待辦挑的。
+  推導與排序在 編輯功能設計方向.md 第 5、5.1 節（安全帽那一類形狀卡在第 4 步「順一順」）。
+  同一個模型、同一個視角，左邊順之前、右邊順之後，讓 kang 看結果挑四件事：
+    ① 按一下會不會變小：一般（Blender「Smooth Vertices」那一套，每個點往相連的點的平均走一半）
+                        ／不縮（同一步走完再往回推一點，Taubin 1995 那一套，往回推的係數 −λ/(1−0.1λ)）
+    ② 開口的邊（帽緣）：不動／只沿著邊順／跟一般點一樣
+    ③ 按幾次、一次走多少：次數 1／3／10，強度 0.25／0.5／1
+    ④ 選到的範圍裡有稜角：一起順／留著（夾角超過 30° 的邊上的點不動 —— 30° 是樣板自己定的，⛔ 不是規格）
+  模型尺寸照 js/build/prim.js 的 PRIM_DEFAULTS：球 r30 32×16、方塊 60×45×40（每面細分 3 等分）。
+  「拉起一塊」＝ 影響半徑 15、往外拉 8 cm（衰減跟建模器同一條 smoothstep）。
+  ⚠ 這是樣板，程式是另外寫的；這裡的算法只是為了看結果，⛔ 不是規格。
+  three.js 跟建模器同一版（r185），從 CDN 載入（這個檔直接點開也看得到）。
+-->
+<style>
+  :root { --bg: #1b1e23; --panel: #23272e; --ink: #e6e9ee; --muted: #9aa3ae; --line: #343a44; --accent: #4a90e2; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; width: 100%; }
+  .grp { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .grp > span { color: var(--muted); }
+  button { background: #2c323b; color: var(--ink); border: 1px solid #3c444f; border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .note { color: var(--muted); font-size: 12px; width: 100%; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin: 0 3px 0 8px; }
+  #wrap { position: relative; flex: 1; min-height: 300px; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .tag { position: absolute; padding: 5px 10px; border-radius: 6px; background: rgba(20,23,28,.85);
+    border: 1px solid var(--line); font-size: 13px; pointer-events: none; max-width: 46%; }
+  .tag b { display: block; font-size: 14px; }
+  .tag .warn { color: #ffcf7a; }
+  .tag .good { color: #9be39b; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: #ffb4a8; }
+  @media (max-width: 700px) { .tag { font-size: 11px; max-width: 90%; } .tag b { font-size: 12px; } header { padding: 6px 10px; } }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>平滑頂點：左邊順之前、右邊順之後 —— 四件事切換著看</h1>
+  <div class="grp" data-k="model"><span>模型</span>
+    <button data-v="bump" class="on">球・拉起一塊</button>
+    <button data-v="noise">球・表面凹凸不平</button>
+    <button data-v="half">半球殼（帽緣是開口）</button>
+    <button data-v="box">方塊（每面切 3×3）</button>
+  </div>
+  <div class="grp" data-k="kind"><span>① 按一下會不會變小</span>
+    <button data-v="plain" class="on">一般（會慢慢縮）</button>
+    <button data-v="taubin">不縮（走一步再往回推一點）</button>
+  </div>
+  <div class="grp" data-k="rim"><span>② 開口的邊（帽緣）</span>
+    <button data-v="fixed" class="on">不動</button>
+    <button data-v="along">只沿著邊順</button>
+    <button data-v="free">跟一般點一樣</button>
+  </div>
+  <div class="grp" data-k="rep"><span>③ 按幾次</span>
+    <button data-v="1" class="on">1</button>
+    <button data-v="3">3</button>
+    <button data-v="10">10</button>
+  </div>
+  <div class="grp" data-k="f"><span>一次走多少</span>
+    <button data-v="0.25">0.25</button>
+    <button data-v="0.5" class="on">0.5（Blender 預設）</button>
+    <button data-v="1">1</button>
+  </div>
+  <div class="grp" data-k="lock"><span>④ 選到的範圍裡有稜角</span>
+    <button data-v="0" class="on">一起順</button>
+    <button data-v="1">留著（夾角超過 30° 的點不動）</button>
+  </div>
+  <div class="note">
+    <span class="legend"><i style="background:#f0b45a"></i>選到的那一塊<i style="background:#6fa8dc"></i>沒選到（⛔ 一定不動）<i style="background:#e05a5a"></i>④ 選「留著」時被固定的點<i style="background:#cfd6df;opacity:.5"></i>原本的球面（淡淡的那一層）</span>
+    　｜　拖曳轉視角、滾輪縮放（左右一起動）
+  </div>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="tag" id="tagA"></div>
+  <div class="tag" id="tagB"></div>
+  <div id="err"></div>
+</div>
+<script type="module">
+let THREE, OrbitControls;
+try {
+  THREE = await import('three');
+  ({ OrbitControls } = await import('three/addons/controls/OrbitControls.js'));
+} catch (e) {
+  const el = document.getElementById('err');
+  el.style.display = 'grid';
+  el.textContent = '載入 three.js 失敗（要連得上網路）：' + e.message;
+  throw e;
+}
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// ── 選項 ─────────────────────────────────────────────
+const opt = { model: 'bump', kind: 'plain', rim: 'fixed', rep: '1', f: '0.5', lock: '0' };
+document.querySelectorAll('.grp[data-k]').forEach(g => {
+  g.querySelectorAll('button').forEach(b => b.onclick = () => {
+    g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    opt[g.dataset.k] = b.dataset.v;
+    rebuild(g.dataset.k === 'model');
+  });
+});
+
+// ── 模型（尺寸照 PRIM_DEFAULTS）─────────────────────────
+function newell(verts, f) {
+  const n = V(0, 0, 0);
+  for (let i = 0; i < f.length; i++) {
+    const a = verts[f[i]], b = verts[f[(i + 1) % f.length]];
+    n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return n;
+}
+function centroid(verts, f) { const c = V(0, 0, 0); f.forEach(i => c.add(verts[i])); return c.divideScalar(f.length); }
+function orient(m) {
+  m.faces = m.faces.map(f => newell(m.verts, f).dot(centroid(m.verts, f)) < 0 ? f.slice().reverse() : f);
+  return m;
+}
+/** 球 r30、32×16。rows ＝ 只留到第幾圈（半球 ＝ 8，赤道那一圈就是帽緣） */
+function sphere(rows = 16) {
+  const r = 30, S = 32, R = 16, verts = [V(0, r, 0)];
+  const last = Math.min(rows, R - 1);
+  for (let j = 1; j <= last; j++) for (let i = 0; i < S; i++) {
+    const ph = Math.PI * j / R, th = 2 * Math.PI * i / S;
+    verts.push(V(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th)));
+  }
+  const id = (j, i) => 1 + (j - 1) * S + ((i % S) + S) % S;
+  const faces = [];
+  for (let i = 0; i < S; i++) faces.push([0, id(1, i + 1), id(1, i)]);
+  for (let j = 1; j < last; j++) for (let i = 0; i < S; i++) faces.push([id(j, i), id(j, i + 1), id(j + 1, i + 1), id(j + 1, i)]);
+  if (rows >= R) {
+    verts.push(V(0, -r, 0)); const bot = verts.length - 1;
+    for (let i = 0; i < S; i++) faces.push([bot, id(R - 1, i), id(R - 1, i + 1)]);
+  }
+  return orient({ verts, faces });
+}
+/** 方塊 60×45×40，每面切 3×3（＝ 建模器「細分」3 等分之後的樣子） */
+function box() {
+  const W = 30, H = 22.5, D = 20, n = 3, verts = [], key = new Map();
+  const at = (i, j, k) => {
+    const s = i + ',' + j + ',' + k;
+    if (!key.has(s)) { key.set(s, verts.length); verts.push(V(-W + 2 * W * i / n, -H + 2 * H * j / n, -D + 2 * D * k / n)); }
+    return key.get(s);
+  };
+  const faces = [];
+  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) for (const e of [0, n]) {
+    faces.push([at(e, a, b), at(e, a + 1, b), at(e, a + 1, b + 1), at(e, a, b + 1)]);
+    faces.push([at(a, e, b), at(a + 1, e, b), at(a + 1, e, b + 1), at(a, e, b + 1)]);
+    faces.push([at(a, b, e), at(a + 1, b, e), at(a + 1, b + 1, e), at(a, b + 1, e)]);
+  }
+  return orient({ verts, faces });
+}
+const smoothstep = t => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const MODELS = {
+  bump: () => {
+    const m = sphere();
+    const top = m.verts.reduce((b, v, i) => (v.x > m.verts[b].x ? i : b), 0);
+    const o = m.verts[top].clone(), dir = o.clone().normalize();
+    m.verts.forEach(v => { const d = v.distanceTo(o); if (d < 15) v.addScaledVector(dir, 8 * smoothstep(1 - d / 15)); });
+    const c = m.verts[top].clone();
+    const sel = new Set(m.verts.map((v, i) => (v.distanceTo(c) < 26 ? i : -1)).filter(i => i >= 0));
+    return { m, sel, cam: [15, 20, 140], ghost: true, top };   // 從正前方看，隆起在右邊的輪廓上
+  },
+  noise: () => {
+    const m = sphere(); seed = 7;
+    m.verts.forEach(v => { const r = v.length(); v.multiplyScalar((r + (rnd() * 2 - 1)) / r); });
+    return { m, sel: new Set(m.verts.keys()), cam: [80, 55, 85], ghost: true };
+  },
+  half: () => { const m = sphere(8); return { m, sel: new Set(m.verts.keys()), cam: [75, 45, 80], ghost: true }; },
+  box: () => { const m = box(); return { m, sel: new Set(m.verts.keys()), cam: [95, 85, 140], ghost: false }; }
+};
+
+// ── 平滑（樣板用的算法，⛔ 不是規格）────────────────────────
+function topo(m) {
+  const nb = m.verts.map(() => new Set()), cnt = new Map();
+  const k = (a, b) => Math.min(a, b) + '-' + Math.max(a, b);
+  m.faces.forEach(f => f.forEach((a, i) => {
+    const b = f[(i + 1) % f.length]; nb[a].add(b); nb[b].add(a);
+    cnt.set(k(a, b), (cnt.get(k(a, b)) || 0) + 1);
+  }));
+  const bnd = new Set();
+  for (const [e, c] of cnt) if (c === 1) e.split('-').forEach(s => bnd.add(+s));
+  return { nb, bnd };
+}
+/** 夾角超過 30° 的邊上的點（④「留著」用；30° 是樣板自己定的） */
+function sharpVerts(m) {
+  const ns = m.faces.map(f => newell(m.verts, f).normalize());
+  const edge = new Map();
+  m.faces.forEach((f, fi) => f.forEach((a, i) => {
+    const b = f[(i + 1) % f.length], k = Math.min(a, b) + '-' + Math.max(a, b);
+    (edge.get(k) || edge.set(k, []).get(k)).push(fi);
+  }));
+  const out = new Set();
+  for (const [k, fs] of edge) if (fs.length === 2 && ns[fs[0]].angleTo(ns[fs[1]]) > Math.PI / 6) k.split('-').forEach(s => out.add(+s));
+  return out;
+}
+function step(P, movable, T, f, rim) {
+  const next = P.map(p => p.clone());
+  movable.forEach(i => {
+    let ns = [...T.nb[i]];
+    if (T.bnd.has(i)) {
+      if (rim === 'fixed') return;
+      if (rim === 'along') ns = ns.filter(j => T.bnd.has(j));
+    }
+    if (!ns.length) return;
+    const c = V(0, 0, 0); ns.forEach(j => c.add(P[j])); c.divideScalar(ns.length);
+    next[i].lerp(c, f);
+  });
+  return next;
+}
+function smooth(m, sel, o) {
+  const T = topo(m), f = +o.f;
+  const locked = o.lock === '1' ? sharpVerts(m) : new Set();
+  const movable = [...sel].filter(i => !locked.has(i));
+  let P = m.verts.map(v => v.clone());
+  for (let r = 0; r < +o.rep; r++) {
+    P = step(P, movable, T, f, o.rim);
+    if (o.kind === 'taubin') P = step(P, movable, T, -f / (1 - 0.1 * f), o.rim);
+  }
+  return { m: { verts: P, faces: m.faces }, locked: [...locked].filter(i => sel.has(i)) };
+}
+
+// ── 量測 ──────────────────────────────────────────────
+function volume(m) {
+  let s = 0;
+  m.faces.forEach(f => { const a = m.verts[f[0]];
+    for (let i = 1; i < f.length - 1; i++) s += a.dot(m.verts[f[i]].clone().cross(m.verts[f[i + 1]])); });
+  return s / 6;
+}
+function bbox(m) { const b = new THREE.Box3().setFromPoints(m.verts); return b.getSize(V(0, 0, 0)); }
+/** 選到的範圍裡最大的折角（相鄰兩面法向的夾角） */
+function maxBend(m, sel) {
+  const ns = m.faces.map(f => newell(m.verts, f).normalize());
+  const edge = new Map(); let best = 0;
+  m.faces.forEach((f, fi) => f.forEach((a, i) => {
+    const b = f[(i + 1) % f.length]; if (!sel.has(a) || !sel.has(b)) return;
+    const k = Math.min(a, b) + '-' + Math.max(a, b);
+    if (edge.has(k)) best = Math.max(best, ns[edge.get(k)].angleTo(ns[fi]) * 180 / Math.PI); else edge.set(k, fi);
+  }));
+  return best;
+}
+const f1 = x => x.toFixed(1), f2 = x => x.toFixed(2);
+function radiusStats(m, idx) {
+  const rs = idx.map(i => m.verts[i].length()), mean = rs.reduce((a, b) => a + b, 0) / rs.length;
+  return { mean, sd: Math.sqrt(rs.reduce((a, r) => a + (r - mean) ** 2, 0) / rs.length) };
+}
+
+// ── 畫 ───────────────────────────────────────────────
+const cv = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setScissorTest(true);
+const camera = new THREE.PerspectiveCamera(35, 1, 1, 2000);
+const controls = new OrbitControls(camera, cv);
+controls.enableDamping = true;
+const COL = { sel: 0xf0b45a, base: 0x6fa8dc };
+function makeScene() {
+  const s = new THREE.Scene(); s.background = new THREE.Color(0x1b1e23);
+  s.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+  const d = new THREE.DirectionalLight(0xffffff, 1.6); d.position.set(60, 100, 80); s.add(d);
+  const g = new THREE.GridHelper(200, 20, 0x2b3038, 0x2b3038); g.position.y = -40; s.add(g);
+  const holder = new THREE.Group(); s.add(holder);
+  return { s, holder };
+}
+const A = makeScene(), B = makeScene();
+function draw(target, m, sel, locked, ghost) {
+  target.holder.clear();
+  const pos = [], col = [], c = new THREE.Color();
+  m.faces.forEach(f => {
+    c.setHex(f.every(i => sel.has(i)) ? COL.sel : COL.base);
+    const a = m.verts[f[0]];
+    for (let i = 1; i < f.length - 1; i++) [a, m.verts[f[i]], m.verts[f[i + 1]]].forEach(p => { pos.push(p.x, p.y, p.z); col.push(c.r, c.g, c.b); });
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  target.holder.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: .8,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })));
+  const seen = new Set(), lp = [];
+  m.faces.forEach(f => f.forEach((a, i) => { const b = f[(i + 1) % f.length], k = Math.min(a, b) + '-' + Math.max(a, b);
+    if (seen.has(k)) return; seen.add(k); const p = m.verts[a], q = m.verts[b]; lp.push(p.x, p.y, p.z, q.x, q.y, q.z); }));
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+  target.holder.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x11151a })));
+  if (locked.length) {
+    const pg = new THREE.BufferGeometry().setFromPoints(locked.map(i => m.verts[i]));
+    target.holder.add(new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe05a5a, size: 7, sizeAttenuation: false })));
+  }
+  if (ghost) {
+    target.holder.add(new THREE.Mesh(new THREE.SphereGeometry(30, 64, 32),
+      new THREE.MeshBasicMaterial({ color: 0xcfd6df, transparent: true, opacity: .13, depthWrite: false })));
+  }
+}
+
+function rebuild(resetCam) {
+  const mod = MODELS[opt.model]();
+  const src = mod.m, sel = mod.sel;
+  const { m: res, locked } = smooth(src, sel, opt);
+  draw(A, src, sel, locked, mod.ghost);
+  draw(B, res, sel, locked, mod.ghost);
+
+  const T = topo(src);
+  const head = `選到 ${sel.size} 個點` + (locked.length ? `（其中 ${locked.length} 個被固定）` : '');
+  let a = '', b = '';
+  if (opt.model === 'bump') {
+    const h0 = src.verts[mod.top].length(), h1 = res.verts[mod.top].length();
+    a = `隆起最高點離球心 ${f1(h0)} cm（球面 30）<br>選到範圍裡最大折角 ${f1(maxBend(src, sel))}°`;
+    b = `隆起最高點離球心 ${f1(h0)} → <b style="display:inline">${f1(h1)}</b> cm` +
+      (h1 < 30 ? `<br><span class="warn">⚠ 比原本的球面還低 ${f1(30 - h1)} cm —— 隆起被順成一個凹洞</span>` : '') +
+      `<br>選到範圍裡最大折角 ${f1(maxBend(res, sel))}°<br>體積 ${f2(100 * volume(res) / volume(src))}%`;
+  } else if (opt.model === 'noise') {
+    const all = [...src.verts.keys()], s0 = radiusStats(src, all), s1 = radiusStats(res, all);
+    a = `凹凸（離平均差多少）${f2(s0.sd)} cm<br>平均半徑 ${f2(s0.mean)} cm（球 30）`;
+    b = `凹凸 ${f2(s0.sd)} → <b style="display:inline">${f2(s1.sd)}</b> cm` +
+      (s1.sd > s0.sd ? '　<span class="warn">⚠ 比順之前還糟</span>' : '') +
+      `<br>平均半徑 ${f2(s0.mean)} → ${f2(s1.mean)} cm` + (s1.mean < 29.5 ? '　<span class="warn">⚠ 球變小了</span>' : '') +
+      `<br>體積 ${f2(100 * volume(res) / volume(src))}%`;
+  } else if (opt.model === 'half') {
+    const rim = [...T.bnd];
+    const rr = m => rim.map(i => Math.hypot(m.verts[i].x, m.verts[i].z)), ry = m => rim.map(i => m.verts[i].y);
+    const rng = xs => `${f2(Math.min(...xs))}${Math.max(...xs) - Math.min(...xs) > 0.005 ? '～' + f2(Math.max(...xs)) : ''}`;
+    const top0 = src.verts[0].y, top1 = res.verts[0].y;
+    a = `帽緣 ${rim.length} 個點：半徑 ${rng(rr(src))} cm、高度 ${rng(ry(src))}<br>帽頂高 ${f2(top0)} cm`;
+    const r1 = rr(res), y1 = ry(res);
+    b = `帽緣半徑 <b style="display:inline">${rng(r1)}</b> cm（原 30）、高度 ${rng(y1)}` +
+      (Math.max(...y1) > 0.005 ? '<br><span class="warn">⚠ 帽緣整圈翹起來了</span>' : '') +
+      (Math.min(...r1) < 29.995 ? '<br><span class="warn">⚠ 帽緣變小 —— 頭圍尺寸跟著變</span>'
+        : Math.max(...r1) > 30.005 ? '<br><span class="warn">⚠ 帽緣變大 —— 頭圍尺寸跟著變</span>'
+        : '<br><span class="good">帽緣尺寸沒變</span>') +
+      `<br>帽頂高 ${f2(top0)} → ${f2(top1)} cm`;
+  } else {
+    const s0 = bbox(src), s1 = bbox(res);
+    a = `外框 ${f1(s0.x)} × ${f1(s0.y)} × ${f1(s0.z)} cm<br>體積 ${Math.round(volume(src)).toLocaleString()} cm³`;
+    const same = s1.distanceTo(s0) < 0.05;
+    b = `外框 <b style="display:inline">${f1(s1.x)} × ${f1(s1.y)} × ${f1(s1.z)}</b> cm` +
+      (same ? '' : (s1.x > s0.x ? '<br><span class="warn">⚠ 往外鼓，比原本的方塊還大</span>' : '<br><span class="warn">⚠ 縮小了</span>')) +
+      `<br>體積 ${f2(100 * volume(res) / volume(src))}%`;
+  }
+  if (res.verts.some(v => v.length() > 200)) {
+    b = '<span class="warn">⚠ 整個爆開了 —— 「不縮」一次走超過 0.5 就不穩，按越多次越大</span>';
+  }
+  document.getElementById('tagA').innerHTML = `<b>順之前</b>${head}<br>${a}`;
+  document.getElementById('tagB').innerHTML = `<b>順之後（按 ${opt.rep} 次、一次走 ${opt.f}）</b>${b}<br>沒選到的點：一個都沒動`;
+  if (resetCam) { camera.position.set(...mod.cam); controls.target.set(0, opt.model === 'half' ? 10 : 0, 0); controls.update(); }
+}
+
+function layout() {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  renderer.setSize(w, h, false);
+  const side = w >= h;
+  const rects = side ? [[0, 0, w / 2, h], [w / 2, 0, w / 2, h]] : [[0, h / 2, w, h / 2], [0, 0, w, h / 2]];
+  camera.aspect = rects[0][2] / rects[0][3]; camera.updateProjectionMatrix();
+  const tA = document.getElementById('tagA').style, tB = document.getElementById('tagB').style;
+  tA.left = '8px'; tA.top = '8px';
+  if (side) { tB.left = (w / 2 + 8) + 'px'; tB.top = '8px'; } else { tB.left = '8px'; tB.top = (h / 2 + 8) + 'px'; }
+  return rects;
+}
+let rects = layout();
+addEventListener('resize', () => { rects = layout(); });
+rebuild(true);
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  [A, B].forEach((sc, k) => {
+    const [x, y, w, h] = rects[k];
+    renderer.setViewport(x, y, w, h); renderer.setScissor(x, y, w, h);
+    renderer.render(sc.s, camera);
+  });
+})();
+</script>
+</body>
+</html>

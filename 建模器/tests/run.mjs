@@ -17177,6 +17177,103 @@ section('牆上的旋轉成形（2026-10-17）');
   }
 }
 
+section('平滑頂點：按一次順一次、不縮、帽緣不動（2026-10-18）');
+
+/**
+ * kang 2026-10-18 看 `樣板-平滑頂點.html` 拍板：① 不縮 ② 開口的邊不動 ③ 按一次順一次、⛔ 欄位
+ * ④ 稜角⛔ 另外保護。→ `規格\建模器-平滑頂點.md`
+ *
+ * ⚠ 量的是「轉成網格」之後的樣子（`baked()`：球是 448 個四邊形 ＋ 64 個三角形），
+ * 跟樣板同一種格子 —— 拿沒併過的三角形量，鄰點多了對角線，數字會差一點。
+ */
+{
+  const sph = () => baked('sphere', { r: 30, segW: 32, segH: 16 });
+  const meanR = m => m.verts.reduce((a, v) => a + v.p.length(), 0) / m.verts.length;
+  const sdR = m => { const r0 = meanR(m); return Math.sqrt(m.verts.reduce((a, v) => a + (v.p.length() - r0) ** 2, 0) / m.verts.length); };
+  const marks = m => [...m.edges()].map(he => `${he.role}|${!!he.smooth}|${!!he.hard}`).join(',');
+
+  eq('前置：轉成網格的球 482 點、512 面', `${sph().verts.length}/${sph().faces.length}`, '482/512');
+  near('★ 往回推的係數 ＝ −0.5 ／ 0.95', edit.SMOOTH_MU, -0.5 / 0.95, 1e-12);
+
+  {
+    const m = sph(), v0 = m.volume(), mk = marks(m), nV = m.verts.length, nF = m.faces.length;
+    const r = edit.smoothVerts(m, m.verts);
+    ok('整顆球全選按一次：成功', r.ok, r.reason || '');
+    ok(`★★★ ① 不縮：平均半徑還是 30（${meanR(m).toFixed(4)}）`, Math.abs(meanR(m) - 30) < 0.05);
+    ok(`★★ 體積差不到 0.5%（${(100 * m.volume() / v0).toFixed(3)}%）`, Math.abs(m.volume() / v0 - 1) < 0.005);
+    ok('★★ 點數、面數、每一條邊的標記都沒變（只動座標）',
+      m.verts.length === nV && m.faces.length === nF && marks(m) === mk && m.validate().ok && m.isClosed());
+    ok('　　封閉的球沒有開口：rim ＝ 0', r.rim === 0);
+  }
+  {
+    /** 對照組：只走那一步（Blender 那一套）按 10 次 ⇒ 會縮。守的是「不縮」那一步真的有作用 */
+    const m = sph();
+    for (let i = 0; i < 10; i++) edit.smoothVerts(m, m.verts);
+    ok(`★★ 不縮版按 10 次，平均半徑還在 30 ± 0.3（${meanR(m).toFixed(3)}）—— 一般版是 27 多`, Math.abs(meanR(m) - 30) < 0.3);
+  }
+  {
+    /** 表面凹凸 ±1 cm（固定亂數），按一次凹凸要變小 */
+    const m = sph();
+    let s = 7; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    for (const v of m.verts) { const r0 = v.p.length(); v.p.multiplyScalar((r0 + (rnd() * 2 - 1)) / r0); }
+    const sd0 = sdR(m);
+    edit.smoothVerts(m, m.verts);
+    const sd1 = sdR(m);
+    edit.smoothVerts(m, m.verts); edit.smoothVerts(m, m.verts);
+    const sd3 = sdR(m);
+    ok(`★★★ 凹凸 ${sd0.toFixed(2)} → 按 1 次 ${sd1.toFixed(2)} → 按 3 次 ${sd3.toFixed(2)}（一次比一次平）`, sd1 < sd0 * 0.85 && sd3 < sd1);
+  }
+  {
+    /** 拉起一塊（影響半徑 15、往外拉 8 cm），只選隆起附近：沒選的點一個都不准動 */
+    const m = sph();
+    const top = m.verts.reduce((a, b) => (b.p.x > a.p.x ? b : a));
+    const pr = edit.proportionalVerts(m, [top], 15), dir = top.p.clone().normalize();
+    pr.verts.forEach((v, i) => v.p.addScaledVector(dir, 8 * pr.weights[i]));
+    const c = top.p.clone(), h0 = top.p.length();
+    const pick = m.verts.filter(v => v.p.distanceTo(c) < 26);
+    const rest = m.verts.filter(v => !pick.includes(v)), before = rest.map(v => v.p.clone());
+    const r = edit.smoothVerts(m, pick);
+    ok('★★★ 沒選到的點一個都沒動（連 0.000001 都沒有）', rest.every((v, i) => v.p.equals(before[i])));
+    ok(`★★ 隆起變矮但還在：${h0.toFixed(2)} → ${top.p.length().toFixed(2)}（一般版按 10 次會比球面 30 還低）`,
+      top.p.length() < h0 && top.p.length() > 34);
+    ok(`　　回報：動了 ${r.moved} 個點、最多挪 ${r.maxMove.toFixed(2)} cm`, r.moved === pick.length && r.maxMove > 0.1);
+    for (let i = 0; i < 9; i++) edit.smoothVerts(m, pick);
+    ok(`★★ 按到 10 次隆起也⛔ 變成凹洞（${top.p.length().toFixed(2)} > 30）`, top.p.length() > 30);
+  }
+  {
+    /** ② 半球殼：帽緣那一圈⛔ 動 */
+    const m0 = sph();
+    const down = m0.faces.filter(f => m0.faceVerts(f).some(v => v.p.y < -1e-6));
+    const d = edit.deleteFaces(m0, down.map(face => ({ kind: 'face', face })));
+    ok('（前置）刪掉下半球', d.ok, d.reason || '');
+    const m = d.mesh; m.computeNormals();
+    const rim = m.verts.filter(v => Math.abs(v.p.y) < 1e-6), rimBefore = rim.map(v => v.p.clone());
+    eq('　　帽緣 32 個點', rim.length, 32);
+    const r = edit.smoothVerts(m, m.verts.filter(v => v.he));
+    ok('★★★ ② 帽緣 32 個點全部沒動（頭圍不變）', rim.every((v, i) => v.p.equals(rimBefore[i])));
+    eq('★★ 回報 rim ＝ 32', r.rim, 32);
+    const r2 = edit.smoothVerts(m, rim);
+    ok(`★★ 只選帽緣 ⇒ 不成功、講原因：「${r2.reason}」`, !r2.ok && /開口/.test(r2.reason) && !/⛔/.test(r2.reason));
+  }
+  {
+    /** ④ 方塊細分 3×3 全選：方角往外鼓（這是拍板時知道的代價，守「沒有偷偷保護稜角」） */
+    const b = baked('box', { w: 60, h: 45, d: 40 });
+    const sdv = edit.subdivideFaces(b, b.faces.slice(), 3);
+    const m = sdv.mesh; m.computeNormals();
+    edit.smoothVerts(m, m.verts);
+    const bb = m.bounds(), w = bb.max.x - bb.min.x;
+    ok(`★★ ④ 方塊每面 3×3 全選按一次：外框寬 60 → ${w.toFixed(2)}（往外鼓，跟樣板的 61.3 對得上）`, Math.abs(w - 61.3) < 0.1);
+  }
+  {
+    /** 沒有東西可以順 ⇒ 不成功或 moved ＝ 0（呼叫端就不記這一步） */
+    const r0 = edit.smoothVerts(sph(), []);
+    ok('★ 沒選點 ⇒ 不成功、講原因', !r0.ok && r0.reason);
+    const m = sph(), lone = m.verts[0];
+    const r = edit.smoothVerts(m, [lone, lone]);
+    eq('　　同一個點給兩次只算一次', r.moved, 1);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
