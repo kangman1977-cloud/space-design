@@ -274,6 +274,11 @@ export class Selection {
      * （gizmo 收起來），控制列那一組才出得來。⚠ 第 1 階段⛔ 還不能點線。
      */
     this.guideMode = false;
+    /**
+     * 🔴 **點物件的面放線**（甲，kang 2026-10-17：示意裡預設開著，他說「效果可以，包含開關」）。
+     * 開著：參考線模式裡點到物件的面 ＝ 從那個面放一條；關掉 ＝ 跟以前一模一樣。
+     */
+    this.guideFace = true;
     /** 下一個錨點強制是尖角（工具列那顆「尖角」切換鈕） */
     this.penCorner = false;
     /**
@@ -1505,6 +1510,24 @@ export class Selection {
         }
         /** 拖了一段但**⛔ 一開始沒抓到線** → 什麼都不做（那多半是想轉視角） */
         if (dist > TAP_MOVE) return;
+
+        /**
+         * 🔴 **甲：點物件的面放線**（kang 2026-10-17）。開關開著、而且⛔ 沒點到現成的線時：
+         * 點到物件的面 → 交給 main 從那個面放；⭐ 每個視角都行（透視圖也行，靠的是射線點面）。
+         * 點到空的地方 → 照原本的方式放；⚠ 但這個視角看不出位置時，講「沒點到物件的面」
+         * ⛔ 不講「這個視角看不出…」（他想點的是面，那句話會讓他以為要切視角）。
+         */
+        if (this.guideFace && !(g && g.hit !== null)) {
+          const el = this.pickElement(e.clientX, e.clientY, { only: 'face', requireMarkable: false });
+          if (el && el.kind === 'face') {
+            if (this.hooks.onGuideFace) this.hooks.onGuideFace(el);
+            return;
+          }
+          if (this._axisValueAt(e.clientX, e.clientY, ax) === null) {
+            if (this.hooks.onGuideFaceMiss) this.hooks.onGuideFaceMiss(ax);
+            return;
+          }
+        }
 
         const v = this._axisValueAt(e.clientX, e.clientY, ax);
         if (v === null) {

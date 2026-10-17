@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
-         revFollowGuide, revDetachGuide, revCheckBinds }
+         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -342,6 +342,40 @@ const sel = new Selection(view, {
   onGuideNoAxis: ax => toast(
     `這個視角看不出 ${GUIDE_AXIS_LABEL[ax]} 的位置　`
     + `⭐ 切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
+
+  /**
+   * 🔴 **甲：從物件的面放一條**（kang 2026-10-17 拍板）。
+   * ⭐ 方向照那個面朝哪裡自動選，**而且工具列的方向跟著換過去** ——
+   * 放好之後下拉就選著這一條，接著照原本的方式打數字挪、或按「刪這條」。
+   * ⚠ 放好就是一條普通的參考線，⛔ 不跟著物件（kang：放好不跟）。
+   */
+  onGuideFace: el => {
+    const off = Number($('guideOff').value);
+    const r = guideFromFace(faceFrame(el.obj, el.face), Number.isFinite(off) ? off : 0);
+    if (!r.ok) {
+      toast('這個面是斜的（物件轉過角度、或是圓弧面的一小片），參考線只能放在正的面上 —— 沒有放。'
+        + '　朝正上、正下、正前後、正左右的面才放得上去', true);
+      return;
+    }
+    if (!doc.addGuide(r.ax, r.v)) {
+      toast(`那個位置已經有一條 ${GUIDE_AXIS_LABEL[r.ax]} ＝ ${fmtGuide(r.v)} cm 了，沒有再放`, true);
+      return;
+    }
+    guideAxis = r.ax;
+    guidePicked = r.v;
+    view.syncGuides(doc);
+    syncGuideRow();
+    commit('從面放參考線');
+    const o = Number.isFinite(off) ? off : 0;
+    toast(`從「${el.obj.name}」的面放了 ${GUIDE_AXIS_LABEL[r.ax]} ＝ ${fmtGuide(r.v)} cm`
+      + (o ? `（離面 ${fmtGuide(o)} cm）` : '（貼在面上）')
+      + '　放好之後不跟著物件；要挪就打數字或拖它');
+  },
+
+  /** 「點物件的面放線」開著、點到空的地方、而這個視角又看不出位置 */
+  onGuideFaceMiss: ax => toast(
+    '沒點到物件的面　「點物件的面放線」開著時，要點在物件上；'
+    + `想點空的地方放 ${GUIDE_AXIS_LABEL[ax]}，切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
   /** 🔴 原點指定：點到什麼就把原點搬到那裡（2026-09-01） */
@@ -5800,10 +5834,12 @@ function syncGuideRow() {
     b.hidden = !on;
     b.classList.toggle('on', b.dataset.ga === guideAxis);
   }
-  for (const id of ['guideList', 'guideNum', 'guideAdd', 'guideDel', 'guideClear']) {
+  for (const id of ['guideFace', 'guideOff', 'guideList', 'guideNum', 'guideAdd', 'guideDel', 'guideClear']) {
     $(id).hidden = !on;
   }
   if (!on) return;
+  $('guideFace').classList.toggle('on', sel.guideFace);
+  $('guideOff').disabled = !sel.guideFace;
 
   const list = doc.guides[guideAxis] || [];
   /**
@@ -5847,10 +5883,12 @@ $('guide').onclick = function () {
    * 他下一次畫新東西會莫名其妙變成一道牆，**而他從頭到尾沒按過那顆**。
    * ⭐ 所以這裡只**講**，⛔ 不動。
    */
+  /** ⭐ 甲：開關開著就多講一句「點物件的面也能放」—— ⛔ 不然他只知道要切視角 */
+  const faceTip = sel.guideFace ? '點物件的面就在那裡放一條（每個視角都行）；' : '';
   toast(on
     ? (view.viewLocked
-        ? '參考線：切到「前／側／上」，在畫面上點一下就生一條；點到線可以拖著走'
-        : '參考線：在畫面上點之前，先切到「前／側／上」　'
+        ? `參考線：${faceTip}切到「前／側／上」，在畫面上點一下就生一條；點到線可以拖著走`
+        : `參考線：${faceTip}點空的地方之前，先切到「前／側／上」　`
           + '⭐ 要拖線建議先按「視角」那一組的「鎖定」，不然畫面會跟著轉')
     : '參考線關閉');
 };
@@ -5977,6 +6015,15 @@ $('guideClear').onclick = () => {
    * 很容易以為只清了這一個。⭐ 而且要提醒 Undo 救得回來。
    */
   toast(`三個方向的參考線全部清掉了（共 ${n} 條）。按「復原」可以救回來`);
+};
+
+/** 🔴 甲：點物件的面放線 —— 開／關（⛔ 不存進檔案，那是操作方式不是模型） */
+$('guideFace').onclick = () => {
+  sel.guideFace = !sel.guideFace;
+  syncGuideRow();
+  toast(sel.guideFace
+    ? '點物件的面放線：開。點物件的一個面就在那裡放一條（方向照面自動選），每個視角都能點'
+    : '點物件的面放線：關。點下去照原本的方式放線（要切到「前／側／上」）');
 };
 
 $('showGuides').onclick = function () {

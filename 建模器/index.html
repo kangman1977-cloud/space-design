@@ -1193,6 +1193,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button class="gaBtn on" data-ga="x" title="前後線 X：一條前後方向的線，位置用 X（左右）表示 —— 打 50 就是在 X 50 的地方。在【上視】與【前視】看得到（都是直的）">前後線 X</button>
       <button class="gaBtn" data-ga="y" title="高度 Y：一層水平的高度，位置用 Y（離地板多高）表示。在【前視】與【側視】看得到（都是橫的）；上視看不到">高度 Y</button>
       <button class="gaBtn" data-ga="z" title="左右線 Z：一條左右方向的線，位置用 Z（前後）表示。在【上視】（橫的）與【側視】（直的）看得到">左右線 Z</button>
+      <!--
+        🔴 甲：從物件的面放（kang 2026-10-17 拍板：斜面不收、跳說明；離面幾 cm 預設 0；放好不跟著物件；每個視角都能點；要有開關）
+        開著：點到物件的面 ⇒ 照那個面朝的方向放一條（方向自動換過去），點到空的地方照原本的方式。
+      -->
+      <button id="guideFace" class="on" title="開著：點物件的一個面，就在那個面上（或離面幾 cm）放一條參考線，方向照那個面自動選 —— 每個視角都能點，透視圖也行。點到空的地方照原本的方式放。斜的面放不上去（參考線只能是正的）。關掉 ＝ 跟以前一樣">點物件的面放線</button>
+      <span class="lbl">離面</span>
+      <input id="guideOff" type="number" step="any" value="0"
+             title="點物件的面放線時，線離那個面幾 cm。正的 ＝ 往物件外面，負的 ＝ 往裡面，0 ＝ 剛好貼在面上">
+      <span class="unit">cm</span>
       <select id="guideList" title="這個方向現有的參考線。選一條，位置欄就會填上它的值 —— 接著可以改數字挪它，或按「刪這條」">
         <option value="">（新的）</option>
       </select>

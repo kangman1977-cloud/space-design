@@ -1001,6 +1001,34 @@ export function normalizeGuides(raw) {
   return out;
 }
 
+/**
+ * 🔴 **從物件的一個面放一條參考線**（甲，kang 2026-10-17 拍板四件事＋開關）。
+ *
+ * ⭐ 業界同一招：SketchUp 捲尺點邊拉平行線、Fusion「偏移平面」點面打距離、
+ * Rhino「工作平面」貼面再推 —— 點一個現成的面，線就平行貼上去，距離可以打數字
+ * 【已查證 · 規格\建模器-參考線.md「從物件的面放」那一節列的官方網址】。
+ *
+ * ⚠ **我們的參考線只能是正的**（`Doc.guides` 只存「哪個方向＋一個數字」）——
+ * ⇒ 面朝的方向要剛好是 ±X／±Y／±Z 其中一個，⛔ 斜的面（含物件轉過角度、圓弧面的一小片）放不上去，
+ * 回 `{ ok:false }` 讓呼叫端講一句說明（kang：斜面先不收、跳說明）。
+ *
+ * @param {{point:{x,y,z}, dir:{x,y,z}}} frame  `faceFrame()` 的結果（世界座標，dir 已正規化）
+ * @param {number} [off=0]  離面幾 cm；⭐ 正的 ＝ 往物件外面（面朝的那一側），負的 ＝ 往裡面
+ * @returns {{ok:true, ax:string, v:number} | {ok:false}}
+ */
+export function guideFromFace(frame, off = 0) {
+  if (!frame || !frame.point || !frame.dir) return { ok: false };
+  const d = frame.dir;
+  const n = [d.x, d.y, d.z];
+  const i = n.findIndex(c => Math.abs(Math.abs(c) - 1) < 1e-6);
+  if (i < 0) return { ok: false };
+  const o = Number.isFinite(off) ? off : 0;
+  const ax = GUIDE_AXES[i];
+  /** ⭐ 對到 0.001 cm ＝ 跟 `normalizeGuides()` 存進去的值一樣，下拉選得回它 */
+  const v = Math.round((frame.point[ax] + Math.sign(n[i]) * o) * 1000) / 1000;
+  return { ok: true, ax, v: Object.is(v, -0) ? 0 : v };
+}
+
 export class Doc {
   constructor() {
     this.head = { name: '未命名', date: today(), note: '' };

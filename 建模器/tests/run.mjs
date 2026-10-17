@@ -16846,6 +16846,70 @@ if (!csgOK) {
     good(sF.inside) && good(sF.outside) && Math.abs(zb.max.z - zb.min.z - 45) < 1e-6 && Math.abs(sF.inside.volume() + sF.outside.volume() - 108000) < 1e-3, pF.reason);
 }
 
+section('參考線 甲：從物件的面放（2026-10-17）');
+{
+  const M = await import('../js/core/mate.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  /** 方塊 100×60×80 放在 (50,30,40)：x 0..100、y 0..60、z 0..80（⚠ 方塊網格以中心為原點 ⇒ pos.y 給高度的一半，底面才貼地） */
+  const box = new io.ModelObject({
+    name: '方塊', src: { type: 'box', w: 100, h: 60, d: 80 }, kind: 'solid', pos: V3(50, 30, 40)
+  });
+  const fr = p => M.faceFrame(box, seam.nearestFace(box.mesh(), p).face);
+  const bb = box.mesh().bounds();
+  const top = fr(V3(0, bb.max.y, 0)), right = fr(V3(bb.max.x, (bb.min.y + bb.max.y) / 2, 0));
+  const front = fr(V3(0, (bb.min.y + bb.max.y) / 2, bb.max.z)), back = fr(V3(0, (bb.min.y + bb.max.y) / 2, bb.min.z));
+  const worldTop = top.point.y, worldRight = right.point.x, worldFront = front.point.z, worldBack = back.point.z;
+
+  let r = io.guideFromFace(top, 0);
+  ok('★★ 上面、離面 0 ⇒ 高度 Y ＝ 上面的高度', r.ok && r.ax === 'y' && Math.abs(r.v - worldTop) < 1e-9, JSON.stringify(r));
+  r = io.guideFromFace(top, 10);
+  ok('★★ 上面、離面 10 ⇒ 往外（往上）10', r.ok && r.ax === 'y' && Math.abs(r.v - (worldTop + 10)) < 1e-9, JSON.stringify(r));
+  r = io.guideFromFace(right, 10);
+  ok('★★ 右側面 ⇒ 前後線 X，往外（+X）10', r.ok && r.ax === 'x' && Math.abs(r.v - (worldRight + 10)) < 1e-9, JSON.stringify(r));
+  r = io.guideFromFace(front, 5);
+  ok('★★ 前面 ⇒ 左右線 Z，往外（+Z）5', r.ok && r.ax === 'z' && Math.abs(r.v - (worldFront + 5)) < 1e-9, JSON.stringify(r));
+  r = io.guideFromFace(back, 5);
+  ok('★★ 後面 ⇒ 左右線 Z，往外是 −Z（離面 5 ⇒ 小 5）', r.ok && r.ax === 'z' && Math.abs(r.v - (worldBack - 5)) < 1e-9, JSON.stringify(r));
+  r = io.guideFromFace(top, -10);
+  ok('★ 離面打負的 ⇒ 往裡面', r.ok && Math.abs(r.v - (worldTop - 10)) < 1e-9, JSON.stringify(r));
+  ok('★ 方塊實際位置對（上面 60、右面 100、前面 80、後面 0）',
+    Math.abs(worldTop - 60) < 1e-9 && Math.abs(worldRight - 100) < 1e-9 && Math.abs(worldFront - 80) < 1e-9 && Math.abs(worldBack) < 1e-9,
+    [worldTop, worldRight, worldFront, worldBack].join());
+
+  /** 轉 30° ⇒ 側面斜了、放不上去；上面還是平的、照樣放 */
+  const rot = new io.ModelObject({
+    name: '轉過的', src: { type: 'box', w: 70, h: 50, d: 50 }, kind: 'solid', pos: V3(0, 25, 0),
+    rot: new THREE.Euler(0, Math.PI / 6, 0)
+  });
+  const rb = rot.mesh().bounds();
+  const rfr = p => M.faceFrame(rot, seam.nearestFace(rot.mesh(), p).face);
+  r = io.guideFromFace(rfr(V3(rb.max.x, 0, 0)), 0);
+  ok('★★★ 轉 30° 的方塊側面 ⇒ 放不上去（斜的）', !r.ok, JSON.stringify(r));
+  r = io.guideFromFace(rfr(V3(0, rb.max.y, 0)), 0);
+  ok('★★ 轉 30° 的方塊上面還是平的 ⇒ 高度 Y ＝ 50', r.ok && r.ax === 'y' && Math.abs(r.v - 50) < 1e-9, JSON.stringify(r));
+
+  /** 轉 90° ⇒ 側面還是正的，只是換了方向 */
+  const r90 = new io.ModelObject({
+    name: '轉 90', src: { type: 'box', w: 70, h: 50, d: 40 }, kind: 'solid', pos: V3(0, 0, 0),
+    rot: new THREE.Euler(0, Math.PI / 2, 0)
+  });
+  const f90 = M.faceFrame(r90, seam.nearestFace(r90.mesh(), V3(35, 0, 0)).face);   // 本地 +X 面，轉 90° 後朝 −Z
+  r = io.guideFromFace(f90, 0);
+  ok('★★ 轉 90° 的方塊側面 ⇒ 照樣放得上去（換成左右線 Z ＝ −35）', r.ok && r.ax === 'z' && Math.abs(r.v + 35) < 1e-9, JSON.stringify(r));
+
+  /** 斜的方向、壞的輸入 */
+  ok('★ 面朝斜的方向 ⇒ 放不上去', !io.guideFromFace({ point: V3(0, 0, 0), dir: V3(1, 1, 0).normalize() }, 0).ok);
+  ok('★ 沒有 frame ⇒ 放不上去、不會當掉', !io.guideFromFace(null, 0).ok);
+  r = io.guideFromFace({ point: V3(0, 12.3456789, 0), dir: V3(0, 1, 0) }, NaN);
+  ok('★ 離面不是數字 ⇒ 當 0；位置對到 0.001', r.ok && r.v === 12.346, JSON.stringify(r));
+
+  /** 放進 Doc：同一個位置點兩次只放一條 */
+  const doc = new io.Doc();
+  const g1 = io.guideFromFace(top, 0);
+  ok('★★ 放進參考線：第一次放得進去、第二次同位置不重複', doc.addGuide(g1.ax, g1.v) && !doc.addGuide(g1.ax, g1.v) && doc.guides.y.length === 1);
+  ok('★ 存進去的值跟算出來的一樣（下拉選得回它）', doc.guides.y[0] === g1.v, String(doc.guides.y[0]));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
