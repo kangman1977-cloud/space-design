@@ -83,7 +83,40 @@ const BIND_TOL = 1e-3;
 
 /** 這支鋼筆的中心線跟哪一種參考線（'x' ＝ 前後線 X、'z' ＝ 左右線 Z） */
 export function revGuideAx(src) {
-  return REV_GUIDE_AX[src && src.rev && src.rev.dir === 'x' ? 'x' : 'z'];
+  const rv = src && src.rev;
+  /**
+   * 🔴 **牆上的碗**（`rev.wall`）：直的（dir 'z'，本地 Z ＝ 世界的上下）沿著牆左右挪 ⇒
+   * 跟「穿過這片牆」的那一種參考線（X 牆跟左右線 Z、Z 牆跟前後線 X）；橫的（dir 'x'）上下挪 ⇒ 跟高度 Y。
+   */
+  if (rv && rv.wall) return rv.dir === 'x' ? 'y' : (String(rv.wall)[0] === 'x' ? 'z' : 'x');
+  return REV_GUIDE_AX[rv && rv.dir === 'x' ? 'x' : 'z'];
+}
+
+/**
+ * 🔴 **牆上的碗：中心線在世界裡的位置**（量在 `revGuideAx()` 那個方向）——
+ * 右側面板「中心線在 ＝」那一格顯示真的位置（kang 2026-10-17：顯示真的位置）。
+ * ⭐ 牆上的碗⛔ 抬 ⇒ 中心線就在本地 (at, 0, 0)（直的）或 (0, 0, at)（橫的），⛔ 用算碗。
+ * @returns {{ax:string, v:number}}
+ */
+export function revWallAxisAt(obj) {
+  const rv = obj.src.rev;
+  const ax = revGuideAx(obj.src);
+  const p = new THREE.Vector3(rv.dir === 'x' ? 0 : +rv.at, 0, rv.dir === 'x' ? +rv.at : 0).applyMatrix4(obj.matrix());
+  return { ax, v: Math.abs(p[ax]) < 1e-9 ? 0 : p[ax] };
+}
+
+/**
+ * 反過來：要讓牆上的碗的中心線落在 `v`（世界、`revGuideAx()` 那個方向），`rev.at` 該是多少。
+ * @returns {{ok:boolean, at?:number, reason?:string}}
+ */
+export function revWallAtFor(obj, v) {
+  const rv = obj.src.rev;
+  const ax = revGuideAx(obj.src);
+  const o = new THREE.Vector3(0, 0, 0).applyMatrix4(obj.matrix());
+  const e = new THREE.Vector3(rv.dir === 'x' ? 0 : 1, 0, rv.dir === 'x' ? 1 : 0).transformDirection(obj.matrix());
+  const k = e[ax] * (rv.dir === 'x' ? obj.scale.z : obj.scale.x);
+  if (!(Math.abs(k) > 1e-9)) return { ok: false, reason: '這個物件的中心線挪不過去（縮放是 0？或物件轉過角度）' };
+  return { ok: true, at: (v - o[ax]) / k };
 }
 
 /** 中心線在世界裡的兩個點（算不出碗 ⇒ `ok:false`） */

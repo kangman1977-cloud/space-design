@@ -17086,6 +17086,97 @@ section('鋼筆 乙 第 1 輪：畫在參考線那一片（2026-10-17）');
   }
 }
 
+section('牆上的旋轉成形（2026-10-17）');
+{
+  const { penRevAutoAt: autoAt } = await import('../js/build/prim.js');
+  /** 牆上那一片的兩個數字：p ＝ 畫面右（X 牆 ＝ −Z）、q ＝ 畫面下（−Y）。碗的半邊：中心底 → 往外 20 → 往上到 25 高、半徑 25 */
+  const prof = [[0, 0], [20, -3], [25, -25]];
+  const a = prof.flat();
+  const mkWall = (plane, dir = 'z') => {
+    const o = new io.ModelObject({ name: '牆上的碗', kind: io.KIND.SHEET,
+      src: { type: 'pen', h: 3, open: true, up: false,
+             paths: [{ closed: true, a: a.slice(), hi: a.map(() => 0), ho: a.map(() => 0) }] } });
+    io.recenterOrigin(o);
+    io.penPlaceOnPlane(o, plane);
+    /** 跟 toolbar「旋轉成形」打勾那一刻同一套：照現在的角度記下 wall、⛔ 立起來 */
+    const wall = io.penWallSide(o);
+    o.src.rev = { dir, seg: 32, stand: !wall, ...(wall ? { wall } : {}), at: autoAt(o.src, dir) };
+    o.kind = io.penKind(o.src) ?? o.kind;
+    o.invalidate();
+    io.recenterOrigin(o);
+    return o;
+  };
+  const wbb = o => {
+    const b = o.mesh().bounds(), M = o.matrix(), out = new THREE.Box3();
+    for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+      out.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(M));
+    }
+    return [out.min.x, out.max.x, out.min.y, out.max.y, out.min.z, out.max.z].map(v => Math.round(v * 1000) / 1000);
+  };
+  {
+    const o = mkWall({ ax: 'x', v: 60 });
+    eq('★★ 畫在 X 牆上、開旋轉成形 ⇒ 記下 wall ＝ x+、⛔ 立起來', JSON.stringify([o.src.rev.wall, o.src.rev.stand]), JSON.stringify(['x+', false]));
+    const b = wbb(o);
+    ok('★★★ 直的：碗正立、⛔ 抬 —— 牆（X 60）穿過正中間：X 35..85、高 0..25、Z −25..25',
+      Math.abs(b[0] - 35) < 0.01 && Math.abs(b[1] - 85) < 0.01 && Math.abs(b[2]) < 1e-6 && Math.abs(b[3] - 25) < 1e-6
+      && Math.abs(b[4] + 25) < 0.01 && Math.abs(b[5] - 25) < 0.01, JSON.stringify(b));
+    const w = io.revAxisWorld(o);
+    ok('★★★ 中心線就在畫的那條線上：X ＝ 60、Z ＝ 0、直的（上下）',
+      w.ok && Math.abs(w.p1.x - 60) < 1e-9 && Math.abs(w.p1.z) < 1e-9 && Math.abs(w.p2.x - 60) < 1e-9 && Math.abs(w.p2.z) < 1e-9
+      && Math.abs(w.p1.y - w.p2.y) > 1, JSON.stringify([w.p1, w.p2]));
+    eq('★★ 直的跟「左右線 Z」', io.revGuideAx(o.src), 'z');
+    const cur = io.revWallAxisAt(o);
+    ok('★★ 右側面板顯示真的位置：中心線在 Z ＝ 0', cur.ax === 'z' && Math.abs(cur.v) < 1e-9, JSON.stringify(cur));
+    const r = io.revWallAtFor(o, 10);
+    o.src.rev.at = r.at; o.invalidate();
+    const w2 = io.revAxisWorld(o);
+    ok('★★ 打 10 ⇒ 中心線挪到 Z ＝ 10（輪廓外側；還在牆上 X ＝ 60）', r.ok && w2.ok && Math.abs(w2.p1.z - 10) < 1e-9 && Math.abs(w2.p1.x - 60) < 1e-9, JSON.stringify(w2.p1));
+    /** 綁參考線（第 2 輪那一套）：直的綁左右線 Z */
+    const rb = io.revAtForGuide(o, 5);
+    ok('★★ 綁「左右線 Z ＝ 5」算得出位置', rb.ok, rb.reason);
+    o.src.rev.at = rb.at; o.src.rev.bind = 5; o.invalidate();
+    const doc = new io.Doc(); doc.add(o); doc.addGuide('z', 5);
+    ok('★★ 綁上之後中心線在 Z ＝ 5', io.revOnGuide(o, 5));
+    const moved = io.revFollowGuide(doc, 'z', 5, 15);
+    doc.removeGuide('z', 5); doc.addGuide('z', 15);
+    o.invalidate();
+    ok('★★★ 拖參考線 5 → 15 ⇒ 碗跟著（中心線 Z ＝ 15）', moved.length === 1 && io.revOnGuide(o, 15), JSON.stringify(io.revAxisWorld(o).p1));
+    ok('★★ 規則 2：沒搬 ⇒ 不脫鉤', io.revCheckBinds(doc).length === 0 && o.src.rev.bind === 15);
+    /** 置中原點之後中心線不動（右側面板每改一格都會置中一次） */
+    const before = io.revAxisWorld(o).p1.clone();
+    io.recenterOrigin(o);
+    const after = io.revAxisWorld(o).p1;
+    ok('★★ 置中原點 ⇒ 中心線在世界裡一點都沒動', before.distanceTo(after) < 1e-9, JSON.stringify([before, after]));
+    /** 存讀檔往返：wall 留著 */
+    const back = io.Doc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+    ok('★★ 存讀檔：rev.wall 還在、碗還在牆上', back.objects[0].src.rev.wall === 'x+' && Math.abs(io.revAxisWorld(back.objects[0]).p1.x - 60) < 1e-4);
+  }
+  {
+    const o = mkWall({ ax: 'x', v: 60 }, 'x');
+    eq('★★ 橫的跟「高度 Y」', io.revGuideAx(o.src), 'y');
+    const w = io.revAxisWorld(o);
+    ok('★★★ 橫的：中心線是牆上一條水平線（X ＝ 60、高度固定、沿著 Z）',
+      w.ok && Math.abs(w.p1.x - 60) < 1e-9 && Math.abs(w.p2.x - 60) < 1e-9 && Math.abs(w.p1.y - w.p2.y) < 1e-9 && Math.abs(w.p1.z - w.p2.z) > 1,
+      JSON.stringify([w.p1, w.p2]));
+    const cur = io.revWallAxisAt(o);
+    ok('★★ 自動放在線的最上面 ⇒ 中心線在高度 Y ＝ 25', cur.ax === 'y' && Math.abs(cur.v - 25) < 1e-9, JSON.stringify(cur));
+    const rb = io.revAtForGuide(o, 30);
+    ok('★★ 綁「高度 Y ＝ 30」算得出位置', rb.ok, rb.reason);
+  }
+  {
+    /** 背面（Z 牆、朝 −Z）：直的跟「前後線 X」 */
+    const o = mkWall({ ax: 'z', v: -20, s: -1 });
+    eq('★★ 背面的碗：wall ＝ z−、直的跟「前後線 X」', JSON.stringify([o.src.rev.wall, io.revGuideAx(o.src)]), JSON.stringify(['z-', 'x']));
+    const b = wbb(o);
+    ok('★★★ 背面那片牆（Z −20）穿過碗的正中間：Z −45..5、高 0..25', Math.abs(b[4] + 45) < 0.01 && Math.abs(b[5] - 5) < 0.01 && Math.abs(b[2]) < 1e-6 && Math.abs(b[3] - 25) < 1e-6, JSON.stringify(b));
+  }
+  {
+    /** 地板上的碗照舊（⛔ wall、照抬、照立起來） */
+    const o = mkWall(null);
+    ok('★★ 地板上的碗：⛔ 記 wall、立起來照預設（開）', o.src.rev.wall === undefined && o.src.rev.stand === true);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

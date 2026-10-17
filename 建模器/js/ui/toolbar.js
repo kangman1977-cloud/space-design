@@ -10,7 +10,8 @@
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
   from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide, penWallSide } from '../core/io.js';
+import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide, penWallSide,
+         revGuideAx, revWallAxisAt, revWallAtFor } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
 import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
@@ -623,8 +624,16 @@ export class Panel {
 
     this.form.appendChild(head('旋轉成形'));
     this._rowCheck('旋轉成形', !!rev, on => {
-      if (on) src.rev = { ...PEN_REV_DEFAULTS, at: penRevAutoAt(src, PEN_REV_DEFAULTS.dir) };
-      else delete src.rev;
+      /**
+       * 🔴 **牆上的旋轉成形**（kang 2026-10-17：開旋轉成形那一刻記下）——
+       * 物件這時候立在牆上（`penWallSide`）⇒ `rev.wall` 記下是哪一面；之後⛔ 跟著角度改
+       *（改了碗會突然跳一下）。牆上的碗⛔ 立起來（`stand` 關）。
+       */
+      const wall = on ? penWallSide(obj) : null;
+      if (on) {
+        src.rev = { ...PEN_REV_DEFAULTS, ...(wall ? { stand: false, wall } : {}),
+                    at: penRevAutoAt(src, PEN_REV_DEFAULTS.dir) };
+      } else delete src.rev;
       after(on ? '開旋轉成形' : '關旋轉成形', on
         ? '旋轉成形：開。這條線繞著中心線轉一圈 —— 中心線先自動放在線的最左邊，'
           + '底下可以改。線還留著：按「編輯路徑」改線，碗會跟著變'
@@ -637,8 +646,13 @@ export class Panel {
     const isZ = rev.dir !== 'x';
     const s = isZ ? obj.scale.x : obj.scale.z;
     const p0 = isZ ? obj.pos.x : obj.pos.z;
+    /** 🔴 牆上的碗（kang 2026-10-17：方向叫直的／橫的、位置顯示真的位置、⛔ 顯示「立起來」） */
+    const wall = !!rev.wall;
 
-    this._rowSelect('中心線方向', isZ ? 'z' : 'x', [
+    this._rowSelect('中心線方向', isZ ? 'z' : 'x', wall ? [
+      ['z', '直的（碗正立）'],
+      ['x', '橫的（沿著牆的水平線）']
+    ] : [
       ['z', '前後（Z 方向）'],
       ['x', '左右（X 方向）']
     ], v => {
@@ -646,18 +660,23 @@ export class Panel {
       /** ⚠ 換方向之後舊的位置⛔ 沒有意義（量的是另一個座標）⇒ 重新自動放一次；跟著的參考線也換了一種 ⇒ 脫鉤 */
       rev.at = penRevAutoAt(src, rev.dir);
       rev.bind = null;
-      after('改中心線方向', '中心線換成' + (rev.dir === 'x' ? '左右' : '前後')
-        + '方向，位置重新自動放在線的最' + (rev.dir === 'x' ? '上面' : '左邊'));
-    }, '中心線一定躺在地板上（線畫在地板上，中心線要跟它在同一個平面才轉得出東西）。'
-      + '從上面看：前後 ＝ 畫面上下那個方向，左右 ＝ 畫面左右那個方向');
+      after('改中心線方向', wall
+        ? '中心線換成' + (rev.dir === 'x' ? '橫的' : '直的') + '，位置重新自動放在線的最' + (rev.dir === 'x' ? '上面' : '左邊')
+        : '中心線換成' + (rev.dir === 'x' ? '左右' : '前後')
+          + '方向，位置重新自動放在線的最' + (rev.dir === 'x' ? '上面' : '左邊'));
+    }, wall
+      ? '這條線畫在牆上：中心線也在那片牆上。直的 ＝ 一條上下的線（碗正立）；橫的 ＝ 一條沿著牆的水平線（碗橫躺）。'
+        + '碗一半在牆前、一半在牆後'
+      : '中心線一定躺在地板上（線畫在地板上，中心線要跟它在同一個平面才轉得出東西）。'
+        + '從上面看：前後 ＝ 畫面上下那個方向，左右 ＝ 畫面左右那個方向');
 
     /**
      * 🔴 **第 2 輪：中心線跟著一條參考線**（kang 2026-10-16 同意「右側面板多一個下拉」）。
      * ⭐ 跟參考線工具列那個下拉同一種用法：列出同方向的參考線，選一條就綁上、選「不跟」就脫鉤。
      * ⚠ 前後方向的中心線只能跟「前後線 X」、左右方向只能跟「左右線 Z」—— 另一種跟它垂直，綁不上。
      */
-    const gax = isZ ? 'x' : 'z';
-    const gname = isZ ? '前後線 X' : '左右線 Z';
+    const gax = revGuideAx(src);
+    const gname = { x: '前後線 X', y: '高度 Y', z: '左右線 Z' }[gax];
     const glist = (this.app.doc && this.app.doc.guides && this.app.doc.guides[gax]) || [];
     const bound = rev.bind !== null && rev.bind !== undefined;
     this._rowSelect('中心線跟著', bound ? String(rev.bind) : '', [
@@ -681,7 +700,21 @@ export class Panel {
         + '沿著中心線推、往上抬都還跟著；搬離那條線、或刪掉那條線就自動脫鉤（形狀不變）'
       : `還沒有 ${gname} 參考線 —— 先按左側「參考線」加一條，這裡就選得到`);
 
-    this._rowNum(isZ ? '中心線在 X ＝' : '中心線在 Z ＝', +rev.at * s + p0, { step: 0.5 }, v => {
+    if (wall) {
+      /**
+       * 🔴 牆上的碗：顯示**真的位置**（世界座標，跟參考線同一套），⛔ 照地板那條算法（那條⛔ 管角度 —— 不準）。
+       */
+      const cur = revWallAxisAt(obj);
+      this._rowNum(`中心線在 ${gax === 'y' ? '高度 Y' : gax.toUpperCase()} ＝`, round(cur.v), { step: 0.5 }, v => {
+        const r = revWallAtFor(obj, v);
+        if (!r.ok) { this.app.toast(r.reason, true); return; }
+        const was = bound;
+        rev.bind = null;
+        rev.at = r.at;
+        after('改中心線位置', was ? '自己打了中心線的位置：已經不跟參考線了' : undefined);
+      }, '單位 cm，世界座標（跟參考線同一套）—— 打一條參考線的數字，中心線就在那條線上。'
+        + '⚠ 自己打數字就不跟參考線了（要跟就用上面那個下拉）');
+    } else this._rowNum(isZ ? '中心線在 X ＝' : '中心線在 Z ＝', +rev.at * s + p0, { step: 0.5 }, v => {
       if (Math.abs(s) < 1e-9) {
         this.app.toast('這個物件有一軸的縮放是 0，中心線放不上去 —— 先把縮放改回來', true);
         return;
@@ -699,7 +732,9 @@ export class Panel {
       after('改轉幾格');
     }, '轉一圈分成幾格。跟圓柱的「分段」同一個意思：越多越圓、面越多');
 
-    this._rowCheck('立起來', !!rev.stand, on => {
+    if (wall) {
+      this.form.appendChild(note('畫在牆上：中心線就在你畫的那條線上，碗一半在牆前、一半在牆後（不抬、不立起來）'));
+    } else this._rowCheck('立起來', !!rev.stand, on => {
       rev.stand = !!on;
       after(on ? '立起來' : '躺下', on
         ? '立起來：開。中心線轉成直立、底貼地板 —— '

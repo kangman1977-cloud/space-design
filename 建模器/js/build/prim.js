@@ -1019,7 +1019,13 @@ export function penRevolve(p) {
   const seg = int(rv.seg, PEN_REV_DEFAULTS.seg);
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-  if (!rv.stand) {
+  /**
+   * 🔴 **牆上的旋轉成形**（kang 2026-10-17 拍板「甲」：中心線就在畫的那條線上、⛔ 抬）——
+   * `rv.wall`（'x+'…）是**打開旋轉成形那一刻**照物件角度記下的（`toolbar.js`；prim ⛔ 認識物件）。
+   * ⭐ 牆上的線本地 XZ 就是那片牆 ⇒ 照「躺著」那條路原地轉、⛔ 往本地 +Y 抬
+   * （本地 +Y 在牆上是朝牆外 —— 抬了就整個被推出牆，2026-10-17 線上實測抓到的）；「立起來」⛔ 管。
+   */
+  if (!rv.stand || rv.wall) {
     const r = dir === 'z'
       ? revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'z', a: at, b: 0, seg })
       : revolve(pts.map(q => V(q.x, 0, q.y)), { axis: 'x', a: 0, b: at, seg });
@@ -1031,8 +1037,8 @@ export function penRevolve(p) {
      * ⚠ 走 `transformed()` 搬，平滑邊與折線的標記才會一起帶過去。
      */
     if (r.ok) {
-      const lo = r.mesh.bounds().min.y;
-      r.mesh = r.mesh.transformed(new THREE.Matrix4().makeTranslation(0, -lo, 0));
+      const lo = rv.wall ? 0 : r.mesh.bounds().min.y;
+      if (lo) r.mesh = r.mesh.transformed(new THREE.Matrix4().makeTranslation(0, -lo, 0));
       /** 中心線也跟著往上搬了 `−lo`（第 2 輪「綁參考線」要知道它在哪） */
       r.axisLocal = dir === 'z'
         ? { p: [at, -lo, 0], d: [0, 0, 1] }
