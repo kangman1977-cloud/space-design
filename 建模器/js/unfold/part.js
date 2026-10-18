@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
+import { Mesh } from '../core/mesh.js';
 
 /**
  * 展開一個物件。
@@ -27,7 +28,7 @@ export function unfoldObject(obj, opt = {}) {
    * ⚠ 〔2026-08-23 不再傳 `k`〕展開流程已經沒有任何東西會用到 K 因子。
    * 詳見 `js/unfold/rules.js` 檔頭與 `PROJECT_LOG.md`「尺寸的依據」。
    */
-  const rule = makeRule(material, obj.thickness);
+  let rule = makeRule(material, obj.thickness);
 
   /**
    * ⚠ 這裡**刻意沒有**「不是板件就拒絕展開」這道門。2026-08-22 拿掉的。
@@ -67,8 +68,26 @@ export function unfoldObject(obj, opt = {}) {
     }
   }
 
+  /**
+   * 🔴 **實心的板 ＋ 折不了的材料 ⇒ 只出一片外形＋洞**（2026-10-19，實驗 T2、T3、T7：`實驗-綜合評估.md` ①-2）。
+   *
+   * ⚠ 以前實心一律照外表面攤：鋼筆畫的背板（40 × 60、開一個窗、厚 0.5）拆成上下兩大片＋8 條 0.5 寬的邊條，
+   * 而壓克力／木板雷切其實只要**一片**。kang 2026-10-19：「三條都照你的建議做」——
+   * 建議是**照材質決定**：折不了的材料（`rule.foldable === false`，目前是壓克力／木板）自動認出實心板；
+   * 紙模、珍珠板、帆布、金屬照舊攤成盒子（那些本來就是用多片組成中空盒 ——
+   * `io.js` `bakeShelled()` 註解：「想做用紙板組的中空扁盒的話，那正是要的東西」）。
+   * ⭐ 認的條件在 `solidPlate()`：封閉、所有面不是跟大面平行就是垂直、頂點只落在兩個高度、厚度 ≤ 3 cm 而且比大面窄邊的 1/4 薄。
+   * ⭐ 板厚改用**實際的幾何厚度**（⛔ 用物件身上看不見的 0.2）—— 卡片、CSV 寫的就是這塊板真正的厚度。
+   */
+  const plate = (rule.foldable === false && opt.mode !== 'dart') ? solidPlate(mesh) : null;
+  if (plate) {
+    mesh = plate.mesh;
+    rule = makeRule(material, plate.t);
+  }
+
   /** `opt.mode`：`'dart'` ＝ 省道打版（2026-10-12）；沒給 ＝ 精確分片（原本的路）*/
   const r = unfoldMesh(mesh, rule, { flatTolDeg: opt.flatTolDeg, mode: opt.mode });
+  if (plate) for (const p of r.pieces) p.solidPlate = { t: plate.t };
 
   /**
    * 🔴 **陣列的份數⛔ 再乘一次**（2026-10-19 實驗 T3／T7 抓到：份數被平方）。
@@ -100,12 +119,109 @@ export function unfoldObject(obj, opt = {}) {
      * 程式自己補剪的邊（智慧分切的提案用，2026-10-13）—— 一律是**物件自己那份網格**的邊。
      * ⚠ 縮放過的物件展開的是套了縮放的另一份網格（上面的 `transformed()`）：頂點順序不變，照頂點編號對回來。
      */
-    autoEdges: mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh()),
+    /** ⚠ 實心板攤的是頂面那一份新網格，邊對不回原物件 ⇒ ⛔ 給（一片板也⛔ 需要補剪）*/
+    autoEdges: plate ? [] : mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh()),
     keepCut: r.keepCut || 0,
     warnings: [...warn, ...r.warnings],
     stats: { ...r.stats, total: r.pieces.reduce((n, p) => n + p.qty, 0) },
     rule
   };
+}
+
+/**
+ * 實心的板：回傳「頂面那幾個面」組成的新網格與板厚；⛔ 是板就回 null。
+ *
+ * **每一塊（連在一起的一團面）各自判斷**，全部都是板、而且厚度一樣才算 ——
+ * 陣列的網格是好幾塊拼在一起（6 個托架 ＝ 6 塊），整體看頂點會落在很多個高度。
+ * 每一塊的條件：
+ *   1. 封閉（整個網格封閉）
+ *   2. 這一塊面積最大的方向 n：每個面的法向不是跟 n 平行（頂、底）就是跟 n 垂直（側邊）
+ *   3. 這一塊的頂點沿 n 只落在兩個高度 ⇒ 厚度 t ＝ 兩個高度的差
+ *   4. t ≤ 3 cm，而且 t ≤ 頂面外框窄邊的 1/4 —— ⛔ 把 10 × 10 × 100 的柱子當成一片 100 × 10 的板
+ * 「頂面」＝ 法向朝 +n 的那幾個面（頂、底形狀一樣，取哪一面都是同一個輪廓；洞會跟著出來）。
+ */
+const PLATE_MAX_T = 3;
+function solidPlate(mesh) {
+  if (!mesh.isClosed()) return null;
+  mesh.computeNormals();
+  const seen = new Set(), parts = [];
+  for (const f of mesh.faces) {
+    if (seen.has(f.id)) continue;
+    const list = [f], stack = [f];
+    seen.add(f.id);
+    while (stack.length) {
+      for (const he of mesh.faceLoop(stack.pop())) {
+        const nb = he.twin && he.twin.face;
+        if (nb && !seen.has(nb.id)) { seen.add(nb.id); stack.push(nb); list.push(nb); }
+      }
+    }
+    parts.push(list);
+  }
+  let t = null;
+  const top = [];
+  for (const faces of parts) {
+    const r = platePart(mesh, faces);
+    if (!r) return null;
+    if (t !== null && Math.abs(r.t - t) > 1e-6) return null;
+    t = r.t;
+    top.push(...r.top);
+  }
+  if (!top.length) return null;
+  const vi = new Map(), pts = [];
+  const faces = top.map(f => mesh.faceVerts(f).map(v => {
+    if (!vi.has(v.id)) { vi.set(v.id, pts.length); pts.push(v.p.clone()); }
+    return vi.get(v.id);
+  }));
+  return { mesh: Mesh.fromFaceList(pts, faces), t };
+}
+
+/** 一塊是不是實心的板：是 ⇒ { t, top:[頂面的面] }；⛔ 是 ⇒ null（條件見 `solidPlate()`）*/
+function platePart(mesh, faces) {
+  const area = f => {
+    let s = 0;
+    for (const [a, b, c] of mesh.faceTriangles(f)) {
+      s += new THREE.Vector3().subVectors(b.p, a.p).cross(new THREE.Vector3().subVectors(c.p, a.p)).length() / 2;
+    }
+    return s;
+  };
+  // 面積最大的方向（正反算同一個）
+  const groups = [];
+  for (const f of faces) {
+    const n = f.normal, a = area(f);
+    const g = groups.find(x => Math.abs(x.n.dot(n)) > 0.9999);
+    if (g) g.a += a; else groups.push({ n: n.clone(), a });
+  }
+  if (!groups.length) return null;
+  const n = groups.reduce((m, g) => (g.a > m.a ? g : m)).n;
+  for (const f of faces) {
+    const d = Math.abs(f.normal.dot(n));
+    if (d < 0.9999 && d > 1e-4) return null;
+  }
+  const hs = [], pts = [];
+  for (const f of faces) {
+    for (const v of mesh.faceVerts(f)) {
+      pts.push(v.p);
+      const h = v.p.dot(n);
+      if (!hs.some(x => Math.abs(x - h) < 1e-6)) hs.push(h);
+      if (hs.length > 2) return null;
+    }
+  }
+  if (hs.length !== 2) return null;
+  const t = Math.abs(hs[1] - hs[0]);
+  const top = faces.filter(f => f.normal.dot(n) > 0.9999);
+  if (!top.length) return null;
+  // 頂面外框的窄邊（在頂面所在的平面上量）
+  const u = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const e1 = u.sub(n.clone().multiplyScalar(u.dot(n))).normalize();
+  const e2 = new THREE.Vector3().crossVectors(n, e1);
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (const p of pts) {
+    const a = p.dot(e1), b = p.dot(e2);
+    a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b);
+  }
+  const narrow = Math.min(a1 - a0, b1 - b0);
+  if (!(t > 0) || t > PLATE_MAX_T || t > narrow / 4) return null;
+  return { t, top };
 }
 
 /** `transformed()` 出來的網格上的邊 → 原本網格上同一條邊（頂點順序一樣，照頂點編號配對）*/

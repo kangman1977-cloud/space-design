@@ -655,6 +655,8 @@ export function titleLines(piece, opt = {}) {
   if (rule.label) spec.push(rule.label);
   if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
   if (spec.length) out.push(spec.join('　'));
+  /** 🔴 實心的板只出一片外形＋洞（2026-10-19，`unfold/part.js` `solidPlate()`）—— 講出來，免得以為少了邊條 */
+  if (piece.solidPlate) out.push(`實心板：只出一片外形＋洞（厚 ${fmt(piece.solidPlate.t)} cm，不是攤開的盒子）`);
 
   /** 省道打版的面積是**攤平後的**（布要買多少），跟 3D 表面積不一樣 —— 寫清楚是哪一個 */
   out.push(`外框 ${fmt(piece.width)} × ${fmt(piece.height)} cm`

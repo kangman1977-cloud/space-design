@@ -349,6 +349,47 @@ export function unionMeshes(meshes, labels = []) {
 }
 
 /**
+ * 🔴 **剖面分切「照最大外形切」：一段厚度裡最大的外形**（2026-10-19，實驗 T2 帽簷不見）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ *
+ * 做法：把網格轉到 (u, v, w) 座標（w ＝ 切片軸）→ 只留 w 在 z0～z1 那一段（`trimByPlane` 兩刀）
+ * → 往 u–v 平面投影（`project()`，⭐ 就是這一段立體的「影子」）→ 多邊形。
+ * ⇒ 那一段裡任何高度、任何厚度的東西都會出現在外形裡 —— 寧大勿小（之後再磨掉）。
+ *
+ * @param {Mesh} mesh  世界座標、封閉
+ * @param {number[][]} basis [U, V, W]：片的右、片的上、切片軸（右手系，`slice/section.js` `AXES`）
+ * @param {number} z0 這一片的下緣（沿 W，世界座標）
+ * @param {number} z1 這一片的上緣
+ * @returns {Array<Array<{x:number,y:number}>>} 每個多邊形一圈點；外圈逆時針、洞順時針（Manifold 的慣例）
+ */
+export function slabShadow(mesh, basis, z0, z1, label = '物件') {
+  need();
+  const [U, V, W] = basis;
+  const M = new THREE.Matrix4().set(
+    U[0], U[1], U[2], 0,
+    V[0], V[1], V[2], 0,
+    W[0], W[1], W[2], 0,
+    0, 0, 0, 1);
+  const made = [];
+  try {
+    const man = toManifold(mesh.transformed(M), label);
+    made.push(man);
+    const lo = man.trimByPlane([0, 0, 1], z0);
+    made.push(lo);
+    const band = lo.trimByPlane([0, 0, -1], -z1);
+    made.push(band);
+    if (band.isEmpty()) return [];
+    const cs = band.project();
+    made.push(cs);
+    return cs.toPolygons().map(poly => poly.map(p => ({ x: p[0], y: p[1] })));
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **曲線刀具第四步 `切穿`：物件 ∩ 刀柱、物件 − 刀柱**（刀柱由 `edit.js` `curveCutterPrism()` 組）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
  * ⚠ 平滑旗標與分片線會消失（布林的輸出是重新組的三角形，`fromManifold()`）—— 規格「切穿」那一段寫著要講。

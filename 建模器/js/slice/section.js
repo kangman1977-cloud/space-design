@@ -19,6 +19,7 @@
  */
 
 import * as THREE from 'three';
+import { csgReady, slabShadow } from '../build/bool.js';
 
 /**
  * 三個切片軸。
@@ -31,12 +32,30 @@ import * as THREE from 'three';
  * 若把 u、v 對調，每一片都會左右翻過來 —— 圖看起來完全正常，
  * 面積、片數、孔位全部算得對，但**做出來的東西是鏡像的，疊不回原形**。
  * 而且要等切完料疊起來才會發現。所以這裡寫死並在測試裡盯住手性。
+ *
+ * ── 🔴 u、v 還要跟「對應的視圖」同方向（2026-10-19 改，實驗 T6）──────
+ * ⚠ 舊版 Y 軸是 (u, v) ＝ (z, x)：手性對（⛔ 鏡像），但**整片轉了 90°** ——
+ * 300 × 160 的招牌切出來每片 160 × 300，圓孔從左邊跑到下面，跟 Illustrator 原稿對不上。
+ * kang 2026-10-19：「三條都照你的建議做」（建議：改成跟畫面同方向、只轉不鏡像）。
+ * ⭐ 現在每個軸的 u、v 就是**那個視圖的螢幕右、螢幕上**（`view/scene.js` `setView()`，相機 up ＝ +Y）：
+ *
+ * | 切片軸 | 對應視圖 | u（片的右）| v（片的上）| u × v |
+ * |---|---|---|---|---|
+ * | Y 水平切 | 上 | +X | −Z | +Y ✓ |
+ * | Z 從正面切 | 前 | +X | +Y | +Z ✓ |
+ * | X 從右邊切 | 側（從 +X 看）| −Z | +Y | +X ✓ |
+ *
+ * ⇒ 帶正負號，所以存成**向量** `uv: [u, v]`，⛔ 是座標字母。
+ * 〔守門的測試：`tests/run.mjs`「剖面片跟視圖同方向」—— 三個軸各驗「右／上」與手性〕
  */
 export const AXES = {
-  x: { key: 'x', label: 'X（從右邊切）', u: 'y', v: 'z', dir: [1, 0, 0] },
-  y: { key: 'y', label: 'Y（水平切，最常用）', u: 'z', v: 'x', dir: [0, 1, 0] },
-  z: { key: 'z', label: 'Z（從正面切）', u: 'x', v: 'y', dir: [0, 0, 1] }
+  x: { key: 'x', label: 'X（從右邊切）', uv: [[0, 0, -1], [0, 1, 0]], dir: [1, 0, 0] },
+  y: { key: 'y', label: 'Y（水平切，最常用）', uv: [[1, 0, 0], [0, 0, -1]], dir: [0, 1, 0] },
+  z: { key: 'z', label: 'Z（從正面切）', uv: [[1, 0, 0], [0, 1, 0]], dir: [0, 0, 1] }
 };
+
+/** 一個 3D 點（或向量）在 (u, v) 上的座標 */
+const along = (p, w) => p.x * w[0] + p.y * w[1] + p.z * w[2];
 
 export const AXIS_KEYS = ['y', 'x', 'z'];
 export const DEFAULT_AXIS = 'y';
@@ -172,7 +191,7 @@ export function planSlabs(height, bands) {
  */
 export function sectionAt(mesh, axisKey, coord) {
   const A = AXES[axisKey] || AXES[DEFAULT_AXIS];
-  const K = A.key, U = A.u, V = A.v;
+  const K = A.key, [U, V] = A.uv;
   const kv = new THREE.Vector3(...A.dir);
 
   const segs = [];
@@ -206,9 +225,10 @@ export function sectionAt(mesh, axisKey, coord) {
       if ((d[i] < 0) === (d[j] < 0)) continue;
       const s = d[i] / (d[i] - d[j]);
       const a = vs[i].p, b = vs[j].p;
+      const au = along(a, U), av = along(a, V);
       hits.push({
-        x: a[U] + (b[U] - a[U]) * s,
-        y: a[V] + (b[V] - a[V]) * s
+        x: au + (along(b, U) - au) * s,
+        y: av + (along(b, V) - av) * s
       });
     }
     if (hits.length < 2) continue;
@@ -223,7 +243,7 @@ export function sectionAt(mesh, axisKey, coord) {
     // 這樣走出來的迴圈從 +軸 看下去是逆時針，實心在左手邊，
     // 內孔自然變成順時針 —— 外輪廓與內孔不必另外判斷包含關係。
     const t = new THREE.Vector3().crossVectors(kv, nn);
-    const tu = t[U], tv = t[V];
+    const tu = along(t, U), tv = along(t, V);
 
     for (let i = 0; i + 1 < hits.length; i += 2) {
       let p = hits[i], q = hits[i + 1];
@@ -409,6 +429,19 @@ export function sliceMany(meshes, opt = {}) {
   plan.bands.forEach((b, i) => {
     if (b.bad) warnings.push(`第 ${i + 1} 段：${b.bad}`);
   });
+  /**
+   * 🔴 **照最大外形切（寧大勿小）**（2026-10-19，實驗 T2：0.4 cm 的帽簷遇到 1 cm 的板，整個不見）。
+   * kang 2026-10-19：「三條都照你的建議做」（建議：預設照舊取中間、漏掉時講出來、另外給這個選項）。
+   * ⭐ 勾了 ⇒ 每片取那一段厚度裡**最大的外形**（`bool.js` `slabShadow()`：那一段立體的影子），
+   * 薄的部分不會不見；疊起來比模型大一點，之後再磨。⚠ 要布林函式庫；開放曲面⛔ 影子可言，照舊取中間。
+   */
+  const wantMax = !!opt.maxOutline;
+  const canMax = wantMax && csgReady();
+  if (wantMax && !canMax) {
+    warnings.push('「照最大外形切」要用布林運算函式庫，它還沒載入（或載入失敗）—— 這次照中間的截面切。');
+  }
+  const basis = [A.uv[0], A.uv[1], A.dir];
+
   const slices = [];
   let openTotal = 0;
 
@@ -417,6 +450,10 @@ export function sliceMany(meshes, opt = {}) {
     const loops = [];
     let op = 0;
     for (const m of list) {
+      if (canMax && m.isClosed()) {
+        loops.push(...shadowLoops(slabShadow(m, basis, lo + s.z0, lo + s.z1)));
+        continue;
+      }
       const r = sectionAt(m, axis, coord);
       loops.push(...r.loops);
       op += r.open;
@@ -437,6 +474,26 @@ export function sliceMany(meshes, opt = {}) {
 
   if (openTotal > 0) {
     warnings.push(`有 ${openTotal} 條線接不成封閉輪廓，那些地方切不出可裁的片。`);
+  }
+
+  /**
+   * 🔴 **照中間切時，片裡面有「台階」要講出來**（2026-10-19，實驗 T2）。
+   * ⚠ 一片只取中間那一刀 ⇒ 落在片**裡面**（⛔ 剛好在片與片之間）的水平面，它上下其中一邊的東西
+   * 會漏掉或多出一塊 —— 帽簷 0～0.4 cm、板 0～1 cm、中間取 0.5：帽簷整個不見，⛔ 任何提示（漏報）。
+   * ⭐ 判準只看「跟切片軸垂直的面」落在哪個高度：平滑曲面⛔ 會有這種面 ⇒ 球、碗⛔ 會被誤報。
+   */
+  if (!canMax) {
+    const steps = stepHeights(list, A.dir);
+    const hit = [];
+    for (const sl of slices) {
+      const hs = steps.filter(h => h > sl.z0 + STEP_TOL && h < sl.z1 - STEP_TOL);
+      if (hs.length) hit.push(`第 ${sl.index} 片（${r2(sl.z0 - lo)}～${r2(sl.z1 - lo)} cm，台階在 ${hs.map(h => r2(h - lo)).join('、')}）`);
+    }
+    if (hit.length) {
+      warnings.push(`有 ${hit.length} 片裡面有台階（跟板子平行的面），照中間切會漏掉或多出一塊：`
+        + hit.slice(0, 5).join('、') + (hit.length > 5 ? ` …等 ${hit.length} 片` : '')
+        + '。改那一段的板厚讓台階落在片與片之間，或勾「照最大外形切」。');
+    }
   }
 
   const empty = slices.filter(s => !s.loops.length).map(s => s.index);
@@ -535,3 +592,37 @@ export function listNums(ns) {
 }
 
 const r2 = v => Math.round(v * 100) / 100;
+
+/** 台階高度跟片的上下緣要差多少才算「在片裡面」（cm）—— 剛好落在片與片之間的⛔ 算 */
+const STEP_TOL = 1e-4;
+
+/** 所有網格裡「跟切片軸垂直的面」的高度（沿切片軸、世界座標，去重）*/
+function stepHeights(meshes, dir) {
+  const out = [];
+  for (const m of meshes) {
+    for (const f of m.faces) {
+      const n = f.normal;
+      if (!n || Math.abs(n.x * dir[0] + n.y * dir[1] + n.z * dir[2]) < 0.9999) continue;
+      const p = m.faceVerts(f)[0].p;
+      const h = p.x * dir[0] + p.y * dir[1] + p.z * dir[2];
+      if (!out.some(x => Math.abs(x - h) < STEP_TOL)) out.push(h);
+    }
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/** `slabShadow()` 的多邊形 → 跟 `sectionAt()` 一樣的輪廓（外圈正面積、洞負面積）*/
+function shadowLoops(polys) {
+  const out = [];
+  for (const pts of polys) {
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      a += p.x * q.y - q.x * p.y;
+    }
+    a /= 2;
+    if (Math.abs(a) < 1e-12) continue;
+    out.push({ pts, area: a, isHole: a < 0 });
+  }
+  return out;
+}

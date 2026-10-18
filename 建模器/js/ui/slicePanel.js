@@ -86,6 +86,7 @@ export class SlicePanel {
           <input type="number" id="slD" step="0.05" min="0" style="width:70px">
           <span class="lbl">淨距 cm</span>
           <input type="number" id="slGap" step="0.1" min="0" style="width:70px">
+          <label class="uwCk" title="勾了：每一片取那一段厚度裡最大的外形（寧大勿小，疊好之後再磨），比板子薄的部分不會不見。沒勾：取每一片正中間的截面（曲面還原得最準）"><input type="checkbox" id="slMax"> 照最大外形切</label>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
           <label class="uwCk"><input type="checkbox" id="slAsk"> 指定存放位置</label>
@@ -122,6 +123,14 @@ export class SlicePanel {
     ax.title = '沿哪個方向一片一片切下去。疊層件通常是 Y（水平切），'
              + '因為那樣每一片都是平放在板材上';
     ax.onchange = () => { this.opt.axis = ax.value; this.run(); };
+
+    /**
+     * 🔴 **照最大外形切（寧大勿小）**（2026-10-19，實驗 T2：帽簷 0.4 cm 遇到 1 cm 的板整個不見）。
+     * kang：「三條都照你的建議做」—— 預設⛔ 勾（照舊取中間），漏掉時 `sliceMany()` 會講；勾了 ⇒ `slabShadow()`。
+     */
+    const mx = $('slMax');
+    mx.checked = !!this.opt.maxOutline;
+    mx.onchange = () => { this.opt.maxOutline = mx.checked; this.run(); };
 
     const unit = $('slUnit');
     for (const k of Object.keys(UNITS)) {
@@ -206,7 +215,7 @@ export class SlicePanel {
 
     this.objs = objs;
     this.result = meshes.length
-      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands })
+      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline })
       : { ok: false, reason: '目前文件裡沒有物件。' };
 
     this.pegs = (this.result.ok && this.result.slices.length)

@@ -15245,7 +15245,12 @@ section('排版擺得更緊：任何空位都能塞、兩個方向都試（2026-
   };
   for (const [label, opt, want, was] of [
     ['kang 的設定 120×240／間距 10／可轉', { w: 120, h: 240, gap: 10, rotate: true }, [8, 5, 2, 2, 1], [12, 5, 3, 2, 2]],
-    ['預設 240×120／間距 1／不轉', { w: 240, h: 120, gap: 1, rotate: false }, [9, 3, 1, 1, 1], [9, 3, 1, 2, 1]]
+    /**
+     * ⚠ 第一格 9 → 8（2026-10-19）：剖面片改成跟上視圖同方向（`slice/section.js` AXES 註解），
+     * 方塊 60×45×40 每片從 40 × 60 變成 60 × 40 ⇒ 不准轉時一張 240 × 120 從 5 片變 6 片。
+     * ⭐ 排版本身⛔ 改；kang 的設定（可轉）兩個方向都試，所以照舊 8 張。
+     */
+    ['預設 240×120／間距 1／不轉', { w: 240, h: 120, gap: 1, rotate: false }, [8, 3, 1, 1, 1], [9, 3, 1, 2, 1]]
   ]) {
     cases.forEach(([name, ps], i) => {
       const nest = packBoards(ps, opt);
@@ -17321,6 +17326,124 @@ section('陣列展開的片數：份數⛔ 再乘一次（2026-10-19 實驗 T3�
     eq('方塊 重疊排 2 份：片數 ＝ 同一份網格的普通物件', ra.stats.total, rt.stats.total);
     near('方塊 重疊排 2 份：面積 ＝ 6 × 2 × 3 的外表面積 2 ×（6×2 ＋ 6×3 ＋ 2×3）＝ 72', ra.stats.area, 2 * (6 * 2 + 6 * 3 + 2 * 3), 1e-6);
     ok('方塊 重疊排 2 份：⛔ 是一份的 4 倍', ra.stats.total !== r1.stats.total * 4);
+  }
+}
+
+section('剖面片跟視圖同方向（2026-10-19 實驗 T6）');
+{
+  /**
+   * 實驗 T6：300 × 160 的招牌水平切，每片出來 160 × 300（轉了 90°）。
+   * ⭐ 現在：片的右／上 ＝ 對應視圖的螢幕右／上（上：+X／−Z；前：+X／+Y；側：−Z／+Y），⛔ 鏡像。
+   * 用一個⛔ 在原點、⛔ 對稱的方塊（X 0～10、Y 1～3、Z −6～−2）一次驗出「轉沒轉、翻沒翻」。
+   */
+  const m = buildPrim('box', { w: 10, h: 2, d: 4 }).transformed(new THREE.Matrix4().makeTranslation(5, 2, -4));
+  const one = (axis, at) => {
+    const s = sect.sliceMesh(m, { axis, bands: [{ t: 0.2, n: 'rest' }] }).slices;
+    return s.find(x => Math.abs((x.z0 + x.z1) / 2 - at) < 0.11) || s[Math.floor(s.length / 2)];
+  };
+  for (const [axis, view, want] of [
+    ['y', '上', { minX: 0, maxX: 10, minY: 2, maxY: 6 }],
+    ['z', '前', { minX: 0, maxX: 10, minY: 1, maxY: 3 }],
+    ['x', '側', { minX: 2, maxX: 6, minY: 1, maxY: 3 }]
+  ]) {
+    const sl = one(axis, axis === 'y' ? 2 : axis === 'z' ? -4 : 5);
+    const b = sl.bounds;
+    const got = [b.minX, b.maxX, b.minY, b.maxY].map(v => +v.toFixed(6)).join(' ');
+    eq(`★★ ${axis.toUpperCase()} 軸 ⇒ 跟「${view}」視圖同方向：片的外框（左 右 下 上）`, got, [want.minX, want.maxX, want.minY, want.maxY].join(' '));
+    const outer = sl.loops.filter(l => !l.isHole);
+    ok(`　　${axis.toUpperCase()} 軸：外輪廓是正面積（⛔ 鏡像）`, outer.length === 1 && outer[0].area > 0);
+  }
+}
+
+section('剖面分切：片裡面的台階要講、照最大外形切（2026-10-19 實驗 T2）');
+if (csgOK) {
+  /**
+   * 實驗 T2：帽簷 0.4 cm 厚、板 1 cm ⇒ 第 1 片只取 0.5 那一刀，帽簷整個不見，⛔ 警告。
+   * ⭐ 預設照舊取中間，但要講出「第幾片裡有台階」；勾「照最大外形切」⇒ 取那一段的影子，帽簷回來。
+   */
+  const { unionMeshes } = await import('../js/build/bool.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const brim = buildPrim('cylinder', { r: 10, h: 0.4, seg: 32 }).transformed(T(0, 0.2, 0));
+  const body = buildPrim('cylinder', { r: 5, h: 4, seg: 32 }).transformed(T(0, 2, 0));
+  const hat = unionMeshes([brim, body]);
+  const oct = r => 0.5 * 32 * r * r * Math.sin(2 * Math.PI / 32);   // 32 邊形的面積
+  const bands = [{ t: 1, n: '' }];
+
+  const mid = sect.sliceMany([hat], { axis: 'y', bands });
+  eq('帽子 4 cm、板 1 cm ⇒ 4 片', mid.slices.length, 4);
+  near('★ 照中間切：第 1 片只有帽身（帽簷不見）＝ 半徑 5 的 32 邊形', mid.slices[0].area, oct(5), 1e-6);
+  const w = mid.warnings.find(s => /台階/.test(s)) || '';
+  ok(`★★ 照中間切：講出第 1 片裡有台階在 0.4 cm —「${w.slice(0, 60)}…」`, /第 1 片（0～1 cm，台階在 0\.4）/.test(w) && /照最大外形切/.test(w));
+  ok('　　⛔ 用「⛔」寫給使用者看的字', !/⛔/.test(w));
+
+  const mx = sect.sliceMany([hat], { axis: 'y', bands, maxOutline: true });
+  near('★★ 照最大外形切：第 1 片 ＝ 帽簷（半徑 10 的 32 邊形）', mx.slices[0].area, oct(10), 1e-6);
+  near('　　第 2 片 ＝ 帽身（半徑 5）', mx.slices[1].area, oct(5), 1e-6);
+  ok('　　照最大外形切 ⇒ ⛔ 再報台階', !mx.warnings.some(s => /台階/.test(s)));
+  const b0 = mx.slices[0].bounds;
+  near('　　片的寬 ＝ 帽簷的直徑 20（32 邊形在 0° 與 180° 各有一個點）', b0.w, 20, 1e-9);
+
+  // ⛔ 誤報：上下面剛好落在片與片之間的方塊、平滑的球
+  const box = buildPrim('box', { w: 30, h: 4, d: 16 }).transformed(T(0, 2, 0));
+  ok('★ 方塊 4 cm、板 1 cm（上下面都在片與片之間）⇒ ⛔ 報台階', !sect.sliceMany([box], { axis: 'y', bands }).warnings.some(s => /台階/.test(s)));
+  const ball = buildPrim('sphere', { r: 5 }).transformed(T(0, 5, 0));
+  ok('★ 球（平滑曲面）⇒ ⛔ 報台階', !sect.sliceMany([ball], { axis: 'y', bands }).warnings.some(s => /台階/.test(s)));
+  const ballMax = sect.sliceMany([ball], { axis: 'y', bands, maxOutline: true });
+  const ballMid = sect.sliceMany([ball], { axis: 'y', bands });
+  ok('★ 球：照最大外形切的每一片都 ≥ 照中間切（寧大勿小）',
+     ballMax.slices.every((s, i) => s.area >= ballMid.slices[i].area - 1e-9));
+}
+
+section('實心的板 ＋ 壓克力／木板 ⇒ 只出一片外形＋洞（2026-10-19 實驗 T2／T3／T7）');
+{
+  /**
+   * 實驗 T7：鋼筆畫的背板（40 × 60、窗 20 × 30、厚 0.5）壓克力展開出 10 片（盒子）。
+   * ⭐ 折不了的材料（壓克力／木板）自動認出實心板 ⇒ 1 片、帶洞、板厚寫實際的 0.5；其他材料照舊。
+   */
+  const { titleLines } = await import('../js/out/sheet.js');
+  const zeros = n => new Array(n).fill(0);
+  const rect = (x0, z0, x1, z1) => ({ closed: true, a: [x0, z0, x1, z0, x1, z1, x0, z1], hi: zeros(8), ho: zeros(8) });
+  const back = new io.ModelObject({ name: '背板', kind: 'solid', thickness: 0.2,
+    src: { type: 'pen', h: 0.5, paths: [rect(-20, -30, 20, 30), rect(-10, -15, 10, 15)] } });
+  const ra = unfoldObject(back, { material: 'acrylic' });
+  eq('★★ 背板（壓克力）⇒ 1 片', ra.stats.total, 1);
+  near('　　面積 ＝ 40 × 60 − 20 × 30 ＝ 1800', ra.stats.area, 1800, 1e-6);
+  eq('　　帶 1 個洞（窗）', ra.pieces[0].holes.length, 1);
+  near('　　板厚寫實際的 0.5（⛔ 物件身上看不見的 0.2）', ra.pieces[0].rule.thickness, 0.5, 1e-9);
+  ok('　　卡片寫「實心板：只出一片外形＋洞」、⛔ 用「⛔」', titleLines(ra.pieces[0]).some(l => /^實心板：只出一片外形＋洞（厚 0\.5 cm/.test(l) && !/⛔/.test(l)));
+  const rf = unfoldObject(back, { material: 'foamboard' });
+  ok('★ 同一塊背板（珍珠板）⇒ 照舊攤成盒子（⛔ 標實心板）', !rf.pieces.some(p => p.solidPlate));
+  near('　　盒子的面積 ＝ 正反 2 × 1800 ＋ 外圈 200 × 0.5 ＋ 窗框 100 × 0.5 ＝ 3750', rf.stats.area, 3750, 1e-6);
+
+  const gusset = new io.ModelObject({ name: '托架', kind: 'solid', src: { type: 'wedge', w: 0.5, h: 3, d: 3 } });
+  const rg = unfoldObject(gusset, { material: 'acrylic' });
+  eq('★ 楔形托架 0.5 × 3 × 3（壓克力）⇒ 1 片', rg.stats.total, 1);
+  near('　　三角形面積 ＝ 3 × 3 ÷ 2', rg.stats.area, 4.5, 1e-6);
+  if (csgOK) {
+    /** 陣列是好幾塊拼在一起 ⇒ 每一塊各自判斷（T7 的 2 × 3 托架）*/
+    const grid = new io.ModelObject({ name: '托架（網格）', kind: 'solid', src: { type: 'array', mode: 'linear',
+      count: 2, step: [20, 0, 0], count2: 3, step2: [0, 15, 0],
+      child: { src: { type: 'wedge', w: 0.5, h: 3, d: 3 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], name: '托架' } } });
+    const rr = unfoldObject(grid, { material: 'acrylic' });
+    eq('★★ 托架 2 × 3 網格（壓克力）⇒ 6 片（每個托架一片三角形）', rr.stats.total, 6);
+    near('　　面積 ＝ 6 × 4.5', rr.stats.area, 27, 1e-6);
+  }
+
+  const col = new io.ModelObject({ name: '柱子', kind: 'solid', src: { type: 'box', w: 10, h: 100, d: 10 } });
+  ok('★ ⛔ 誤認：10 × 100 × 10 的柱子（壓克力）不當成一片板', !unfoldObject(col, { material: 'acrylic' }).pieces.some(p => p.solidPlate));
+  const big = new io.ModelObject({ name: '方塊', kind: 'solid', src: { type: 'box', w: 60, h: 45, d: 40 } });
+  ok('★ ⛔ 誤認：60 × 45 × 40 的方塊（壓克力）照舊', !unfoldObject(big, { material: 'acrylic' }).pieces.some(p => p.solidPlate));
+
+  if (csgOK) {
+    const item = (src, pos) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: '件' });
+    const holed = new io.ModelObject({ name: '挖孔的板', kind: 'solid', src: { type: 'bool', op: 'subtract', items: [
+      item({ type: 'box', w: 30, h: 0.5, d: 20 }, [0, 0, 0]),
+      item({ type: 'cylinder', r: 3, h: 2, seg: 32 }, [5, 0, 0])
+    ] } });
+    const rh = unfoldObject(holed, { material: 'acrylic' });
+    eq('★★ 布林挖孔的板（壓克力）⇒ 1 片', rh.stats.total, 1);
+    eq('　　帶 1 個洞', rh.pieces[0].holes.length, 1);
+    near('　　面積 ＝ 30 × 20 − 半徑 3 的 32 邊形', rh.stats.area, 600 - 0.5 * 32 * 9 * Math.sin(2 * Math.PI / 32), 1e-6);
   }
 }
 
