@@ -1047,9 +1047,12 @@ export class Mesh {
   toJSON() {
     const vi = new Map(this.verts.map((v, i) => [v.id, i]));
     return {
-      points: this.verts.flatMap(v => [
-        +v.p.x.toFixed(6), +v.p.y.toFixed(6), +v.p.z.toFixed(6)
-      ]),
+      /**
+       * 🔴 座標存**完整精度**，⛔ 捨入（2026-10-19，綜合評估 ①-3）。以前捨入到 6 位小數 ⇒ 存讀（還有復原，
+       * 快照也走這支）之後浮點雜訊變了 ⇒ 方塊這種折角全是 90° 的，「先走最平的邊」挑到別條 ⇒ 展開圖的擺法變了。
+       * JSON 的數字本來就能一位不差地來回；代價是網格物件的存檔大一些（參數物件不存網格，不受影響）。
+       */
+      points: this.verts.flatMap(v => [v.p.x, v.p.y, v.p.z]),
       faces: this.faces.map(f => this.faceVerts(f).map(v => vi.get(v.id))),
       roles: [...this.edges()]
         .filter(he => he.role !== EDGE_ROLE.FREE)

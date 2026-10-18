@@ -15990,6 +15990,8 @@ section('智慧分切 第一步：不准切 ＋ 提案（2026-10-13）');
    * ── 🔴 沒標不准切 ⇒ 展開結果跟改之前一樣 ──
    * 標準答案是 2026-10-13 沙箱量測（`外部參考-自動分切.md` 第 6 節）用**改之前的程式**量到的：
    * 程式自己剪幾條邊、最大一片的外框（珍珠板、精確分片、預設尺寸、轉成可編輯網格）。
+   * ⭐ 2026-10-19 網格物件改成「照存檔內容重建後才攤」（`unfold/part.js` `canonicalMesh()`，實驗 T3）之後還是這一組 ——
+   * 因為存檔同時改成座標存完整精度（`mesh.js` `toJSON()`），重建出來的跟原網格一位不差。
    */
   const before = { box: [7, 145, 210], wedge: [5, 106, 168], prism: [11, 195, 164], stairs: [19, 120, 420], roundBox: [39, 200, 142],
     cylinder: [63, 179, 170], cone: [32, 126, 149], tube: [127, 179, 206], dome: [256, 191, 242], sphere: [481, 223, 297], torus: [358, 166, 198] };
@@ -17315,7 +17317,8 @@ section('陣列展開的片數：份數⛔ 再乘一次（2026-10-19 實驗 T3�
     eq(`${label}：片數 ＝ 一份的 ${n} 倍`, ra.stats.total, r1.stats.total * n);
     near(`${label}：面積 ＝ 一份的 ${n} 倍`, ra.stats.area, r1.stats.area * n, 1e-6);
     eq(`${label}：片數 ＝ 同一份網格的普通物件`, ra.stats.total, rt.stats.total);
-    near(`${label}：面積 ＝ 同一份網格的普通物件`, ra.stats.area, rt.stats.area, 1e-6);
+    /** ⚠ 網格物件照存檔內容（座標 6 位小數）重建後才攤（`part.js` `canonicalMesh()`）⇒ 面積會差到 1e-5 */
+    near(`${label}：面積 ＝ 同一份網格的普通物件`, ra.stats.area, rt.stats.area, 1e-4);
   }
   if (csgOK) {
     /** 重疊的實體排列 ⇒ 聯集成一塊 ⇒ 片數跟那一塊一樣，⛔ 是一份的 2 倍、更⛔ 是 4 倍 */
@@ -17445,6 +17448,87 @@ section('實心的板 ＋ 壓克力／木板 ⇒ 只出一片外形＋洞（2026
     eq('　　帶 1 個洞', rh.pieces[0].holes.length, 1);
     near('　　面積 ＝ 30 × 20 − 半徑 3 的 32 邊形', rh.stats.area, 600 - 0.5 * 32 * 9 * Math.sin(2 * Math.PI / 32), 1e-6);
   }
+}
+
+section('存讀前後攤法一樣（2026-10-19 實驗 T3）');
+{
+  /**
+   * 實驗 T3：盒身 28 × 52，重新整理後變 44 × 28。病因：方塊的折角全是 90°，「先走最平的邊」靠座標的浮點雜訊挑，
+   * 存檔捨入到 6 位小數後雜訊不同。⭐ 修兩件事：① 存檔座標存完整精度（`mesh.js` `toJSON()`）；
+   * ② 網格物件一律照存檔內容重建後才攤（`unfold/part.js` `canonicalMesh()`）—— 編輯過的網格內部排列跟重建的⛔ 一樣。
+   * 對照：照舊的存法（捨入 6 位）的話，下面 20 個裡有好幾個存讀後會變（沙箱 2026-10-19：9 個）。
+   */
+  const sig = r => r.pieces.map(p => `${p.width.toFixed(4)}×${p.height.toFixed(4)}`).join(',') + `｜剪 ${r.autoEdges.length}`;
+  const mkMesh = m => { const o = new io.ModelObject({ name: '盒', src: { type: 'mesh' }, kind: 'sheet', thickness: 0.5 }); o._mesh = m; return o; };
+  const reload = m => { const b = Mesh.fromJSON(JSON.parse(JSON.stringify(m.toJSON()))); b.computeNormals(); return b; };
+  const oldSave = m => { const d = m.toJSON(); d.points = d.points.map(x => +x.toFixed(6)); const b = Mesh.fromJSON(d); b.computeNormals(); return b; };
+  let n = 0, same = 0, exact = 0, oldDiff = 0;
+  for (const [w, h, d] of [[28, 8, 20], [20, 10, 12], [30, 6, 16], [16, 8, 8], [44, 8, 28]]) {
+    for (const a of [0.1, 0.37, 1.3, 2.9]) {
+      const m0 = edit.mergeCoplanarFaces(buildPrim('box', { w, h, d })).mesh;
+      // 轉一下再轉回來 ⇒ 形狀一樣、座標帶著浮點雜訊（就像在編輯模式改過的網格）
+      const m = m0.transformed(new THREE.Matrix4().makeRotationY(a)).transformed(new THREE.Matrix4().makeRotationY(-a));
+      m.computeNormals();
+      const back = reload(m);
+      n++;
+      if (back.verts.every((v, i) => v.p.equals(m.verts[i].p))) exact++;
+      if (sig(unfoldObject(mkMesh(m), { material: 'foamboard' })) === sig(unfoldObject(mkMesh(back), { material: 'foamboard' }))) same++;
+      if (sig(unfoldObject(mkMesh(m), { material: 'foamboard' })) !== sig(unfoldObject(mkMesh(oldSave(m)), { material: 'foamboard' }))) oldDiff++;
+    }
+  }
+  eq(`★★★ 帶雜訊的網格 ${n} 個：存檔再讀回來，座標一位不差`, exact, n);
+  eq(`★★★ 帶雜訊的網格 ${n} 個：存讀前後攤法（外框、程式剪的邊數）都一樣`, same, n);
+  ok(`　　對照：照舊的存法（座標捨入 6 位）有 ${oldDiff} 個會變 —— 這個測試抓得到那個病`, oldDiff > 0);
+
+  // 編輯過的網格（刪面、內縮、細分）：內部排列跟重建的不一樣，也要存讀前後一樣
+  let n2 = 0, same2 = 0;
+  for (const [w, h, d] of [[28, 8, 20], [20, 10, 12], [30, 6, 16], [16, 8, 8]]) {
+    let m = edit.mergeCoplanarFaces(buildPrim('box', { w, h, d })).mesh; m.computeNormals();
+    const top = m.faces.find(f => f.normal.y > 0.99);
+    let r = edit.deleteFaces(m, [{ kind: 'face', face: top }]); if (r && r.mesh) m = r.mesh; m.computeNormals();
+    const front = m.faces.find(f => f.normal.z > 0.99);
+    r = edit.insetFaces(m, front, 2); if (r && r.mesh) m = r.mesh; m.computeNormals();
+    const back = reload(m);
+    n2++;
+    if (sig(unfoldObject(mkMesh(m), { material: 'foamboard' })) === sig(unfoldObject(mkMesh(back), { material: 'foamboard' }))) same2++;
+  }
+  eq(`★★★ 編輯過的網格 ${n2} 個：存讀前後攤法都一樣`, same2, n2);
+}
+
+section('布林、陣列沒轉成網格就攤 ＝ 轉了再攤（2026-10-19 實驗 T2 疑點 Q9）');
+if (csgOK) {
+  /**
+   * 實驗 T2：布林的網格全是三角形，以前只有「轉成可編輯網格」才併回面，展開拿沒轉的照樣攤 ⇒ 平面零件重疊。
+   * ⭐ 展開前先併面（`unfold/part.js`，跟 `bake()` 同一支 `mergeCoplanarFaces()`）。
+   * 數字是 2026-10-19 沙箱：方塊 40 × 30 × 20 挖掉一角（10 × 10 × 40），以前沒轉 125 × 65 重疊、轉了 125 × 115 一片好的。
+   */
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+  const sig = r => r.pieces.map(p => `${p.width.toFixed(3)}×${p.height.toFixed(3)}×${p.qty}${p.overlap ? '重疊' : ''}`).join(',') + `｜剪 ${r.autoEdges.length}`;
+  const area = r => r.pieces.reduce((a, p) => a + p.area * p.qty, 0);
+  const cases = [
+    ['挖掉一角（差集）', { type: 'bool', op: BOOL_OPS.SUBTRACT, items: [it({ type: 'box', w: 40, h: 30, d: 20 }), it({ type: 'box', w: 10, h: 10, d: 40 }, [20, 15, 0])] }],
+    ['L 形（聯集）', { type: 'bool', op: BOOL_OPS.UNION, items: [it({ type: 'box', w: 40, h: 10, d: 10 }), it({ type: 'box', w: 10, h: 30, d: 10 }, [-15, 10, 0])] }],
+    ['交集', { type: 'bool', op: BOOL_OPS.INTERSECT, items: [it({ type: 'box', w: 40, h: 30, d: 20 }), it({ type: 'box', w: 30, h: 40, d: 20 }, [10, 10, 0])] }],
+    ['實體陣列 3 份', { type: 'array', mode: 'linear', count: 3, step: [30, 0, 0], count2: 1, step2: [0, 0, 20], child: it({ type: 'box', w: 20, h: 10, d: 10 }) }]
+  ];
+  for (const [name, src] of cases) {
+    const a = new io.ModelObject({ name, kind: io.KIND.SOLID, src });
+    const b = new io.ModelObject({ name, kind: io.KIND.SOLID, src: JSON.parse(JSON.stringify(src)) }); b.bake();
+    const ra = unfoldObject(a, { material: 'foamboard' }), rb = unfoldObject(b, { material: 'foamboard' });
+    eq(`★★★ ${name}：沒轉就攤 ＝ 轉成網格再攤（外框、片數、程式剪的邊數）`, sig(ra), sig(rb));
+    near(`★★ 　 面積一樣`, area(ra), area(rb), 1e-6);
+    const own = new Set([...a.mesh().edges()]);
+    ok(`★★ 　 程式剪的邊都是物件自己網格上的邊（${ra.autoEdges.length} 條）`, ra.autoEdges.length > 0 && ra.autoEdges.every(h => own.has(h) || own.has(h.twin)));
+  }
+  const notch = new io.ModelObject({ name: '挖角', kind: io.KIND.SOLID, src: cases[0][1] });
+  const rn = unfoldObject(notch, { material: 'foamboard' });
+  ok('★★★ 挖掉一角：沒轉就攤也⛔ 重疊（以前 125 × 65 重疊）', rn.pieces.every(p => !p.overlap), sig(rn));
+  ok('★★ 　 物件自己的網格⛔ 換（還是布林算出來的三角形，畫面、匯出照舊）', notch.mesh().faces.length > 8 && notch.isBool, `${notch.mesh().faces.length} 面`);
+  // 對照：直接攤三角形（舊做法）會重疊 —— 這個測試抓得到那個病
+  const old = unfoldMesh(notch.mesh(), makeRule('foamboard', notch.thickness));
+  ok('　　對照：直接攤三角形（舊做法）會重疊', old.pieces.some(p => p.overlap));
+} else {
+  ok('（略過：CSG 沒載入）', true);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

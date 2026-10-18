@@ -35,6 +35,7 @@ import { isMarkable, isSeam, markSignature } from './seam.js';
 import { EDGE_ROLE } from '../core/mesh.js';
 import { fitsBoard, NEST_DEFAULTS } from '../out/nest.js';
 import { gridOf, candidatesOf } from './curved.js';
+import { canonicalMesh } from './part.js';
 
 const DEG = 180 / Math.PI;
 /** 轉折小於這個角度 ＝ 曲面上的分格，算同一塊（圓柱 32 段約 11°、圓角 4 段 22.5°；方塊的角 90°）*/
@@ -93,7 +94,12 @@ export function proposeSeams(obj, opt = {}) {
   /** 縮放吃進去（跟 `unfoldObject()` 一樣）；`clone()`／`transformed()` 都保持頂點順序 ⇒ 用頂點編號對回物件自己的網格 */
   const s = obj.scale || { x: 1, y: 1, z: 1 };
   const scaled = Math.abs(s.x - 1) > 1e-9 || Math.abs(s.y - 1) > 1e-9 || Math.abs(s.z - 1) > 1e-9;
-  const base = scaled ? own.transformed(new THREE.Matrix4().makeScale(s.x, s.y, s.z)) : own.clone();
+  let base = scaled ? own.transformed(new THREE.Matrix4().makeScale(s.x, s.y, s.z)) : own.clone();
+  /**
+   * 🔴 網格物件照存檔內容重建後才試攤 —— 跟 `unfoldObject()` 同一個做法（`part.js` `canonicalMesh()`，2026-10-19 實驗 T3），
+   * ⛔ 的話提案在編輯中的網格上量、展開圖在重建的那份上攤，兩邊的片可能對不上。⭐ `fromJSON()` 保持頂點順序 ⇒ 下面照頂點編號對回照舊。
+   */
+  if (obj.src && obj.src.type === 'mesh') base = canonicalMesh(base).mesh;
   base.computeNormals();
 
   const vi = new Map(base.verts.map((v, i) => [v.id, i]));

@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
 import { Mesh } from '../core/mesh.js';
+import { mergeCoplanarFaces } from '../core/edit.js';
 
 /**
  * 展開一個物件。
@@ -79,6 +80,44 @@ export function unfoldObject(obj, opt = {}) {
    * ⭐ 認的條件在 `solidPlate()`：封閉、所有面不是跟大面平行就是垂直、頂點只落在兩個高度、厚度 ≤ 3 cm 而且比大面窄邊的 1/4 薄。
    * ⭐ 板厚改用**實際的幾何厚度**（⛔ 用物件身上看不見的 0.2）—— 卡片、CSV 寫的就是這塊板真正的厚度。
    */
+  /**
+   * 🔴 **網格物件照存檔內容重建後才攤**（2026-10-19，實驗 T3：`實驗-綜合評估.md` ①-3）。
+   *
+   * ⚠ 同一個盒身，存檔讀回來攤法就變（28 × 52 → 44 × 28）。病因【已查證 · 沙箱】：方塊的折角全是 90°，
+   * 「先走最平的邊」要在一堆一樣大的角裡挑 —— 挑中哪一條，靠的是座標**最後幾位的浮點雜訊**；
+   * 存檔把座標捨入到 6 位小數，雜訊換了一組，挑中的邊跟著換。轉一下再轉回來的方塊 20 個裡有 9 個存讀後攤法變了。
+   * ⭐ 修兩件事：① 存檔座標改存**完整精度**（`mesh.js` `toJSON()`）⇒ 讀回來一位不差；
+   * ② 一律在「照存檔內容重建」的副本上攤（`canonicalMesh()`）⇒ 編輯過的網格內部排列就算跟重建的不一樣，攤的也是存讀之後那一份。
+   * ⛔ 改攤平的規則本身 —— 試過「一樣大的角捨入後照順序挑」，圓錐、圓環、階梯的攤法跟著變、還有變差的（2026-10-19 沙箱）。
+   * ⛔ 只做 ②、存檔照舊捨入 —— 也試過：存讀前後一樣了，但剛轉成網格的圓柱縫從 1 條直線變成 5 段、
+   *   智慧分切的提案也從 1 片變 2 片（捨入過的雜訊剛好挑得比較亂；2026-10-19 沙箱）。
+   * ⚠ **只對網格物件做**（`src.type === 'mesh'`：編輯過的、讀檔讀回來的）。參數物件（方塊、圓柱、布林、陣列…）
+   * 每次都照參數重建，順序本來就固定、存讀前後一樣 —— 排了反而會讓大家看慣的攤法換樣子（方塊的十字形 145 × 210）。
+   */
+  const canon = obj.src && obj.src.type === 'mesh' ? canonicalMesh(mesh) : null;
+  if (canon) mesh = canon.mesh;
+
+  /**
+   * 🔴 **布林、陣列：先把同一個平面上的三角形併回一個面再攤**（2026-10-19，實驗 T2 疑點 Q9：`實驗-綜合評估.md` ①-4）。
+   *
+   * ⚠ 布林／實體陣列的網格是 Manifold 算出來的（`build/bool.js`），**全部是三角形**；
+   * 以前只有按「轉成可編輯網格」（`io.js` `bake()`）才會併回面，而展開拿沒轉的照樣攤 ——
+   * 方塊挖掉一角（差集）攤出來**重疊、不能下料**，轉成網格之後就是一片好的（2026-10-19 沙箱）。
+   * ⭐ 跟 `bake()` 用同一支（`edit.js` `mergeCoplanarFaces()`）：⛔ 改幾何（體積面積一樣），只把三角形併回本來那個平面；
+   * 併不動的（環形、其實不共面的）原樣留著。⇒ 沒轉就攤、轉了再攤，攤出來一樣。
+   * ⚠ 只對布林與陣列做：基本形狀的三角形排得整齊、本來就攤得好，大家看慣的攤法⛔ 動。
+   * ⚠ 物件自己的網格⛔ 換（畫面、匯出照舊）；程式補剪的邊照頂點編號對回去（`remap`）。
+   */
+  let merged = null;
+  if (!canon && (obj.isBool || obj.isArray)) {
+    const mr = mergeCoplanarFaces(mesh);
+    if (mr.ok) {
+      mesh = mr.mesh;
+      merged = [];
+      for (const [from, to] of mr.remap) merged[to] = from;
+    }
+  }
+
   const plate = (rule.foldable === false && opt.mode !== 'dart') ? solidPlate(mesh) : null;
   if (plate) {
     mesh = plate.mesh;
@@ -120,7 +159,7 @@ export function unfoldObject(obj, opt = {}) {
      * ⚠ 縮放過的物件展開的是套了縮放的另一份網格（上面的 `transformed()`）：頂點順序不變，照頂點編號對回來。
      */
     /** ⚠ 實心板攤的是頂面那一份新網格，邊對不回原物件 ⇒ ⛔ 給（一片板也⛔ 需要補剪）*/
-    autoEdges: plate ? [] : mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh()),
+    autoEdges: plate ? [] : mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh(), merged || (canon && canon.orig)),
     keepCut: r.keepCut || 0,
     warnings: [...warn, ...r.warnings],
     stats: { ...r.stats, total: r.pieces.reduce((n, p) => n + p.qty, 0) },
@@ -224,9 +263,26 @@ function platePart(mesh, faces) {
   return { t, top };
 }
 
-/** `transformed()` 出來的網格上的邊 → 原本網格上同一條邊（頂點順序一樣，照頂點編號配對）*/
-function mapEdgesBack(hes, from, to) {
-  const idx = new Map(from.verts.map((v, i) => [v.id, i]));
+/**
+ * 「照存檔的樣子重建一次」的副本（頂點順序不變，所以 `orig` 是恆等、回傳 null）。
+ *
+ * ⭐ 編輯中的網格跟讀檔讀回來的網格，**存檔內容一模一樣** ⇒ 一律攤「存檔內容重建出來的那一份」⇒ 存讀前後攤法一模一樣。
+ * ⚠ 照存檔的兩件事：① 座標（`mesh.js` `toJSON()` 存完整精度；舊檔捨入過的讀進來就是捨入過的那組，之後也一直是那組）；
+ * ② 內部排列（半邊的順序）照重建的 —— 編輯過的網格還留著「刪過、加過」的痕跡，那些⛔ 寫進存檔。
+ * ⚠ 真的走一次 `JSON.stringify()`／`JSON.parse()`（跟存檔同一條路，例如 −0 存成 0）。
+ * ⚠ 走 `toJSON()`／`fromJSON()`：標記（切開、不准切、平滑、環切的邊）跟著頂點編號一起搬，⛔ 漏。
+ */
+export function canonicalMesh(mesh) {
+  return { mesh: Mesh.fromJSON(JSON.parse(JSON.stringify(mesh.toJSON()))), orig: null };
+}
+
+/**
+ * 攤的那份網格上的邊 → 物件自己網格上同一條邊。
+ * `orig[i]` ＝ 攤的那份第 i 個點對應原網格的第幾個點（`canonicalMesh()` 是恆等；併面會清掉孤點、編號往前移；
+ * 縮放的 `transformed()` 不改頂點順序）。
+ */
+function mapEdgesBack(hes, from, to, orig) {
+  const idx = new Map(from.verts.map((v, i) => [v.id, orig ? orig[i] : i]));
   const tIdx = new Map(to.verts.map((v, i) => [v.id, i]));
   const byPair = new Map();
   for (const he of to.edges()) {
