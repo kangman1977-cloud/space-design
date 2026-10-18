@@ -17274,6 +17274,56 @@ section('平滑頂點：按一次順一次、不縮、帽緣不動（2026-10-18�
   }
 }
 
+section('陣列展開的片數：份數⛔ 再乘一次（2026-10-19 實驗 T3／T7）');
+{
+  /**
+   * 實驗 T3：隔板排列 2 份 → 展開 ×4、3 份 → ×9、鏡射 → ×4；
+   * T7：托架 2 × 3 網格 → 三角片 ×72（應 12）。病因：`obj.mesh()` 已含每一份，
+   * `unfold/part.js` 又乘一次 `obj.copies`（註解在那一行）。
+   * ⭐ 守的是「兩端一致」：陣列物件 vs 把同一份網格當成普通網格物件，片數與面積要一模一樣。
+   */
+  const item = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: '原件' });
+  const bend = { type: 'bend', w: 11, first: 1, arcSeg: 4, bends: [{ angle: 90, ri: 0.2, len: 7.5 }] };
+  const box = { type: 'box', w: 4, h: 2, d: 3 };
+  const wedge = { type: 'wedge', w: 0.5, h: 3, d: 3 };
+  const un = o => unfoldObject(o, { material: 'foamboard' });
+  /** 同一份網格、⛔ 是陣列的普通物件（⛔ 走 bake，免得共面合併改了網格） */
+  const twinOf = o => {
+    const t = new io.ModelObject({ name: o.name + '（網格）', src: { type: 'mesh' }, kind: o.kind, thickness: o.thickness });
+    t._mesh = o.mesh().clone();
+    return t;
+  };
+  const cases = [
+    ['折板 排列 2 份', 'sheet', bend, { mode: 'linear', count: 2, step: [6.67, 0, 0], count2: 1 }, 2],
+    ['折板 排列 3 份', 'sheet', bend, { mode: 'linear', count: 3, step: [6.67, 0, 0], count2: 1 }, 3],
+    ['折板 鏡射', 'sheet', bend, { mode: 'mirror', axis: 'x', offset: 5, keepOriginal: true }, 2],
+    ['折板 2 × 3 網格', 'sheet', bend, { mode: 'linear', count: 2, step: [20, 0, 0], count2: 3, step2: [0, 15, 0] }, 6]
+  ];
+  if (csgOK) {
+    cases.push(['方塊 分開排 3 份', 'solid', box, { mode: 'linear', count: 3, step: [10, 0, 0], count2: 1 }, 3]);
+    cases.push(['楔形 2 × 3 網格（T7 托架）', 'solid', wedge, { mode: 'linear', count: 2, step: [20, 0, 0], count2: 3, step2: [0, 15, 0] }, 6]);
+  }
+  for (const [label, kind, src, arr, n] of cases) {
+    const single = new io.ModelObject({ name: '單一', src, kind, thickness: 0.5 });
+    const o = new io.ModelObject({ name: label, src: { type: 'array', ...arr, child: item(src) }, kind, thickness: 0.5 });
+    const r1 = un(single), ra = un(o), rt = un(twinOf(o));
+    eq(`${label}：片數 ＝ 一份的 ${n} 倍`, ra.stats.total, r1.stats.total * n);
+    near(`${label}：面積 ＝ 一份的 ${n} 倍`, ra.stats.area, r1.stats.area * n, 1e-6);
+    eq(`${label}：片數 ＝ 同一份網格的普通物件`, ra.stats.total, rt.stats.total);
+    near(`${label}：面積 ＝ 同一份網格的普通物件`, ra.stats.area, rt.stats.area, 1e-6);
+  }
+  if (csgOK) {
+    /** 重疊的實體排列 ⇒ 聯集成一塊 ⇒ 片數跟那一塊一樣，⛔ 是一份的 2 倍、更⛔ 是 4 倍 */
+    const o = new io.ModelObject({ name: '方塊 重疊排 2 份', src: { type: 'array', mode: 'linear', count: 2, step: [2, 0, 0], count2: 1, child: item(box) }, kind: 'solid', thickness: 0.5 });
+    const single = new io.ModelObject({ name: '單一', src: box, kind: 'solid' });
+    const ra = un(o), rt = un(twinOf(o)), r1 = un(single);
+    eq('方塊 重疊排 2 份：聯集後是 1 塊', o.mesh().validate().components, 1);
+    eq('方塊 重疊排 2 份：片數 ＝ 同一份網格的普通物件', ra.stats.total, rt.stats.total);
+    near('方塊 重疊排 2 份：面積 ＝ 6 × 2 × 3 的外表面積 2 ×（6×2 ＋ 6×3 ＋ 2×3）＝ 72', ra.stats.area, 2 * (6 * 2 + 6 * 3 + 2 * 3), 1e-6);
+    ok('方塊 重疊排 2 份：⛔ 是一份的 4 倍', ra.stats.total !== r1.stats.total * 4);
+  }
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

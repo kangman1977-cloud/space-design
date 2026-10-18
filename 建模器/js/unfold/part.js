@@ -70,10 +70,20 @@ export function unfoldObject(obj, opt = {}) {
   /** `opt.mode`：`'dart'` ＝ 省道打版（2026-10-12）；沒給 ＝ 精確分片（原本的路）*/
   const r = unfoldMesh(mesh, rule, { flatTolDeg: opt.flatTolDeg, mode: opt.mode });
 
-  // 陣列的份數要乘上去：12 支一樣的橫料 ＝ 一張圖 ×12。
-  // 這是第 2 期把陣列做成修飾器、而不是複製成 12 個物件的理由。
-  const copies = obj.copies || 1;
-  if (copies > 1) for (const p of r.pieces) p.qty *= copies;
+  /**
+   * 🔴 **陣列的份數⛔ 再乘一次**（2026-10-19 實驗 T3／T7 抓到：份數被平方）。
+   *
+   * ⚠ 這裡原本寫 `p.qty *= obj.copies` —— 那是「陣列只算一份網格」那個年代的寫法。
+   * **現在 `obj.mesh()` 已經把每一份都放進去了**（`build/array.js` `evalArrayTree()`：
+   * 板件 `Mesh.merge(copies)`、實體 `unionMeshes(copies)`），
+   * 而 `unfoldMesh()` 本來就會把一樣的片併成一張圖 ×N（`flatten.js` `groupIdentical()`）。
+   * ⇒ 再乘一次就是 N²：排列 2 份出 4 片、3 份出 9 片、鏡射出 4 片、2 × 3 網格的三角片 ×72。
+   *
+   * ⭐ **片數只由「實際攤的那份網格」決定**（鐵律二：性質由兩端決定 —— 這裡的兩端是
+   * 陣列造網格的那一端、展開數片的這一端；網格那一端改了，這一端要跟著拿掉）。
+   * ⭐ 重疊的實體陣列聯集成一塊之後也就對了：一塊就是一塊，⛔ 再乘份數。
+   * 〔守門的測試：`tests/run.mjs`「陣列展開的片數」—— 陣列物件 vs 同一份網格烤成的物件，片數與面積要一樣〕
+   */
 
   /**
    * 🔴 **每一片帶著自己的規則（材質＋板厚）**（2026-10-08 查 bug 找到的）。
