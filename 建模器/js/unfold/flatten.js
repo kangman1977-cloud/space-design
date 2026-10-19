@@ -176,8 +176,13 @@ export function unfoldMesh(mesh, rule, opts = {}) {
      * 沙箱實測：半球的開口停在 6 成高 ⇒ 上面那頂帽子太鼓，有 1 個面翻過來；不開口 ⇒ 50 個。
      */
     if (dart && p.strain && p.strain.flips) {
+      /**
+       * ⚠ 2026-10-19（實驗 T5：`實驗-綜合評估.md` ①-14，kang「先同意你的研究與建議」）：多講一句「不想變形可以怎麼做」——
+       * T5 燈罩是 AI 拿錯了工具：圓錐面用分片的智慧分切「環帶」就 0% 攤平（3 片），省道打版是給會伸縮的材料做鼓起來的形狀用的。
+       * ⭐ 照 10/09 的定案（`外部參考-打版.md` 第 2 節第 1 條）⛔ 做自動開口，只指路（`DART_HINT`）。
+       */
       warnings.push(`「${p.name}」攤平後有 ${p.strain.flips} 個面翻過來（疊在一起）—— 這片就算能拉也做不出來。`
-                  + `請多開幾道開口（開長一點），或多分幾片`);
+                  + `請多開幾道開口（開長一點），或多分幾片${DART_HINT}`);
     }
     if (dart && p.strain && !p.strain.converged) {
       warnings.push(`「${p.name}」算到上限還沒停下來 —— 上面的拉伸數字可能還會再變一點`);
@@ -1041,6 +1046,12 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
   if (strain) piece.area = strain.area;
   return piece;
 }
+
+/**
+ * 省道打版變形太大時多講的那一句（翻面的提醒、`out/sheet.js` 超過上限那一行共用 —— ⛔ 兩邊各寫一份）。
+ * 2026-10-19 ①-14：不做自動開口（10/09 定案），改成指出不變形的做法。
+ */
+export const DART_HINT = '；不想變形的話，改用「精確分片」，或到分片模式用「智慧分切」（例如環帶）—— 省道打版是給布這類會伸縮的材料用的';
 
 /** 圓弧帶裡面的面（見 `piece.arcFaces`）*/
 function arcFacesOf(mesh, faces, bands, found) {

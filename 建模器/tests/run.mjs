@@ -17841,6 +17841,42 @@ section('平滑的圓錐面當一段曲線帶（2026-10-19 綜合評估 ①-11�
   eq('★★ 圓環、半球（旋轉做的，有平滑標記）：圖上的折線 70 → 38、38 → 8', ['torus', 'dome'].map(drawn).join(','), '38,8');
 }
 
+section('省道打版變形太大時指路（2026-10-19 綜合評估 ①-14）');
+{
+  /**
+   * 實驗 T5：燈罩不切縫用省道打版，壓 29.9%（面積 924.8，真值 1,003.4）—— 用智慧分切「環帶」是 3 片、0%。
+   * kang 2026-10-19「先同意你的研究與建議」：照 10/09 定案⛔ 做自動開口；翻面、超過上限時多講一句「不想變形可以怎麼做」。
+   */
+  const { DART_HINT } = await import('../js/unfold/flatten.js');
+  const { titleLines } = await import('../js/out/sheet.js');
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const pts = [[10.3561, 0]];
+  for (const [L, a] of [[8.0156, 93.58], [10.198, 101.31], [7.433, 109.65]]) {
+    const [x, y] = pts[pts.length - 1], t = a * Math.PI / 180;
+    pts.push([x + L * Math.cos(t), y + L * Math.sin(t)]);
+  }
+  const xy = pts.flat();
+  const lamp = new io.ModelObject({ name: '燈罩', kind: io.KIND.SHEET, thickness: 0.2,
+    src: { type: 'pen', h: 3, open: true, paths: [{ closed: false, a: xy, hi: xy.map(() => 0), ho: xy.map(() => 0) }], rev: { dir: 'z', at: 2.3561, seg: 32, stand: false } } });
+  lamp.bake();
+  const r = unfoldObject(lamp, { material: 'canvas', mode: 'dart' });
+  const p = r.pieces[0];
+  ok('★★ T5 燈罩不切縫、省道打版：壓縮超過 20%（以前就是這樣，這一輪⛔ 改算法）', p.strain && -p.strain.min > 0.2, (-p.strain.min * 100).toFixed(1) + '%');
+  const over = titleLines(p, { rule: p.rule, limit: 3 }).find(t => t.startsWith('⚠ 超過你填的上限'));
+  ok('★★★ 　 超過上限 3% 那一行多講「不想變形的話，改用精確分片，或到分片模式用智慧分切（例如環帶）」', !!over && over.endsWith(DART_HINT), over);
+  ok('★★ 　 提醒裡⛔ 出現 ⛔、** 這種文件記號', !DART_HINT.includes('⛔') && !DART_HINT.includes('**'));
+  ok('★★ 　 沒超過上限 ⇒ ⛔ 講', !titleLines(p, { rule: p.rule, limit: 50 }).some(t => t.includes('智慧分切')));
+  // 翻面：半球只切開底那一圈、不開口（規格 2.1 量過：50 個面翻過來）
+  const dome = new io.ModelObject({ name: '半球', kind: io.KIND.SOLID, src: { type: 'dome', ...PRIM_DEFAULTS.dome } }); dome.bake();
+  const m = dome.mesh(); m.computeNormals();
+  const yb = m.bounds().min.y;    // 半球是置中的，底在最低的那一圈
+  for (const h of [...m.edges()]) if (h.twin && h.twin.face && Math.abs(h.v.p.y - yb) < 1e-6 && Math.abs(h.to.p.y - yb) < 1e-6) setSeam(m, h, true);
+  const rd = unfoldObject(dome, { material: 'canvas', mode: 'dart' });
+  const flipW = rd.warnings.find(w => w.includes('個面翻過來'));
+  ok('★★★ 半球只切開底、不開口：「…個面翻過來…」那一則多講同一句', !!flipW && flipW.endsWith(DART_HINT), flipW || rd.warnings.join('｜'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

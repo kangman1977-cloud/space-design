@@ -103,6 +103,7 @@ export const STYLE = {
  * 又是同一條原則：要送出去的格式，用最保守的寫法。
  */
 import { csgReady, offsetLoop } from '../build/bool.js';
+import { DART_HINT } from '../unfold/flatten.js';
 
 export const FONT = 'Noto Sans TC, Microsoft JhengHei, PingFang TC, sans-serif';
 
@@ -864,7 +865,8 @@ export function titleLines(piece, opt = {}) {
     if (opt.limit !== undefined && opt.limit !== '' && Number.isFinite(lim)) {
       const worst = Math.max(s.max, -s.min) * 100;
       out.push(worst > lim + 1e-9
-        ? `⚠ 超過你填的上限 ${fmt(lim)}%（這片最多 ${fmt(worst)}%）—— 多開幾道開口或多分幾片`
+        /** 2026-10-19 ①-14：多講「不想變形可以怎麼做」（`flatten.js` `DART_HINT`）*/
+        ? `⚠ 超過你填的上限 ${fmt(lim)}%（這片最多 ${fmt(worst)}%）—— 多開幾道開口或多分幾片${DART_HINT}`
         : `在你填的上限 ${fmt(lim)}% 以內`);
     }
   }
