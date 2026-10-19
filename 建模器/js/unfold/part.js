@@ -171,6 +171,20 @@ export function unfoldObject(obj, opt = {}) {
    */
   for (const p of r.pieces) { p.owner = obj.name; p.rule = rule; }
 
+  /**
+   * 🔴 **紙模的黏合片長在接縫的哪一邊**（2026-10-19，`實驗-綜合評估.md` ①-7；畫的人是 `out/sheet.js` `marginGeometry()`）。
+   * 一條縫的兩側走的是同一串 3D 頂點、同一個方向（`flatten.js` `collectSeamRuns()`）⇒ 用頂點串當 key，
+   * **先遇到的那一側長**（片的順序、縫的順序），另一側不長 —— 一對接縫只長一片，兩邊一定對得上。
+   */
+  const tabSeen = new Set();
+  for (const p of r.pieces) {
+    for (const run of (p.seamRuns || [])) {
+      const k = run.segs.map(g => `${g.va}-${g.vb}`).join(',');
+      run.tab = !tabSeen.has(k);
+      tabSeen.add(k);
+    }
+  }
+
   return {
     ok: true,
     pieces: r.pieces,

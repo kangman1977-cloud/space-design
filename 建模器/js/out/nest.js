@@ -29,7 +29,16 @@
  * 單位 cm。⛔ 不碰 DOM，Node 裡測得到。
  */
 
-import { drawProgram, sliceProgram } from './sheet.js';
+import { drawProgram, sliceProgram, pieceFootprint } from './sheet.js';
+
+/**
+ * 一片排版時佔多大（2026-10-19，`實驗-綜合評估.md` ①-7）：勾了畫縫份／黏合片（`opt.margin`）⇒ 含外面那一圈（`pieceFootprint()`）；
+ * 沒勾 ⇒ 就是外框的寬、高（跟以前一樣）。
+ */
+function dimsOf(piece, opt = {}) {
+  const f = pieceFootprint(piece, opt);
+  return { w: f.x1 - f.x0, h: f.y1 - f.y0 };
+}
 
 /** ⚠ 預設照 kang 2026-10-09 講的：120 × 240 橫放、轉 90° 關、間距 1 cm */
 export const NEST_DEFAULTS = { on: true, w: 240, h: 120, gap: 1, rotate: false };
@@ -69,7 +78,7 @@ export function fitsBoard(w, h, opt = {}) {
  */
 export function packBoards(pieces, opt = {}) {
   const shelf = shelfPack(pieces, opt);
-  const best = rectPackBest(pieces, { w: shelf.W, h: shelf.H, gap: shelf.gap, rotate: !!opt.rotate });
+  const best = rectPackBest(pieces, { w: shelf.W, h: shelf.H, gap: shelf.gap, rotate: !!opt.rotate, margin: opt.margin, rule: opt.rule });
   return best && best.boards.length < shelf.boards.length ? { ...best, W: shelf.W, H: shelf.H, gap: shelf.gap } : shelf;
 }
 
@@ -84,9 +93,10 @@ function shelfPack(pieces, opt = {}) {
   const todo = [];
   const oversize = [];
   for (const piece of pieces) {
+    const D = dimsOf(piece, opt);
     for (let copy = 0; copy < (piece.qty || 1); copy++) {
-      const a = { w: piece.width, h: piece.height, rot: 0 };
-      const b = { w: piece.height, h: piece.width, rot: 90 };
+      const a = { w: D.w, h: D.h, rot: 0 };
+      const b = { w: D.h, h: D.w, rot: 90 };
       const cand = (opt.rotate ? [a, b] : [a]).filter(o => fits(o.w, o.h));
       if (!cand.length) { oversize.push({ piece, copy }); continue; }
       // 可以轉時挑「比較扁」的放法 —— 一列比較矮，擺得比較多
@@ -132,10 +142,10 @@ function shelfPack(pieces, opt = {}) {
   }));
   /** 比板子還大的：單獨一張、照它自己的大小，⛔ 不轉 */
   for (const o of oversize) {
-    const p = o.piece;
+    const D = dimsOf(o.piece, opt);
     out.push({
-      w: p.width + 2 * g, h: p.height + 2 * g, oversize: true,
-      items: [{ ...o, x: g, y: g, w: p.width, h: p.height, rot: 0 }]
+      w: D.w + 2 * g, h: D.h + 2 * g, oversize: true,
+      items: [{ ...o, x: g, y: g, w: D.w, h: D.h, rot: 0 }]
     });
   }
   return { boards: out, count: todo.length + oversize.length, W, H, gap: g };
@@ -179,9 +189,8 @@ function takeRect(free, x, y, w, h) {
 function rectPack(todo, W, H, g, rotate, how, pol) {
   const boards = [];
   for (const it of todo) {
-    const P = it.piece;
-    const all = [{ w: P.width, h: P.height, rot: 0 }];
-    if (rotate) all.push({ w: P.height, h: P.width, rot: 90 });
+    const all = [{ w: it.fw, h: it.fh, rot: 0 }];
+    if (rotate) all.push({ w: it.fh, h: it.fw, rot: 90 });
     let ors = all;
     if (rotate && pol === 'tall') ors = [all[0].h >= all[1].h ? all[0] : all[1]];
     if (rotate && pol === 'wide') ors = [all[0].w >= all[1].w ? all[0] : all[1]];
@@ -212,18 +221,19 @@ function rectPackBest(pieces, opt) {
   const W = opt.w, H = opt.h, g = opt.gap;
   const todo = [], oversize = [];
   for (const piece of pieces) {
+    const D = dimsOf(piece, opt);
     for (let copy = 0; copy < (piece.qty || 1); copy++) {
-      if (fitsBoard(piece.width, piece.height, opt)) todo.push({ piece, copy });
+      if (fitsBoard(D.w, D.h, opt)) todo.push({ piece, copy, fw: D.w, fh: D.h });
       else oversize.push({ piece, copy });
     }
   }
-  const area = it => it.piece.width * it.piece.height;
+  const area = it => it.fw * it.fh;
   const orders = [
     (a, b) => area(b) - area(a),
-    (a, b) => Math.max(b.piece.width, b.piece.height) - Math.max(a.piece.width, a.piece.height),
-    (a, b) => Math.min(b.piece.width, b.piece.height) - Math.min(a.piece.width, a.piece.height),
-    (a, b) => (b.piece.width + b.piece.height) - (a.piece.width + a.piece.height),
-    (a, b) => b.piece.height - a.piece.height
+    (a, b) => Math.max(b.fw, b.fh) - Math.max(a.fw, a.fh),
+    (a, b) => Math.min(b.fw, b.fh) - Math.min(a.fw, a.fh),
+    (a, b) => (b.fw + b.fh) - (a.fw + a.fh),
+    (a, b) => b.fh - a.fh
   ];
   let best = null;
   for (const pol of (opt.rotate ? ['best', 'tall', 'wide'] : ['best'])) {
@@ -242,10 +252,10 @@ function rectPackBest(pieces, opt) {
     items: bd.items.map(it => ({ ...it, y: H - it.y - it.h }))
   }));
   for (const o of oversize) {
-    const p = o.piece;
+    const D = dimsOf(o.piece, opt);
     out.push({
-      w: p.width + 2 * g, h: p.height + 2 * g, oversize: true,
-      items: [{ ...o, x: g, y: g, w: p.width, h: p.height, rot: 0 }]
+      w: D.w + 2 * g, h: D.h + 2 * g, oversize: true,
+      items: [{ ...o, x: g, y: g, w: D.w, h: D.h, rot: 0 }]
     });
   }
   return { boards: out, count: todo.length + oversize.length };
@@ -270,10 +280,14 @@ export function boardProgram(board, opt = {}) {
   for (const it of board.items) {
     const p = it.piece;
     const prog = opt.draw ? opt.draw(p) : drawProgram(p, { ...opt, showDims: false, showBendMarks: false });
-    /** 片的座標（0..寬, 0..高）→ 板子座標；轉 90° ＝ 逆時針（(x, y) → (高 − y, x)） */
+    /**
+     * 片的座標 → 板子座標；轉 90° ＝ 逆時針（(x, y) → (高 − y, x)）。
+     * ⚠ 勾了縫份／黏合片：片佔的範圍是 `pieceFootprint()`（外面那一圈在 0 的左邊、下面）⇒ 先挪回 0 再擺（排版排的也是這個範圍）。
+     */
+    const F = opt.draw ? { x0: 0, y0: 0, x1: p.width, y1: p.height } : pieceFootprint(p, opt);
     const T = (x, y) => (it.rot
-      ? { x: it.x + (p.height - y), y: it.y + x }
-      : { x: it.x + x, y: it.y + y });
+      ? { x: it.x + (F.y1 - y), y: it.y + (x - F.x0) }
+      : { x: it.x + (x - F.x0), y: it.y + (y - F.y0) });
     /**
      * ⚠ 圓弧折彎的參考線（`bend`）在 `drawProgram()` 裡上下各多畫 1 cm（單片圖上好看）——
      * 排在板子上就會畫進隔壁那片或板邊外（間距 0 時一定會）。⇒ 夾回這一片的高度以內。

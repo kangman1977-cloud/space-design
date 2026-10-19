@@ -102,6 +102,10 @@ export class UnfoldPanel {
             <option value="mark">只畫短線、不切</option>
           </select>
         </div>
+        <div class="uwBar" id="uwMarginBar" hidden title="帆布：每片外面多畫一圈縫份（實線是裁切線），原本的外框變成虛線的縫線。紙模：標過分片的，每一對接縫只在一邊長梯形黏合片；沒標過的，改成外圍一圈。只有帆布、紙模才有這一列">
+          <label class="uwCk"><input type="checkbox" id="uwMargin"> 畫縫份／黏合片</label>
+          <span class="lbl">寬</span><input type="number" id="uwMarginW" min="0.1" step="0.1" style="width:56px"><span class="lbl">cm</span>
+        </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
           <label class="uwCk"><input type="checkbox" id="uwNest"> 排版到板子上</label>
           <span class="lbl">板寬</span><input type="number" id="uwNW" min="1" step="1" style="width:64px">
@@ -130,6 +134,7 @@ export class UnfoldPanel {
     mat.value = this.opt.material;
     mat.onchange = () => {
       this.opt.material = mat.value;
+      this._syncMarginBar();
       this.run();
     };
     this.matSel = mat;
@@ -242,6 +247,27 @@ export class UnfoldPanel {
     };
     nOn.onchange = nGap.onchange = nSt.onchange = notchChanged;
 
+    /**
+     * 🔴 「畫縫份／黏合片」（2026-10-19，`實驗-綜合評估.md` ①-7，kang「能夠變成選項…有需要時才會觸發」→「同意」）。
+     * ⭐ 預設⛔ 勾（原本的圖一個字都不變）；勾不勾、每種材質的寬度記在瀏覽器裡（寬度預設照材質：帆布 1.5、紙模 1）。
+     * ⚠ 只有材質有縫份或黏合片時才出現這一列（`_syncMarginBar()`）—— 珍珠板、壓克力、金屬出現了只會讓人困惑。
+     * 寬度填錯（空白、0、負數）⇒ 退回上一個能用的值。
+     */
+    this.marginBar = $('uwMarginBar');
+    this.marginIn = $('uwMargin');
+    this.marginW = $('uwMarginW');
+    this.marginIn.checked = !!this.opt.marginOn;
+    if (!this.opt.marginW || typeof this.opt.marginW !== 'object') this.opt.marginW = {};
+    const marginChanged = () => {
+      this.opt.marginOn = this.marginIn.checked;
+      const v = +this.marginW.value;
+      if (v > 0) this.opt.marginW[this.opt.material] = v; else this.marginW.value = this._marginWidth();
+      saveOpt(this.opt);
+      if (this.result) this._render(this.result, this.objs);
+    };
+    this.marginIn.onchange = this.marginW.onchange = marginChanged;
+    this._syncMarginBar();
+
     $('uwClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
 
@@ -272,6 +298,26 @@ export class UnfoldPanel {
     return picked.length ? picked : this.app.doc.objects;
   }
 
+  /** 這個材質的縫份／黏合片預設多寬（cm）；0 ＝ 沒有（鈑金、珍珠板、壓克力）*/
+  _marginDefault() {
+    const M = MATERIALS[this.opt.material] || {};
+    return M.seam || M.tab || 0;
+  }
+
+  /** 目前要畫多寬：使用者打過的優先，沒打過照材質 */
+  _marginWidth() {
+    const v = this.opt.marginW && this.opt.marginW[this.opt.material];
+    return v > 0 ? v : this._marginDefault();
+  }
+
+  /** 換材質時：這一列要不要出現、寬度欄換成這個材質的數字 */
+  _syncMarginBar() {
+    if (!this.marginBar) return;
+    const has = this._marginDefault() > 0;
+    this.marginBar.hidden = !has;
+    if (has) this.marginW.value = this._marginWidth();
+  }
+
   /**
    * 卡片、SVG、列印、DXF 共用的選項 —— ⛔ 不要各組一份。
    * ⚠ `strainFill`（省道打版的拉伸色塊）預設開 —— 畫面、列印要；**存 SVG／DXF 的地方明講 `strainFill: false`**
@@ -284,6 +330,8 @@ export class UnfoldPanel {
       dartStyle: this.opt.dartStyle || 'cut', limit: this.opt.limit ?? '', strainFill: true,
       dartFolds: !!this.opt.dartFolds,
       notch: this.opt.notchOn ? { style: this.opt.notchStyle || 'slit', spacing: this.opt.notchGap || 10 } : null,
+      /** 畫縫份／黏合片（`out/sheet.js` `marginGeometry()`）：材質沒有縫份／黏合片時給了也不畫 */
+      margin: this.opt.marginOn && this._marginDefault() > 0 ? { on: true, w: this._marginWidth() } : null,
       ...extra
     };
   }
@@ -369,7 +417,7 @@ export class UnfoldPanel {
   /** 排版：照目前的設定把這次的片擺進板子裡（⛔ 不存結果 —— 設定一改就重排）*/
   _nest() {
     const N = this.opt.nest;
-    return packBoards(this.result.pieces, { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate });
+    return packBoards(this.result.pieces, { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate, margin: this._drawOpt().margin });
   }
 
   /** 每張板的「畫什麼」與標題 —— 畫面、SVG、DXF、列印共用，⛔ 不各排一次（存檔時傳 `{ strainFill: false }`）*/

@@ -54,7 +54,7 @@
  */
 
 import { pieceNo } from '../unfold/part.js';
-import { sameFolds, outlineSegments, notchMarks, foldStyle } from './sheet.js';
+import { sameFolds, outlineSegments, notchMarks, foldStyle, pieceFootprint } from './sheet.js';
 
 /**
  * CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）。
@@ -76,7 +76,9 @@ const upDown = a => (a > 0 ? 'UP' : 'DOWN');
 const NOTCH_LAYER = { notchCut: 'CUT_NOTCH', notchMark: 'MARK' };
 
 /** 展開圖的線型 → DXF 圖層（`outlineSegments()` 的 style）。剪掉的開口照樣要切 ⇒ CUT */
-const OUTLINE_LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', dartCut: 'CUT', dartSew: 'SEW' };
+const OUTLINE_LAYER = { cut: 'CUT', hole: 'CUT', autoCut: 'CUT_AUTO', dartCut: 'CUT', dartSew: 'SEW',
+  /** 畫縫份／黏合片（2026-10-19，①-7）：帆布原本的外框 ＝ 縫線（SEW，⛔ 切）、紙模黏合片的底邊 ＝ 折線（FOLD）*/
+  seamSew: 'SEW', tabFold: 'FOLD' };
 
 /** 剖面分切用的圖層顏色。切割層依板厚各一層，名字由 cutLayer() 產生。 */
 const SLICE_COLOR = { NUM: 30, TEXT: 8 };
@@ -109,9 +111,11 @@ export function toDXF(pieces, opt = {}) {
   const laid = [];
   let x = 0, maxY = 0;
   for (const p of pieces) {
-    laid.push({ p, ox: x, oy: 0 });
-    x += p.width * s + gap;
-    maxY = Math.max(maxY, p.height * s);
+    /** 勾了縫份／黏合片：外面那一圈也要排進去（`pieceFootprint()`；沒勾 ⇒ 0..寬、0..高，跟以前一樣）*/
+    const fb = pieceFootprint(p, opt);
+    laid.push({ p, ox: x - fb.x0 * s, oy: -fb.y0 * s });
+    x += (fb.x1 - fb.x0) * s + gap;
+    maxY = Math.max(maxY, (fb.y1 - fb.y0) * s);
   }
 
   /**

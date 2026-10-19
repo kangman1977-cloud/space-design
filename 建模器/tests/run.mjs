@@ -17631,6 +17631,99 @@ section('綜合評估 ① 第三批：短縫的對位記號、DXF 折向、刀�
   }
 }
 
+section('畫縫份／黏合片（2026-10-19 綜合評估 ①-7）');
+if (csgOK) {
+  /**
+   * kang 2026-10-19：「縫份、黏合片…能夠變成選項…有需要時才會觸發」→ 照建議「同意」：預設⛔ 勾、寬度照材質可以改、
+   * 紙模標過分片 ⇒ 每對接縫只長一邊；沒標過 ⇒ 外圍一圈。數字是同一天沙箱量的（T3 盒身 20 × 8 × 12，開口朝上）。
+   */
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { marginGeometry, pieceFootprint, outlineSegments, titleLines, drawProgram, notchMarks } = await import('../js/out/sheet.js');
+  const { toDXF } = await import('../js/out/dxf.js');
+  const { packBoards } = await import('../js/out/nest.js');
+  const LN = (d, layer) => (d.match(new RegExp(`\\r\\n0\\r\\nLINE\\r\\n8\\r\\n${layer}\\r\\n`, 'g')) || []).length;
+  const sty = segs => Object.entries(segs.reduce((c, x) => (c[x.style] = (c[x.style] || 0) + 1, c), {})).sort().map(([k, v]) => `${k}${v}`).join(',');
+  const box = seam => {
+    const o = new io.ModelObject({ name: '盒身', kind: io.KIND.SOLID, src: { type: 'box', w: 20, h: 8, d: 12 } }); o.bake();
+    let m = o.mesh(); m.computeNormals();
+    m = edit.deleteFaces(m, [{ kind: 'face', face: m.faces.find(f => f.normal.y > 0.99) }]).mesh; m.computeNormals(); o.setMesh(m);
+    if (seam) setSeam(m, [...m.edges()].find(h => h.twin && h.twin.face && Math.abs(Math.abs(h.v.p.y - h.to.p.y) - 8) < 1e-6), true);
+    return o;
+  };
+  const ON = { margin: { on: true } };
+
+  // ── 沒勾 ⇒ 一個字都不變 ──
+  {
+    const p = unfoldObject(box(false), { material: 'canvas' }).pieces[0];
+    const a = JSON.stringify(drawProgram(p, { rule: p.rule })), b = JSON.stringify(drawProgram(p, { rule: p.rule, margin: { on: false } }));
+    ok('★★★ 沒勾：畫的東西跟沒有這個選項時一模一樣', a === b && !marginGeometry(p, { margin: null }));
+    ok('★★ 　 卡片照舊寫「⚠ 圖上未含縫份 1.5 cm，下料時另加」，並講去哪裡勾', titleLines(p, { rule: p.rule }).some(t => t.startsWith('⚠ 圖上未含縫份 1.5 cm，下料時另加') && t.includes('畫縫份／黏合片')));
+    const f = unfoldObject(box(false), { material: 'foamboard' }).pieces[0];
+    ok('★★ 　 珍珠板（沒有縫份）勾了也⛔ 畫', !marginGeometry(f, ON) && sty(outlineSegments(f, ON).segs) === sty(outlineSegments(f, {}).segs));
+  }
+
+  // ── 帆布：外圍一圈，原本的外框變縫線 ──
+  {
+    const p = unfoldObject(box(false), { material: 'canvas' }).pieces[0];
+    const g = marginGeometry(p, ON);
+    eq('★★★ 帆布 T3 盒身（64 × 20）：外圍一圈 1.5、範圍 −1.5..65.5 × −1.5..21.5', `${g.kind} ${g.bounds.x0},${g.bounds.y0},${g.bounds.x1},${g.bounds.y1}`, 'seam -1.5,-1.5,65.5,21.5');
+    eq('★★★ 　 原本的外框 6 段變縫線、外面 6 段裁切線', sty(outlineSegments(p, ON).segs), 'cut6,seamSew6');
+    const d = toDXF([p], ON);
+    eq('★★★ 　 DXF：裁切線在 CUT（6）、縫線在 SEW（6）—— 縫線⛔ 切', `${LN(d, 'CUT')}/${LN(d, 'SEW')}`, '6/6');
+    const tl = titleLines(p, { rule: p.rule, ...ON });
+    ok('★★ 　 卡片：「縫份 1.5 cm 已畫進圖…」「含縫份外框 67 × 23 cm」、⛔「圖上未含」', tl.some(t => t.startsWith('縫份 1.5 cm 已畫進圖')) && tl.includes('含縫份外框 67 × 23 cm') && !tl.some(t => t.includes('圖上未含')), tl.join('｜'));
+    const g2 = marginGeometry(p, { margin: { on: true, w: 3 } });
+    eq('★★ 　 寬度打 3 ⇒ 外圍推 3', `${g2.w} ${g2.bounds.x0}`, '3 -3');
+    const nb = packBoards([p], { w: 240, h: 120, gap: 1, margin: ON.margin });
+    eq('★★★ 　 排版照含縫份的外框排（67 × 23）', nb.boards[0].items.map(it => `${it.w}×${it.h}`).join(), '67×23');
+    eq('★★ 　 沒勾的排版照舊（64 × 20）', packBoards([p], { w: 240, h: 120, gap: 1 }).boards[0].items.map(it => `${it.w}×${it.h}`).join(), '64×20');
+    const pr = drawProgram(p, { rule: p.rule, ...ON });
+    ok('★★ 　 圖面包住外面那一圈', pr.box.x <= -1.5 && pr.box.y <= -1.5 && pr.box.x + pr.box.w >= 65.5);
+  }
+
+  // ── 帆布的洞：往內縮；小到縮沒了 ⇒ 講 ──
+  {
+    const sq = (x, y, s) => [{ x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s }];
+    const fake = { name: '有洞的片', qty: 1, area: 0, width: 20, height: 20, outline: sq(0, 0, 20), holes: [sq(7, 7, 6), sq(2, 2, 2)],
+      seamRuns: [], bends: [], folds: [], joints: [], warnings: [], rule: makeRule('canvas', 0.2) };
+    const g = marginGeometry(fake, ON);
+    eq('★★ 帆布的洞：6 × 6 的往內縮成 3 × 3（4 段裁切線）、2 × 2 的縮沒了（算 1 個）', `${g.cuts.length}/${g.lostHoles}`, '8/1');
+    ok('★★ 　 卡片講「1 個洞比縫份還小」', titleLines(fake, { rule: fake.rule, ...ON }).some(t => t.includes('1 個洞比縫份還小')));
+  }
+
+  // ── 紙模：沒標過分片 ⇒ 外圍一圈 ──
+  {
+    const p = unfoldObject(box(false), { material: 'paper' }).pieces[0];
+    const g = marginGeometry(p, ON);
+    eq('★★★ 紙模、沒標過分片：外圍一圈 1（kang 同意）', `${g.kind} ${g.bounds.x0},${g.bounds.x1}`, 'ring -1,65');
+    eq('★★ 　 原本的外框變黏合片折線（DXF 在 FOLD）', `${sty(outlineSegments(p, ON).segs)} ${LN(toDXF([p], ON), 'FOLD')}`, 'cut6,tabFold6 6');
+    ok('★★ 　 卡片講「沒標過分片…改成外圍一圈…要只長在一邊，請先標分片」', titleLines(p, { rule: p.rule, ...ON }).some(t => t.includes('沒標過分片') && t.includes('請先標分片')));
+  }
+
+  // ── 紙模：標過分片 ⇒ 每對接縫只長一邊 ──
+  {
+    const r = unfoldObject(box(true), { material: 'paper' });
+    const p = r.pieces[0];
+    const keys = new Map();
+    for (const q of r.pieces) for (const run of q.seamRuns) {
+      const k = run.segs.map(g => `${g.va}-${g.vb}`).join(',');
+      keys.set(k, (keys.get(k) || 0) + (run.tab ? 1 : 0));
+    }
+    ok('★★★ 紙模、標過分片：每一對接縫剛好一邊長黏合片', keys.size === 2 && [...keys.values()].every(v => v === 1), [...keys.values()].join(','));
+    const g = marginGeometry(p, ON);
+    eq('★★★ 　 這一片長 2 段（4 條縫裡 2 條）', `${g.kind} ${g.tabs}`, 'tab 2');
+    const segs = outlineSegments(p, ON).segs;
+    ok('★★ 　 長了黏合片的底邊變折線、黏合片的三邊是裁切線', segs.filter(x => x.style === 'tabFold').length > 0 && g.cuts.length % 3 === 0 && g.cuts.length > 0, sty(segs));
+    // 黏合片長在料的外面
+    const inside = (x, y) => { let c = false; const P = p.outline; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { if ((P[i].y > y) !== (P[j].y > y) && x < (P[j].x - P[i].x) * (y - P[i].y) / (P[j].y - P[i].y) + P[i].x) c = !c; } return c; };
+    ok('★★ 　 黏合片的外緣都在料的外面（⛔ 長進片裡）', g.cuts.filter((c, i) => i % 3 === 1).every(c => !inside((c.a.x + c.b.x) / 2, (c.a.y + c.b.y) / 2)));
+    eq('★★ 　 對位記號：一邊長黏合片 ⇒ 往內切（另一邊外面沒有東西）', notchMarks(p, { rule: p.rule, notch: { style: 'slit', spacing: 10 }, ...ON }).dir, 'in');
+    ok('★★ 　 卡片講「這一片長 2 段…接縫的另一邊不長」', titleLines(p, { rule: p.rule, ...ON }).some(t => t.includes('這一片長 2 段') && t.includes('另一邊不長')));
+  }
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

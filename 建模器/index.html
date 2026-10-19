@@ -379,6 +379,8 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
   flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   padding: 8px 14px; background: #1d2026; border-bottom: 1px solid #2c313a;
 }
+/* ⚠ 跟 `.grp[hidden]` 同一個坑：上面寫了 display:flex，hidden 就沒作用了（2026-10-19「畫縫份／黏合片」那一列，珍珠板也顯示出來，本機版按過才看到）*/
+.uwBar[hidden] { display: none; }
 .uwBar .lbl { font-size: 11px; color: #8b93a1; }
 .uwBar .sp { width: 10px; }
 .uwBar input[type=number] {

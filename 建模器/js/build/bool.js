@@ -390,6 +390,31 @@ export function slabShadow(mesh, basis, z0, z1, label = '物件') {
 }
 
 /**
+ * 🔴 **一圈平面上的點往外（`delta` > 0）或往內（< 0）推一段距離**（2026-10-19，展開圖的縫份／黏合片：`out/sheet.js` `marginGeometry()`）。
+ * 放在這裡的理由同 `slabShadow()`：只有這個檔可以碰 Manifold（`CrossSection.offset()`）。
+ * ⭐ 轉角用「尖角」（Miter，上限 2 倍 ⇒ 很尖的角會被削平，⛔ 長出一根刺）—— 縫份、黏合片的外框都是直角接。
+ * ⚠ 照 EvenOdd 填：一圈點不管順時針逆時針都當成「圈裡面是料」。往內推到沒了 ⇒ 回傳空陣列。
+ * @param {{x:number,y:number}[]} loop
+ * @returns {{x:number,y:number}[][]} 推完的幾圈（凹得很深的形狀可能多出一圈內圈）
+ */
+export function offsetLoop(loop, delta) {
+  const w = need();
+  const made = [];
+  try {
+    const cs = new w.CrossSection([loop.map(p => [p.x, p.y])], 'EvenOdd');
+    made.push(cs);
+    const off = cs.offset(delta, 'Miter', 2);
+    made.push(off);
+    if (off.isEmpty()) return [];
+    return off.toPolygons().map(poly => poly.map(p => ({ x: p[0], y: p[1] })));
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **曲線刀具第四步 `切穿`：物件 ∩ 刀柱、物件 − 刀柱**（刀柱由 `edit.js` `curveCutterPrism()` 組）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
  * ⚠ 平滑旗標與分片線會消失（布林的輸出是重新組的三角形，`fromManifold()`）—— 規格「切穿」那一段寫著要講。

@@ -59,6 +59,12 @@ export const STYLE = {
    * ⭐ 上折照舊點劃線、下折改虛線；DXF 分 `FOLD_UP`／`FOLD_DOWN` 兩層（`dxf.js`）。哪一種 ⇒ `foldStyle()`。
    */
   foldUp:   { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '上折線' },
+  /**
+   * 🔴 **畫縫份／黏合片**（2026-10-19，`實驗-綜合評估.md` ①-7，kang「同意」）：勾了之後原本的外框變成這兩種（`marginGeometry()`）。
+   * `seamSew` 帆布的縫線（外面那圈才是裁切線）—— DXF 在 SEW 層（⛔ 切）；`tabFold` 紙模黏合片的折線 —— DXF 在 FOLD 層。
+   */
+  seamSew:  { w: 0.030, minPx: 1.1, dash: [0.5, 0.3],        color: '#555',    label: '縫線（原本的外框）' },
+  tabFold:  { w: 0.030, minPx: 1.1, dash: [0.4, 0.3],        color: '#7f8c8d', label: '黏合片折線' },
   foldDown: { w: 0.030, minPx: 1.1, dash: [0.7, 0.45],       color: '#c0392b', label: '下折線' },
   bend: { w: 0.025, minPx: 1.0, dash: [0.8, 0.5],  color: '#2980b9', label: '折彎區' },
   dim:  { w: 0.018, minPx: 0.8, dash: null,        color: '#666',  label: '尺寸' },
@@ -96,6 +102,8 @@ export const STYLE = {
  * 有些解析器碰到 `font-family='"A","B"'` 這種巢狀引號會直接放棄。
  * 又是同一條原則：要送出去的格式，用最保守的寫法。
  */
+import { csgReady, offsetLoop } from '../build/bool.js';
+
 export const FONT = 'Noto Sans TC, Microsoft JhengHei, PingFang TC, sans-serif';
 
 // ═══════════════════════════════════════════════════════
@@ -383,9 +391,13 @@ export function drawProgram(piece, opt = {}) {
   }
 
   const top = Math.max(pad.t, topUsed + 2);
+  /** 勾了縫份／黏合片：圖面要包住外面那一圈（`marginGeometry()`）*/
+  const fb = pieceFootprint(piece, opt);
+  const bx0 = Math.min(-pad.l, fb.x0 - 1), by0 = Math.min(-pad.b, fb.y0 - 1);
+  const bx1 = Math.max(W + pad.r, fb.x1 + 1), by1 = Math.max(H + top, fb.y1 + 1);
   return {
     w: W, h: H,
-    box: { x: -pad.l, y: -pad.b, w: W + pad.l + pad.r, h: H + pad.b + top },
+    box: { x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0 },
     items,
     jointInfo
   };
@@ -415,9 +427,16 @@ export function outlineSegments(piece, opt = {}) {
   const sew = opt.dartStyle === 'sew';
   const loops = [[piece.outline, 'cut', ac.outline, dc && dc.outline, dc && dc.vids],
     ...piece.holes.map((h, k) => [h, 'hole', ac.holes && ac.holes[k], dc && dc.holes[k], dc && dc.holeVids[k]])];
+  /** 畫縫份／黏合片（`opt.margin`）：原本的外框換成縫線或折線、外面那圈的裁切線加在最後（`marginGeometry()`）*/
+  const mg = marginGeometry(piece, opt);
   for (const [pts, base, auto, dart, vids] of loops) {
     const n = pts.length;
-    const style = i => (auto && auto[i]) ? 'autoCut' : (dart && dart[i]) ? (sew ? 'dartSew' : 'dartCut') : base;
+    const style0 = i => (auto && auto[i]) ? 'autoCut' : (dart && dart[i]) ? (sew ? 'dartSew' : 'dartCut') : base;
+    const style = i => {
+      const st = style0(i);
+      if (!mg || st === 'dartCut' || st === 'dartSew') return st;
+      return mg.over(pts[i], pts[(i + 1) % n], base) || st;
+    };
     for (let i = 0; i < n; i++) segs.push({ a: pts[i], b: pts[(i + 1) % n], style: style(i) });
     if (!dart || !dart.some(Boolean)) continue;
     /**
@@ -443,7 +462,110 @@ export function outlineSegments(piece, opt = {}) {
       }
     }
   }
+  if (mg) for (const c of mg.cuts) segs.push({ a: c.a, b: c.b, style: 'cut' });
   return { segs, darts };
+}
+
+/**
+ * 🔴 **畫縫份／黏合片**（2026-10-19，實驗 T5、T8：`實驗-綜合評估.md` ①-7，kang「關於縫份、黏合片…能夠變成選項…有需要時才會觸發」→「同意」）。
+ *
+ * ⚠ 以前一律⛔ 畫，卡片寫「圖上未含…下料時另加」，紙模的材質說明卻寫「外圍自動加黏合片」—— 說明跟圖對不起來。
+ * ⭐ 現在是展開圖上的勾選（`opt.margin = { on, w }`，預設⛔ 勾 ⇒ 原本的圖一個字都不變），只有材質有縫份／黏合片時才出現：
+ *
+ * | 情形 | 外面加什麼（裁切線）| 原本的外框變成 |
+ * |---|---|---|
+ * | 帆布（縫份）| 外框往外推 `w` 一整圈；每個洞往內縮 `w`（洞小到縮沒了 ⇒ 那個洞不留，卡片講）| 縫線 `seamSew` |
+ * | 紙模、標過分片（有接合編號）| 每一對接縫**只在一邊**長梯形黏合片（`run.tab`，`unfold/part.js` 決定哪一邊）| 長了黏合片的那幾段變折線 `tabFold`，其他照舊切 |
+ * | 紙模、沒標過分片 | 外框往外推 `w` 一整圈（kang 同意：勾了卻沒反應會讓人以為壞了）| 折線 `tabFold` |
+ *
+ * ⚠ 尺寸數字（外框、面積）照舊是完成線；卡片另外寫「含…外框」。排版照含縫份／黏合片的外框排（`pieceFootprint()`）。
+ * ⚠ 一樣的片會算好幾次（畫面、SVG、DXF、排版）⇒ 算過的記在片上（⛔ 列舉，不會跟著存出去）。
+ * ⚠ 黏合片⛔ 檢查會不會跟這一片自己或別的黏合片疊在一起（凹進去很深的地方可能會）。
+ * @returns {null|{kind:'seam'|'tab'|'ring', w, label, cuts:{a,b}[], over:(a,b,base)=>string|null, bounds:{x0,y0,x1,y1}, tabs:number, lostHoles:number, notReady:boolean}}
+ */
+export function marginGeometry(piece, opt = {}) {
+  const M = opt.margin;
+  const rule = piece.rule || opt.rule || {};
+  const def = rule.margin ? rule.margin() : 0;
+  if (!M || !M.on || !(def > 0)) return null;
+  const w = +M.w > 0 ? +M.w : def;
+  const label = rule.marginLabel ? rule.marginLabel() : '';
+  const hasRuns = !!(piece.seamRuns && piece.seamRuns.length);
+  const kind = label === '黏合片' ? (hasRuns ? 'tab' : 'ring') : 'seam';
+  const key = `${kind}|${w}|${(piece.seamRuns || []).map(r => (r.tab ? 1 : 0)).join('')}|${csgReady() ? 1 : 0}`;
+  if (piece._margin && piece._margin.key === key) return piece._margin.geo;
+
+  const W = piece.width, H = piece.height;
+  const cuts = [];
+  let tabs = 0, lostHoles = 0, notReady = false;
+  const loopCuts = L => { for (let i = 0; i < L.length; i++) cuts.push({ a: L[i], b: L[(i + 1) % L.length] }); };
+  let over = () => null;
+
+  if (kind === 'seam' || kind === 'ring') {
+    if (!csgReady()) notReady = true;
+    else {
+      for (const L of offsetLoop(piece.outline, w)) loopCuts(L);
+      if (kind === 'seam') {
+        for (const h of piece.holes) {
+          const inner = offsetLoop(h, -w);
+          if (!inner.length) lostHoles++;
+          for (const L of inner) loopCuts(L);
+        }
+      }
+    }
+    /** 帆布：外框與洞都變縫線；紙模外圍一圈：只有外框變折線（洞照舊切）*/
+    over = (a, b, base) => (notReady ? null : kind === 'seam' ? 'seamSew' : base === 'cut' ? 'tabFold' : null);
+  } else {
+    const onMaterial = (x, y) => {
+      if (!pointInPoly(x, y, piece.outline)) return false;
+      for (const h of (piece.holes || [])) if (pointInPoly(x, y, h)) return false;
+      return true;
+    };
+    const bases = [];
+    for (const run of piece.seamRuns) {
+      if (!run.tab) continue;
+      tabs++;
+      for (const g of run.segs) {
+        const dx = g.b.x - g.a.x, dy = g.b.y - g.a.y, L = Math.hypot(dx, dy);
+        if (!(L > 1e-9)) continue;
+        const T = { x: dx / L, y: dy / L };
+        let n = { x: -T.y, y: T.x };
+        const mx = (g.a.x + g.b.x) / 2, my = (g.a.y + g.b.y) / 2, e = 0.05;
+        if (onMaterial(mx + n.x * e, my + n.y * e)) n = { x: -n.x, y: -n.y };   // 往料的外面長
+        const ins = Math.min(w, L / 4);                                          // 兩端斜進去（梯形）
+        const a2 = { x: g.a.x + n.x * w + T.x * ins, y: g.a.y + n.y * w + T.y * ins };
+        const b2 = { x: g.b.x + n.x * w - T.x * ins, y: g.b.y + n.y * w - T.y * ins };
+        cuts.push({ a: g.a, b: a2 }, { a: a2, b: b2 }, { a: b2, b: g.b });
+        bases.push(g);
+      }
+    }
+    /** 外框上的這一段落在某一個黏合片的底邊上 ⇒ 變折線（外框可能把共線的點併掉，所以用「中點在不在底邊上」判斷）*/
+    over = (a, b) => {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      for (const g of bases) {
+        const dx = g.b.x - g.a.x, dy = g.b.y - g.a.y, L2 = dx * dx + dy * dy;
+        if (!(L2 > 0)) continue;
+        const t = ((mx - g.a.x) * dx + (my - g.a.y) * dy) / L2;
+        if (t < -1e-6 || t > 1 + 1e-6) continue;
+        if (Math.hypot(g.a.x + dx * t - mx, g.a.y + dy * t - my) < 1e-6) return 'tabFold';
+      }
+      return null;
+    };
+  }
+
+  const b = { x0: 0, y0: 0, x1: W, y1: H };
+  for (const c of cuts) for (const q of [c.a, c.b]) {
+    b.x0 = Math.min(b.x0, q.x); b.y0 = Math.min(b.y0, q.y); b.x1 = Math.max(b.x1, q.x); b.y1 = Math.max(b.y1, q.y);
+  }
+  const geo = { kind, w, label, cuts, over, bounds: b, tabs, lostHoles, notReady };
+  Object.defineProperty(piece, '_margin', { value: { key, geo }, writable: true, configurable: true, enumerable: false });
+  return geo;
+}
+
+/** 這一片佔多大（片的座標）：勾了縫份／黏合片 ⇒ 含外面那一圈；沒勾 ⇒ 0..寬、0..高。排版、DXF 一長條用它 */
+export function pieceFootprint(piece, opt = {}) {
+  const g = marginGeometry(piece, opt);
+  return g ? g.bounds : { x0: 0, y0: 0, x1: piece.width, y1: piece.height };
 }
 
 /**
@@ -489,7 +611,12 @@ export function notchMarks(piece, opt = {}) {
   if (!N || !(N.spacing > 0) || !piece.seamRuns || !piece.seamRuns.length) return res;
 
   const rule = piece.rule || opt.rule || {};
-  const m = rule.margin ? rule.margin() : 0;
+  /**
+   * 往外切的深度看「之後要加的那一圈」有多寬：勾了畫縫份／黏合片 ⇒ 照畫出來的寬度；
+   * ⚠ 紙模一邊長黏合片（`tab`）⇒ 另一邊外面沒有東西 ⇒ 一律往內切（跟沒有縫份的材質一樣）。
+   */
+  const mgN = marginGeometry(piece, opt);
+  const m = mgN ? (mgN.kind === 'tab' ? 0 : mgN.w) : (rule.margin ? rule.margin() : 0);
   const cut = N.style !== 'mark';
   const out = cut && m > 0;
   res.dir = out ? 'out' : 'in';
@@ -762,8 +889,23 @@ export function titleLines(piece, opt = {}) {
   /** ⭐ 「相同的折線合成一行」：圖上的每道角度拿掉了，所以這一行⛔ 不可以省 */
   const same = opt.foldSummary ? sameFolds(piece) : null;
   if (same) out.push(`折線全部一樣：${same.dir} ${fmt(same.angle)}°（${same.n} 道）—— 圖上只畫線`);
-  if (rule.margin && rule.margin() > 0) {
-    out.push(`⚠ 圖上未含${rule.marginLabel()} ${fmt(rule.margin())} cm，下料時另加`);
+  const mgT = marginGeometry(piece, opt);
+  if (mgT) {
+    const fbT = mgT.bounds, lb = mgT.label, wv = fmt(mgT.w);
+    if (mgT.notReady) out.push(`⚠ ${lb}要等運算模組載好才畫得出來（重新整理一次再開展開圖）`);
+    else if (mgT.kind === 'seam') {
+      out.push(`${lb} ${wv} cm 已畫進圖：外圍實線是裁切線、虛線（原本的外框）是縫線`
+        + (mgT.lostHoles ? `；${mgT.lostHoles} 個洞比${lb}還小，那幾個洞沒有往內留${lb}` : ''));
+    } else if (mgT.kind === 'ring') {
+      out.push(`${lb} ${wv} cm：沒標過分片，${lb}改成外圍一圈（灰色虛線是折線）；要只長在一邊，請先標分片`);
+    } else {
+      out.push(mgT.tabs
+        ? `${lb} ${wv} cm：這一片長 ${mgT.tabs} 段（灰色虛線是折線；接縫的另一邊不長）`
+        : `${lb} ${wv} cm：這一片的接縫都由另一邊長${lb}`);
+    }
+    if (!mgT.notReady) out.push(`含${lb}外框 ${fmt(fbT.x1 - fbT.x0)} × ${fmt(fbT.y1 - fbT.y0)} cm`);
+  } else if (rule.margin && rule.margin() > 0) {
+    out.push(`⚠ 圖上未含${rule.marginLabel()} ${fmt(rule.margin())} cm，下料時另加（展開圖勾「畫縫份／黏合片」就會畫進圖）`);
   }
   if (head.name) out.push(`案件：${head.name}${head.date ? '　' + head.date : ''}`);
 
