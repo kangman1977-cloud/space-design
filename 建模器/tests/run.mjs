@@ -17724,6 +17724,32 @@ if (csgOK) {
   ok('（略過：CSG 沒載入）', true);
 }
 
+section('實體⛔ 寫看不見的板厚（2026-10-19 綜合評估 ①-9）');
+{
+  /**
+   * 實驗 T7、T8、補測：實體的面板上看不到板厚，物件身上卻帶著 0.2 —— 照樣寫進卡片、CSV、DXF 標題（T7 托架 0.2、其他板 0.5）。
+   * kang 2026-10-19「先做 ①-9（照這個建議）」：實體的片寫「—」；認成實心板的照舊寫量出來的厚度；板件照舊。
+   */
+  const { titleLines } = await import('../js/out/sheet.js');
+  const { toDXF } = await import('../js/out/dxf.js');
+  const { billOfMaterials } = await import('../js/unfold/part.js');
+  const spec = p => titleLines(p, { rule: p.rule })[1];
+  const solid = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', w: 30, h: 20, d: 10 } });
+  const rs = unfoldObject(solid, { material: 'foamboard' });
+  eq('★★★ 實體方塊（珍珠板）：卡片寫「板厚 —（實體）」（以前「板厚 0.2 cm」）', spec(rs.pieces[0]), '珍珠板／發泡板／薄木板　板厚 —（實體）');
+  eq('★★★ 　 CSV 板厚欄「—」', billOfMaterials(rs.pieces, rs.rule)[0]['板厚cm'], '—');
+  const d = toDXF(rs.pieces, { unit: 'mm' });
+  ok('★★ 　 DXF 標題⛔ 寫 t0.2', !/ t0\.2\r?\n/.test(d) && /foamboard\r?\n/.test(d));
+  const sheet = new io.ModelObject({ name: '平板', kind: io.KIND.SHEET, thickness: 0.5, src: { type: 'plate', w: 30, d: 20 } });
+  const rp = unfoldObject(sheet, { material: 'foamboard' });
+  eq('★★ 板件照舊寫自己的板厚', `${spec(rp.pieces[0])} ${billOfMaterials(rp.pieces, rp.rule)[0]['板厚cm']}`, '珍珠板／發泡板／薄木板　板厚 0.5 cm 0.5');
+  const plate = new io.ModelObject({ name: '背板', kind: io.KIND.SOLID, src: { type: 'box', w: 30, h: 0.5, d: 20 } });
+  const ra = unfoldObject(plate, { material: 'acrylic' });
+  eq('★★ 實體但認成實心板（壓克力）：照舊寫量出來的 0.5', `${spec(ra.pieces[0])} ${billOfMaterials(ra.pieces, ra.rule)[0]['板厚cm']}`, '壓克力／木板　板厚 0.5 cm 0.5');
+  const rw = unfoldObject(new io.ModelObject({ name: '楔形', kind: io.KIND.SOLID, src: { type: 'wedge', w: 20, h: 10, d: 15 } }), { material: 'paper' });
+  ok('★★ 紙模的實體楔形也⛔ 寫 0.2', rw.pieces.every(p => spec(p).endsWith('板厚 —（實體）')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

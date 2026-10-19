@@ -172,6 +172,14 @@ export function unfoldObject(obj, opt = {}) {
   for (const p of r.pieces) { p.owner = obj.name; p.rule = rule; }
 
   /**
+   * 🔴 **實體⛔ 寫板厚**（2026-10-19，實驗 T7、T8、補測：`實驗-綜合評估.md` ①-9，kang「先做 ①-9（照這個建議）」）。
+   * ⚠ 實體的面板上看不到板厚，物件身上卻帶著預設的 0.2 —— 以前照樣寫進卡片、CSV、DXF 標題：
+   * T7 托架寫 0.2、其他板 0.5，同一張料單兩種厚度。⭐ 實體（`kind` ≠ 板件）的片標 `solidBody` ⇒ 板厚寫「—」；
+   * 被認成實心板的（`solidPlate`）照舊寫量出來的厚度。攤平本身⛔ 動（`rule` 照舊傳進去）。
+   */
+  if (obj.kind !== 'sheet' && !plate) for (const p of r.pieces) p.solidBody = true;
+
+  /**
    * 🔴 **紙模的黏合片長在接縫的哪一邊**（2026-10-19，`實驗-綜合評估.md` ①-7；畫的人是 `out/sheet.js` `marginGeometry()`）。
    * 一條縫的兩側走的是同一串 3D 頂點、同一個方向（`flatten.js` `collectSeamRuns()`）⇒ 用頂點串當 key，
    * **先遇到的那一側長**（片的順序、縫的順序），另一側不長 —— 一對接縫只長一片，兩邊一定對得上。
@@ -420,7 +428,8 @@ export function billOfMaterials(pieces, rule) {
     名稱: p.name,
     數量: p.qty,
     材質: (p.rule || rule) ? (p.rule || rule).label : '',
-    板厚cm: (p.rule || rule) ? (p.rule || rule).thickness : '',
+    /** 實體的片（`solidBody`）⛔ 寫看不見的 0.2（①-9）*/
+    板厚cm: p.solidBody ? '—' : (p.rule || rule) ? (p.rule || rule).thickness : '',
     展開長cm: round(p.width),
     展開寬cm: round(p.height),
     單片面積cm2: round(p.area),

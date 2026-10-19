@@ -214,8 +214,11 @@ export class ExportPanel {
          <div class="nm">${esc(it.obj.name)}
            <span class="exTag ${c.ok ? 'good' : 'bad'}">${c.ok ? '可以列印' : '印不出來'}</span>
          </div>
-         ${it.shelled ? '<div class="dim">開放的面，已依板厚 '
-            + f(it.obj.thickness) + ' cm 自動加厚</div>' : ''}
+         ${it.shelled ? (it.obj.kind === 'sheet'
+            ? '<div class="dim">開放的面，已依板厚 ' + f(it.obj.thickness) + ' cm 自動加厚</div>'
+            /** ⚠ 實體沒封口（2026-10-19 ①-9）：講清楚是照哪個厚度、去哪裡改 —— 以前那個厚度在面板上看不到 */
+            : '<div class="bad">⚠ 這個實體沒有封口（例如刪過面），已照板厚 ' + f(it.obj.thickness)
+              + ' cm 加厚成一層殼 —— 板厚在右邊物件面板改；要實心的話請把洞補起來</div>') : ''}
        </div>
        <table class="exTab">${rows.map(r =>
          `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table>`;

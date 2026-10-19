@@ -227,7 +227,8 @@ export function toDXF(pieces, opt = {}) {
       `${round(p.height)}`, s);
 
     // 標題：這一片是什麼、要做幾片、什麼材料
-    const th = (ruleOf(p) && ruleOf(p).thickness) || 0;
+    /** 實體的片（`solidBody`，2026-10-19 ①-9）⛔ 寫看不見的 0.2 */
+    const th = p.solidBody ? 0 : (ruleOf(p) && ruleOf(p).thickness) || 0;
     const mat = (ruleOf(p) && ruleOf(p).key) || '';   // ⚠ 代號（英文），⛔ 不是中文名稱
     /**
      * ⚠ 標題寫**片號**，⛔ 不寫名稱（2026-10-08 查 bug E9，kang 決定）——

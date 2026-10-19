@@ -802,7 +802,9 @@ export function titleLines(piece, opt = {}) {
    * —— 銑 V 溝要多寬、STL 加厚。見 `規格\建模器-展開與分片.md`。
    */
   if (rule.label) spec.push(rule.label);
-  if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
+  /** 實體的片（`solidBody`，2026-10-19 ①-9）⛔ 寫物件身上看不見的 0.2 */
+  if (piece.solidBody) spec.push('板厚 —（實體）');
+  else if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
   if (spec.length) out.push(spec.join('　'));
   /** 🔴 實心的板只出一片外形＋洞（2026-10-19，`unfold/part.js` `solidPlate()`）—— 講出來，免得以為少了邊條 */
   if (piece.solidPlate) out.push(`實心板：只出一片外形＋洞（厚 ${fmt(piece.solidPlate.t)} cm，不是攤開的盒子）`);

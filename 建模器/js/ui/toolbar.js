@@ -254,6 +254,18 @@ export class Panel {
         this.analysisCache.delete(obj.id);
         this._edit('改板厚');
       }, '折彎補償與展開長度都要用它算：中性層半徑 ＝ 內側R ＋ K×板厚');
+    } else if (!meshClosed(obj)) {
+      /**
+       * 🔴 **沒封口的實體也看得到板厚**（2026-10-19，`實驗-綜合評估.md` ①-9，kang「先做 ①-9（照這個建議）」）。
+       * ⚠ 畫面與 3D 列印判的是「網格封不封閉」（⛔ 看種類），沒封口就照板厚加厚成殼 ——
+       * 以前實體的板厚欄藏起來，刪過面的方塊就被看不見的 0.2 加厚，改都改不了（補測：36,008 mm³「可以列印」）。
+       */
+      this._rowNum('板厚 cm', obj.thickness, { min: 0.01, step: 0.1 }, v => {
+        obj.thickness = v;
+        obj.invalidate();
+        this.analysisCache.delete(obj.id);
+        this._edit('改板厚');
+      }, '這個實體沒有封口（例如刪過面）：畫面與 3D 列印都照這個厚度加厚成一層殼。要實心的話請把洞補起來');
     }
 
     // ── 分片（只有分片模式開著才顯示）──
@@ -2044,6 +2056,11 @@ export function fillPrimMenu(selectEl) {
 export { defaultSrc };
 
 // ── 小工具 ────────────────────────────────────────────
+
+/** 這個物件的網格封不封閉（算不出來當封閉 ⇒ ⛔ 多冒一個板厚欄）—— 跟畫面、3D 列印同一個判準（`mesh.isClosed()`）*/
+function meshClosed(obj) {
+  try { return obj.mesh().isClosed(); } catch (e) { return true; }
+}
 
 function head(text) {
   const h = document.createElement('div');
