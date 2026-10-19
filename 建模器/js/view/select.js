@@ -27,6 +27,8 @@ import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
 import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleStep,
   penPlaneFrame } from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
+/** ③-13 自己吸格子時走的三根軸（物件的節點直接掛在場景底下 ⇒ `node.position` 就是世界座標）*/
+const GUIDE_AXES_LIST = ['x', 'y', 'z'];
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
          remapElements, proportionalVerts, PROP_DEFAULT_RADIUS }
@@ -650,6 +652,7 @@ export class Selection {
       if (e.value) {                             // 按下去 → 拍一份初始狀態
         if (this.editSel) this._beginEditDrag();
         else if (this._onObjProxy) this._beginObjDrag();
+        else this._beginOwnGrid();
         return;
       }
       if (this.editSel) {                        // 放手 → 記一步 Undo
@@ -671,9 +674,15 @@ export class Selection {
       } else {
         this._writeBack(true);
       }
+      this._endOwnGrid();
     });
 
+    /** ③-4：three.js 在 `pointerDown` 算好按下去那一點之後才送 `mouseDown` ⇒ 在這裡撐開太靠近中心的起點 */
+    tc.addEventListener('mouseDown', () => this._guardScaleStart());
+    tc.addEventListener('mouseUp', () => { this._scaleStart = null; this._scaleFix = null; });
+
     tc.addEventListener('objectChange', () => {
+      this._guardScaleFrame();                   // ③-4：倍數爆掉的那一幀退回上一個好的
       if (this.editSel) this._writeBackEdit(false);
       else if (this._onObjProxy) this._writeBackObj(false);
       else this._writeBack(false);
@@ -756,6 +765,113 @@ export class Selection {
    * 這段在每一幀都跑，所以裡面只有固定次數的向量運算，
    * 沒有任何隨模型大小成長的東西（坑第 22 條）。
    */
+  /**
+   * gizmo 的一個本地單位在世界裡有多長 —— **照抄 TransformControls 的縮放算法**，全檔只留這一份
+   * （拉桿的字、③-4 縮放的保護都用它；抄兩份的話換 three.js 版本時遲早一邊對不上）。
+   */
+  _gizmoUnit(origin) {
+    const cam = this.view.camera;
+    let factor;
+    if (cam.isOrthographicCamera) {
+      factor = (cam.top - cam.bottom) / cam.zoom;
+    } else {
+      const camPos = new THREE.Vector3();
+      cam.getWorldPosition(camPos);
+      factor = origin.distanceTo(camPos)
+        * Math.min(1.9 * Math.tan(Math.PI * cam.fov / 360) / cam.zoom, 7);
+    }
+    return factor * this.tc.size / 4;
+  }
+
+  /**
+   * 🔴 **縮放一拖就爆開的保護**（綜合評估 ③-4 前半，2026-10-19，kang 同意）。
+   *
+   * three.js 的縮放倍數 ＝「現在的點離中心多遠 ÷ 按下去那一點離中心多遠」（`pointEnd ÷ pointStart`）——
+   * 整體縮放的把手是正中間一個小方塊、單軸的感應區是從中心長出去的錐子 ⇒
+   * **按下去那一點可能幾乎就在中心**，除以接近 0 的數 ⇒ 13.6 倍、27 京 cm（T1、T8）。
+   * ⇒ ① 按下去時：離中心太近（< 箭頭本體的長度 0.5 單位）就當成在 0.5 單位那裡（只改那幾根軸的分量，方向不變）；
+   *    ② 每一幀：算出來的倍數不是有限數、或比按下去時大過 1000 倍 ⇒ 這一幀⛔ 收，留著上一個好的。
+   * ⚠ 代價：從中心附近按下去時，頭幾個像素動得比較少 —— 換掉「一拖就爆」。⛔ 動到移動、旋轉。
+   */
+  _guardScaleStart() {
+    const tc = this.tc;
+    this._scaleFix = null;
+    if (tc.getMode() !== 'scale' || !tc.object) return;
+    const min = 0.5 * this._gizmoUnit(tc.worldPositionStart);
+    const axis = tc.axis || '';
+    const p = tc.pointStart;
+    /**
+     * ⚠ **⛔ 只把起點撐開就好** —— 那樣從離中心 0.08 往外拖到 0.16，倍數是 0.16 ÷ 0.5 ＝ 0.32：
+     * **往外拖反而縮小**（本機實測抓到）。⇒ 撐開之後記下「原本按在哪」，
+     * 每一幀改用「拖出去多少 ÷ 撐開後的距離 ＋ 1」：一開始 ＝ 1、往外 ＝ 放大、往內 ＝ 縮小，方向永遠對。
+     */
+    const fix = { uniform: false, orig: {}, start: {} };
+    let any = false;
+    if (axis.search('XYZ') !== -1) {
+      const len = p.length();
+      if (len < min) {
+        if (len < 1e-9) p.set(1, 0, 0).applyQuaternion(this.view.camera.quaternion);
+        p.setLength(min);
+        Object.assign(fix, { uniform: true, origLen: len, startLen: min });
+        any = true;
+      }
+    } else {
+      /** 單軸／平面把手：three.js 是在物件自己的方向上逐軸相除 ⇒ 也在那個方向上逐軸撐開 */
+      const qi = tc.worldQuaternionStart.clone().invert();
+      const loc = p.clone().applyQuaternion(qi);
+      for (const k of ['x', 'y', 'z']) {
+        if (axis.search(k.toUpperCase()) === -1) continue;
+        if (Math.abs(loc[k]) < min) {
+          const sgn = loc[k] < 0 ? -1 : 1;
+          fix.orig[k] = loc[k];
+          fix.start[k] = sgn * min;
+          loc[k] = sgn * min;
+          any = true;
+        }
+      }
+      p.copy(loc.applyQuaternion(tc.worldQuaternionStart));
+    }
+    if (any) this._scaleFix = fix;
+    this._scaleGood = tc.object.scale.clone();
+    this._scaleStart = tc.object.scale.clone();
+  }
+
+  /**
+   * 每一幀：① 起點被撐開過 ⇒ 換成「拖出去多少」的倍數；② 倍數爆掉就退回上一個好的
+   * （`_guardScaleStart()` 那則的 ②）。回傳 true ＝ 這一幀被擋下。
+   */
+  _guardScaleFrame() {
+    const tc = this.tc;
+    if (tc.getMode() !== 'scale' || !tc.object || !this._scaleStart) return false;
+    const s = tc.object.scale, s0 = this._scaleStart;
+    const fx = this._scaleFix;
+    if (fx) {
+      /**
+       * 倍數改成 1 ＋（現在的點 − 原本按的點）÷ 撐開後的距離。
+       * ⚠ 「現在的點」直接讀 three.js 的 `pointEnd`，⛔ 從它給的倍數反推 ——
+       * 那個倍數已經被吸附（0.05 一格）四捨五入過，反推會差一截（本機實測：沒動也變 1.05）。
+       */
+      const snap = tc.scaleSnap;
+      const fit = v => (snap ? (Math.round(v / snap) * snap || snap) : v);
+      const pe = tc.pointEnd;
+      if (fx.uniform) {
+        const endLen = pe.length() * (pe.dot(tc.pointStart) < 0 ? -1 : 1);
+        const f = 1 + (endLen - fx.origLen) / fx.startLen;
+        for (const k of ['x', 'y', 'z']) s[k] = fit(s0[k] * f);
+      } else {
+        const loc = pe.clone().applyQuaternion(tc.worldQuaternionStart.clone().invert());
+        for (const k of Object.keys(fx.start)) {
+          s[k] = fit(s0[k] * (1 + (loc[k] - fx.orig[k]) / fx.start[k]));
+        }
+      }
+    }
+    const bad = ['x', 'y', 'z'].some(k => !Number.isFinite(s[k])
+      || Math.abs(s[k]) > 1000 * Math.max(Math.abs(s0[k]), 1e-6));
+    if (bad) { s.copy(this._scaleGood); return true; }
+    this._scaleGood.copy(s);
+    return false;
+  }
+
   syncGizmoLabels() {
     const L = this.axisLabels;
     if (!L) return;
@@ -781,21 +897,9 @@ export class Selection {
       return;
     }
 
-    const cam = this.view.camera;
     const origin = new THREE.Vector3();
     node.getWorldPosition(origin);
-
-    // ── 照抄 TransformControls 的縮放算法 ──
-    let factor;
-    if (cam.isOrthographicCamera) {
-      factor = (cam.top - cam.bottom) / cam.zoom;
-    } else {
-      const camPos = new THREE.Vector3();
-      cam.getWorldPosition(camPos);
-      factor = origin.distanceTo(camPos)
-        * Math.min(1.9 * Math.tan(Math.PI * cam.fov / 360) / cam.zoom, 7);
-    }
-    const unit = factor * tc.size / 4;      // gizmo 的一個本地單位有多大
+    const unit = this._gizmoUnit(origin);   // gizmo 的一個本地單位有多大
 
     /**
      * 拉桿的箭頭本體在本地座標 0.5，錐頭再往外 0.1，所以尖端在 0.6。
@@ -936,16 +1040,29 @@ export class Selection {
       this._reportGuideHits(null);
       return;
     }
+    const hits = this._guideSnapHits(node, obj);
+    /** ③-13：吸到參考線的軸已經對好了，其餘的軸才照格子吸（只有 `_beginOwnGrid()` 接手時才做）*/
+    this._ownGridRound(node, obj, hits);
+
+    /**
+     * ⚠ **放手的那一下要把高亮收掉** —— 留著的話畫面上會有一條
+     * 一直亮著的線，而使用者會以為那是另一種狀態。
+     */
+    this._reportGuideHits(committing ? null : hits);
+  }
+
+  /** 找參考線、吸過去；回傳吸中的那幾條（沒有 ⇒ `null`）。原本 `_applyGuideSnap()` 的內容，拆出來給 ③-13 用 */
+  _guideSnapHits(node, obj) {
     const guides = this._doc && this._doc.guides;
-    if (!guides) { this._reportGuideHits(null); return; }
+    if (!guides) return null;
 
     const b = worldBounds(obj);
-    if (b.isEmpty()) { this._reportGuideHits(null); return; }
+    if (b.isEmpty()) return null;
 
     /** 世界單位的容許值 ＝ 像素容許值 ÷（像素／世界） */
     const center = b.getCenter(new THREE.Vector3());
     const pxPer = this.view.pxPerWorld ? this.view.pxPerWorld(center) : 0;
-    if (!(pxPer > 0)) { this._reportGuideHits(null); return; }
+    if (!(pxPer > 0)) return null;
     const tol = GUIDE_SNAP_PX / pxPer;
 
     const { delta, hits } = guideSnapDelta(b, guides, tol);
@@ -956,12 +1073,48 @@ export class Selection {
       node.position.z += delta.z;
       obj.pos.copy(node.position);
     }
+    return hits;
+  }
 
-    /**
-     * ⚠ **放手的那一下要把高亮收掉** —— 留著的話畫面上會有一條
-     * 一直亮著的線，而使用者會以為那是另一種狀態。
-     */
-    this._reportGuideHits(committing ? null : hits);
+  /**
+   * 🔴 **格子和參考線一起開時，參考線真的要贏**（綜合評估 ③-13，2026-10-19；規則是 kang 2026-09-01 定的）。
+   *
+   * 以前的做法是「three.js 先把位置吸成格子的整數倍，我們再找參考線」——
+   * 但吸完格子已經被拉離參考線：停在 14.4 會被吸成 14.0，離 15 的參考線 1 cm、超出容許值 ⇒ **吸不到**（T7）。
+   * ⇒ 拖單一物件、移動、方向「世界」、兩個吸附都開著時：**拖曳期間關掉 three.js 的格子吸附**，
+   * 先拿沒吸過的位置找參考線，**沒吸到參考線的軸**才自己照格子吸（跟 three.js 同一個算法：世界座標四捨五入成格距的整數倍）。
+   * ⚠ 多選（`_writeBackObj`）、編輯模式、方向「物件」照舊交給 three.js —— 這幾條路本來就不吸參考線。
+   */
+  _beginOwnGrid() {
+    this._ownGrid = 0;
+    if (!this.snapGuides || !(this.snapStep > 0)) return;
+    if (this.tc.getMode() !== 'translate' || this.tc.space !== 'world') return;
+    const g = this._doc && this._doc.guides;
+    if (!g || !GUIDE_AXES_LIST.some(ax => g[ax] && g[ax].length)) return;
+    this._ownGrid = this.snapStep;
+    this.tc.setTranslationSnap(null);
+  }
+
+  /** 放手：把 three.js 的格子吸附還回去 */
+  _endOwnGrid() {
+    if (!this._ownGrid) return;
+    this._ownGrid = 0;
+    this.tc.setTranslationSnap(this.snapStep > 0 ? this.snapStep : null);
+  }
+
+  /** 沒吸到參考線、而且是正在拖的那幾根軸 ⇒ 照格子吸 */
+  _ownGridRound(node, obj, hits) {
+    const step = this._ownGrid;
+    if (!step) return;
+    const axis = this.tc.axis || '';
+    const hit = new Set((hits || []).map(h => h.ax));
+    let moved = false;
+    for (const ax of GUIDE_AXES_LIST) {
+      if (hit.has(ax) || axis.search(ax.toUpperCase()) === -1) continue;
+      node.position[ax] = Math.round(node.position[ax] / step) * step;
+      moved = true;
+    }
+    if (moved) obj.pos.copy(node.position);
   }
 
   /**
@@ -1987,6 +2140,9 @@ export class Selection {
     this.view.setRotateBlock('marquee', this.marqueeMode);
     orb.enablePan = !this.marqueeMode;
     if (!this.marqueeMode) this._endMarquee(null, false);
+    /** ③-9：箭頭跟著收／回來（判斷只在 `gizmoHidden` 一個地方）*/
+    this.tc.enabled = !this.gizmoHidden;
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.marqueeMode;
   }
 
@@ -2979,8 +3135,10 @@ export class Selection {
    * ⇒ 只能掛在 `objectChange` 上自己算（見 `_applyGuideSnap`）。
    *
    * ── 🔴 兩個吸附同時開著時，**參考線贏**（kang 2026-09-01 拍板）──
-   * three.js 先把位移吸成 1cm 的整數倍，**我們接著再把它挪到線上** ——
-   * ⭐ 所以順序天然就是「參考線覆蓋格距」，⛔ 不必去關掉誰。
+   * ⚠ 原本寫的是「three.js 先吸格子、我們再挪到線上 ⇒ 順序天然就是參考線贏，⛔ 不必關掉誰」——
+   * **那是錯的**：吸完格子已經被拉離參考線（14.4 → 14.0，離 15 那條 1 cm、超出容許值）⇒ 吸不到（綜合評估 ③-13）。
+   * ⇒ 現在拖單一物件時**拖曳期間關掉 three.js 的格子吸附**，先找參考線、沒吸到的軸才自己吸格子
+   * （`_beginOwnGrid()`／`_ownGridRound()`），放手再還回去。
    * ⚠ 對照組（沒選的兩個）是「格距贏」與「開一個就自動關另一個」。
    */
   setSnapGuides(on) {
@@ -3850,6 +4008,7 @@ export class Selection {
        * 把精確數字套回初始座標。替身重新對準的時機改由呼叫端決定，
        * 因為它要先跑完連帶重算與 commit。
        */
+      this._rememberEnd(d);
     }
     if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el);
   }
@@ -3905,11 +4064,13 @@ export class Selection {
       /** 世界的公分（2026-10-19 ②-7）：替身的位移是物件自己座標的量，物件有縮放就要乘回來（`_worldLen()`）*/
       return { axis, mode, value: off.dot(dir) * this._worldLen(dir), unit: 'cm' };
     }
+    /** ③-5：放手後替身已經歸零 ⇒ 讀放手那一刻存下來的（`_rememberEnd()`）；還在拖就讀替身 */
+    const end = (d.end && !this.tc.dragging) ? d.end : null;
     if (mode === 'scale') {
-      return { axis, mode, value: this._proxy.scale[axis.toLowerCase()], unit: '倍' };
+      return { axis, mode, value: (end ? end.scale : this._proxy.scale)[axis.toLowerCase()], unit: '倍' };
     }
     // 旋轉：把「從初始到現在」的四元數換成繞那根軸轉了幾度
-    const dq = d.start.quat.clone().invert().premultiply(this._proxy.quaternion);
+    const dq = d.start.quat.clone().invert().premultiply(end ? end.quat : this._proxy.quaternion);
     const e = new THREE.Euler().setFromQuaternion(dq, 'XYZ');
     return { axis, mode, value: THREE.MathUtils.radToDeg(e[axis.toLowerCase()]), unit: '°' };
   }
@@ -3948,11 +4109,14 @@ export class Selection {
        */
       this._proxy.scale.set(1, 1, 1);
       this._proxy.scale[k] = num;
+      /** ③-5：放手後替身已經重新對準到新的中心 ⇒ 縮放要繞「拖之前」的中心，⛔ 用新的（不然會多出一段位移）*/
+      this._proxy.position.copy(d.start.pos);
     } else {
       const e = new THREE.Euler(0, 0, 0, 'XYZ');
       e[k] = THREE.MathUtils.degToRad(num);
       this._proxy.quaternion.copy(d.start.quat)
         .multiply(new THREE.Quaternion().setFromEuler(e));
+      this._proxy.position.copy(d.start.pos);       // ③-5：同上，繞拖之前的中心轉
     }
 
     applyElementTransform(d.verts, d.base, d.start, {
@@ -3962,8 +4126,24 @@ export class Selection {
     }, d.weights);
     this.view.markGeomDirty();
     this._drawEditMark();
+    this._rememberEnd(d);
     if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel);
     return true;
+  }
+
+  /**
+   * 🔴 **記住這一次拖到哪裡（轉了幾度、縮了幾倍）**（綜合評估 ③-5，2026-10-19）。
+   *
+   * 放手後 `commit()` 會走到 `_rebaseProxy()`，把替身的旋轉與縮放**歸零**（替身要對準新的位置）——
+   * 以前數值欄直接讀替身 ⇒ 放手就變 0；而打數字是從「拖之前」的形狀算（快照還留著），
+   * 等於**取代**剛才那一次 —— 欄位卻寫 0，人會以為是「再多轉幾度」⇒ 疊了一次看不見的旋轉。
+   * ⇒ 放手（或打完數字）那一刻把替身的旋轉與縮放存下來，數值欄改讀這一份：
+   * 放手後看到的就是剛才那一次的量，打數字就是改這一次。
+   * ⚠ 位移⛔ 需要：重新對準的中心本來就跟著走了同一段距離（`editDragValue()` 算得出來）。
+   */
+  _rememberEnd(d) {
+    if (!d) return;
+    d.end = { quat: this._proxy.quaternion.clone(), scale: this._proxy.scale.clone() };
   }
 
   /**
@@ -4045,7 +4225,12 @@ export class Selection {
    * ⚠ ⛔ 只在拉點線面裡收 —— 一般模式下開加選多半就是要一起拖，那時需要箭頭。
    */
   get gizmoHidden() {
-    return this.inPickMode || (this.multi && this.editMode);
+    /**
+     * ③-9（2026-10-19，kang 同意）：**框選開著也收**。箭頭四周有一圈看不見的感應區（連沒畫箭頭的反方向都有），
+     * 而箭頭比框選先接到滑鼠 ⇒ 框選的起點壓到那附近，就變成把物件拖走（T2 拖到 X 139）。
+     * 框選開著就是在挑東西 —— 跟上面「加選」同一個道理；關掉框選，箭頭就回來。
+     */
+    return this.inPickMode || (this.multi && this.editMode) || this.marqueeMode;
   }
 
   /** 開關「加選」—— 箭頭的顯示跟著重算（`gizmoHidden` 那則）*/

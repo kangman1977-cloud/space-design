@@ -692,7 +692,15 @@ function explodeSelected(obj) {
 function newDoc() {
   exitOtherModes();
   doc.clear();
-  doc.head.name = '未命名';
+  /**
+   * 🔴 **新建＝一個新案子：參考線清掉、案件資料（名稱、日期、備註）換新**（綜合評估 ③-6，2026-10-19）。
+   * ⚠ `clear()` 刻意⛔ 清參考線（它是「刪掉所有物件」那條路的），新建要自己清 ——
+   * 以前新建借它用 ⇒ T7 的 11 條參考線帶到 T9；日期也一直是第一次開頁面那天（展開圖、DXF 的案件那一行會印出來）。
+   * ⭐ 用 `new Doc().head` 拿預設值，⛔ 在這裡另寫一份（以後 head 加欄位才不會漏）；
+   * 用 `Object.assign` 改內容、⛔ 換掉物件本身（別處可能拿著同一個 head）。
+   */
+  doc.clearGuides();
+  Object.assign(doc.head, new Doc().head);
   sel.clear();
   view.sync(doc);
   hist.reset('新建檔案');
@@ -6322,7 +6330,8 @@ $('frame').onclick = () => view.frameAll(doc);
 $('save').onclick = () => { download(doc); toast('已存檔'); };
 $('load').onclick = loadFile;
 $('newDoc').onclick = () => {
-  if (doc.objects.length && !confirm('新建會清空目前內容，確定嗎？')) return;
+  /** ③-6：只剩參考線也要問 —— 新建不能復原（`hist.reset`），以前只看物件 ⇒ 參考線會被默默清掉 */
+  if ((doc.objects.length || doc.guideCount()) && !confirm('新建會清空目前內容（物件與參考線），確定嗎？')) return;
   newDoc();
 };
 
