@@ -174,6 +174,46 @@ export function revAtForGuide(obj, c) {
 }
 
 /**
+ * 🔴 **綁上去的那一刻：碗整個搬過去、大小⛔ 變**（綜合評估 ③-11，2026-10-19，kang「照建議」）。
+ *
+ * 以前綁的時候是改 `rev.at`（把中心線挪到參考線上）⇒ 輪廓沒動、離中心線的距離變了 ⇒ **碗當場變大一圈**
+ * （T5：3～8 變成 5.36～10.36）。⇒ 改成**搬物件**：中心線平移到參考線上、`rev.at` 不動 ⇒ 形狀一格都不變；
+ * 之後拖那條參考線，才照規則 1（`revFollowGuide()`）跟著變粗變細 —— 那是綁的用意。
+ * ⚠ 不平行一樣綁不上（同 `revAtForGuide()`）。⛔ 改動輸入，只回傳要搬多少。
+ * @returns {{ok:boolean, ax?:string, delta?:number, reason?:string}}
+ */
+export function revMoveToGuide(obj, c) {
+  const src = obj && obj.src;
+  if (!src || !src.rev) return { ok: false, reason: '這支鋼筆沒有開旋轉成形' };
+  const ax = revGuideAx(src);
+  const w = revAxisWorld(obj);
+  if (!w.ok) return { ok: false, reason: '現在轉不出碗，綁不上參考線（先把中心線調到線的一邊）' };
+  if (Math.abs(w.p1[ax] - w.p2[ax]) > BIND_TOL) {
+    return { ok: false, reason: '這個物件轉過角度，中心線跟參考線不平行，綁不上 —— 先把旋轉改回 0' };
+  }
+  return { ok: true, ax, delta: c - w.p1[ax] };
+}
+
+/**
+ * ③-11 後半（2026-10-19）：參考線挪完（放手、或打完數字），跟著它的碗**原點重新置中**。
+ * 規則 1 只改 `rev.at` ⇒ 碗變粗變細了，原點還留在舊的地方（T5 第 4 點）。
+ * ⭐ `recenterOrigin()` 會把路徑和 `rev.at` 一起挪、物件反方向搬 ⇒ 畫面上一格都不動、仍然綁著。
+ * ⚠ ⛔ 在拖曳的每一幀做（每幀換原點，箭頭會跟著跳）—— 放手那一下才做。
+ * @returns {number} 置中了幾個
+ */
+export function revRecenterBound(doc, ax, v) {
+  let n = 0;
+  for (const o of (doc && doc.objects) || []) {
+    const rv = o.src && o.src.type === 'pen' && o.src.rev;
+    if (!rv || rv.bind === null || rv.bind === undefined) continue;
+    if (revGuideAx(o.src) !== ax || Math.abs(rv.bind - v) > BIND_TOL) continue;
+    recenterOrigin(o);
+    n++;
+  }
+  return n;
+}
+
+/**
  * 規則 1：參考線從 `from` 挪到 `to` ⇒ 跟著它的碗一起改。
  * @returns {ModelObject[]} 跟著改了的物件（呼叫端要重畫）
  */

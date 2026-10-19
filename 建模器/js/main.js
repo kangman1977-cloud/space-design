@@ -14,7 +14,8 @@ import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
-         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide }
+         revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
+         revRecenterBound }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
@@ -317,6 +318,8 @@ const sel = new Selection(view, {
     if (committing) {
       guidePicked = to;
       syncGuideRow();
+      /** ③-11 後半：放手那一下，跟著這條線的碗原點重新置中（拖曳中⛔ 做，見 `revRecenterBound()`）*/
+      if (revRecenterBound(doc, ax, to)) view.sync(doc);
       commit('挪參考線');
       /** ⭐ 跟著這條線的碗，右側面板「中心線在 X ＝」那一格要換成新位置 */
       panel.refresh();
@@ -3422,11 +3425,14 @@ function setEditFilter(kind, quiet = false) {
  */
 function setEditPivot(want) {
   const got = sel.setEditPivot(want);
-  for (const b of document.querySelectorAll('.pvBtn')) {
-    b.classList.toggle('on', b.dataset.p === got);
-  }
+  syncPivotBtns();
   updateEditNum();
   panel.refresh();
+  /** ③-12：外框中心（只在編輯模式有這顆）*/
+  if (got === 'bounds') {
+    toast('中心改成「選到的點的外框正中間」—— 點分布不均時不會像「重心」那樣偏一邊');
+    return;
+  }
 
   /**
    * 🔴 **兩種模式講的東西⛔ 不一樣，話也要不一樣**（2026-09-01 補物件模式那半）。
@@ -3444,6 +3450,16 @@ function setEditPivot(want) {
       ? '中心改成「最後點的那一個物件」—— 其他物件會繞著它轉'
       : '中心改成「全部選到的物件的中間」');
   }
+}
+
+/**
+ * 「中心」那幾顆按鈕亮哪一顆（③-12 抽出來：模式一換也要重算）。
+ * ⚠ 物件模式沒有「外框中心」那顆 —— 選著它時，物件模式其實就是「重心」（整組外框的中間）⇒ 亮「重心」。
+ */
+function syncPivotBtns() {
+  const p = sel.editPivot;
+  const shown = (!sel.editMode && p === 'bounds') ? 'median' : p;
+  for (const b of document.querySelectorAll('.pvBtn')) b.classList.toggle('on', b.dataset.p === shown);
 }
 
 /**
@@ -5938,6 +5954,9 @@ function syncEditXfRow() {
   const pivotOff = off || (!edit && sel.count < 2);
   $('pvLbl').hidden = pivotOff;
   for (const b of document.querySelectorAll('.pvBtn')) b.hidden = pivotOff;
+  /** ③-12：「外框中心」只在編輯模式 —— 物件模式多選的「重心」本來就是整組外框的中間（`groupPivot()`），兩顆一樣會讓人猜 */
+  $('pvBounds').hidden = pivotOff || !edit;
+  syncPivotBtns();
 
   const editOnly = off || !edit;
   for (const id of ['editNumLbl', 'editNum', 'editNumUnit']) $(id).hidden = editOnly;
@@ -6224,6 +6243,7 @@ $('guideNum').addEventListener('change', () => {
   guidePicked = v;
   /** 🔴 旋轉成形 第 2 輪 規則 1：打數字挪線，跟著它的碗一起改 */
   const fol = revFollowGuide(doc, guideAxis, from, v);
+  if (fol.length && revRecenterBound(doc, guideAxis, v)) view.sync(doc);   // ③-11 後半
   commit('挪參考線');
   if (fol.length) panel.refresh();
   if (fol.length) {

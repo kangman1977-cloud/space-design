@@ -1094,6 +1094,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl" id="pvLbl">中心</span>
       <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
       <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
+      <button id="pvBounds" class="pvBtn" data-p="bounds" title="中心＝選到的點的外框正中間（只看最外圍）。點分布不均時（例如一邊加了很多點）「重心」會偏過去，這個不會 —— 整顆轉、整塊縮放用它">外框中心</button>
       <!--
         🔴 這個字會跟著動作換成「移動／旋轉／縮放」（見 main.js updateEditNum）。
         原本固定寫「數值」，而 kang 2026-08-25 的回報是

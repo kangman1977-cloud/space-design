@@ -157,9 +157,12 @@ function edge(b, ax, mode) {
  * @param {ModelObject[]} objs
  * @param {'x'|'y'|'z'} ax
  * @param {'min'|'center'|'max'} mode
+ * @param {number|null} [anchor] 🔴 綜合評估 ③-3（2026-10-19，kang「照建議」）：給了 ⇒ **對齊到這一個**
+ *   （Illustrator 的「對齊至：關鍵物件」）—— 它自己⛔ 動、其他的對過去。⛔ 給 ＝ 照舊對整組的外框。
+ *   以前只有整組 ⇒ 把軸對到齒輪中心時齒輪也被移走 3.49 cm（T9）。
  * @returns {THREE.Vector3[]} 每個物件的新位置，順序同輸入。不改動輸入。
  */
-export function alignPositions(objs, ax, mode) {
+export function alignPositions(objs, ax, mode, anchor = null) {
   const out = objs.map(o => o.pos.clone());
   if (objs.length < 2) return out;          // 一個物件對誰？不動
 
@@ -168,7 +171,9 @@ export function alignPositions(objs, ax, mode) {
   for (const b of bs) if (!b.isEmpty()) all.union(b);
   if (all.isEmpty()) return out;
 
-  const target = edge(all, ax, mode);
+  const key = Number.isInteger(anchor) && anchor >= 0 && anchor < objs.length && !bs[anchor].isEmpty()
+    ? bs[anchor] : null;
+  const target = edge(key || all, ax, mode);
 
   objs.forEach((o, i) => {
     if (bs[i].isEmpty()) return;

@@ -599,7 +599,9 @@ export function measureLabels(mesh, els, M, opt = {}) {
      * ⛔ 改成面積加權：gizmo 掛的也是這個點，改了箭頭會跟著跑（kang 同意只改名）。
      */
     const isOneVert = kind === 'vertex' && !many;
-    rows.push((isOneVert ? '座標' : (many && pivot === 'active' ? '中心（最後選的）' : '中心（點的平均）'))
+    /** ③-12：中心選「外框中心」時，單選也是外框的中間（`elementCenter()`）⇒ 名稱跟著換 */
+    rows.push((isOneVert ? '座標' : pivot === 'bounds' ? '中心（外框中心）'
+      : (many && pivot === 'active' ? '中心（最後選的）' : '中心（點的平均）'))
       + ` X ${fmtCm(ms.center.x)}　Y ${fmtCm(ms.center.y)}　Z ${fmtCm(ms.center.z)} cm`);
 
     /** 第 4 步（一）：剛好兩個 → 多報距離。⛔ 三個以上不硬湊 */

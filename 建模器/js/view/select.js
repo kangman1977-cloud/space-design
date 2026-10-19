@@ -3048,7 +3048,8 @@ export class Selection {
    * 單選時兩者是同一個點，所以介面上要講清楚它是給多選用的。
    */
   setEditPivot(pivot) {
-    this.editPivot = pivot === 'active' ? 'active' : 'median';
+    /** ③-12：多一種 `'bounds'`（外框中心，只在編輯模式有按鈕；物件模式的「重心」本來就是整組外框的中間）*/
+    this.editPivot = pivot === 'active' || pivot === 'bounds' ? pivot : 'median';
     this._drag = null;              // 中心變了，上一次拖曳的基準就不同了
     if (this.editSel) { this._rebaseProxy(); this._drawEditMark(); }
     else if (!this.editMode && this.count > 1) {

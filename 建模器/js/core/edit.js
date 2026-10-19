@@ -210,10 +210,21 @@ export function elementVerts(mesh, el, tolDeg = 0.5) {
  * 只看 active 那一個。兩個概念名義上正交，實作上方向依賴中心 ——
  * Blender 也是這樣（算方向的函式吃 pivot 當參數）。
  *
+ * 🔴 **第三種 `'bounds'`：選到的點的【外框中心】**（綜合評估 ③-12，2026-10-19，kang「照建議」）。
+ * `'median'` 是點的平均 ⇒ 點分布不均時偏一邊（T8：整顆網格轉完球心偏 0.39）。
+ * 外框中心只看最外圍，⛔ 被點的多寡拉走 —— 跟「原點置中」取外框中心是同一個理由（見 `recenterMesh` 那則）。
+ * ⚠ ⛔ 改 `'median'` 的意思：量測讀數、gizmo、壓平都靠它（它是「一個面的中心」唯一的定義）。
+ *
  * @param {object|object[]} el 一個元素或一個陣列
- * @param {'median'|'active'} pivot
+ * @param {'median'|'active'|'bounds'} pivot
  */
 export function elementCenter(mesh, el, tolDeg = 0.5, pivot = 'median') {
+  if (pivot === 'bounds') {
+    const vs = elementVerts(mesh, el, tolDeg);
+    const box = new THREE.Box3();
+    for (const v of vs) box.expandByPoint(v.p);
+    return box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+  }
   let target = el;
   if (pivot === 'active' && Array.isArray(el) && el.length) {
     target = el[el.length - 1];                    // 順序即 active：最後一筆

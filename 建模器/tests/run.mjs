@@ -18014,6 +18014,60 @@ section('綜合評估 ③ 第二批：講出來、多選一起改（2026-10-19�
   ok('　 不是齒輪 ⇒ null', gearClash(new io.ModelObject({ src: { type: 'box', w: 1, h: 1, d: 1 } }), [A]) === null);
 }
 
+section('綜合評估 ③ 第三批（一）：對齊到最後選的、綁參考線搬碗、外框中心（2026-10-19）');
+{
+  /** 面板上的「對齊到」下拉、按鈕、提示文字在本機／線上版用畫面驗 */
+  const A = await import('../js/core/align.js');
+  const box = (w, x) => { const o = new io.ModelObject({ src: { type: 'box', w, h: 2, d: 2 } }); o.pos.set(x, 1, 0); return o; };
+  // ③-3 對齊到最後選的（它不動）
+  const shaft = box(1, 7), gearB = box(10, 0);
+  const p = A.alignPositions([shaft, gearB], 'x', A.ALIGN.CENTER, 1);
+  near('★★★ ③-3 對齊到最後選的：齒輪（最後選的）⛔ 動', p[1].x, 0, 1e-9);
+  near('★★★ 　 軸對到齒輪中心', p[0].x, 0, 1e-9);
+  const q = A.alignPositions([shaft, gearB], 'x', A.ALIGN.CENTER);
+  ok('★★ 　 不給基準 ⇒ 照舊對整組（兩個都往整組中間移）', Math.abs(q[1].x) > 1e-6 && Math.abs(q[0].x - q[1].x) < 1e-9, `${q[0].x} ${q[1].x}`);
+  near('★ 　 對齊到最後選的「靠左」：軸的左緣 ＝ 齒輪的左緣 −5', A.alignPositions([shaft, gearB], 'x', A.ALIGN.MIN, 1)[0].x, -4.5, 1e-9);
+  near('　 基準超出範圍 ⇒ 當成沒給', A.alignPositions([shaft, gearB], 'x', A.ALIGN.CENTER, 5)[0].x, q[0].x, 1e-9);
+
+  // ③-11 綁參考線：搬碗、大小不變；挪線放手後原點置中
+  const xy = [0, 50, 30, 50, 38, 40, 42, 20, 44, 0];
+  const bowl = new io.ModelObject({ kind: io.KIND.SHEET,
+    src: { type: 'pen', h: 3, open: true, up: false,
+           paths: [{ closed: true, a: xy.slice(), hi: xy.map(() => 0), ho: xy.map(() => 0) }], rev: { dir: 'z', at: 0, seg: 32, stand: true } } });
+  bowl.pos.set(100, 0, 20);
+  const size = o => { const b = A.worldBounds(o); return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z]; };
+  const s0 = size(bowl);
+  const r = io.revMoveToGuide(bowl, 95);
+  ok('★★ ③-11 綁到 X 95：算得出要搬多少', r.ok && r.ax === 'x', r.reason);
+  near('★★ 　 要往左搬 5', r.delta, -5, 1e-9);
+  bowl.pos[r.ax] += r.delta; bowl.src.rev.bind = 95; bowl.invalidate();
+  ok('★★★ 　 搬過去之後中心線就在 X 95', io.revOnGuide(bowl, 95));
+  const s1 = size(bowl);
+  ok('★★★ 　 碗的大小一格都不變（以前改 at ⇒ 當場變大一圈）', s0.every((v, i) => Math.abs(v - s1[i]) < 1e-6), `${s0} → ${s1}`);
+  const doc = new io.Doc(); doc.add(bowl); doc.addGuide('x', 95);
+  doc.removeGuide('x', 95); doc.addGuide('x', 90);
+  io.revFollowGuide(doc, 'x', 95, 90);
+  const before = A.worldBounds(bowl).clone();
+  eq('★★ 　 挪線放手：跟著它的碗 1 個原點置中', io.revRecenterBound(doc, 'x', 90), 1);
+  const after = A.worldBounds(bowl);
+  ok('★★★ 　 置中之後畫面上一格都不動、仍然綁著', before.min.distanceTo(after.min) < 1e-6 && before.max.distanceTo(after.max) < 1e-6 && io.revOnGuide(bowl, 90), `${before.min.toArray()} ${after.min.toArray()}`);
+  const c = after.getCenter(new THREE.Vector3());
+  ok('★★ 　 原點在碗的外框中間（X、Z）', Math.abs(bowl.pos.x - c.x) < 1e-6 && Math.abs(bowl.pos.z - c.z) < 1e-6, `${bowl.pos.toArray()} vs ${c.toArray()}`);
+  eq('　 沒綁的那條線 ⇒ 0 個', io.revRecenterBound(doc, 'z', 90), 0);
+
+  // ③-12 外框中心
+  const m = buildPrim('box', { w: 10, h: 10, d: 10 });
+  const vs = m.verts.filter(v => v.p.y > 4.9);           // 頂面四個角
+  const extra = [vs[0], vs[0], vs[1]].map(v => ({ kind: 'vertex', vert: v }));
+  const all = [...vs.map(v => ({ kind: 'vertex', vert: v })), ...extra];
+  const med = edit.elementCenter(m, all, 0.5, 'median'), bnd = edit.elementCenter(m, all, 0.5, 'bounds');
+  ok('★★★ ③-12 四個角（其中兩個多選幾次也只算一次）：外框中心 ＝ 頂面正中間 (0, 5, 0)', bnd.distanceTo(new THREE.Vector3(0, 5, 0)) < 1e-9, bnd.toArray().join(','));
+  const lop = [vs[0], vs[1], vs[2]].map(v => ({ kind: 'vertex', vert: v }));
+  const m3 = edit.elementCenter(m, lop, 0.5, 'median'), b3 = edit.elementCenter(m, lop, 0.5, 'bounds');
+  ok('★★ 　 三個角：重心偏一邊、外框中心照樣在外框中間（兩個不一樣）', m3.distanceTo(b3) > 1, `${m3.toArray()} ${b3.toArray()}`);
+  ok('　 「重心」的意思⛔ 變（四個角 ⇒ 一樣在正中間）', med.distanceTo(new THREE.Vector3(0, 5, 0)) < 1e-9);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

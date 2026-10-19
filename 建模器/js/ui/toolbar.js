@@ -10,7 +10,7 @@
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
          bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
   from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin, penKind, revAtForGuide, penWallSide,
+import { KIND, canExplodeShapes, recenterOrigin, penKind, revMoveToGuide, penWallSide,
          revGuideAx, revWallAxisAt, revWallAtFor } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
@@ -755,14 +755,19 @@ export class Panel {
         return;
       }
       const c = +v;
-      const r = revAtForGuide(obj, c);
+      /**
+       * 🔴 ③-11（2026-10-19，kang「照建議」）：綁上去那一刻**搬碗、⛔ 改中心線** ⇒ 大小一格都不變
+       * （以前用 `revAtForGuide()` 改 `rev.at` ⇒ 碗當場變大一圈，T5）。之後拖參考線才變粗變細。
+       */
+      const r = revMoveToGuide(obj, c);
       if (!r.ok) { this.app.toast(r.reason, true); this.refresh(); return; }
-      rev.at = r.at;
+      obj.pos[r.ax] += r.delta;
       rev.bind = c;
-      after('中心線綁參考線', `中心線跟著 ${gname} ＝ ${round(c)}：拖那條參考線，碗會當場跟著變粗變細；`
+      const moved = Math.abs(r.delta) > 1e-6 ? `碗整個搬過去 ${round(Math.abs(r.delta))} cm、大小不變` : '碗本來就在線上';
+      after('中心線綁參考線', `中心線跟著 ${gname} ＝ ${round(c)}：${moved}。之後拖那條參考線，碗會當場跟著變粗變細；`
         + '把碗搬離那條線（或刪掉那條線）就自動脫鉤，形狀不變');
     }, glist.length
-      ? `選一條 ${gname}，中心線就放到那條線上並跟著它：拖那條參考線，碗會當場跟著變粗變細。`
+      ? `選一條 ${gname}，碗就整個搬到那條線上（大小不變）並跟著它：之後拖那條參考線，碗會當場跟著變粗變細。`
         + '沿著中心線推、往上抬都還跟著；搬離那條線、或刪掉那條線就自動脫鉤（形狀不變）'
       : `還沒有 ${gname} 參考線 —— 先按左側「參考線」加一條，這裡就選得到`);
 
@@ -863,6 +868,25 @@ export class Panel {
 
     this.form.appendChild(head('對齊'));
 
+    /**
+     * 🔴 **對齊到：整組／最後選的**（綜合評估 ③-3，2026-10-19，kang「照建議」）。
+     * ⭐ 預設維持「整組」（以前怎麼用就怎麼用）；選「最後選的」⇒ 最後選的那個⛔ 動、其他的對過去
+     * （T9：把軸對到齒輪中心，齒輪不該被移走）。跟「咬上去」「貼合」一樣是「對到後選的那一個」。
+     * ⚠ 只記在這一次開著的頁面裡（⛔ 存檔）—— 換了一組選取也照樣沿用，重新整理回到「整組」。
+     */
+    const actName = this.app.sel.active ? this.app.sel.active.name : '';
+    this._rowSelect('對齊到', this.alignTo || 'group', [
+      ['group', '整組的外框'],
+      ['active', `最後選的「${actName}」（它不動）`]
+    ], v => { this.alignTo = v; this.refresh(); },
+    '整組的外框：全部對到整組最左／中間／最右；最後選的：最後點的那一個不動，其他的對到它');
+    const anchorIdx = () => {
+      if (this.alignTo !== 'active') return null;
+      const list = this.app.sel.objects, act = this.app.sel.active;
+      const i = list.indexOf(act);
+      return i >= 0 ? i : null;
+    };
+
     for (const ax of AXIS_KEYS) {
       const r = document.createElement('div');
       r.className = 'alignRow';
@@ -873,8 +897,8 @@ export class Panel {
         const b = document.createElement('button');
         b.textContent = ALIGN_LABEL[ax][mode];
         b.onclick = () => this._applyPositions(
-          alignPositions(this.app.sel.objects, ax, mode),
-          `對齊 ${ALIGN_LABEL[ax][mode]}`);
+          alignPositions(this.app.sel.objects, ax, mode, anchorIdx()),
+          `對齊 ${ALIGN_LABEL[ax][mode]}${this.alignTo === 'active' ? `（到「${actName}」）` : ''}`);
         r.appendChild(b);
       }
       this.form.appendChild(r);
@@ -981,9 +1005,22 @@ export class Panel {
       if (this.app.toast) this.app.toast(`${label}：已經在位置上了，沒有移動`);
       return;
     }
+    /**
+     * ③-3：講出**誰移了多少**（以前只說「移動了 2 個」⇒ 齒輪被移走 3.49 cm 也看不出來）。
+     * 最多列 3 個，其餘講「等 N 個」；只列有動的那幾根軸。
+     */
+    const f = v => (Math.abs(v) < 0.005 ? null : `${v > 0 ? '+' : '−'}${+Math.abs(v).toFixed(2)}`);
+    const who = [];
+    objs.forEach((o, i) => {
+      const d = list[i].clone().sub(o.pos);
+      if (d.lengthSq() <= 1e-12) return;
+      const parts = ['x', 'y', 'z'].map(k => (f(d[k]) ? `${k.toUpperCase()} ${f(d[k])}` : null)).filter(Boolean);
+      who.push(`「${o.name}」${parts.join('、') || '（不到 0.01）'} cm`);
+    });
     objs.forEach((o, i) => o.pos.copy(list[i]));
     this._edit(label);
-    if (this.app.toast) this.app.toast(`${label}：移動了 ${moved} 個物件`);
+    const more = who.length > 3 ? `等 ${who.length} 個` : '';
+    if (this.app.toast) this.app.toast(`${label}：移動了 ${moved} 個物件 —— ${who.slice(0, 3).join('；')}${more}`);
   }
 
   // ═══════════════════════════════════════════════════
@@ -1099,6 +1136,7 @@ export class Panel {
        * （三種說法都跟左下角讀數一樣，見 `measure.js`）
        */
       + `${!many && el.kind === 'vertex' ? '座標'
+        : sel.editPivot === 'bounds' ? '中心（外框中心）'
         : many && sel.editPivot === 'active' ? '中心（最後選的）' : '中心（點的平均）'} `
       + `X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`
       + (many ? '<br><span class="dim2">橘色的那個是最後選的（active）——'
