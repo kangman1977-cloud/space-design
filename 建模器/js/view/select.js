@@ -2593,7 +2593,19 @@ export class Selection {
     const { obj, node, pLocal } = h;
 
     const mesh = obj.mesh();
-    const near = this._nearestPickableEdge(mesh, pLocal);
+    /**
+     * 🔴 **一條可標的邊都沒有（平板轉成網格只有一個面、全是外緣）⇒ 退回去吸外緣**（2026-10-19，補測：`實驗-綜合評估.md` ②-3）。
+     * ⚠ 以前「含外緣」沒開就一條都吸不到，提示卻說「點在物件上」—— 平板上點哪裡都切不了。
+     * ⭐ 只在刀具這裡退（`pickEdgePoint()` 只有刀具在用）；「含外緣」那顆開關照舊（kang 拍板：框選⛔ 默默把外圈掃進去）。
+     */
+    let near = this._nearestPickableEdge(mesh, pLocal);
+    if ((!near || !near.he) && !this.includeBoundary) {
+      for (const he of mesh.edges()) {
+        if (!he.face || (he.twin && he.twin.face)) continue;
+        const d = distPointSeg(pLocal, he.v.p, he.to.p);
+        if (!near || d < near.dist) near = { he, dist: d };
+      }
+    }
     if (!near || !near.he) return null;
 
     /** 投影到那條邊上 → 邊上的落點 */
@@ -3404,7 +3416,7 @@ export class Selection {
    */
   _applyModeLimit() {
     const el = this.editSel;
-    if (el && el.kind === 'vertex' && this.tc.getMode() !== 'translate') {
+    if (el && this._singleVertex() && this.tc.getMode() !== 'translate') {
       this.tc.setMode('translate');
     }
   }
@@ -3413,7 +3425,16 @@ export class Selection {
   editModeAllowed(mode) {
     if (!this.editSels.length) return false;
     // 型別在同一次多選裡一定一致，所以問 active 就等於問全部
-    return this.editSel.kind !== 'vertex' || mode === 'translate';
+    return !this._singleVertex() || mode === 'translate';
+  }
+
+  /**
+   * 🔴 **只有「剛好一個點」才擋轉／縮放**（2026-10-19，實驗 T1：`實驗-綜合評估.md` ②-14）。
+   * ⚠ 以前只看種類是不是「點」：選了 64 個點要縮放也被擋，訊息還說「一個點轉或縮放不會改變座標」——
+   * 好幾個點繞著共同的中心縮放、旋轉，座標當然會變（梯形、收尖用點也做得到）。
+   */
+  _singleVertex() {
+    return !!this.editSel && this.editSel.kind === 'vertex' && this.editSels.length === 1;
   }
 
   /**
@@ -3881,7 +3902,8 @@ export class Selection {
     if (mode === 'translate') {
       const dir = this._axisDir(axis, d.start.quat);
       const off = new THREE.Vector3().subVectors(this._proxy.position, d.start.pos);
-      return { axis, mode, value: off.dot(dir), unit: 'cm' };
+      /** 世界的公分（2026-10-19 ②-7）：替身的位移是物件自己座標的量，物件有縮放就要乘回來（`_worldLen()`）*/
+      return { axis, mode, value: off.dot(dir) * this._worldLen(dir), unit: 'cm' };
     }
     if (mode === 'scale') {
       return { axis, mode, value: this._proxy.scale[axis.toLowerCase()], unit: '倍' };
@@ -3909,8 +3931,9 @@ export class Selection {
 
     const k = info.axis.toLowerCase();
     if (info.mode === 'translate') {
-      this._proxy.position.copy(d.start.pos)
-        .addScaledVector(this._axisDir(info.axis, d.start.quat), num);
+      const dir = this._axisDir(info.axis, d.start.quat);
+      /** 打的是世界的公分 ⇒ 換回物件自己座標的長度（2026-10-19 ②-7；沒縮放的物件除以 1，跟以前一樣）*/
+      this._proxy.position.copy(d.start.pos).addScaledVector(dir, num / this._worldLen(dir));
     } else if (info.mode === 'scale') {
       /**
        * ⚠ **0 是合法的，不要擋。**
@@ -3954,6 +3977,20 @@ export class Selection {
    * 拿新的去換算，打進去的數字就會沿著**另一根軸**走 ——
    * 而數字看起來完全正常。
    */
+  /**
+   * 🔴 **物件自己座標裡長度 1 的這根方向，在世界裡有多長**（2026-10-19，實驗 T1：`實驗-綜合評估.md` ②-7）。
+   * ⚠ 替身掛在物件底下（`_proxy` 的父節點帶著 obj.scale）—— 以前打 0.8 被當成物件自己的 0.8，
+   * 物件 Y 放大 1.1 倍 ⇒ 實際走 0.88；拖完欄位顯示的也是物件自己的量，差同一個倍率。
+   * ⭐ 數值欄一律是世界的公分：顯示乘這個、打進去除以這個。沒縮放 ⇒ 1。
+   */
+  _worldLen(dir) {
+    const node = this._proxy.parent;
+    if (!node) return 1;
+    node.updateMatrixWorld(true);
+    const L = dir.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(node.matrixWorld)).length();
+    return L > 1e-12 ? L : 1;
+  }
+
   _axisDir(axis, quat) {
     const u = new THREE.Vector3(
       axis === 'X' ? 1 : 0, axis === 'Y' ? 1 : 0, axis === 'Z' ? 1 : 0);

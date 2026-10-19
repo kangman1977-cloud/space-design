@@ -224,6 +224,26 @@ export class Panel {
       return;
     }
 
+    /**
+     * 🔴 **結構分析的數字要跟著目前的物件**（2026-10-19，實驗 T4：`實驗-綜合評估.md` ②-4）。
+     * ⚠ 以前改了參數只清掉快取、畫面上的表格照舊留著 ⇒ 改了孔徑還一直顯示 162.9；換選另一個物件也還掛著上一個的。
+     * ⭐ 有這個物件算好的 ⇒ 畫那一份；沒有 ⇒ 講「按重新計算」（⛔ 自動算：面數多時要幾百毫秒，`analyse()` 檔頭）。
+     */
+    const cachedAna = this.analysisCache.get(obj.id);
+    if (cachedAna) {
+      if (this._anaShown !== cachedAna) this._renderAnalysis(cachedAna);
+    } else if (this.anaBody.textContent !== '計算中…') {
+      /** 這個物件算過、後來改了 ⇒「形狀改過了」；沒算過 ⇒「按重新計算」（換物件時也要換這一句 —— 本機版按過才抓到）*/
+      const msg = this._anaFor === obj.id
+        ? '形狀改過了 —— 按「重新計算」看新的數字'
+        : '按「重新計算」看這個物件的結構';
+      if (this._anaShown || this.anaBody.textContent !== msg) {
+        this.anaBody.className = 'empty';
+        this.anaBody.textContent = msg;
+      }
+      this._anaShown = null;
+    }
+
     // 網格生成失敗（多半是布林算不出來）先講清楚，再讓人去改參數
     if (obj.error) {
       this.form.appendChild(bad('這個物件目前算不出來：' + obj.error));
@@ -1944,6 +1964,9 @@ export class Panel {
   }
 
   _renderAnalysis(d) {
+    /** 記住畫的是哪一份、哪個物件的（`refresh()` 拿來判斷要不要換掉 —— ②-4）*/
+    this._anaShown = d;
+    this._anaFor = this.app.sel.active ? this.app.sel.active.id : null;
     const { v, s } = d;
     const t = topologyCheck(v, s.totalDefect);
 

@@ -204,6 +204,8 @@ const sel = new Selection(view, {
    * ⛔ 不講的話使用者不知道那兩根是可以拖的（坑第 21 條）。
    */
   onPenEditPick: (i, n) => {
+    /** ⚠ 2026-10-19（補測：②-4）選到錨點要重畫工具列 —— 以前「刪點」一直是灰的，實際用不了 */
+    updateBar();
     const sm = sel.penIsSmoothAt(i);
     toast(`選到第 ${i + 1} 個點（共 ${n} 個）　`
       + (sm
@@ -398,6 +400,10 @@ const sel = new Selection(view, {
     if (!r) { toast('先選一個已經轉成網格的物件，再框選它的點／邊／面', true); return; }
     if (!r.added) { toast('框選範圍內沒有東西', true); return; }
     const what = r.kind === 'vertex' ? '個點' : r.kind === 'face' ? '個面' : '條邊';
+    /**
+     * ⚠ 2026-10-19（實驗 T1：`實驗-綜合評估.md` ②-4）以前只跳提示 —— 工具列、面板、數值欄都還是上一次的（點選那條路有重畫，框選這條沒有）。
+     */
+    panel.refresh(); updateBar(); updateEditNum();
     toast(`框選到 ${r.added} ${what}（含轉過去才看得到的背面）　目前共選 ${r.total} 個`);
   }
 });
@@ -543,6 +549,8 @@ function deleteSelected() {
    */
   if (sel.inPickMode) {
     if (sel.penMode && !sel.penEdit && sel.penCount > 0) { $('penUndo').onclick(); return; }
+    /** ⭐ 鋼筆「改點」選到一個錨點時，Delete ＝「刪點」那顆按鈕（2026-10-19 ②-4）—— 只放行這一種，其他照舊擋 */
+    if (sel.penMode && sel.penEdit && sel.penSel >= 0) { $('penDel').onclick(); return; }
     toast('這個模式下 Delete 不會刪物件 —— 要刪物件請先離開目前的模式', true);
     return;
   }
@@ -5545,7 +5553,7 @@ let seamMarkKind = 'cut';
  * 存著提案當時的**物件、網格、標記指紋**；三樣有一樣對不上 ⇒ 收起來（規格：有提案時改了標記 ⇒ 提案收起來，要再按一次）。
  * ⭐ 用指紋判斷、⛔ 在每一個改標記的地方各自收 —— 標縫、標不准切、清除、Undo、讀檔都會改到指紋，一個判準全包
  * （鐵律二：與其讓好幾條路對齊，不如換一個只有一條路的定義）。
- * `seamProposalStale`：剛被收起來 ⇒ 面板下次重畫講一次「標記改了，提案收起來了」。
+ * `seamProposalStale`：提案被收起來的那個物件（false ＝ 沒有）⇒ 選著它時面板一直講「標記改了，提案收起來了」（2026-10-19 ②-16，以前只講一次就被蓋掉）。
  */
 let seamProposal = null;
 let seamProposalStale = false;
@@ -5594,10 +5602,20 @@ function currentSeamProposal(obj) {
   const p = seamProposal;
   if (p && (p.obj !== obj || p.obj.mesh() !== p.mesh || markSignature(p.mesh) !== p.sig)) {
     dropSeamProposal();
-    seamProposalStale = true;
+    /**
+     * 🔴 **同一個物件、標記改了 ⇒ 講一次，而且面板那句留著**（2026-10-19，補測：`實驗-綜合評估.md` ②-16）。
+     * ⚠ 以前「講一次」的旗標被同一輪的第一次重畫用掉、第二次重畫就沒了 ⇒ 提案默默不見；toast 只有按「全部接受」才跳。
+     * ⭐ 旗標改成記「是哪個物件的提案收起來了」：同一個物件就一直講，換物件、再按提案、接受才清掉。
+     * toast 晚一拍跳（⛔ 被改標記那一步自己的提示蓋掉）。換了物件 ⇒ 安靜收起來（那是使用者自己走開的）。
+     */
+    if (p.obj === obj) {
+      seamProposalStale = obj;
+      setTimeout(() => toast('標記改了，提案收起來了 —— 要再按一次「提案」', true), 0);
+    } else seamProposalStale = false;
   }
   if (seamProposal) return { proposal: seamProposal };
-  if (seamProposalStale) { seamProposalStale = false; return { stale: true }; }
+  if (seamProposalStale && seamProposalStale === obj) return { stale: true };
+  seamProposalStale = false;
   return null;
 }
 
@@ -5607,7 +5625,7 @@ function acceptSeamProposal() {
   if (!p) return;
   if (p.obj.mesh() !== p.mesh || markSignature(p.mesh) !== p.sig) {
     dropSeamProposal();
-    seamProposalStale = true;
+    seamProposalStale = p.obj;
     panel.refresh();
     toast('標記改了，提案收起來了 —— 要再按一次「提案」', true);
     return;
@@ -5746,8 +5764,9 @@ function setMode(m) {
      * 兩個不同的拒絕理由，訊息一定要分開 ——
      * 講錯理由比不講更糟，使用者會去找一個不存在的問題。
      */
-    toast(sel.editMode && sel.editSel && sel.editSel.kind === 'vertex'
-      ? '一個「點」轉或縮放都不會改變任何座標。要做梯形／收尖請選「邊」或「面」'
+    /** ⚠ 2026-10-19（②-14）只有「剛好一個點」才擋，訊息照實講（以前選了 64 個點也說「一個點」）*/
+    toast(sel.editMode && sel.editSel && sel.editSel.kind === 'vertex' && sel.editCount === 1
+      ? '只選了一個點：一個點自己轉、自己縮放都不會變。選兩個以上的點，或改選邊、面'
       : '這個物件鎖定了縮放', true);
     return;
   }
@@ -7126,10 +7145,11 @@ function updateBar() {
                              : '先選一條邊（把過濾器切到「邊」比較好點）')
         : '先按「拉點線面」進入編輯模式，再選一條邊');
 
-  const vtx = sel.editMode && sel.editSel && sel.editSel.kind === 'vertex';
+  /** 只有「剛好一個點」才灰掉（2026-10-19 ②-14，跟 `select.js` `_singleVertex()` 同一個條件）*/
+  const vtx = sel.editMode && sel.editSel && sel.editSel.kind === 'vertex' && sel.editCount === 1;
   for (const id of ['mRot', 'mScale']) {
     $(id).disabled = vtx;
-    if (vtx) $(id).title = '一個「點」轉或縮放都不會改變任何座標。要做梯形／收尖請選「邊」或「面」';
+    if (vtx) $(id).title = '只選了一個點：一個點自己轉、自己縮放都不會變。選兩個以上的點，或改選邊、面';
     else $(id).removeAttribute('title');
   }
 

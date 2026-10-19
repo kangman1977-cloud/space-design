@@ -132,6 +132,34 @@ export function stlVolume(tris) {
 }
 
 /** 整批三角形的外接框 */
+/**
+ * 互不相連的每一塊各自的外框，回傳最大那一塊的最長邊（跟 `tris` 同一個單位）——
+ * 共用一個頂點（位置相同，1e-6 以內）的三角形算同一塊。給 `printCheck()` 的「超過成型範圍」用（②-5）。
+ */
+function largestPartMM(tris) {
+  const key = p => `${Math.round(p.x * 1e6)},${Math.round(p.y * 1e6)},${Math.round(p.z * 1e6)}`;
+  const parent = tris.map((_, i) => i);
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const seen = new Map();
+  tris.forEach((t, i) => {
+    for (const p of [t.a, t.b, t.c]) {
+      const k = key(p);
+      if (seen.has(k)) { const a = find(i), b = find(seen.get(k)); if (a !== b) parent[a] = b; }
+      else seen.set(k, i);
+    }
+  });
+  const boxes = new Map();
+  tris.forEach((t, i) => {
+    const r = find(i);
+    if (!boxes.has(r)) boxes.set(r, new THREE.Box3());
+    const b = boxes.get(r);
+    b.expandByPoint(t.a); b.expandByPoint(t.b); b.expandByPoint(t.c);
+  });
+  let best = 0;
+  for (const b of boxes.values()) { const s = b.getSize(new THREE.Vector3()); best = Math.max(best, s.x, s.y, s.z); }
+  return best;
+}
+
 export function trisBounds(tris) {
   const box = new THREE.Box3();
   for (const t of tris) { box.expandByPoint(t.a); box.expandByPoint(t.b); box.expandByPoint(t.c); }
@@ -409,9 +437,18 @@ export function printCheck(mesh, tris, opt = {}) {
 
   const big = Math.max(size.x, size.y, size.z);
   if (big > build) {
+    /**
+     * 🔴 **分開的好幾塊：看最大的那一塊**（2026-10-19，實驗 T2：`實驗-綜合評估.md` ②-5）。
+     * ⚠ 以前量的是整組的外框 —— 鏡射出來的兩塊 1 × 2.5 × 4 cm 側塊隔 25 cm 放，被報「最長邊 256mm 超過 250」，
+     * 叫人去分件或縮小；其實每一塊都小得很，在切片軟體裡排一下就放得下。
+     */
+    const part = v.components > 1 ? largestPartMM(tris) : big;
     issues.push({
       level: 'warn',
-      text: `最長邊 ${big.toFixed(1)}mm 超過常見成型範圍 ${build}mm，可能要分件或縮小`
+      text: part > build
+        ? `最長邊 ${big.toFixed(1)}mm 超過常見成型範圍 ${build}mm，可能要分件或縮小`
+        : `整件最長 ${big.toFixed(1)}mm 超過常見成型範圍 ${build}mm，但它是 ${v.components} 塊分開的、`
+          + `最大一塊 ${part.toFixed(1)}mm —— 在切片軟體裡把它們排近一點就放得下`
     });
   }
 

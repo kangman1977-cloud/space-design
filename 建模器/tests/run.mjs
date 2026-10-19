@@ -17899,6 +17899,23 @@ section('綜合評估 ② 第一批：說錯的數字與提示（2026-10-19）')
   ok('★★ ②-17 3 mm 的方塊：「這個物件最長邊只有 3.00mm…」（以前「整個模型」）', !!small && small.text.startsWith('這個物件最長邊只有') && !small.text.includes('整個模型'), small && small.text);
 }
 
+section('綜合評估 ② 第二批：行為修正（2026-10-19）');
+if (csgOK) {
+  /** 畫面上的部分（框選重畫、鋼筆刪點、結構分析過期、多點縮放、縮放物件的數值欄、刀具在平板、提案收起來）在本機／線上版用畫面驗 */
+  // ②-5 分開的兩小塊：看最大的一塊
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+  const two = io.buildSrc({ type: 'bool', op: BOOL_OPS.UNION, items: [it({ type: 'box', w: 2, h: 2, d: 2 }), it({ type: 'box', w: 2, h: 2, d: 2 }, [30, 0, 0])] });
+  const c2 = printCheck(two, triangles(two, { scale: 10 }));
+  const w2 = c2.issues.find(i => i.text.includes('成型範圍'));
+  ok('★★★ ②-5 兩塊 2 cm 的方塊隔 30 cm：⛔ 叫人分件，改講「2 塊分開的、最大一塊 20.0mm…排近一點就放得下」',
+    !!w2 && w2.text.includes('2 塊分開的') && w2.text.includes('最大一塊 20.0mm') && !w2.text.includes('分件'), w2 && w2.text);
+  const one = io.buildSrc({ type: 'box', w: 30, h: 2, d: 2 });
+  const w1 = printCheck(one, triangles(one, { scale: 10 })).issues.find(i => i.text.includes('成型範圍'));
+  ok('★★ 　 一整塊 300 mm 照舊「可能要分件或縮小」', !!w1 && w1.text.includes('可能要分件或縮小'), w1 && w1.text);
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
