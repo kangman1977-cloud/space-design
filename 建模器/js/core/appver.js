@@ -38,7 +38,10 @@
  *
  * ── ⚠ 比對用「檔案大小」，而它會漏報 ──────────────────
  * ⛔ 我們沒有辦法讀到「現在正在跑的那份程式碼的內容」，
- * 但 `performance` 有記著**它載入時的位元組數**（`encodedBodySize`）。
+ * 但 `performance` 有記著**它載入時的位元組數**（`decodedBodySize` ＝ 解開壓縮之後的）。
+ * 🔴 2026-10-19（補測：`實驗-綜合評估.md` ②-1）以前用 `encodedBodySize`（**壓縮後**的）去比重抓回來的文字長度（**解開後**的）——
+ *   線上是壓縮傳送的，兩個數字永遠不相等 ⇒ 45 個檔每次都「變了」、每次都自己重新載入。本機的測試伺服器不壓縮，所以本機看不出來。
+ *   線上實測：135 筆載入紀錄的 `decodedBodySize` 全部等於重抓回來的位元組數。
  * ⇒ 拿它跟重抓回來的長度比。
  *
  * 🔴 **誠實的但書：某次改動如果剛好沒有改變檔案大小，這裡會漏報**
@@ -75,7 +78,8 @@ function loadedOwnFiles() {
     if (!e.name.startsWith(here)) continue;
     if (!e.name.endsWith('.js')) continue;
     if (e.name.includes('/lib/')) continue;
-    out.push({ url: e.name, size: e.encodedBodySize | 0 });
+    /** 拿不到大小（0）⇒ 當成「⛔ 比對」（`-1`，跟 index.html 一樣只換快取）—— ⛔ 讓它變成「變了」 */
+    out.push({ url: e.name, size: e.decodedBodySize > 0 ? e.decodedBodySize : -1 });
   }
 
   /**

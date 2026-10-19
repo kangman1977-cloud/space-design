@@ -521,12 +521,13 @@ function deleteSelected() {
    * 可以 Undo，但那絕對不是他要的結果，而且他會嚇一跳。
    *
    * 擋下來並講清楚，比「刪掉再叫他 Undo」好得多 ——
-   * 而「刪除面」本身還沒做（那是第 6 期剩下的工具之一，
-   * 而且「刪除」與「溶解」是兩個不同的指令，結果不唯一就不要猜）。
+   * 「刪除面」是工具列上另一顆按鈕（Delete 鍵⛔ 拿來刪面：「刪除」與「溶解」是兩個不同的指令，結果不唯一就不要猜）。
+   * 〔2026-10-19 更正：這裡以前寫「刪除面本身還沒做」，那早就做了 —— 提示字跟著改（②-15）〕
    */
   if (sel.editMode) {
     toast(sel.editSel
-      ? '編輯模式下不能用 Delete —— 它刪的是整個物件。「刪除面」還沒做，先按一次「拉點線面」離開編輯模式'
+      /** ⚠ 2026-10-19（實驗 T4：`實驗-綜合評估.md` ②-15，疑點 Q3）以前寫「刪除面還沒做」—— 其實工具列早就有「刪除面」 */
+      ? '編輯模式下 Delete 不會刪東西（它刪的是整個物件）。要拿掉選到的面，請按工具列的「刪除面」；要刪整個物件，先按一次「拉點線面」離開編輯模式'
       : '編輯模式下不能用 Delete（它刪的是整個物件）。要刪物件請先離開編輯模式', true);
     return;
   }
@@ -1430,6 +1431,8 @@ function originPick(el) {
 
 const EDIT_NAME = { vertex: '點', edge: '邊', face: '面' };
 const FILTER_NAME = { auto: '自動', vertex: '點', edge: '邊', face: '面' };
+/** 「點選一個 ＿」要填的東西（⛔ 用 FILTER_NAME：「自動」是模式名稱、⛔ 是東西 —— ②-17）*/
+const PICK_NOUN = { auto: '點、邊或面', vertex: '點', edge: '邊', face: '面' };
 /** Undo 標籤用。三種變換要分得出來，否則使用者不知道要退回哪一步 */
 const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
 
@@ -3255,7 +3258,8 @@ function toggleEditMode() {
   panel.refresh();
   updateBar();
   toast(on
-    ? `編輯模式：點一個${FILTER_NAME[sel.editFilter]}，再用箭頭把它拉走。再按一次「拉點線面」離開`
+    /** ⚠ 2026-10-19（補測：`實驗-綜合評估.md` ②-17）過濾器是「自動」時以前變成「點一個自動」—— 改照要點的東西講 */
+    ? `編輯模式：點選一個${PICK_NOUN[sel.editFilter] || '點、邊或面'}，再用箭頭把它拉走。再按一次「拉點線面」離開`
     : '已離開編輯模式');
 }
 
@@ -3523,7 +3527,8 @@ function editDrag(committing, el) {
    * 　多 10 條折線、13 個面已經不平了」，看不出那是不是壞掉了〕
    */
   const bits = [];
-  if (r.degenerate) bits.push(`${r.degenerate} 個面被壓成零面積（拉回去就恢復）`);
+  /** ⚠ 2026-10-19（②-17）⛔ 猜原因（以前寫「拉回去就恢復」，半徑推成 0 的那種拉不回去）*/
+  if (r.degenerate) bits.push(`${r.degenerate} 個面被壓扁成沒有面積（把那些點拉開或按 Ctrl+Z 就恢復）`);
   if (r.nonPlanar) bits.push(`${r.nonPlanar} 個面不再是平的（展開會變近似；剖面分切與 3D 列印不受影響）`);
   if (bits.length) toast(bits.join('　'));
 }

@@ -423,8 +423,9 @@ export function printCheck(mesh, tris, opt = {}) {
   if (tris.length && big < 10) {
     issues.push({
       level: 'warn',
-      text: `整個模型最長邊只有 ${big.toFixed(2)}mm（不到 1 公分），`
-          + '確認一下單位是不是選錯了 —— 用 cm 匯出會讓模型小十倍'
+      /** ⚠ 2026-10-19（實驗 T9：`實驗-綜合評估.md` ②-17）檢查是一個物件一個物件做的 ⇒ ⛔ 寫「整個模型」 */
+      text: `這個物件最長邊只有 ${big.toFixed(2)}mm（不到 1 公分），`
+          + '確認一下單位是不是選錯了 —— 用 cm 匯出會讓它小十倍'
     });
   }
 

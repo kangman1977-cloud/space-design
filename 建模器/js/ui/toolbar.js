@@ -282,7 +282,8 @@ export class Panel {
         '每一份變成可以各自搬動、各自改參數的物件。' +
         '但打散之後就不再是「同一件 ×N」了，備料時會被當成不同的件。' +
         '資訊只能往下走，所以能不打散就不要打散。', () => {
-          if (!confirm(`會變成 ${obj.copies} 個獨立物件，而且收不回來，確定嗎？`)) return;
+          /** ⚠ 2026-10-19（實驗 T6：`實驗-綜合評估.md` ②-15）以前寫「收不回來」—— Ctrl+Z 收得回來；真正回不去的是「之後不再是同一組」 */
+          if (!confirm(`會變成 ${obj.copies} 個獨立物件，之後不會再自動合回同一組（要反悔可以馬上按 Ctrl+Z），確定嗎？`)) return;
           this.app.onExplode(obj);
         });
       this._freezeBtn(obj, '排列方式與份數');
@@ -311,9 +312,9 @@ export class Panel {
       this._rowBtn(`打散成 ${obj.src.shapes.length} 個獨立物件`,
         '每個形狀變成可以各自移動、旋轉、縮放的物件。'
         + '版面維持原樣，而且每個物件的原點都在自己的中心。'
-        + '拆開之後就不再是同一份稿了，收不回來。', () => {
+        + '拆開之後就不再是同一份稿了（Ctrl+Z 可以復原）。', () => {
           if (!confirm(`會變成 ${obj.src.shapes.length} 個獨立物件，`
-            + '而且收不回來，確定嗎？')) return;
+            + '之後不會再自動合回同一份稿（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
           this.app.onExplode(obj);
         });
 
@@ -436,9 +437,14 @@ export class Panel {
            * （體積 ＝ 面積 × 板厚，`shell()` 的檔頭寫著這個性質）。
            */
           const f = n => Math.round(n * 100) / 100;
+          /**
+           * ⚠ 2026-10-19（實驗 T1：`實驗-綜合評估.md` ②-6）體積要乘物件的縮放 —— 以前報網格自己的（293），
+           * 3D 列印報的是乘過縮放的（371），同一頂帽差 26%。跟結構分析的 `volumeFactor` 同一個乘法（`core/measure.js`）。
+           */
+          const sc = obj.scale, vol = r.volume * Math.abs(sc.x * sc.y * sc.z);
           this.app.toast(`已經加厚成實體：面數 ${before} → ${r.faces}、`
-            + `體積 ${f(r.volume)} cm³（＝ 面積 × 板厚）　`
-            + '⚠ 展開現在會攤成【盒子】，⛔ 不再是原本那一片板');
+            + `體積 ${f(vol)} cm³（＝ 面積 × 板厚${vol !== r.volume ? '，含物件的縮放' : ''}）　`
+            + '⚠ 展開現在會攤成【盒子】，不再是原本那一片板');   // 畫面上的字⛔ 用「⛔」（2026-10-19 順手改）
         });
     }
 
@@ -691,7 +697,14 @@ export class Panel {
     const gname = { x: '前後線 X', y: '高度 Y', z: '左右線 Z' }[gax];
     const glist = (this.app.doc && this.app.doc.guides && this.app.doc.guides[gax]) || [];
     const bound = rev.bind !== null && rev.bind !== undefined;
-    this._rowSelect('中心線跟著', bound ? String(rev.bind) : '', [
+    /**
+     * ⚠ 2026-10-19（實驗 T5、T7：`實驗-綜合評估.md` ②-8）下拉要在 0.001 內找「綁著的是哪一條」，⛔ 用字串完全相等：
+     * 參考線存的是捨到 0.001 的（`io.js` `normalizeGuides()`，刻意的），綁定記的是沒捨的（2.3561 vs 2.356）⇒
+     * 以前找不到相同字串就顯示「不跟」，其實還綁著（`revCheckBinds()` 也是用 0.001 判斷）。
+     */
+    const boundTo = bound ? glist.reduce((best, g) => (Math.abs(g - rev.bind) <= 0.001 + 1e-9
+      && (best === null || Math.abs(g - rev.bind) < Math.abs(best - rev.bind)) ? g : best), null) : null;
+    this._rowSelect('中心線跟著', boundTo !== null ? String(boundTo) : bound ? String(rev.bind) : '', [
       ['', '不跟（打數字）'],
       ...glist.map(g => [String(g), `${gname} ＝ ${round(g)}`])
     ], v => {
@@ -917,11 +930,17 @@ export class Panel {
   _applyPositions(list, label) {
     const objs = this.app.sel.objects;
     if (list.length !== objs.length) return;
+    /**
+     * ⚠ 2026-10-19（實驗 T7：`實驗-綜合評估.md` ②-15）「沒動」的門檻放到 1e-6 cm（以前 1e-9：浮點誤差就算「動了」⇒ 本來就在地板上也說「移動了 10 個」）；
+     * 一個都沒動 ⇒ ⛔ 記一步復原、講「沒有移動」。
+     */
     let moved = 0;
-    objs.forEach((o, i) => {
-      if (o.pos.distanceToSquared(list[i]) > 1e-18) moved++;
-      o.pos.copy(list[i]);
-    });
+    objs.forEach((o, i) => { if (o.pos.distanceToSquared(list[i]) > 1e-12) moved++; });
+    if (!moved) {
+      if (this.app.toast) this.app.toast(`${label}：已經在位置上了，沒有移動`);
+      return;
+    }
+    objs.forEach((o, i) => o.pos.copy(list[i]));
     this._edit(label);
     if (this.app.toast) this.app.toast(`${label}：移動了 ${moved} 個物件`);
   }
@@ -1049,8 +1068,9 @@ export class Panel {
     const deg = degenerateFaces(mesh);
     if (deg.length) {
       this.form.appendChild(note(
-        `${deg.length} 個面被壓成零面積 —— 多半是擠出來的那一段又被拉回原位了。`
-        + '拉回去就恢復，資料沒壞。'
+        /** ⚠ 2026-10-19（補測：`實驗-綜合評估.md` ②-17）⛔ 猜原因 —— 這裡只知道有幾個面壓扁了，⛔ 知道是怎麼壓扁的 */
+        `${deg.length} 個面被壓扁成沒有面積（點都擠在同一條線或同一點上）。`
+        + '資料沒壞，把那些點拉開或按 Ctrl+Z 就恢復。'
       ));
     }
     const np = nonPlanarFaces(mesh);

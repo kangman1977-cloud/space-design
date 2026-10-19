@@ -522,11 +522,10 @@ export class UnfoldPanel {
 
   _print() {
     if (!this._has()) return;
-    if (this.opt.nest.on) {
-      printSVGs(this._boardSheets().map(sh => progSVG(sh.prog, sh.title)), '排版');
-      return;
-    }
-    printPieces(this.result.pieces, this._drawOpt());
+    const ok = this.opt.nest.on
+      ? printSVGs(this._boardSheets().map(sh => progSVG(sh.prog, sh.title)), '排版')
+      : printPieces(this.result.pieces, this._drawOpt());
+    if (ok === false) { this._say(PRINT_BLOCKED); if (this.app.toast) this.app.toast(PRINT_BLOCKED, true); }
   }
 
   /**
@@ -606,6 +605,12 @@ function hasSeams(o) {
   if (!o || o.isParametric) return false;
   try { return seamCount(o.mesh()) > 0; } catch (e) { return false; }
 }
+
+/**
+ * 列印視窗被瀏覽器擋掉（`printSVGs()` 回傳 false）⇒ 講出來（2026-10-19，補測：`實驗-綜合評估.md` ②-13）。
+ * ⚠ 以前兩個面板都沒看回傳值 ⇒ 按了完全沒反應，跟「壞了」分不出來。
+ */
+const PRINT_BLOCKED = '瀏覽器擋掉了列印視窗 —— 請在網址列允許這個網站開彈出視窗，或改用「存 SVG」再用別的程式印';
 
 function box(cls, msg) {
   const d = document.createElement('div');

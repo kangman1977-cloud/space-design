@@ -211,8 +211,9 @@ export function findPegs(slices, opt = {}) {
     if (d < need * 1.5) tight.push({ index: s.index, depth: d });
   }
   if (tight.length) {
-    warnings.push(`第 ${listNums(tight.map(t => t.index))} 片的孔離邊緣只剩 `
-      + `${r2(Math.min(...tight.map(t => t.depth)))} cm，容易裂。`);
+    /** ⚠ 2026-10-19（②-10）報孔邊、⛔ 報孔中心（`depth` 是孔中心到邊界的距離）*/
+    warnings.push(`第 ${listNums(tight.map(t => t.index))} 片的孔邊離邊緣只剩 `
+      + `${r2(Math.min(...tight.map(t => t.depth - o.d / 2)))} cm，容易裂。`);
   }
 
   return {

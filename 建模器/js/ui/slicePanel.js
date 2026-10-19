@@ -295,7 +295,8 @@ export class SlicePanel {
         + `孔① (${f(g.base.x)}, ${f(g.base.y)}) 通到底　`
         + `⌀${f(this.opt.d)} cm　`
         + g.bands.map(b => `段${b.band + 1} ${b.pegs.length} 孔`).join('　')
-        + `　最糟的那一片離邊緣還剩 ${f(chk.worst)} cm`
+        /** ⚠ 2026-10-19（實驗 T6：`實驗-綜合評估.md` ②-10）報「孔邊」離邊緣多遠 —— `worst` 是孔中心的（判斷本身有算孔半徑，只是顯示的數字多了半個孔）*/
+        + `　最糟的那一片孔邊離邊緣還剩 ${f(chk.worst - this.opt.d / 2)} cm`
         + (chk.ok ? '' : `　→ 第 ${chk.bad.join('、')} 片串不起來`)));
       // 紅色只留給「程式做不到你要求的事」；你自己選的後果用藍色說明
       for (const w of g.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
@@ -511,17 +512,19 @@ export class SlicePanel {
 
   _print() {
     if (!this._has()) return;
+    let ok;
     if (this.opt.nest.on) {
-      printSVGs(this._sheets().map(sh => progSVG(sh.prog, sh.title)), '剖面排版');
-      return;
+      ok = printSVGs(this._sheets().map(sh => progSVG(sh.prog, sh.title)), '剖面排版');
+    } else {
+      const base = { ...this._progOpt(), head: this.app.head };
+      ok = printSVGs(
+        this.result.slices.map(s => {
+          const opt = { ...base, pegs: this._pegsOf(s) };
+          return progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt));
+        }),
+        '剖面分切');
     }
-    const base = { ...this._progOpt(), head: this.app.head };
-    printSVGs(
-      this.result.slices.map(s => {
-        const opt = { ...base, pegs: this._pegsOf(s) };
-        return progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt));
-      }),
-      '剖面分切');
+    if (ok === false) { this._say(PRINT_BLOCKED); if (this.app.toast) this.app.toast(PRINT_BLOCKED, true); }
   }
 
   /**
@@ -614,3 +617,9 @@ function loadOpt() {
 function save(o) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(o)); } catch (e) { /* 無所謂 */ }
 }
+
+/**
+ * 列印視窗被瀏覽器擋掉（`printSVGs()` 回傳 false）⇒ 講出來（2026-10-19，補測：`實驗-綜合評估.md` ②-13）。
+ * ⚠ 以前兩個面板都沒看回傳值 ⇒ 按了完全沒反應，跟「壞了」分不出來。
+ */
+const PRINT_BLOCKED = '瀏覽器擋掉了列印視窗 —— 請在網址列允許這個網站開彈出視窗，或改用「存 SVG」再用別的程式印';

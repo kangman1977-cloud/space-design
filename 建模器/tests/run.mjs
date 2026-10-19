@@ -17877,6 +17877,28 @@ section('省道打版變形太大時指路（2026-10-19 綜合評估 ①-14）')
   ok('★★★ 半球只切開底、不開口：「…個面翻過來…」那一則多講同一句', !!flipW && flipW.endsWith(DART_HINT), flipW || rd.warnings.join('｜'));
 }
 
+section('綜合評估 ② 第一批：說錯的數字與提示（2026-10-19）');
+{
+  /** kang 2026-10-19「同意你的安排與建議」—— 畫面上的部分（抓最新版、加厚提示、參考線下拉、列印被擋、各按鈕提示）在本機／線上版用畫面驗 */
+  const { PRIM_SPECS, PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  // ②-9 齒輪：中心距離的係數⛔ 捨到 2 位
+  const n25 = PRIM_SPECS.gear.noteOf({ ...PRIM_DEFAULTS.gear, module: 0.25 });
+  ok('★★★ ②-9 模數 0.25：說明寫「0.125 × (20 ＋ 對方齒數)」（以前 0.13，照抄差 0.3 cm）', n25.some(s => s.includes('0.125 × (20 ＋ 對方齒數)')), n25.join('｜'));
+  ok('★★ 　 預設模數 0.3 照舊「0.15 ×」', PRIM_SPECS.gear.noteOf(PRIM_DEFAULTS.gear).some(s => s.includes('0.15 × (20 ＋ 對方齒數)')));
+  // ②-15 切一刀切在既有的線上：⛔ 說「斷開」
+  const box = io.buildSrc({ type: 'box', w: 60, h: 40, d: 45 });
+  const m0 = edit.mergeCoplanarFaces(box).mesh;
+  const r1 = edit.bisect(m0, { n: new THREE.Vector3(1, 0, 0), d: 0 });
+  const r2 = r1.ok ? edit.bisect(r1.mesh, { n: new THREE.Vector3(1, 0, 0), d: 0 }) : null;
+  ok('★★★ ②-15 同一個位置再切一刀：講「已經有一條線…物件還是連著的」，⛔ 講「斷開」',
+    !!r2 && !r2.ok && r2.reason.includes('已經有一條線') && r2.reason.includes('還是連著的') && !r2.reason.includes('斷開'), r2 && r2.reason);
+  // ②-17 STL：小物件的提醒⛔ 寫「整個模型」
+  const tiny = io.buildSrc({ type: 'box', w: 0.3, h: 0.3, d: 0.3 });
+  const ct = printCheck(tiny, triangles(tiny, { scale: 10 }));
+  const small = ct.issues.find(i => i.text.includes('最長邊只有'));
+  ok('★★ ②-17 3 mm 的方塊：「這個物件最長邊只有 3.00mm…」（以前「整個模型」）', !!small && small.text.startsWith('這個物件最長邊只有') && !small.text.includes('整個模型'), small && small.text);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
