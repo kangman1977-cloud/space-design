@@ -848,8 +848,17 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
    * （見「四、圓弧修正」開頭的說明）。只有一組 ＝ 全部平行 ＝ 修正有效；
    * 超過一組就代表這一片有修正管不到的地方。
    */
-  const dirGroups = groupByDirection(folds);
-  const bands = arcCorrection(pt2, folds, dirGroups);
+  /**
+   * 🔴 **有平滑標記、但互相不平行的折線 ⇒ 一整段圓錐面**（2026-10-19，實驗 T5：`實驗-綜合評估.md` ①-11，kang「同意」）。
+   * ⚠ 下面那套認曲線帶的做法假設折線**互相平行**（圓柱攤開），方向差超過 1° 就分開 ——
+   * 燈罩每一片是圓錐的一圈，攤開的折線是放射狀的：一片當成 15 段兩小格的曲線帶，另外兩片各 31 道「真轉角」。
+   * ⭐ 那些折線其實都帶著平滑標記（旋轉成形、鋼筆的平滑點、匯入的曲線才有；方塊、圓柱、圓錐這些基本形狀沒有）
+   * ⇒ 先把**連在一起的平滑折線**收成一段（`coneBands()`）；彼此平行的照舊交給下面那套（數字一個都不變）。
+   */
+  const cones = coneBands(folds);
+  const rest = cones.length ? folds.filter(f => !f.band) : folds;
+  const dirGroups = groupByDirection(rest);
+  const bands = [...cones, ...arcCorrection(pt2, rest, dirGroups)];
   orient(pt2, folds, mesh, faces, isCut);
 
   /**
@@ -1856,6 +1865,50 @@ function smoothBands(lines, bands, used) {
     }
     i = j + 1;
   }
+}
+
+/**
+ * 連在一起（共用一個面）的平滑折線收成一段；**互相不平行**的才算圓錐面（`radial`），平行的留給 `bandsInGroup()`。
+ * 只有一條的⛔ 成帶（理由同 `smoothBands()`：一格的圓弧跟倒角分不出來）。
+ * ⚠ 會設 `f.band`；回傳的帶跟 `smoothBands()` 同一種格式（`isArc`、`isCurve`、`segs` ＝ 幾條折線）＋ `radial: true`。
+ */
+function coneBands(folds) {
+  const sm = folds.filter(f => f.smooth && f.he && f.he.face && f.he.twin && f.he.twin.face);
+  if (sm.length < 2) return [];
+  const parent = new Map();
+  const find = x => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const add = x => { if (!parent.has(x)) parent.set(x, x); };
+  for (const f of sm) {
+    const a = f.he.face.id, b = f.he.twin.face.id;
+    add(a); add(b);
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  const groups = new Map();
+  for (const f of sm) {
+    const k = find(f.he.face.id);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(f);
+  }
+  const out = [];
+  const cosTol = Math.cos(1 / DEG);                       // 跟 `groupByDirection()` 同一個 1°
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const dir = f => { const dx = f.b.x - f.a.x, dy = f.b.y - f.a.y, L = Math.hypot(dx, dy) || 1; return { x: dx / L, y: dy / L }; };
+    const d0 = dir(g[0]);
+    if (g.every(f => { const d = dir(f); return Math.abs(d.x * d0.x + d.y * d0.y) >= cosTol; })) continue;   // 平行 ⇒ 照舊
+    let ang = 0;
+    for (const f of g) ang += f.angle;
+    const band = {
+      isArc: true, isCurve: true, radial: true,
+      chordW: 0, arcW: 0, angle: ang, r: 0, segs: g.length,
+      approx: false, flange: undefined,
+      lines: g.map(f => ({ folds: [f] }))
+    };
+    for (const f of g) f.band = band;
+    out.push(band);
+  }
+  return out;
 }
 
 function sharpBand(L) {

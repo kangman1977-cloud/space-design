@@ -271,7 +271,8 @@ export function drawProgram(piece, opt = {}) {
 
   // ── 折彎區 ──
   for (const b of piece.bends) {
-    if (!b.isArc) continue;
+    /** 圓錐面（`radial`，2026-10-19 ①-11）：折線是放射狀的，直的起訖線、中心線畫了只會誤導 ⇒ ⛔ 畫（卡片講）*/
+    if (!b.isArc || b.radial) continue;
     line('bend', b.x0, 0, b.x0, H);
     line('bend', b.x1, 0, b.x1, H);
     // 中心線：折床對位用
@@ -289,6 +290,7 @@ export function drawProgram(piece, opt = {}) {
     const rowEnd = [-Infinity, -Infinity];
 
     for (const b of [...piece.bends].sort((p, q) => p.x0 - q.x0)) {
+      if (b.radial) continue;                      // 圓錐面：⛔ 標（寬度、方向都⛔ 有一個數字可言，卡片講）
       const cx = b.isArc ? (b.x0 + b.x1) / 2 : b.x0;
       const dir = b.angle > 0 ? '↑ 上折' : '↓ 下折';
       /**
@@ -888,6 +890,8 @@ export function titleLines(piece, opt = {}) {
       + (curves
         ? `　曲線帶共 ${piece.bends.filter(b => b.isCurve)
             .reduce((n, b) => n + b.segs, 0)} 小段，圖上不畫`
+          /** 圓錐面（2026-10-19 ①-11）：講出來 —— 參考線也⛔ 畫，免得以為漏了 */
+          + (piece.bends.some(b => b.radial) ? `（其中 ${piece.bends.filter(b => b.radial).length} 帶是圓錐面，參考線也不畫）` : '')
         : ''));
   }
   /** ⭐ 「相同的折線合成一行」：圖上的每道角度拿掉了，所以這一行⛔ 不可以省 */

@@ -15028,8 +15028,13 @@ section('打版（展開模式一：精確分片）：一次標一整圈 ＋ 相
   }
 
   // ── 標完展開：32 條西瓜皮／12 條環帶，0 重疊、面積對 ──
-  const cutAll = pick => {
+  /**
+   * ⚠ 2026-10-19（綜合評估 ①-11）起：有平滑標記、互相不平行的折線收成一段圓錐面 ⇒ 圓環的環帶（每一圈是一段圓錐）⛔ 再畫 31 道折線。
+   * 「相同的折線合成一行」那幾項要的是「31 道一樣的真折線」⇒ 那幾項用 `noSmooth`（把平滑標記拿掉，像匯入的網格）照舊守。
+   */
+  const cutAll = (pick, noSmooth = false) => {
     const m = torus();
+    if (noSmooth) for (const h of [...m.edges()]) if (h.smooth) m.setSmooth(h, false);
     for (const h of seamLoopEdges(m, [...m.edges()].find(pick), 'all')) setSeam(m, h, true);
     return { m, r: unfoldMesh(m, makeRule('paper', 0.05)) };
   };
@@ -15051,9 +15056,15 @@ section('打版（展開模式一：精確分片）：一次標一整圈 ＋ 相
     ok('★★ 西瓜皮：每片標註 ≤ 5 個（⛔ 擠）', r.pieces.every(p => p.bends.length <= 5), r.pieces.map(p => p.bends.length).join(','));
   }
 
+  {
+    const { r } = cutAll(isRing);
+    ok('★★★ 圓環切成環帶（有平滑標記）：每一片都是一段圓錐面曲線帶、圖上 0 道折線（①-11）',
+      r.pieces.every(p => p.bends.length === 1 && p.bends[0].isCurve && p.folds.every(f => f.isArcEdge)),
+      r.pieces.map(p => `${p.bends.length}/${p.folds.filter(f => !f.isArcEdge).length}`).join(','));
+  }
   for (const [name, pick, want] of [['環帶', isRing, 12]]) {
-    const { r } = cutAll(pick);
-    eq(`★★★ 圓環切成${name}：每一片的折線都「全部一樣」（31 道）→ 可以合成一行`,
+    const { r } = cutAll(pick, true);
+    eq(`★★★ 圓環（拿掉平滑標記）切成${name}：每一片的折線都「全部一樣」（31 道）→ 可以合成一行`,
        r.pieces.filter(p => sameFolds(p) && sameFolds(p).n === 31).length, want);
 
     // 卡片、圖、DXF：開著才合成，關著照舊
@@ -17778,6 +17789,56 @@ section('金屬收起來、折板講 K（2026-10-19 綜合評估 ①-13 後半�
   const arr = new io.ModelObject({ name: '隔板×2', kind: io.KIND.SHEET, thickness: 0.5, src: { type: 'array', mode: 'linear', count: 2, step: [6.67, 0, 0], count2: 1, step2: [0, 0, 20],
     child: { src: div(0.4).src, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], name: '隔板' } } });
   ok('★★ 　 排列 2 份的折板也講', unfoldObject(arr, { material: 'foamboard' }).pieces.every(p => !!kLine(p)));
+}
+
+section('平滑的圓錐面當一段曲線帶（2026-10-19 綜合評估 ①-11）');
+{
+  /**
+   * 實驗 T5：燈罩（旋轉成形、三段輪廓）切成環帶 3 片 —— 第 1 片 15 段兩小格的曲線帶、第 2、3 片各 31 道「真轉角」。
+   * 病因：認曲線帶的做法假設折線互相平行；圓錐的一圈攤開，折線是放射狀的（相鄰差 0.7°／2.2°／3.8°）。
+   * kang 2026-10-19「同意」：有平滑標記的一律當曲線帶、圖上不畫折線、圓錐面也不畫參考線；沒有平滑標記的照舊。
+   */
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { titleLines, drawProgram } = await import('../js/out/sheet.js');
+  const { toDXF } = await import('../js/out/dxf.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const LN = (d, layer) => (d.match(new RegExp(`\\r\\n0\\r\\nLINE\\r\\n8\\r\\n${layer}\\r\\n`, 'g')) || []).length;
+  const pts = [[10.3561, 0]];
+  for (const [L, a] of [[8.0156, 93.58], [10.198, 101.31], [7.433, 109.65]]) {
+    const [x, y] = pts[pts.length - 1], t = a * Math.PI / 180;
+    pts.push([x + L * Math.cos(t), y + L * Math.sin(t)]);
+  }
+  const xy = pts.flat();
+  const lamp = new io.ModelObject({ name: '燈罩', kind: io.KIND.SHEET, thickness: 0.2,
+    src: { type: 'pen', h: 3, open: true, paths: [{ closed: false, a: xy, hi: xy.map(() => 0), ho: xy.map(() => 0) }], rev: { dir: 'z', at: 2.3561, seg: 32, stand: false } } });
+  lamp.bake();
+  const band = proposeSeams(lamp, { material: 'paper', board: { w: 240, h: 120, gap: 1, rotate: false } }).options.find(x => x.kind === 'band');
+  for (const h of band.edges) setSeam(lamp.mesh(), h, true);
+  const r = unfoldObject(lamp, { material: 'paper' });
+  eq('★★★ T5 燈罩環帶 3 片：面積照舊 389.67／415.72／198.05', r.pieces.map(p => p.area.toFixed(2)).join('／'), '389.67／415.72／198.05');
+  eq('★★★ 　 每一片都是一段圓錐面曲線帶（31 小段）、圖上 0 道折線（以前 1／31／31 道）',
+    r.pieces.map(p => `${p.bends.length}:${p.bends[0].radial ? '錐' : '?'}${p.bends[0].segs}:${p.folds.filter(f => !f.isArcEdge).length}`).join(' '), '1:錐31:0 1:錐31:0 1:錐31:0');
+  ok('★★ 　 卡片講「曲線帶共 31 小段，圖上不畫（其中 1 帶是圓錐面，參考線也不畫）」',
+    r.pieces.every(p => titleLines(p, { rule: p.rule }).some(t => t.includes('曲線帶共 31 小段，圖上不畫（其中 1 帶是圓錐面，參考線也不畫）'))));
+  const items = r.pieces.flatMap(p => drawProgram(p, { rule: p.rule }).items);
+  eq('★★ 　 圖上⛔ 折線、⛔ 折彎參考線', items.filter(i => /^fold|^bend$/.test(i.style)).length, 0);
+  const d = toDXF(r.pieces, { unit: 'mm' });
+  eq('★★★ 　 DXF：FOLD／FOLD_UP／FOLD_DOWN／BEND 都 0 條（T5 排版 DXF 以前 63 條折線 ＋ 45 條彎線）', LN(d, 'FOLD') + LN(d, 'FOLD_UP') + LN(d, 'FOLD_DOWN') + LN(d, 'BEND'), 0);
+
+  // 平行的平滑折線（直筒）：照舊走原本那一套（⛔ 標成圓錐面）
+  const cyl = [[5, 0], [5, 10]].flat();
+  const tube = new io.ModelObject({ name: '直筒', kind: io.KIND.SHEET, thickness: 0.2,
+    src: { type: 'pen', h: 3, open: true, paths: [{ closed: false, a: cyl, hi: cyl.map(() => 0), ho: cyl.map(() => 0) }], rev: { dir: 'z', at: 0, seg: 32, stand: false } } });
+  const rt = unfoldObject(tube, { material: 'paper' });
+  ok('★★ 直筒（折線互相平行）：⛔ 標成圓錐面，照舊', rt.pieces.every(p => p.bends.every(b => !b.radial)), rt.pieces.map(p => p.bends.map(b => b.isCurve ? 'C' : b.isArc ? 'A' : 'S').join('')).join(','));
+
+  // 沒有平滑標記的基本形狀：一條線都不變（數字是 2026-10-19 改之前量的）
+  const drawn = t => unfoldObject(new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t] } }), { material: 'paper' })
+    .pieces.reduce((n, p) => n + p.folds.filter(f => !f.isArcEdge).length, 0);
+  eq('★★★ 沒有平滑標記的照舊畫折線：方塊 5、圓柱 2、圓錐 43、球 493、階梯 11', ['box', 'cylinder', 'cone', 'sphere', 'stairs'].map(drawn).join(','), '5,2,43,493,11');
+  /** ⚠ 圓環、半球是旋轉做出來的、本來就有平滑標記 ⇒ 跟著變（改之前 70、38 道）—— 2026-10-19 跟 kang 報告過 */
+  eq('★★ 圓環、半球（旋轉做的，有平滑標記）：圖上的折線 70 → 38、38 → 8', ['torus', 'dome'].map(drawn).join(','), '38,8');
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

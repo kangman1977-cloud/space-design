@@ -169,7 +169,8 @@ export function toDXF(pieces, opt = {}) {
     // 折彎區：起線、訖線、中心線
     const y0 = oy, y1 = oy + p.height * s;
     for (const b of p.bends) {
-      if (!b.isArc) continue;
+      /** 圓錐面（`radial`，2026-10-19 ①-11）：跟展開圖一樣⛔ 畫參考線、⛔ 標字 */
+      if (!b.isArc || b.radial) continue;
       out.line('BEND', ox + b.x0 * s, y0, ox + b.x0 * s, y1);
       out.line('BEND', ox + b.x1 * s, y0, ox + b.x1 * s, y1);
       const cx = ox + (b.x0 + b.x1) / 2 * s;
