@@ -18068,6 +18068,59 @@ section('綜合評估 ③ 第三批（一）：對齊到最後選的、綁參考
   ok('　 「重心」的意思⛔ 變（四個角 ⇒ 一樣在正中間）', med.distanceTo(new THREE.Vector3(0, 5, 0)) < 1e-9);
 }
 
+section('綜合評估 ③ 第三批（二）：陣列／鏡射照世界的方向（2026-10-19）');
+{
+  /** 編輯模式縮放照世界（③-4 後半）在畫面那一層（select.js），在本機／線上版用畫面驗 */
+  const A = await import('../js/core/align.js');
+  // 照 main.js arrayOp() 的做法做一個陣列：位置留著、角度歸零、縮放歸 1
+  const makeArr = (obj, mode) => new io.ModelObject({ name: obj.name + '陣列', kind: obj.kind, src: io.arraySrcFrom(obj, mode),
+    pos: obj.pos.clone(), rot: obj.rot.clone().set(0, 0, 0), scale: obj.scale.clone().set(1, 1, 1), thickness: obj.thickness });
+  const oldArr = (obj, mode) => new io.ModelObject({ name: obj.name + '舊陣列', kind: obj.kind, src: io.arraySrcFrom(obj, mode, { world: false }),
+    pos: obj.pos.clone(), rot: obj.rot.clone(), scale: obj.scale.clone(), thickness: obj.thickness });
+  // 立起來的側板（平板繞 Z 轉 90°：板面朝左右）
+  const panel = new io.ModelObject({ name: '側板', kind: io.KIND.SHEET, src: { type: 'plate', w: 100, d: 60 } });
+  panel.rot.set(0, 0, Math.PI / 2); panel.pos.set(0, 50, 0);
+  const bp = A.worldBounds(panel);
+  const mir = makeArr(panel, ARRAY_MODES.MIRROR), bm = A.worldBounds(mir);
+  ok('★★★ ③-2 立起來的側板鏡射：副本在旁邊（世界的左右），高度跟原件一樣（以前跑到頭頂）',
+    Math.abs(bm.min.y - bp.min.y) < 1e-6 && Math.abs(bm.max.y - bp.max.y) < 1e-6, `原件 Y ${bp.min.y}～${bp.max.y}；陣列 Y ${bm.min.y}～${bm.max.y}`);
+  ok('★★ 　 板子沒有厚度：對稱面往外 5 cm ⇒ 副本離 10 cm，⛔ 整片疊在原件上（本機實測抓到的）',
+    !mir.stacked && Math.abs(mir.src.offset - (bp.max.x + 5)) < 1e-6 && bm.max.x - bp.max.x > 9.99, `offset ${mir.src.offset}、陣列 X ${bm.min.x}～${bm.max.x}`);
+  const bo = A.worldBounds(oldArr(panel, ARRAY_MODES.MIRROR));
+  ok('★★ 　 對照：舊的做法（角度留在陣列上）副本真的跑到上面', bo.max.y > bp.max.y + 1, `舊 Y ${bo.min.y}～${bo.max.y}`);
+  // 轉過 90° 的橫料線性排列
+  const bar = new io.ModelObject({ name: '橫料', kind: io.KIND.SHEET, src: { type: 'plate', w: 100, d: 10 } });
+  bar.rot.set(0, Math.PI / 2, 0);
+  const lin = makeArr(bar, ARRAY_MODES.LINEAR), bl = A.worldBounds(lin), bb = A.worldBounds(bar);
+  ok('★★★ ③-1 轉過 90° 的橫料排列：沿世界的 X 排開，每份間距照轉過之後的寬（10 ＋ 10）',
+    Math.abs(lin.src.step[0] - 20) < 1e-6 && Math.abs((bl.max.x - bl.min.x) - (bb.max.x - bb.min.x) - 40) < 1e-6 && Math.abs((bl.max.z - bl.min.z) - (bb.max.z - bb.min.z)) < 1e-6,
+    `step ${lin.src.step}；陣列 X 寬 ${bl.max.x - bl.min.x}、Z ${bl.max.z - bl.min.z}`);
+  // 立起來的板繞世界的 Y 轉一圈
+  const fin = new io.ModelObject({ name: '鰭片', kind: io.KIND.SHEET, src: { type: 'plate', w: 20, d: 10 } });
+  fin.rot.set(Math.PI / 2, 0, 0); fin.pos.set(0, 30, 0);
+  const rad = makeArr(fin, ARRAY_MODES.RADIAL); rad.src.center = [50, 0, 0]; rad.invalidate();
+  const br = A.worldBounds(rad), bf = A.worldBounds(fin);
+  ok('★★★ ③-1 立起來的鰭片繞「Y 軸」排一圈：是世界的直立軸（每一份高度都跟原件一樣）',
+    Math.abs(br.min.y - bf.min.y) < 1e-6 && Math.abs(br.max.y - bf.max.y) < 1e-6, `原件 Y ${bf.min.y}～${bf.max.y}；陣列 Y ${br.min.y}～${br.max.y}`);
+  // 原件帶著角度與縮放；打散回去位置照樣對
+  ok('★★ 　 原件帶著零件的角度（新的做法）', Math.abs(fin.rot.x - rad.src.child.rot[0]) < 1e-9 && rad.rot.x === 0);
+  const parts = io.explodeArray(rad);
+  const ub = new THREE.Box3(); for (const p of parts) ub.union(A.worldBounds(p));
+  ok('★★ 　 打散成 8 個物件：拼起來跟陣列一模一樣', ub.min.distanceTo(br.min) < 1e-6 && ub.max.distanceTo(br.max) < 1e-6, `${ub.min.toArray()} vs ${br.min.toArray()}`);
+  // 沒轉過的零件：跟以前一模一樣
+  const flat = new io.ModelObject({ name: '平的', kind: io.KIND.SHEET, src: { type: 'plate', w: 30, d: 20 } });
+  flat.pos.set(5, 0, 7);
+  const a1 = A.worldBounds(makeArr(flat, ARRAY_MODES.LINEAR)), a0 = A.worldBounds(oldArr(flat, ARRAY_MODES.LINEAR));
+  ok('★★ 　 沒轉過、沒縮放的零件：新舊做法排出來一模一樣', a1.min.distanceTo(a0.min) < 1e-9 && a1.max.distanceTo(a0.max) < 1e-9);
+  const m1 = makeArr(flat, ARRAY_MODES.MIRROR), m0 = oldArr(flat, ARRAY_MODES.MIRROR);
+  eq('　 　 鏡射的對稱面預設也一樣（置中的零件：右緣 ＝ 半個寬）', m1.src.offset, m0.src.offset);
+  // 縮放搬進原件之後展開的警告照樣講
+  const sq = new io.ModelObject({ name: '壓扁', kind: io.KIND.SHEET, src: { type: 'plate', w: 30, d: 20 } });
+  sq.scale.set(1, 1, 2);
+  const ru = unfoldObject(makeArr(sq, ARRAY_MODES.LINEAR), { material: 'paper' });
+  ok('★ 　 原件被非等比縮放過：展開照樣講「圓弧會變成橢圓」', ru.warnings.some(w => w.includes('非等比縮放')), ru.warnings.join('｜'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -661,11 +661,27 @@ export function boolSrcFrom(objects, op) {
  * 所以鏡出來的那一份剛好貼著原件，一眼就懂鏡射在做什麼。
  * 要把對稱面移到機箱中心線之類的地方，改 offset 即可。
  *
+ * ── 🔴 方向照世界、位置從零件算起（綜合評估 ③-1、③-2，2026-10-19，kang「照建議」）──
+ * 以前原件⛔ 帶變換、物件的角度與縮放留在陣列物件身上 ⇒ 陣列的「X 軸」「繞 Y 軸」是**零件自己的軸**：
+ * 立起來的側板鏡射，副本跑到頭頂（T2、T7）；轉過的零件排列也歪著排。
+ * ⇒ **零件的角度與縮放搬進原件**（`child.rot`／`child.scale`），陣列物件只留位置（`main.js` `arrayOp()` 把角度歸零、縮放歸 1）
+ * ⇒ 陣列自己的座標軸就是世界的方向，原點還在零件身上（箭頭照樣掛在零件那裡）。
+ * ⭐ 預設的間距、對稱面位置照「轉過之後」的外框算；鏡射的對稱面放在外框的右緣（零件⛔ 置中也貼得剛好）。
+ * ⚠ 舊檔的陣列原件沒有變換、角度在陣列物件上 ⇒ 照舊算、打開⛔ 變。`opt.world === false` 走舊的做法（測試對照用）。
+ *
  * @param {ModelObject} obj
  * @param {string} mode ARRAY_MODES 之一
+ * @param {{world?: boolean}} [opt]
  */
-export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR) {
-  const size = obj.mesh().bounds().getSize(new THREE.Vector3());
+export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR, opt = {}) {
+  const world = opt.world !== false;
+  /** ⚠ `itemMatrix()` 一律用 XYZ 序 —— 物件的 Euler 序不見得是 XYZ（`select.js` 那則），先換成同一個轉向的 XYZ */
+  const rotXYZ = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().setFromEuler(obj.rot), 'XYZ');
+  const child = makeItem(srcForItem(obj), null, world ? rotXYZ : null, world ? obj.scale : null, obj.name);
+  /** 原件在陣列座標裡的外框（world ⇒ 已經轉過、縮放過）*/
+  const box = obj.mesh().bounds().clone();
+  if (world && !box.isEmpty()) box.applyMatrix4(itemMatrix(child));
+  const size = box.getSize(new THREE.Vector3());
   const gap = 10;
   const span = a => Math.max(a, 1) + gap;
 
@@ -673,14 +689,20 @@ export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR) {
     type: 'array',
     mode,
     ...cloneSrc(ARRAY_DEFAULTS[mode]),
-    child: makeItem(srcForItem(obj), null, null, null, obj.name)
+    child
   };
 
   if (mode === ARRAY_MODES.LINEAR) {
     node.step = [+span(size.x).toFixed(3), 0, 0];
     node.step2 = [0, 0, +span(size.z).toFixed(3)];
   } else if (mode === ARRAY_MODES.MIRROR) {
-    node.offset = +(size.x / 2).toFixed(3);
+    /**
+     * ⚠ 沿鏡射方向是扁的（立起來的板子：板件的網格沒有厚度，右緣就是它自己）⇒ 對稱面放在右緣會**整片疊在原件上**
+     * （本機實測抓到）⇒ 對稱面再往外 5 cm，副本離 10 cm、一眼看得到；有厚度的照舊貼著原件。
+     */
+    /** ⚠ 「扁」用 0.01 cm（0.1 mm）判：存檔把角度捨過位，轉 90° 的板子會剩 0.00003 的寬（本機實測），⛔ 用 1e-6 */
+    const edge = world && !box.isEmpty() ? box.max.x + (size.x < 0.01 ? gap / 2 : 0) : size.x / 2;
+    node.offset = +edge.toFixed(3);
   } else if (mode === ARRAY_MODES.RADIAL) {
     // 繞物件自己的中心轉整圈，預設 8 份
     node.center = [0, 0, 0];

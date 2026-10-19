@@ -657,13 +657,17 @@ function arrayOp(mode) {
 
   const made = [], failed = [];
   for (const obj of list) {
+    /**
+     * ③-1、③-2（2026-10-19，kang「照建議」）：零件的角度與縮放已經搬進原件（`arraySrcFrom()`）⇒
+     * 陣列物件**只留位置**、角度歸零、縮放歸 1 ⇒ 陣列的方向就是世界的方向，箭頭照樣在零件身上。
+     */
     const m = new ModelObject({
       name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
       kind: obj.kind,
       src: arraySrcFrom(obj, mode),
       pos: obj.pos.clone(),
-      rot: obj.rot.clone(),
-      scale: obj.scale.clone(),
+      rot: obj.rot.clone().set(0, 0, 0),
+      scale: obj.scale.clone().set(1, 1, 1),
       color: obj.color,
       thickness: obj.thickness,
       lockScale: obj.lockScale
@@ -5820,6 +5824,19 @@ function setMode(m) {
   }
   syncModeButtons();
   updateEditNum();
+  /**
+   * ③-4 後半（2026-10-19）：**物件模式**的縮放只能沿物件自己的方向（物件只記位置、角度、縮放三組數字，
+   * 記不住「斜著拉出來」的變形）⇒ 物件轉過角度時講一句、指到能照世界縮放的地方；沒轉過的⛔ 講（兩種一樣）。
+   * 編輯模式「方向：世界」的縮放已經照世界（`select.js` `_rebaseProxy()`）。
+   */
+  if (m === 'scale' && !sel.editMode && sel.count === 1 && sel.active) {
+    const r = sel.active.rot;
+    if (Math.abs(r.x) + Math.abs(r.y) + Math.abs(r.z) > 1e-9) {
+      const isMesh = sel.active.src && sel.active.src.type === 'mesh';
+      toast('這個物件轉過角度：物件的縮放是沿它自己的方向（箭頭也是歪的）。'
+        + `要照世界的 X／Y／Z 縮放，請${isMesh ? '' : '轉成可編輯網格、'}到「拉點線面」裡、方向選「世界」再縮放`);
+    }
+  }
 }
 
 /**

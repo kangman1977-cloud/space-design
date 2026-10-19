@@ -1627,6 +1627,15 @@ export class Panel {
     wrap.appendChild(total);
     /** ③-1：每一份都在同一個位置 ⇒ 講出來、講怎麼排開（以前只寫「總共 8 份」，其實 8 份疊在原地）*/
     if (obj.stacked) wrap.appendChild(bad(stackedHint(src.mode, obj.copies)));
+    /**
+     * ③-1、③-2（2026-10-19）：新做的陣列方向就是世界的方向（`io.js` `arraySrcFrom()`）；
+     * 陣列物件本身轉過或縮放過（舊檔的陣列、或後來整個轉過）⇒ 方向跟著它自己的角度 —— 講一句，⛔ 讓人以為是世界的。
+     */
+    const turned = Math.abs(obj.rot.x) + Math.abs(obj.rot.y) + Math.abs(obj.rot.z) > 1e-9
+      || Math.abs(obj.scale.x - 1) + Math.abs(obj.scale.y - 1) + Math.abs(obj.scale.z - 1) > 1e-9;
+    if (turned) {
+      wrap.appendChild(note('這個陣列本身轉過角度（或縮放過）：下面的 X／Y／Z 跟著它自己的角度走，不是世界的方向'));
+    }
 
     // ── 各模式的參數 ──
     if (src.mode === ARRAY_MODES.RADIAL) {

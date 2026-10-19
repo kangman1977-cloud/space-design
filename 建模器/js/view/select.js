@@ -3075,6 +3075,8 @@ export class Selection {
       if (this.editSel && !this.editModeAllowed(mode)) return false;
       this._drag = null;            // 換了種類，上一次拖曳的量沒有意義了
       this.tc.setMode(mode);
+      /** ③-4 後半：縮放跟移動／旋轉的替身方向不一樣（見 `_rebaseProxy()` 世界那一段）⇒ 換種類要重新對準 */
+      if (this.editSel) this._rebaseProxy();
       return true;
     }
     const act = this.active;
@@ -3552,6 +3554,21 @@ export class Selection {
       this._proxy.quaternion.identity();
       this.tc.space = 'world';
       this.lastBasisOk = true;
+      /**
+       * 🔴 **方向「世界」＋ 縮放 ⇒ 真的照世界的 X／Y／Z 縮放**（綜合評估 ③-4 後半，2026-10-19，kang「照建議」）。
+       * three.js 的縮放**永遠沿掛著的那個東西自己的軸**（寫死的）；替身掛在物件底下 ⇒ 以前是物件自己的軸
+       * （T8：轉過 22.5° 的物件，選一個面沿 X 縮放，是斜著縮）。
+       * ⇒ 縮放時把替身轉成「物件角度的反方向」⇒ 替身在世界裡是正的 ⇒ 它自己的軸 ＝ 世界的軸。
+       * ⚠ 只在物件**等比縮放**時做：物件本身被拉成非等比，世界方向的縮放在它自己的座標裡會變成斜切，⛔ 準 ⇒ 照舊沿物件的軸。
+       * ⚠ 移動、旋轉⛔ 受影響（three.js 那兩種本來就照 `space` 走）。
+       */
+      if (this.tc.getMode() === 'scale' && this._proxy.parent) {
+        const s = new THREE.Vector3(), q = new THREE.Quaternion(), p = new THREE.Vector3();
+        this._proxy.parent.updateMatrixWorld(true);
+        this._proxy.parent.matrixWorld.decompose(p, q, s);
+        const uniform = Math.abs(s.x - s.y) < 1e-9 && Math.abs(s.y - s.z) < 1e-9;
+        if (uniform) this._proxy.quaternion.copy(q).invert();
+      }
     }
     /**
      * ⚠ **這裡刻意不清 `_drag`。**
