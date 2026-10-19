@@ -23,7 +23,7 @@ import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
 import { Selection, isTouch, VERT_DOTS_MAX } from './view/select.js';
-import { Panel, fillPrimMenu, fieldNum, clampNum } from './ui/toolbar.js';
+import { Panel, fillPrimMenu, fieldNum, clampNum, stackedHint } from './ui/toolbar.js';
 import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
          setKeep, isKeep, markSignature, nearestFace }
@@ -641,34 +641,58 @@ function shortName(list, op) {
  * 才有辦法出「一張圖 ×N」而不是 N 張一樣的圖。
  */
 function arrayOp(mode) {
-  const obj = sel.active;
-  if (!obj) { toast('先選一個物件', true); return; }
+  /**
+   * 🔴 **選了好幾個 ⇒ 每一個各自排成陣列**（綜合評估 ③-8，2026-10-19，kang 同意）。
+   * 以前只拿 `sel.active`（最後選的）⇒ 其他的默默被丟出選取、也沒排（疑點 Q1），⛔ 講。
+   * ⭐ 各排各的（每個照自己的外框算間距），**一次記一步復原** ⇒ 按一次 Ctrl+Z 全部收回。
+   * 算不出來的那幾個照原樣留著，結尾講是哪幾個。
+   */
+  const list = sel.count > 1 ? sel.objects : (sel.active ? [sel.active] : []);
+  if (!list.length) { toast('先選一個物件', true); return; }
   // 板件的陣列只是把副本拼在一起，用不到布林函式庫，所以不在這裡擋；
   // 真的需要而沒載到時，evalArrayTree 會給出明確的訊息
 
-  const made = new ModelObject({
-    name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
-    kind: obj.kind,
-    src: arraySrcFrom(obj, mode),
-    pos: obj.pos.clone(),
-    rot: obj.rot.clone(),
-    scale: obj.scale.clone(),
-    color: obj.color,
-    thickness: obj.thickness,
-    lockScale: obj.lockScale
-  });
+  const made = [], failed = [];
+  for (const obj of list) {
+    const m = new ModelObject({
+      name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
+      kind: obj.kind,
+      src: arraySrcFrom(obj, mode),
+      pos: obj.pos.clone(),
+      rot: obj.rot.clone(),
+      scale: obj.scale.clone(),
+      color: obj.color,
+      thickness: obj.thickness,
+      lockScale: obj.lockScale
+    });
 
-  // 先試算一次，算不出來就整個放棄，不要在文件裡留下壞掉的物件
-  made.mesh();
-  if (made.error) { toast(ARRAY_LABEL[mode] + '失敗：' + made.error, true); return; }
+    // 先試算一次，算不出來就放棄這一個，不要在文件裡留下壞掉的物件
+    m.mesh();
+    if (m.error) { failed.push(`「${obj.name}」${m.error}`); continue; }
 
-  doc.remove(obj);
-  doc.add(made);
+    doc.remove(obj);
+    doc.add(m);
+    made.push(m);
+  }
+  if (!made.length) { toast(ARRAY_LABEL[mode] + '失敗：' + failed.join('；'), true); return; }
+
   view.sync(doc);
-  sel.set([made.id]);
+  sel.set(made.map(m => m.id));
   panel.analysisCache.clear();
-  commit(ARRAY_LABEL[mode]);
-  toast(`${ARRAY_LABEL[mode]}完成：${made.copies} 份。份數與間距可在右側面板調整`);
+  commit(made.length > 1 ? `${ARRAY_LABEL[mode]}（${made.length} 個）` : ARRAY_LABEL[mode]);
+  const fail = failed.length ? `　⚠ 這 ${failed.length} 個沒排成（照原樣留著）：${failed.join('；')}` : '';
+  /** ③-1：疊在原地的 ⇒ ⛔ 只說「完成 8 份」，接著講怎麼排開（面板上也會一直掛著同一句）*/
+  const stacked = made.filter(m => m.stacked);
+  const stack = !stacked.length ? ''
+    : made.length === 1 ? '　' + stackedHint(mode, made[0].copies)
+    : `　⚠ 其中 ${stacked.length} 個每一份都在同一個位置（點選它看右側面板的說明）`;
+  const warn = !!(failed.length || stacked.length);
+  if (made.length === 1) {
+    toast(`${ARRAY_LABEL[mode]}完成：${made[0].copies} 份。份數與間距可在右側面板調整${stack}${fail}`, warn);
+  } else {
+    toast(`${ARRAY_LABEL[mode]}完成：${made.length} 個物件各自排成陣列（各 ${made[0].copies} 份）。`
+      + `份數與間距要一個一個點選後在右側面板調整；按一次 Ctrl+Z 全部收回${stack}${fail}`, warn);
+  }
 }
 
 /** 把陣列打散成一個個獨立物件 */

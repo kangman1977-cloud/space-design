@@ -36,6 +36,44 @@ const near1 = v => Math.abs(v - 1) <= 1e-9;
 const near0 = v => Math.abs(v) <= 1e-9;
 
 /**
+ * 🔴 **改了齒數或模數之後，跟旁邊的齒輪還咬不咬得剛好**（綜合評估 ③-7，2026-10-19，kang 同意）。
+ *
+ * 程式⛔ 記「誰跟誰咬著」（`meshGearPair()` 算一次就擺好）⇒ 改了一個的齒數，對方⛔ 會跟、也⛔ 講 ⇒ 兩個齒輪穿過去（T9）。
+ * ⇒ 改完看「同一個平面上」（都平放、沒縮放、高度重疊）的其他齒輪：兩個**齒頂圓有重疊**（靠得夠近、齒碰得到）
+ * 而中心距⛔ 等於 m ×（z1 ＋ z2）÷ 2（或模數不一樣）⇒ 回傳一句話；都沒事 ⇒ `null`。
+ * ⚠ 齒頂圓沒重疊的⛔ 管（本來就沒咬著，可能是故意放旁邊）。⛔ 改動任何東西。
+ *
+ * @param {ModelObject} obj 剛改過的那個
+ * @param {ModelObject[]} objects 文件裡全部的物件
+ * @returns {string|null}
+ */
+export function gearClash(obj, objects) {
+  const flat = o => near0(o.rot.x) && near0(o.rot.z) && near1(o.scale.x) && near1(o.scale.y) && near1(o.scale.z);
+  if (!isGear(obj) || !flat(obj)) return null;
+  const a = gearDims(obj.src);
+  for (const o of objects || []) {
+    if (o === obj || !isGear(o) || !flat(o)) continue;
+    const b = gearDims(o.src);
+    if (Math.abs(o.pos.y - obj.pos.y) >= (a.t + b.t) / 2) continue;          // 不在同一個平面
+    const d = Math.hypot(o.pos.x - obj.pos.x, o.pos.z - obj.pos.z);
+    if (d >= a.ra + b.ra - 1e-6) continue;                                   // 齒碰不到
+    const sameM = Math.abs(a.m - b.m) <= 1e-9;
+    const want = sameM ? a.m * (a.z + b.z) / 2 : null;
+    if (want !== null && Math.abs(d - want) <= 1e-3) continue;               // 咬得剛好
+    const f = v => +v.toFixed(2);
+    const fix = `兩個都選起來按「咬上去」（先選要動的那個）`;
+    if (!sameM) {
+      return `⚠ 「${obj.name}」跟「${o.name}」的模數不一樣（${+a.m.toFixed(4)} 與 ${+b.m.toFixed(4)}），`
+        + `齒碰在一起卻咬不住 —— ${fix}，它會把模數改成一樣`;
+    }
+    return d < want
+      ? `⚠ 「${obj.name}」跟「${o.name}」的齒穿過去了：中心距 ${f(d)} cm，要咬得剛好是 ${f(want)} cm —— ${fix}`
+      : `⚠ 「${obj.name}」跟「${o.name}」沒有咬緊：中心距 ${f(d)} cm，要咬得剛好是 ${f(want)} cm —— ${fix}`;
+  }
+  return null;
+}
+
+/**
  * @param {ModelObject} mover 動的那個（先選的）
  * @param {ModelObject} anchor 不動的那個（後選的）
  * @returns {{ok:false, reason:string} |

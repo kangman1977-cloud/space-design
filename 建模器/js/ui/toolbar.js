@@ -49,7 +49,7 @@ import { landPositions, lowestY } from '../core/align.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 import { fetchLatest } from '../core/appver.js';
-import { meshGearPair } from '../core/gearPair.js';
+import { meshGearPair, gearClash } from '../core/gearPair.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -249,43 +249,54 @@ export class Panel {
       this.form.appendChild(bad('這個物件目前算不出來：' + obj.error));
     }
 
+    /**
+     * 🔴 **多選時，種類、板厚、顏色「N 個一起改」**（綜合評估 ③-8，2026-10-19，kang 同意）。
+     * 以前多選改顏色只改到最後選的那一個 —— 上面有一句「以下編輯最後選的」，但顏色在最底下、很容易沒看到（T7）。
+     * ⭐ 只放這三個「每個物件都有、意思也一樣」的欄位；名稱、位置、參數照舊只改最後選的（物件種類不同，參數也不同）。
+     * ⚠ 板厚只改「看得到板厚欄的那種」（板件、或沒封口的實體）—— 封口的實體用不到板厚，偷偷改它沒有意義。
+     */
+    const all = many ? this.app.sel.objects : [obj];
+    const together = (label, n) => (n > 1 ? `${label}（${n} 個一起改）` : label);
+    const thickTargets = all.filter(o => o.kind === KIND.SHEET || !meshClosed(o));
+    const setThickness = v => {
+      for (const o of thickTargets) {
+        o.thickness = v;
+        o.invalidate();
+        this.analysisCache.delete(o.id);
+      }
+      this._edit(thickTargets.length > 1 ? `改板厚（${thickTargets.length} 個）` : '改板厚');
+    };
+
     if (many) {
-      this.form.appendChild(note(`已選 ${this.app.sel.count} 個，以下編輯最後選的「${obj.name}」`));
+      this.form.appendChild(note(`已選 ${this.app.sel.count} 個：種類、板厚、顏色是 ${this.app.sel.count} 個一起改；`
+        + `其他欄位只改最後選的「${obj.name}」`));
       this._gearPairBox();
       this._alignBox();
     }
 
     this._rowText('名稱', obj.name, v => { obj.name = v; this._edit('改名稱'); });
 
-    this._rowSelect('種類', obj.kind, [
+    this._rowSelect(together('種類', all.length), obj.kind, [
       [KIND.SOLID, '實體 solid'],
       [KIND.SHEET, '板件 sheet']
     ], v => {
-      obj.kind = v;
-      this._edit('改種類');
+      for (const o of all) o.kind = v;
+      this._edit(all.length > 1 ? `改種類（${all.length} 個）` : '改種類');
     }, '板件是要拿去展開的東西（有厚度、可折彎）；實體是有體積的量體');
 
     if (obj.kind === KIND.SHEET) {
       // 板厚會改變折彎的中性層位置，也就會改變形狀與展開長度，
       // 所以一定要 invalidate() 讓網格重生，不能只改數字。
-      this._rowNum('板厚 cm', obj.thickness, { min: 0.01, step: 0.1 }, v => {
-        obj.thickness = v;
-        obj.invalidate();
-        this.analysisCache.delete(obj.id);
-        this._edit('改板厚');
-      }, '折彎補償與展開長度都要用它算：中性層半徑 ＝ 內側R ＋ K×板厚');
+      this._rowNum(together('板厚 cm', thickTargets.length), obj.thickness, { min: 0.01, step: 0.1 }, setThickness,
+        '折彎補償與展開長度都要用它算：中性層半徑 ＝ 內側R ＋ K×板厚');
     } else if (!meshClosed(obj)) {
       /**
        * 🔴 **沒封口的實體也看得到板厚**（2026-10-19，`實驗-綜合評估.md` ①-9，kang「先做 ①-9（照這個建議）」）。
        * ⚠ 畫面與 3D 列印判的是「網格封不封閉」（⛔ 看種類），沒封口就照板厚加厚成殼 ——
        * 以前實體的板厚欄藏起來，刪過面的方塊就被看不見的 0.2 加厚，改都改不了（補測：36,008 mm³「可以列印」）。
        */
-      this._rowNum('板厚 cm', obj.thickness, { min: 0.01, step: 0.1 }, v => {
-        obj.thickness = v;
-        obj.invalidate();
-        this.analysisCache.delete(obj.id);
-        this._edit('改板厚');
-      }, '這個實體沒有封口（例如刪過面）：畫面與 3D 列印都照這個厚度加厚成一層殼。要實心的話請把洞補起來');
+      this._rowNum(together('板厚 cm', thickTargets.length), obj.thickness, { min: 0.01, step: 0.1 }, setThickness,
+        '這個實體沒有封口（例如刪過面）：畫面與 3D 列印都照這個厚度加厚成一層殼。要實心的話請把洞補起來');
     }
 
     // ── 分片（只有分片模式開著才顯示）──
@@ -322,10 +333,12 @@ export class Panel {
         this.form.appendChild(head(spec.label + ' 參數'));
         for (const f of spec.fields) {
           this._rowNum(f.label, obj.src[f.key], f, v => {
+            const was = this._onFloor(obj);       // ③-14
             obj.src[f.key] = f.int ? Math.round(v) : v;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + f.label);
+            this._afterParam(obj, was);
           }, f.hint);
         }
       }
@@ -352,6 +365,7 @@ export class Panel {
         for (const t of spec.toggles || []) {
           if (t.when && !t.when(obj.src)) continue;
           this._rowCheck(t.labelOf ? t.labelOf(obj.src, ctx) : t.label, obj.src[t.key], v => {
+            const was = this._onFloor(obj);       // ③-14
             obj.src[t.key] = !!v;
             /**
              * 🔴🔴 **`不封口` 一開，這個物件就⛔ 不再是實體了。**
@@ -364,16 +378,19 @@ export class Panel {
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + t.label);
+            this._afterParam(obj, was);
           }, t.hint);
         }
         for (const f of spec.fields) {
           if (f.when && !f.when(obj.src)) continue;
           const lab = f.labelOf ? f.labelOf(obj.src, ctx) : f.label;
           this._rowNum(lab, obj.src[f.key], f, v => {
+            const was = this._onFloor(obj);       // ③-14：改之前貼不貼地
             obj.src[f.key] = f.int ? Math.round(v) : v;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
             this._edit('改' + lab);
+            this._afterParam(obj, was);           // ③-14 離地、③-7 齒輪卡住 ⇒ 講出來
           }, f.hintOf ? f.hintOf(obj.src, ctx) : f.hint);
         }
         if (obj.src.type === 'pen') this._penRevBox(obj);
@@ -630,7 +647,11 @@ export class Panel {
       this._edit(v ? '鎖定縮放' : '解除鎖定');
     }, '鎖定後不給縮放把手。帶料表的精確件應該鎖住，避免圖面與實際用料不符');
 
-    this._rowColor('顏色', obj.color, v => { obj.color = v; this._edit('改顏色'); });
+    /** ③-8：多選時一起改（見上面「種類、板厚、顏色」那則）*/
+    this._rowColor(together('顏色', all.length), obj.color, v => {
+      for (const o of all) o.color = v;
+      this._edit(all.length > 1 ? `改顏色（${all.length} 個）` : '改顏色');
+    });
   }
 
   /**
@@ -1566,6 +1587,8 @@ export class Panel {
         : obj.copies === 1 ? '（只留鏡像那一份，展開圖要翻面）'
         : '（其中一份是鏡像，展開圖要翻面）');
     wrap.appendChild(total);
+    /** ③-1：每一份都在同一個位置 ⇒ 講出來、講怎麼排開（以前只寫「總共 8 份」，其實 8 份疊在原地）*/
+    if (obj.stacked) wrap.appendChild(bad(stackedHint(src.mode, obj.copies)));
 
     // ── 各模式的參數 ──
     if (src.mode === ARRAY_MODES.RADIAL) {
@@ -1580,9 +1603,11 @@ export class Panel {
       this._rowNum('總角度', src.angle, { step: 15 }, v => {
         src.angle = v; this._rebuild(obj, '改總角度');
       }, '360＝繞滿一圈平均分佈；小於 360 時頭尾都會放一份');
-      this._rowArr3('旋轉中心 cm', src.center, ['X', 'Y', 'Z'], false,
+      /** ③-1：「相對物件自己」直接寫在名稱上（以前只寫在滑鼠停上去的說明裡）*/
+      this._rowArr3('旋轉中心（相對物件）cm', src.center, ['X', 'Y', 'Z'], false,
         () => this._rebuild(obj, '改旋轉中心'),
-        '相對於物件自己的原點。法蘭螺栓孔通常留 0，讓孔繞著中心排');
+        '相對於物件自己的原點，不是世界座標。法蘭螺栓孔通常留 0，讓孔繞著中心排；'
+        + '要讓一個零件繞成一圈，就把中心移到零件外面（例如 X 打 50 ＝ 繞著右邊 50 cm 那一點轉）');
 
     } else if (src.mode === ARRAY_MODES.MIRROR) {
       this._rowSelect('對稱面垂直於', src.axis || 'x',
@@ -1746,9 +1771,41 @@ export class Panel {
 
   /** 運算樹被改過 → 清掉快取重算，然後照一般編輯流程走 */
   _rebuild(obj, label) {
+    const was = this._onFloor(obj);
     obj.invalidate();
     this.analysisCache.delete(obj.id);
     this._edit(label);
+    this._afterParam(obj, was);
+  }
+
+  /**
+   * 🔴 **改了參數（尺寸、齒數…）之後，講兩件「位置沒動、但關係變了」的事**（綜合評估 ③-14、③-7，2026-10-19，kang 同意）。
+   *
+   * ③-14 **原本貼地、改完離地**：參數物件以中心為原點，改高度後底部就跑掉（方塊 h 45 → 90 底部到 −22.5）。
+   * ⭐ 照 kang 2026-10-09 的決定**⛔ 自動往上長**（會偷偷改掉對齊、貼合、咬上去擺好的位置，`align.js` `landPositions()`）——
+   * 只講一句、請人按「落地」。⚠ 只在「改之前貼地」才講：浮在別的東西上面常常是故意的（面板那句也是這個規則）。
+   *
+   * ③-7 **齒輪跟咬著的那一個卡在一起**：程式⛔ 記「誰跟誰咬著」（`gearPair.js` 是算一次就擺好）⇒
+   * 改齒數或模數後，對方⛔ 會跟、也⛔ 講。⇒ 看同一個高度、平放的其他齒輪：
+   * 兩個齒頂圓重疊、而且中心距不等於 m ×（z1 ＋ z2）÷ 2 ⇒ 講出來、指到「咬上去」那顆按鈕。⛔ 記任何關係、⛔ 改存檔。
+   */
+  _afterParam(obj, wasOnFloor) {
+    const msgs = [];
+    if (wasOnFloor) {
+      const low = lowestY([obj]);
+      if (Math.abs(low) >= 1e-3) {
+        msgs.push(`「${obj.name}」原本貼在地板上，改完之後${low > 0 ? '浮起來' : '沉下去'} ${+Math.abs(low).toFixed(2)} cm`
+          + ' —— 要貼回地板就按右邊的「落地」');
+      }
+    }
+    const g = gearClash(obj, this.app.doc.objects);
+    if (g) msgs.push(g);
+    if (msgs.length) this.app.toast(msgs.join('　'), true);
+  }
+
+  /** 改之前貼不貼地（③-14；跟面板「底部在地板下」那句同一個容許值）*/
+  _onFloor(obj) {
+    try { return Math.abs(lowestY([obj])) < 1e-3; } catch (e) { return false; }
   }
 
   // ── 表單元件 ──────────────────────────────────────
@@ -2024,6 +2081,21 @@ export class Panel {
 // ═══════════════════════════════════════════════════════
 //  拓撲判定
 // ═══════════════════════════════════════════════════════
+
+/**
+ * ③-1：陣列每一份都在同一個位置時要講的話（面板與「排列完成」的提示共用；純函式，測試載得到）。
+ * ⚠ 畫面上的字，⛔ 用文件記號。
+ */
+export function stackedHint(mode, copies) {
+  if (mode === 'radial') {
+    return `⚠ 這 ${copies} 份全部在同一個位置：它們是繞物件自己的中心轉，只在原地自轉、沒有排成一圈。`
+      + '要排成一圈，把下面的「旋轉中心」移到物件外面（例如 X 打 50）';
+  }
+  if (mode === 'mirror') {
+    return '⚠ 鏡射出來的那一份跟原件疊在同一個位置（對稱面剛好在正中間）—— 把「對稱面位置」移到物件的邊上';
+  }
+  return `⚠ 這 ${copies} 份全部疊在同一個位置 —— 把間距改成不是 0`;
+}
 
 /**
  * 由拓撲數字推出「理論上應該是多少」，並判斷對不對。

@@ -345,6 +345,8 @@ export class ModelObject {
    * 第 3 期展開要靠它出「一張圖 ×N」，第 8 期匯出備料也用得到。
    */
   get copies() { return this.isArray ? copyCount(this.src) : 1; }
+  /** ③-1：陣列的每一份都在同一個位置（`array.js` `copiesStacked()`；算出來的，⛔ 存檔）*/
+  get stacked() { return this.isArray && !!this.mesh().arrayStacked; }
 
   /**
    * 取得半邊網格。參數物件與布林物件會在第一次要用時才生成，

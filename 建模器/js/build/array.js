@@ -221,6 +221,35 @@ export function evalArrayTree(node, buildChild) {
 
   const label = node.child.name || '原件';
   const copies = mats.map(m => base.transformed(m));
+  const stacked = copiesStacked(mats, base.bounds());
+
+  const out = joinCopies(base, copies, label);
+  /** ③-1：每一份都在同一個位置 ⇒ 掛在結果上，讓面板與提示講出來（⛔ 存檔，每次算出來的）*/
+  if (stacked) out.arrayStacked = true;
+  return out;
+}
+
+/**
+ * 🔴 **每一份是不是都在同一個位置**（綜合評估 ③-1，2026-10-19）。
+ *
+ * 環形陣列預設繞**物件自己的原點**轉 ⇒ 原件剛好在原點上（大多數都是）就**只在原地自轉**，
+ * 8 份全部疊在一起，以前還說「完成 8 份」（T4、T9）。間距 0 的排列、對稱面剛好在正中間的對稱件鏡射也一樣。
+ * 判準：原件外框的中心，經過每一份的矩陣之後**都落在同一點** ⇒ 疊在原地。
+ * ⚠ 不對稱的東西繞自己的中心轉，看起來是一朵星星，⛔ 是完全重疊 —— 但一樣是「沒排開」，照樣要講。
+ *
+ * @param {THREE.Matrix4[]} mats
+ * @param {THREE.Box3} bounds 原件的外框（陣列自己的座標）
+ */
+export function copiesStacked(mats, bounds) {
+  if (!mats || mats.length < 2 || !bounds || bounds.isEmpty()) return false;
+  const c = bounds.getCenter(new THREE.Vector3());
+  const tol = 1e-6 * (bounds.getSize(new THREE.Vector3()).length() + 1);
+  const p0 = c.clone().applyMatrix4(mats[0]);
+  return mats.every(m => c.clone().applyMatrix4(m).distanceTo(p0) <= tol);
+}
+
+/** 把每一份接起來（原本 `evalArrayTree()` 的結尾，拆出來好掛 `arrayStacked`）*/
+function joinCopies(base, copies, label) {
 
   /**
    * 實體與板件要分開處理，而且不是為了遷就函式庫，是因為**語意不同**：

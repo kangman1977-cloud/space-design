@@ -17962,6 +17962,58 @@ section('綜合評估 ② 第三批：結構分析、中心、指出來（2026-1
   ok('　 封閉的方塊照舊（開口 0 圈、χ 2 ✓）', buildPrim('box', { w: 60, h: 45, d: 40 }).validate().boundaryLoops === 0);
 }
 
+section('綜合評估 ③ 第二批：講出來、多選一起改（2026-10-19）');
+{
+  /** ③-8 多選排列、多選一起改、③-14 離地的提示都在畫面那一層（main.js、Panel），在本機／線上版用畫面驗 */
+  const { copiesStacked } = await import('../js/build/array.js');
+  const { gearClash, meshGearPair } = await import('../js/core/gearPair.js');
+  const { stackedHint } = await import('../js/ui/toolbar.js');
+
+  // ③-1 每一份都在同一個位置
+  const b10 = new THREE.Box3(new THREE.Vector3(-5, -5, -5), new THREE.Vector3(5, 5, 5));
+  const radial = c => arrayMatrices({ type: 'array', mode: ARRAY_MODES.RADIAL, count: 8, angle: 360, axis: 'y', center: c });
+  ok('★★★ ③-1 環形預設（繞自己的原點）：8 份都在同一個位置 ⇒ 抓得到', copiesStacked(radial([0, 0, 0]), b10));
+  ok('★★ 　 旋轉中心移到 X 50：排成一圈 ⇒ ⛔ 講', !copiesStacked(radial([50, 0, 0]), b10));
+  const lin = s => arrayMatrices({ type: 'array', mode: ARRAY_MODES.LINEAR, count: 3, step: s });
+  ok('★ 　 排列間距 0 ⇒ 抓得到；間距 12 ⇒ ⛔ 講', copiesStacked(lin([0, 0, 0]), b10) && !copiesStacked(lin([12, 0, 0]), b10));
+  ok('　 只有一份 ⇒ ⛔ 講', !copiesStacked(radial([0, 0, 0]).slice(0, 1), b10));
+  if (csgOK) {
+    const box = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', w: 10, h: 10, d: 10 } });
+    const arr = new io.ModelObject({ name: '環形', kind: io.KIND.SOLID, src: io.arraySrcFrom(box, ARRAY_MODES.RADIAL) });
+    ok('★★★ 　 真的按「環形」做出來的方塊陣列：`stacked` 是 true（以前只說「完成 8 份」）', arr.stacked === true, arr.error);
+    arr.src.center = [50, 0, 0]; arr.invalidate();
+    ok('★★ 　 中心移到 X 50 ⇒ `stacked` 變 false', arr.stacked === false, arr.error);
+  }
+  const hints = ['radial', 'linear', 'mirror'].map(m => stackedHint(m, 8));
+  ok('★ 　 三種提示都講得出怎麼排開、⛔ 有文件記號', hints.every(h => !h.includes('⛔') && !h.includes('**')) && hints[0].includes('旋轉中心') && hints[1].includes('間距'), hints.join(' ｜ '));
+
+  // ③-7 齒輪改了齒數之後跟旁邊的那個卡住
+  const gear = (name, p, x, z) => {
+    const o = new io.ModelObject({ name, kind: io.KIND.SOLID, src: { type: 'gear', module: 0.3, teeth: 20, t: 0.5, hole: 0.6, gapMm: 0.2, ...p } });
+    o.pos.set(x, 3, z);
+    return o;
+  };
+  const A = gear('A', {}, 0, 0), B = gear('B', { teeth: 30 }, 20, 0);
+  const r = meshGearPair(B, A);
+  B.pos.set(r.pos.x, r.pos.y, r.pos.z); B.rot.set(0, r.rotY, 0);
+  eq('★★ ③-7 咬上去之後 ⇒ ⛔ 講', gearClash(B, [A, B]), null);
+  B.src.teeth = 36;
+  const m1 = gearClash(B, [A, B]);
+  ok('★★★ 　 B 改成 36 齒（變大）⇒「齒穿過去了：中心距 7.5 cm，要咬得剛好是 8.4 cm」', !!m1 && m1.includes('穿過去') && m1.includes('7.5') && m1.includes('8.4') && m1.includes('咬上去'), m1);
+  B.src.teeth = 28;
+  const m2 = gearClash(B, [A, B]);
+  ok('★★ 　 B 改成 28 齒（變小、齒頂還碰得到）⇒「沒有咬緊：中心距 7.5，要 7.2」', !!m2 && m2.includes('沒有咬緊') && m2.includes('7.2'), m2);
+  B.src.teeth = 30; B.src.module = 0.35;
+  const m3 = gearClash(B, [A, B]);
+  ok('★★ 　 B 的模數改成 0.35 ⇒「模數不一樣」', !!m3 && m3.includes('模數不一樣'), m3);
+  B.src.module = 0.3;
+  const C = gear('C', {}, 100, 0);
+  eq('★ 　 離很遠的齒輪（齒碰不到）⇒ ⛔ 管', gearClash(C, [A, B, C]), null);
+  const D = gear('D', { teeth: 36 }, 7.5, 0); D.pos.y = 20;
+  eq('★ 　 不同高度（不在同一個平面）⇒ ⛔ 管', gearClash(D, [A, D]), null);
+  ok('　 不是齒輪 ⇒ null', gearClash(new io.ModelObject({ src: { type: 'box', w: 1, h: 1, d: 1 } }), [A]) === null);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
