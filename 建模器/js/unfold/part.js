@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
 import { Mesh } from '../core/mesh.js';
-import { mergeCoplanarFaces } from '../core/edit.js';
+import { mergeCoplanarFaces, cleanRebuild } from '../core/edit.js';
 
 /**
  * 展開一個物件。
@@ -124,9 +124,29 @@ export function unfoldObject(obj, opt = {}) {
     rule = makeRule(material, plate.t);
   }
 
+  /**
+   * 🔴 **折不了的材料遇到折板的圓弧：圓弧那幾格⛔ 出片**（2026-10-19，實驗 T3：`實驗-綜合評估.md` ①-13，kang「同意你的安排與建議」）。
+   *
+   * ⚠ 以前壓克力／木板把所有折線改成切割線 ⇒ 圓弧切出來的每一小格都變成一片：
+   * 隔板（板寬 11、內側圓角 0.2、分 4 段）出了 4 條 11 × 0.16 的細條 —— 下不了料，也⛔ 是設計要的東西。
+   * ⭐ 先用能折的規則認出圓弧帶（`flatten.js` `piece.arcFaces`，跟展開圖標「圓弧折彎」同一套），把那幾格拿掉再攤 ⇒ 只出平的那幾段，並且講出來。
+   * ⚠ 尖角的折線照舊（本來就是一刀切成兩片）。
+   * ⚠ **只對折板**（`src.type === 'bend'`，或陣列裡排的是折板，T3 的隔板就是）：圓柱、圓角方塊的曲面拆成一條一條
+   *   是可以黏成多邊形的，照舊出片。轉成網格之後的折板認不出來（沒有參數了），照舊。
+   */
+  let arcDrop = null;
+  if (rule.foldable === false && opt.mode !== 'dart' && !plate && isBendSrc(obj.src)) {
+    arcDrop = arcStripFaces(mesh, obj.thickness);
+    if (arcDrop) mesh = arcDrop.mesh;
+  }
+
   /** `opt.mode`：`'dart'` ＝ 省道打版（2026-10-12）；沒給 ＝ 精確分片（原本的路）*/
   const r = unfoldMesh(mesh, rule, { flatTolDeg: opt.flatTolDeg, mode: opt.mode });
   if (plate) for (const p of r.pieces) p.solidPlate = { t: plate.t };
+  if (arcDrop) {
+    r.warnings.push(`${rule.label}折不了：圓弧折彎 ${arcDrop.bands} 道沒有出片（彎的那一段做不出來），只出平的那幾段`
+      + ` —— 要整片折成形，請換能折的材質，或把折板拆成幾片平板`);
+  }
 
   /**
    * 🔴 **陣列的份數⛔ 再乘一次**（2026-10-19 實驗 T3／T7 抓到：份數被平方）。
@@ -159,7 +179,7 @@ export function unfoldObject(obj, opt = {}) {
      * ⚠ 縮放過的物件展開的是套了縮放的另一份網格（上面的 `transformed()`）：頂點順序不變，照頂點編號對回來。
      */
     /** ⚠ 實心板攤的是頂面那一份新網格，邊對不回原物件 ⇒ ⛔ 給（一片板也⛔ 需要補剪）*/
-    autoEdges: plate ? [] : mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh(), merged || (canon && canon.orig)),
+    autoEdges: plate || arcDrop ? [] : mesh === obj.mesh() ? (r.autoEdges || []) : mapEdgesBack(r.autoEdges || [], mesh, obj.mesh(), merged || (canon && canon.orig)),
     keepCut: r.keepCut || 0,
     warnings: [...warn, ...r.warnings],
     stats: { ...r.stats, total: r.pieces.reduce((n, p) => n + p.qty, 0) },
@@ -261,6 +281,40 @@ function platePart(mesh, faces) {
   const narrow = Math.min(a1 - a0, b1 - b0);
   if (!(t > 0) || t > PLATE_MAX_T || t > narrow / 4) return null;
   return { t, top };
+}
+
+/** 這個物件是不是折板（陣列的話看排的那一個）*/
+function isBendSrc(src) {
+  if (!src) return false;
+  if (src.type === 'bend') return true;
+  return src.type === 'array' && !!src.child && isBendSrc(src.child.src);
+}
+
+/**
+ * 折板圓弧切出來的小格（`unfoldMesh()` 用能折的規則攤一次拿 `arcFaces`）→ 拿掉之後的網格；沒有圓弧 ⇒ null。
+ * ⚠ 用鐵板的規則認：什麼角度都折得動 ⇒ 圓弧帶一定認得出來（認法只看幾何，跟材質無關）。
+ * @returns {{mesh:Mesh, faces:number, bands:number}|null}
+ */
+function arcStripFaces(mesh, t) {
+  const probe = unfoldMesh(mesh, makeRule('steel', t));
+  const drop = new Set(probe.arcFaces || []);
+  if (!drop.size) return null;
+  const bands = probe.pieces.reduce((n, p) => n + p.bends.filter(b => b.isArc).length * p.qty, 0);
+  const d = mesh.toJSON();
+  const pts = [];
+  for (let i = 0; i < d.points.length; i += 3) pts.push(new THREE.Vector3(d.points[i], d.points[i + 1], d.points[i + 2]));
+  const keep = d.faces.filter((f, i) => !drop.has(mesh.faces[i].id));
+  const cr = cleanRebuild(pts, keep);
+  const pair = ([a, b, ...rest]) => (cr.remap.has(a) && cr.remap.has(b) ? [cr.remap.get(a), cr.remap.get(b), ...rest] : null);
+  const out = Mesh.fromJSON({
+    points: cr.points.flatMap(p => [p.x, p.y, p.z]),
+    faces: cr.faces,
+    roles: (d.roles || []).map(pair).filter(Boolean),
+    smooth: (d.smooth || []).map(pair).filter(Boolean),
+    hard: (d.hard || []).map(pair).filter(Boolean),
+    keep: (d.keep || []).map(pair).filter(Boolean)
+  });
+  return { mesh: out, faces: drop.size, bands };
 }
 
 /**

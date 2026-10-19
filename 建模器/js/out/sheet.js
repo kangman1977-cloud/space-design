@@ -53,6 +53,13 @@ export const STYLE = {
   dartSew: { w: 0.030, minPx: 1.2, dash: [0.6, 0.4], color: '#8e44ad', label: '開口縫線（不剪）' },
   hole: { w: 0.040, minPx: 1.3, dash: null,        color: '#111', label: '內孔' },
   fold: { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '折線' },
+  /**
+   * 🔴 **上折、下折分兩種線**（2026-10-19，實驗 T3、T8：`實驗-綜合評估.md` ①-10，kang「同意你的安排與建議」）。
+   * ⚠ 以前同一種紅線，方向只寫在折彎標註的字裡；DXF 只有線 ⇒ 送出去的檔看不出往哪邊折。
+   * ⭐ 上折照舊點劃線、下折改虛線；DXF 分 `FOLD_UP`／`FOLD_DOWN` 兩層（`dxf.js`）。哪一種 ⇒ `foldStyle()`。
+   */
+  foldUp:   { w: 0.030, minPx: 1.1, dash: [1.2, .5, .3, .5], color: '#c0392b', label: '上折線' },
+  foldDown: { w: 0.030, minPx: 1.1, dash: [0.7, 0.45],       color: '#c0392b', label: '下折線' },
   bend: { w: 0.025, minPx: 1.0, dash: [0.8, 0.5],  color: '#2980b9', label: '折彎區' },
   dim:  { w: 0.018, minPx: 0.8, dash: null,        color: '#666',  label: '尺寸' },
   /**
@@ -146,7 +153,7 @@ export function drawProgram(piece, opt = {}) {
   // 畫出來只會讓師傅以為要折五道。只畫折彎區的起訖線。
   for (const f of piece.folds) {
     if (f.isArcEdge) continue;
-    line('fold', f.a.x, f.a.y, f.b.x, f.b.y);
+    line(foldStyle(f), f.a.x, f.a.y, f.b.x, f.b.y);
   }
 
   /**
@@ -447,6 +454,15 @@ export function outlineSegments(piece, opt = {}) {
 export const NOTCH = { endGap: 1, double: 0.5, inDepth: 0.3, markLen: 0.5 };
 
 /**
+ * 一道折線畫哪一種線（2026-10-19，綜合評估 ①-10）：轉角正 ＝ 上折、負 ＝ 下折 —— 跟折彎標註「↑ 上折／↓ 下折」同一個判準（`b.angle > 0`）。
+ * 角度 0（理論上不會有折線）⇒ 照舊 `fold`。
+ */
+export function foldStyle(f) {
+  const a = f && f.angle;
+  return a > 1e-9 ? 'foldUp' : a < -1e-9 ? 'foldDown' : 'fold';
+}
+
+/**
  * 🔴 **對位記號**（2026-10-12，kang 拍板 → `規格\建模器-對位記號.md`）—— 畫面、列印、SVG、DXF 共用這一支。
  *
  * 每一條有接合編號的縫（`piece.seamRuns`，兩側同一個起點、同一個方向），從起點量起每隔 `spacing` cm 放一個；
@@ -465,11 +481,11 @@ export const NOTCH = { endGap: 1, double: 0.5, inDepth: 0.3, markLen: 0.5 };
  *
  * @param {object} opt `{ notch: {style, spacing}, rule }`；⛔ 給 `notch` ⇒ 一條都不畫
  * @returns {{lines:{style,a,b}[], count:number, short:number, dir:'in'|'out', depth:number}}
- *          `count` 記號幾個（雙刻口算一個）；`short` 幾條縫太短沒有放
+ *          `count` 記號幾個（雙刻口算一個）；`short` 幾條縫太短（< 2 cm）沒有放；`mid` 幾條比間距短、放在正中間
  */
 export function notchMarks(piece, opt = {}) {
   const N = opt.notch;
-  const res = { lines: [], count: 0, short: 0, dir: 'in', depth: 0 };
+  const res = { lines: [], count: 0, short: 0, mid: 0, dir: 'in', depth: 0 };
   if (!N || !(N.spacing > 0) || !piece.seamRuns || !piece.seamRuns.length) return res;
 
   const rule = piece.rule || opt.rule || {};
@@ -520,6 +536,12 @@ export function notchMarks(piece, opt = {}) {
     const L = run.segs.reduce((s, g) => s + g.len, 0);
     const at = [];
     for (let k = 1; k * N.spacing <= L - NOTCH.endGap + 1e-9; k++) at.push(k * N.spacing);
+    /**
+     * 🔴 **比間距短的縫：正中間放一個**（2026-10-19，實驗 T3、T5、T8：`實驗-綜合評估.md` ①-12，kang「同意你的安排與建議」）。
+     * ⚠ 以前一個都不放 —— 盒子 8 cm 的轉角縫（間距 10）最需要對齊，反而沒有。
+     * ⭐ 正中間兩側量起來一樣，⛔ 管起點；離兩端都要 ≥ `endGap` ⇒ 縫至少 2 cm，再短才不放（卡片照舊講幾條）。
+     */
+    if (!at.length && L >= 2 * NOTCH.endGap - 1e-9) { at.push(L / 2); res.mid++; }
     if (!at.length) { res.short++; continue; }
     res.count += at.length;
     if (at[0] + NOTCH.double < L - 1e-9) at.push(at[0] + NOTCH.double);
@@ -679,10 +701,11 @@ export function titleLines(piece, opt = {}) {
   /** 對位記號（2026-10-12）：打勾、而且這片有接合編號才講 —— 幾個、怎麼量、長什麼樣；太短沒放的也講 */
   if (opt.notch && piece.seamRuns && piece.seamRuns.length) {
     const nm = notchMarks(piece, opt), sp = opt.notch.spacing;
-    const short = nm.short ? `；${nm.short} 條縫比 ${fmt(sp + NOTCH.endGap)} cm 短，沒有放` : '';
+    const mid = nm.mid ? `；${nm.mid} 條縫比 ${fmt(sp + NOTCH.endGap)} cm 短，放在正中間` : '';
+    const short = nm.short ? `；${nm.short} 條縫比 ${fmt(2 * NOTCH.endGap)} cm 短，沒有放` : '';
     out.push(nm.count
-      ? `對位記號 ${nm.count} 個（每 ${fmt(sp)} cm，一條縫的兩側從同一端量起，每條縫第一個是兩條）　${notchWords(opt.notch.style, nm, rule)}${short}`
-      : `對位記號 0 個：每條縫都比 ${fmt(sp + NOTCH.endGap)} cm 短`);
+      ? `對位記號 ${nm.count} 個（每 ${fmt(sp)} cm，一條縫的兩側從同一端量起，每條縫第一個是兩條）　${notchWords(opt.notch.style, nm, rule)}${mid}${short}`
+      : `對位記號 0 個：每條縫都比 ${fmt(2 * NOTCH.endGap)} cm 短`);
   }
 
   /**

@@ -37,7 +37,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut,
-         sampleCurve, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
+         sampleCurve, sampleCurveInfo, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges,
@@ -2268,6 +2268,16 @@ function cancelKnifeMode() {
 
 // ── 刀具裡的「曲線」—— 規格：`規格\建模器-曲線刀具.md` ──────────────
 
+/**
+ * 切完的提示多講一句：曲線（圓、圓弧）實際切成幾段、離真的曲線最多多遠（2026-10-19，綜合評估 ①-8）。
+ * ⚠ 以前⛔ 講 —— 直徑 2 cm 的孔變八角形，使用者要量面積才發現。全是直線（沒有把手）⇒ ⛔ 講。
+ */
+function curveSegWords(info) {
+  if (!info || !info.curveSegs) return '';
+  const mm = Math.round(info.maxDev * 10 * 100) / 100;
+  return `　曲線切成 ${info.curveSegs} 段直線（每段離曲線最多 ${mm} mm）`;
+}
+
 /** 「每隔幾公分切一段」—— 欄位打壞了就用預設，⛔ 不擋（打字打到一半常常是空的）*/
 function curveStepCm() {
   const v = Number($('curveStep').value);
@@ -2853,7 +2863,8 @@ function curveThroughApply() {
     toast('這個物件不是封閉的實體（開放的面／板件）—— 切穿要分得出裡外；只想在面上切出線請按「切下去」', true);
     return false;
   }
-  const pts = sampleCurve(curve.anchors, curveStepCm(), curve.closed);
+  const info = sampleCurveInfo(curve.anchors, curveStepCm(), curve.closed);
+  const pts = info.pts;
   const pr = curveCutterPrism(mesh, curve.n, pts, curve.closed);
   if (!pr.ok) { toast(pr.reason, true); return false; }
   let r;
@@ -2895,6 +2906,7 @@ function curveThroughApply() {
   toast(`已切穿成 2 個實心物件：` + (wasClosed
       ? `「${made[0].name}」是圈裡面那塊、「${made[1].name}」是帶一個洞的那塊`
       : `「${made[0].name}」「${made[1].name}」是線的兩邊`)
+      + curveSegWords(info)
       + '　⚠ 平滑與分片線的標記會消失');
   return true;
 }
@@ -2903,7 +2915,8 @@ function curveThroughApply() {
 function curveApply() {
   if (curveNotReady()) return false;
   const obj = curve.obj;
-  const pts = sampleCurve(curve.anchors, curveStepCm(), curve.closed);
+  const info = sampleCurveInfo(curve.anchors, curveStepCm(), curve.closed);
+  const pts = info.pts;
   const r = curve.closed ? curveCutFaceLoop(obj.mesh(), curve.face, pts) : curveCutFace(obj.mesh(), curve.face, pts);
   if (!r.ok) { toast(r.reason, true); return false; }
 
@@ -2931,7 +2944,7 @@ function curveApply() {
   panel.refresh();
   updateBar();
   updateEditNum();
-  toast(`已沿曲線切開　新增 ${r.added} 個點、${r.newEdges.length} 條線`
+  toast(`已沿曲線切開　新增 ${r.added} 個點、${r.newEdges.length} 條線` + curveSegWords(info)
       + (got ? '（已選起來）—— 要推高、挖洞，切到「面」選那一塊' : ''));
   return true;
 }

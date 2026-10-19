@@ -2771,21 +2771,39 @@ function trisCross(A, B) {
 export const CURVE_STEP_CM = 1;
 
 /**
+ * 🔴 **每一段離真的曲線最多多遠**（cm）—— 0.02 cm ＝ 0.2 mm，跟匯入 SVG 的「曲線精度」預設同一個數字（`importPanel.js` `tolMm`）。
+ * 2026-10-19（實驗 T3、T6：`實驗-綜合評估.md` ①-8，kang「同意你的安排與建議」）：以前只照「每隔 1 cm」⇒ 直徑 2 cm 的孔只有 8 段
+ * （面積 2.83，真圓 3.14）、r 3 mm 的吊孔也 8 段。⭐ 現在兩個條件都要滿足：每段 ≤「每隔」、而且離曲線 ≤ 這個數字 ⇒ 小孔自動切細。
+ */
+export const CURVE_TOL_CM = 0.02;
+
+/**
  * 🔴 **把一串錨點（照鋼筆：尖角／圓滑）變成「切下去要新增的點」。**
  *
  * - 兩個錨點之間**都沒有把手** ⇒ 直線，只要兩端（⛔ 不在直線上多插點）
- * - 有把手 ⇒ 三次貝茲，**依弧長每隔 `stepCm` 一段**，至少 2 段（太短的段也不會變成直線）
+ * - 有把手 ⇒ 三次貝茲，**依弧長等分**，段數取「每隔 `stepCm` 一段」與「每段離曲線 ≤ `tolCm`」兩者裡比較多的，至少 2 段
  *   ⚠ 依「弧長」等分，⛔ 不是依參數 t 等分 —— 把手拉得長時，t 等分會一頭密一頭疏
  *
  * @param {{p:THREE.Vector3, hin:THREE.Vector3|null, hout:THREE.Vector3|null}[]} anchors
  * @param {number} stepCm 每隔幾公分一段
  * @param {boolean} closed 封閉圈（第二步）：最後一點再接回第一點；回傳⛔ 不重複第一點
+ * @param {number} tolCm 每段離曲線最多多遠（預設 `CURVE_TOL_CM`）
  * @returns {THREE.Vector3[]} 第一點到最後一點（含兩端）
  */
-export function sampleCurve(anchors, stepCm = CURVE_STEP_CM, closed = false) {
-  if (!Array.isArray(anchors) || anchors.length < 2) return [];
+export function sampleCurve(anchors, stepCm = CURVE_STEP_CM, closed = false, tolCm = CURVE_TOL_CM) {
+  return sampleCurveInfo(anchors, stepCm, closed, tolCm).pts;
+}
+
+/**
+ * 同 `sampleCurve()`，多交出「曲線部分切成幾段」與「最多離曲線多遠」（cm）—— 切完的提示要講（①-8）。
+ * @returns {{pts:THREE.Vector3[], curveSegs:number, maxDev:number}}
+ */
+export function sampleCurveInfo(anchors, stepCm = CURVE_STEP_CM, closed = false, tolCm = CURVE_TOL_CM) {
+  if (!Array.isArray(anchors) || anchors.length < 2) return { pts: [], curveSegs: 0, maxDev: 0 };
   const step = stepCm > 0 ? stepCm : CURVE_STEP_CM;
+  const tol = tolCm > 0 ? tolCm : CURVE_TOL_CM;
   const out = [anchors[0].p.clone()];
+  let curveSegs = 0, maxDev = 0;
   const segs = closed ? anchors.length : anchors.length - 1;
   for (let i = 0; i < segs; i++) {
     const a = anchors[i], b = anchors[(i + 1) % anchors.length];
@@ -2806,19 +2824,43 @@ export function sampleCurve(anchors, stepCm = CURVE_STEP_CM, closed = false) {
       acc += q.distanceTo(prev);
       prev = q; ts.push(j / M); ls.push(acc);
     }
-    const k = Math.max(2, Math.ceil(acc / step - 1e-9));
-    for (let j = 1; j < k; j++) {
-      const want = acc * j / k;
+    /** 弧長 `want` 那一點 */
+    const atLen = want => {
       let lo = 0;
       while (lo + 1 < ls.length && ls[lo + 1] < want) lo++;
       const span = ls[lo + 1] - ls[lo];
       const f = span > 0 ? (want - ls[lo]) / span : 0;
-      out.push(at(ts[lo] + (ts[lo + 1] - ts[lo]) * f));
+      return at(ts[lo] + (ts[lo + 1] - ts[lo]) * Math.min(1, Math.max(0, f)));
+    };
+    /** 等分成 k 段時，每段弦的正中間離曲線多遠（量弦中點到那一段曲線弧長中點的距離）*/
+    const devOf = k => {
+      let d = 0, p0 = a.p;
+      for (let j = 1; j <= k; j++) {
+        const p1 = j === k ? b.p : atLen(acc * j / k);
+        const pm = atLen(acc * (j - 0.5) / k);
+        d = Math.max(d, pm.distanceTo(p0.clone().add(p1).multiplyScalar(0.5)));
+        p0 = p1;
+      }
+      return d;
+    };
+    let k = Math.max(2, Math.ceil(acc / step - 1e-9));
+    let dev = devOf(k);
+    /**
+     * 離曲線太遠 ⇒ 找**夠用的最少段數**（先加倍找到夠的，再二分；上限 512：再細也只是點變多，⛔ 卡住）。
+     * ⚠ 一定要找「最少」：只往上加一個固定倍數的話，「每隔 5」可能反而比「每隔 1」點多（測試抓到）。
+     */
+    if (dev > tol && k < 512) {
+      let lo = k, hi = k;
+      while (hi < 512) { hi = Math.min(512, hi * 2); if (devOf(hi) <= tol) break; lo = hi; }
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (devOf(mid) <= tol) hi = mid; else lo = mid; }
+      k = hi; dev = devOf(k);
     }
+    curveSegs += k; maxDev = Math.max(maxDev, dev);
+    for (let j = 1; j < k; j++) out.push(atLen(acc * j / k));
     out.push(b.p.clone());
   }
   if (closed) out.pop();                     // 最後一點 ＝ 第一點
-  return out;
+  return { pts: out, curveSegs, maxDev };
 }
 
 /**

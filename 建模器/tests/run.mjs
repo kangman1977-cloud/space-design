@@ -2104,10 +2104,11 @@ section('第 3 期：展開圖與 DXF');
    */
   /** 同一天再加 CUT_NOTCH／MARK（對位記號）—— 9 → 11，第三次擋下來。 */
   ok('DXF 表格數量宣告正確',
-    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n11\r\n'),
-    'CUT/CUT_AUTO/SEW/FOLD/BEND/DIM/TEXT/JOIN/CUT_NOTCH/MARK 十個圖層 ＋ 圖層 0');
+    dxf.includes('\r\n2\r\nLAYER\r\n70\r\n13\r\n'),
+    'CUT/CUT_AUTO/SEW/FOLD/FOLD_UP/FOLD_DOWN/BEND/DIM/TEXT/JOIN/CUT_NOTCH/MARK 十二個圖層 ＋ 圖層 0');
+  /** 2026-10-19 再加 FOLD_UP／FOLD_DOWN（上折、下折分層，綜合評估 ①-10）—— 11 → 13，第四次擋下來。 */
   eq('★★ 宣告的圖層數 ＝ 真的寫出來的 LAYER 數',
-    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 11);
+    (dxf.match(/\r\n0\r\nLAYER\r\n/g) || []).length, 13);
 
   // ENDTAB / ENDSEC 要成對，少一個整個檔就打不開
   eq('DXF TABLE 與 ENDTAB 成對', (dxf.match(/\r\nENDTAB\r\n/g) || []).length, tbls.length);
@@ -15858,8 +15859,18 @@ section('對位記號：沿縫每隔一段距離，兩側同一個位置（2026-
 
   // ── 太短、沒標過 ──
   const big = notchMarks(cp, { rule: canvas.rule, ...N('slit', 100) });
-  eq('★★ 間距比縫還長 ⇒ 0 個、兩條都算「太短」', `${big.count}/${big.short}`, '0/2');
-  ok('★★ 　 卡片講「0 個：每條縫都比 101 cm 短」', titleLines(cp, { rule: canvas.rule, ...N('slit', 100) }).includes('對位記號 0 個：每條縫都比 101 cm 短'));
+  /** ⚠ 2026-10-19 改了（綜合評估 ①-12，kang 同意）：比間距短的縫⛔ 再一個都不放，改成正中間放一個；只有短過 2 cm 才不放 */
+  eq('★★ 間距比縫還長 ⇒ 兩條都放在正中間（各 1 個）、⛔ 算「太短」', `${big.count}/${big.mid}/${big.short}`, '2/2/0');
+  const bigLine = titleLines(cp, { rule: canvas.rule, ...N('slit', 100) }).find(s => s.startsWith('對位記號'));
+  ok('★★ 　 卡片講「2 條縫比 101 cm 短，放在正中間」', !!bigLine && bigLine.startsWith('對位記號 2 個') && bigLine.includes('2 條縫比 101 cm 短，放在正中間'), bigLine);
+  {
+    // 正中間：兩側同一個點（換回 3D 一樣）—— 中點離起點的 3D 長度 ＝ 一半
+    const run = cp.seamRuns[0], L = run.segs.reduce((t, g) => t + g.len, 0);
+    const lines = notchMarks({ ...cp, seamRuns: [run] }, { rule: canvas.rule, ...N('mark', 100) }).lines;
+    let acc = 0, mid = null;
+    for (const g of run.segs) { if (acc + g.len >= L / 2) { const t = (L / 2 - acc) / g.len; mid = { x: g.a.x + (g.b.x - g.a.x) * t, y: g.a.y + (g.b.y - g.a.y) * t }; break; } acc += g.len; }
+    ok('★★ 　 第一條記號落在縫的正中間（3D 長度的一半）', !!mid && Math.hypot(lines[0].a.x - mid.x, lines[0].a.y - mid.y) < 1e-6, `L ${L.toFixed(3)}`);
+  }
   const plain = unfoldMesh(buildPrim('box', PRIM_DEFAULTS.box), makeRule('foamboard', 0.3));
   ok('★★ 沒標過分片 ⇒ 沒有縫可以放（seamRuns 空的）', plain.pieces.every(p => p.seamRuns.length === 0));
 
@@ -16398,13 +16409,18 @@ section('曲線刀具 第一步：平面上從邊到邊（2026-10-13）');
 
   // sampleCurve：直線段只要兩端；曲線段依弧長每隔 step 一段、至少 2 段
   eq('★★ 沒有把手的兩點 ⇒ 只有 2 點（直線⛔ 多插點）', edit.sampleCurve([A(v(-30, 0)), A(v(30, 5))], 1).length, 2);
-  const s1 = edit.sampleCurve(wave, 1), s5 = edit.sampleCurve(wave, 5);
+  /**
+   * ⚠ 2026-10-19（綜合評估 ①-8）起段數還要滿足「每段離曲線 ≤ 0.02 cm」（`CURVE_TOL_CM`）—— 這條波浪那一條比「每隔」嚴，兩種都變 109 點。
+   * 下面幾項守的是「每隔」本身 ⇒ 把離曲線的上限放到很大（`NO_TOL`），數字照原本那一組。
+   */
+  const NO_TOL = 1e9;
+  const s1 = edit.sampleCurve(wave, 1, false, NO_TOL), s5 = edit.sampleCurve(wave, 5, false, NO_TOL);
   ok('★★ 每隔 1 cm 比每隔 5 cm 點多（84 ＞ 19）', s1.length === 84 && s5.length === 19, `${s1.length} ${s5.length}`);
   const gaps = s1.slice(1).map((p, i) => p.distanceTo(s1[i]));
   ok('★★ 每隔 1 cm：每一段都不超過 1 cm（依弧長等分）', Math.max(...gaps) <= 1 + 1e-6, Math.max(...gaps));
   eq('★ 很短的曲線段至少 2 段', edit.sampleCurve([A(v(0, 0), null, v(0.1, 0.1)), A(v(0.2, 0), v(0.1, 0.1), null)], 1).length, 3);
 
-  const cut = (anchors, step = 1, face = top, mesh = box) => edit.curveCutFace(mesh, face, edit.sampleCurve(anchors, step));
+  const cut = (anchors, step = 1, face = top, mesh = box) => edit.curveCutFace(mesh, face, edit.sampleCurve(anchors, step, false, NO_TOL));
   const r1 = cut(wave);
   ok('★★★ ① 波浪線（左邊→右邊）⇒ 成功、封閉、χ ＝ 2', r1.ok && r1.mesh.isClosed() && r1.mesh.validate().ok && chiOf(r1.mesh) === 2, r1.reason);
   near('★★★ 　 體積一格都沒變', r1.ok && r1.mesh.volume(), 108000, 1e-6);
@@ -17529,6 +17545,90 @@ if (csgOK) {
   ok('　　對照：直接攤三角形（舊做法）會重疊', old.pieces.some(p => p.overlap));
 } else {
   ok('（略過：CSG 沒載入）', true);
+}
+
+section('綜合評估 ① 第三批：短縫的對位記號、DXF 折向、刀具的圓、壓克力配折板（2026-10-19）');
+{
+  const { setSeam } = await import('../js/unfold/seam.js');
+  const { notchMarks, titleLines, foldStyle, drawProgram } = await import('../js/out/sheet.js');
+  const { toDXF } = await import('../js/out/dxf.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+
+  // ── ①-12 短縫：正中間放一個（T3 的盒身 20 × 8 × 12，開口朝上，標一條轉角）──
+  {
+    const o = new io.ModelObject({ name: '盒身', kind: io.KIND.SOLID, src: { type: 'box', w: 20, h: 8, d: 12 } }); o.bake();
+    let m = o.mesh(); m.computeNormals();
+    m = edit.deleteFaces(m, [{ kind: 'face', face: m.faces.find(f => f.normal.y > 0.99) }]).mesh; m.computeNormals(); o.setMesh(m);
+    setSeam(m, [...m.edges()].find(h => h.twin && h.twin.face && Math.abs(Math.abs(h.v.p.y - h.to.p.y) - 8) < 1e-6), true);
+    const r = unfoldObject(o, { material: 'foamboard' });
+    const p = r.pieces[0], N = { notch: { style: 'slit', spacing: 10 } };
+    const nm = notchMarks(p, { rule: p.rule, ...N });
+    eq('★★★ ①-12 T3 盒身：攤成 28 × 52、4 條縫（8、8、40、40）', `${Math.round(p.width)}×${Math.round(p.height)} ${p.seamRuns.map(x => Math.round(x.segs.reduce((t, g) => t + g.len, 0))).join(',')}`, '28×52 8,8,40,40');
+    eq('★★★ 　 對位記號 6 → 8 個：兩條 8 cm 的轉角縫各放一個在正中間', `${nm.count}/${nm.mid}/${nm.short}`, '8/2/0');
+    const tl = titleLines(p, { rule: p.rule, ...N }).find(t => t.startsWith('對位記號'));
+    ok('★★ 　 卡片講「2 條縫比 11 cm 短，放在正中間」', !!tl && tl.endsWith('2 條縫比 11 cm 短，放在正中間'), tl);
+    // 2 cm 以下才不放
+    const tiny = { ...p, seamRuns: [{ segs: [{ a: { x: 0, y: 0 }, b: { x: 1.5, y: 0 }, len: 1.5 }] }] };
+    eq('★★ 　 1.5 cm 的縫（< 2 cm）⇒ 不放、算「太短」', (({ count, mid, short }) => `${count}/${mid}/${short}`)(notchMarks(tiny, { rule: p.rule, ...N })), '0/0/1');
+  }
+
+  // ── ①-10 DXF：上折、下折分兩層，文字寫 UP／DOWN ──
+  {
+    const layerN = (d, L) => (d.match(new RegExp(`\r\n0\r\nLINE\r\n8\r\n${L}\r\n`, 'g')) || []).length;
+    const cases = [
+      ['階梯（有凹角）', { type: 'stairs', ...PRIM_DEFAULTS.stairs }, io.KIND.SOLID, 8, 3],
+      ['方塊', { type: 'box', ...PRIM_DEFAULTS.box }, io.KIND.SOLID, 5, 0],
+      ['Z 形折板（＋90、−90，尖角）', { type: 'bend', ...PRIM_DEFAULTS.bend, bends: [{ angle: 90, ri: 0, len: 30 }, { angle: -90, ri: 0, len: 20 }] }, io.KIND.SHEET, 1, 1]
+    ];
+    for (const [name, src, kind, up, down] of cases) {
+      const o = new io.ModelObject({ name, kind, src }); o.bake();
+      const r = unfoldObject(o, { material: 'foamboard' });
+      const folds = r.pieces.flatMap(p => p.folds.filter(f => !f.isArcEdge));
+      const d = toDXF(r.pieces, { unit: 'mm' });
+      eq(`★★★ ①-10 ${name}：折線 上折 ${up}／下折 ${down}（畫面）＝ DXF 的 FOLD_UP／FOLD_DOWN，FOLD 層 0 條`,
+        `${folds.filter(f => foldStyle(f) === 'foldUp').length}/${folds.filter(f => foldStyle(f) === 'foldDown').length} ${layerN(d, 'FOLD_UP')}/${layerN(d, 'FOLD_DOWN')}/${layerN(d, 'FOLD')}`,
+        `${up}/${down} ${up}/${down}/0`);
+      if (down) ok(`★★ 　 DXF 折彎文字寫「DOWN 90deg R0」（⛔ 只有負號）`, d.includes('DOWN 90deg R0') && !/\r\n-90deg R0/.test(d));
+      const items = r.pieces.flatMap(p => drawProgram(p).items || []);
+      eq(`★★ 　 展開圖畫面：上折線 ${up} 條、下折線 ${down} 條`, `${items.filter(x => x.style === 'foldUp').length}/${items.filter(x => x.style === 'foldDown').length}`, `${up}/${down}`);
+    }
+  }
+
+  // ── ①-8 刀具的圓：照誤差決定段數 ──
+  {
+    const frame = { toWorld: (u, w) => new THREE.Vector3(u, 0, w) };
+    const area = pts => { let a = 0; for (let k = 0; k < pts.length; k++) { const P = pts[k], Q = pts[(k + 1) % pts.length]; a += P.x * Q.z - Q.x * P.z; } return Math.abs(a) / 2; };
+    for (const [r, segs, oldSegs] of [[0.3, 12, 8], [1, 16, 8], [5, 36, 32], [25, 160, 160]]) {
+      const an = edit.circleAnchors(frame, 0, 0, r);
+      const info = edit.sampleCurveInfo(an, 1, true);
+      eq(`★★★ ①-8 半徑 ${r} 的圓（每隔 1 cm）：${oldSegs} → ${segs} 段`, `${info.pts.length}/${info.curveSegs}`, `${segs}/${segs}`);
+      ok(`★★ 　 每段離曲線 ≤ 0.2 mm（${(info.maxDev * 10).toFixed(3)} mm）`, info.maxDev <= edit.CURVE_TOL_CM + 1e-12);
+      if (r === 1) ok('★★ 　 直徑 2 的孔面積 2.83 → 3.06（真圓 3.14）', Math.abs(area(info.pts) - 3.062) < 0.005, area(info.pts).toFixed(3));
+    }
+    const s1 = edit.sampleCurveInfo(edit.circleAnchors(frame, 0, 0, 5), 1, true), s5 = edit.sampleCurveInfo(edit.circleAnchors(frame, 0, 0, 5), 5, true);
+    ok('★★ 　 「每隔」打大一點也⛔ 會比誤差要的少（每隔 5 ＝ 每隔 1 ＝ 36 段）', s5.pts.length === 36 && s1.pts.length === 36, `${s1.pts.length} ${s5.pts.length}`);
+    eq('★★ 　 「每隔 0.5」比誤差要的多 ⇒ 照每隔（64 段）', edit.sampleCurve(edit.circleAnchors(frame, 0, 0, 5), 0.5, true).length, 64);
+  }
+
+  // ── ①-13 壓克力配折板：圓弧那幾格⛔ 出片 ──
+  {
+    const div = { type: 'bend', ...PRIM_DEFAULTS.bend, w: 11, first: 1, bends: [{ angle: 90, ri: 0.2, len: 7.5 }] };
+    const mk = src => new io.ModelObject({ name: '隔板', kind: io.KIND.SHEET, thickness: 0.5, src });
+    const sz = r => r.pieces.map(p => `${p.width.toFixed(2)}×${p.height.toFixed(2)}×${p.qty}`).sort().join(',');
+    const ra = unfoldObject(mk(div), { material: 'acrylic' });
+    eq('★★★ ①-13 T3 隔板（圓角 0.2、分 4 段）壓克力：只出平的兩段（以前多 4 條 11 × 0.16 的細條）', sz(ra), '11.00×1.00×1,11.00×7.50×1');
+    ok('★★ 　 講出來：「圓弧折彎 1 道沒有出片…請換能折的材質，或把折板拆成幾片平板」', ra.warnings.some(w => w.includes('圓弧折彎 1 道沒有出片') && w.includes('請換能折的材質')), ra.warnings.join('｜'));
+    ok('★★ 　 提醒裡⛔ 出現 ⛔、** 這種文件記號', ra.warnings.every(w => !w.includes('⛔') && !w.includes('**')));
+    eq('★★ 　 珍珠板照舊攤成一片（9.12 × 11）', sz(unfoldObject(mk(div), { material: 'foamboard' })), '9.12×11.00×1');
+    const arr = { type: 'array', mode: 'linear', count: 2, step: [6.67, 0, 0], count2: 1, step2: [0, 0, 20], child: { src: div, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], name: '隔板' } };
+    const rr = unfoldObject(mk(arr), { material: 'acrylic' });
+    eq('★★★ 　 排列 2 份（T3 的隔板）：4 片、⛔ 細條', sz(rr), '11.00×1.00×2,11.00×7.50×2');
+    const sharp = unfoldObject(mk({ type: 'bend', ...PRIM_DEFAULTS.bend }), { material: 'acrylic' });
+    eq('★★ 　 預設折板（圓角 2、分 4 段）壓克力：60 × 40 ＋ 60 × 30（以前多 4 條 60 × 0.86）', sz(sharp), '60.00×30.00×1,60.00×40.00×1');
+    const cyl = new io.ModelObject({ name: '圓柱', kind: io.KIND.SOLID, src: { type: 'cylinder', ...PRIM_DEFAULTS.cylinder } });
+    const rc = unfoldObject(cyl, { material: 'acrylic' });
+    ok('★★ 　 圓柱（⛔ 是折板）壓克力照舊：側面還是一條一條（可以黏成多邊形）', rc.stats.total > 30 && !rc.warnings.some(w => w.includes('圓弧折彎')), `${rc.stats.total} 片`);
+  }
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

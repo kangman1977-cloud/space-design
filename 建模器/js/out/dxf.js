@@ -31,7 +31,8 @@
  *
  * ── 圖層 ────────────────────────────────────────────
  *   CUT    切割線 —— 雷切機真的要切的就只有這一層
- *   FOLD   折線   —— 折床看的參考線，不能切
+ *   FOLD   折線   —— 折床看的參考線，不能切（省道打版的折線；精確分片的折線分成下面兩層）
+ *   FOLD_UP／FOLD_DOWN 上折／下折（2026-10-19，綜合評估 ①-10）—— 以前全在 FOLD，送出去的檔看不出往哪邊折
  *   BEND   折彎區 —— 圓弧折彎的起訖線與中心線
  *   DIM    尺寸線
  *   TEXT   文字說明
@@ -53,13 +54,19 @@
  */
 
 import { pieceNo } from '../unfold/part.js';
-import { sameFolds, outlineSegments, notchMarks } from './sheet.js';
+import { sameFolds, outlineSegments, notchMarks, foldStyle } from './sheet.js';
 
 /**
  * CUT_AUTO 30 ＝ AutoCAD 色號裡的橘色（跟展開圖的橘色對得上）。
  * SEW 6 ＝ 洋紅：省道打版「只畫縫線（不剪）」的開口縫線（2026-10-12）—— **⛔ 是切割線**，機器⛔ 開這一層。
  */
-const COLOR = { CUT: 7, CUT_AUTO: 30, SEW: 6, FOLD: 3, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3, CUT_NOTCH: 7, MARK: 4 };
+const COLOR = { CUT: 7, CUT_AUTO: 30, SEW: 6, FOLD: 3, FOLD_UP: 3, FOLD_DOWN: 2, BEND: 5, DIM: 8, TEXT: 8, JOIN: 3, CUT_NOTCH: 7, MARK: 4 };
+
+/** 折線的線型 → 圖層（`sheet.js` `foldStyle()`）：上折 3 綠、下折 2 黃 */
+const FOLD_LAYER = { fold: 'FOLD', foldUp: 'FOLD_UP', foldDown: 'FOLD_DOWN' };
+
+/** 折彎標註的方向字（DXF 的文字只能英數）：跟展開圖「↑ 上折／↓ 下折」同一個判準 */
+const upDown = a => (a > 0 ? 'UP' : 'DOWN');
 
 /**
  * 對位記號（2026-10-12，`notchMarks()`）：要切的刻口 → `CUT_NOTCH`（**⚠ 照樣要切**，跟 CUT_AUTO 一樣用 `CUT_` 開頭排在 CUT 旁邊）；
@@ -148,7 +155,7 @@ export function toDXF(pieces, opt = {}) {
     // 畫出來只會讓師傅困惑，所以只畫折彎區的起訖線（下面那段）。
     for (const f of p.folds) {
       if (f.isArcEdge) continue;
-      out.line('FOLD', X(f.a), Y(f.a), X(f.b), Y(f.b));
+      out.line(FOLD_LAYER[foldStyle(f)], X(f.a), Y(f.a), X(f.b), Y(f.b));
     }
     /** 省道打版：「畫折線」打勾才畫（2026-10-12）—— 跟展開圖同一個開關、同一份 `p.dartFolds` */
     if (opt.dartFolds && p.dartFolds) {
@@ -170,20 +177,20 @@ export function toDXF(pieces, opt = {}) {
        */
       // r ＝ 網格量出來的半徑。〔2026-08-23 從 b.ri（K 推的內側 R）改過來〕
       out.text('BEND', cx, y1 + 1.2 * s, 0.8 * s, b.isCurve
-        ? `CURVE ${round(Math.abs(b.angle))}deg ${b.segs}seg`
-        : `${round(b.angle)}deg R${round(b.r)}`);
+        ? `CURVE ${upDown(b.angle)} ${round(Math.abs(b.angle))}deg ${b.segs}seg`
+        : `${upDown(b.angle)} ${round(Math.abs(b.angle))}deg R${round(b.r)}`);
     }
     /** ⭐ 「相同的折線合成一行」開著、而且這片的折線全部一樣 → 一行（判斷跟展開圖同一支 `sameFolds()`） */
     const same = opt.foldSummary ? sameFolds(p) : null;
     if (same) {
       const b0 = p.bends[0];
       out.text('BEND', ox + b0.x0 * s, y1 + 1.2 * s, 0.8 * s,
-        `ALL ${same.n} FOLDS ${round(b0.angle)}deg R0`);
+        `ALL ${same.n} FOLDS ${upDown(b0.angle)} ${round(Math.abs(b0.angle))}deg R0`);
     } else {
       for (const b of p.bends) {
         if (b.isArc) continue;
         out.text('BEND', ox + b.x0 * s, y1 + 1.2 * s, 0.8 * s,
-          `${round(b.angle)}deg R0`);
+          `${upDown(b.angle)} ${round(Math.abs(b.angle))}deg R0`);
       }
     }
 
@@ -261,7 +268,7 @@ export function toDXF(pieces, opt = {}) {
 export function boardDXF(prog, opt = {}) {
   const U = UNITS[opt.unit] || UNITS.mm;
   const s = U.scale;
-  const LAYER = { ...OUTLINE_LAYER, ...NOTCH_LAYER, fold: 'FOLD', bend: 'BEND', joint: 'JOIN',
+  const LAYER = { ...OUTLINE_LAYER, ...NOTCH_LAYER, ...FOLD_LAYER, bend: 'BEND', joint: 'JOIN',
     num: 'TEXT', text: 'TEXT', note: 'SHEET', dim: 'DIM', ...(opt.layers || {}) };
   const out = new Writer();
   const { w, h } = prog.box;

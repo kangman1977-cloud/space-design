@@ -143,6 +143,8 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   // 不是 12 張一樣的圖。這跟說明表的「套數」是同一個概念。
   /** 智慧分切要的是**全部**補剪的邊 ⇒ 在「一樣的片併成一張」之前收（併掉的片也有它自己的邊）*/
   const autoEdges = pieces.flatMap(p => p.autoEdges || []);
+  /** 圓弧帶裡面的面也在併片之前收（併掉的片也有它自己的圓弧，`piece.arcFaces`）*/
+  const arcFaces = pieces.flatMap(p => p.arcFaces || []);
   /**
    * 🔴 **不准切卻非切不可的**：一樣在併片之前加總（併掉的片也算），寫成整份的一則提醒（⛔ 安靜地切）。
    * ⚠ 標不准切的物件⛔ 一定標過縫，片可能被併成一張 —— 寫在卡片上只會算到留下來的那一片。
@@ -224,6 +226,8 @@ export function unfoldMesh(mesh, rule, opts = {}) {
     warnings,
     /** 程式自己補剪的邊（每條一次、所有片）—— 智慧分切的提案用（2026-10-13）*/
     autoEdges,
+    /** 圓弧帶裡面的面（face id，所有片）—— 折不了的材料要先拿掉（`part.js`，2026-10-19 ①-13）*/
+    arcFaces,
     /** 不准切卻非切不可的條數（所有片）*/
     keepCut: keepLoop + keepMat,
     stats: {
@@ -1014,6 +1018,12 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      * 這是**事實**，不是結論；要不要據以下料由警告訊息去講。
      */
     radialFolds: radialFan(folds),
+    /**
+     * 🔴 **圓弧帶裡面的面**（face id，2026-10-19，實驗 T3：`實驗-綜合評估.md` ①-13）：兩條以上的邊落在同一條圓弧帶上的面 ＝ 折板圓弧切出來的小格。
+     * 折不了的材料（壓克力／木板）要先把這幾格拿掉 —— 不然每一格都變成一條 0.16 cm 寬的細條當成一片（`part.js` `arcStripFaces()`）。
+     * ⭐ 只認 `isArc` 的帶（尖角的折線⛔ 算）；平的那段只碰到帶的一條邊 ⇒ ⛔ 算進來。
+     */
+    arcFaces: arcFacesOf(mesh, faces, bands, found),
     area: 0, width: 0, height: 0
   };
 
@@ -1021,6 +1031,26 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
   /** 省道打版：面積 ＝ 攤平後的（布要買多少）—— ⚠ 跟 3D 表面積不一樣，差的就是變形 */
   if (strain) piece.area = strain.area;
   return piece;
+}
+
+/** 圓弧帶裡面的面（見 `piece.arcFaces`）*/
+function arcFacesOf(mesh, faces, bands, found) {
+  const out = [];
+  for (const b of bands) {
+    if (!b.isArc) continue;
+    const es = new Set();
+    for (const f of found) {
+      if (f.band !== b || !f.he) continue;
+      es.add(f.he.id);
+      if (f.he.twin) es.add(f.he.twin.id);
+    }
+    for (const fc of faces) {
+      let n = 0;
+      for (const he of mesh.faceLoop(fc)) if (es.has(he.id)) n++;
+      if (n >= 2) out.push(fc.id);
+    }
+  }
+  return out;
 }
 
 /**
@@ -1455,7 +1485,8 @@ function collectFolds(mesh, faces, inPatch, pt2, isCut) {
       if (!a || !b) continue;
       // smooth ＝ 這條邊是曲面被切成小面的產物，不是造型上真的有一道折。
       // 上游（貝茲錨點、參數體）才知道，這裡只是帶著走。
-      out.push({ a, b, angle: d * DEG, band: null, smooth: !!he.smooth });
+      /** `he` 只在裡面用（認圓弧帶裡面的面 `arcFaces`），⛔ 進輸出 */
+      out.push({ a, b, angle: d * DEG, band: null, smooth: !!he.smooth, he });
     }
   }
   return out;

@@ -905,7 +905,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="curveUndo" hidden title="退掉曲線的最後一點（已經畫好的話，回到還沒畫完）">退一點</button>
       <span class="lbl" id="curveStepLbl" hidden>每隔</span>
       <input id="curveStep" type="number" min="0.1" step="0.5" value="1" hidden
-             title="曲線切多細：每隔幾公分一段（長的那段自動切多一點，太短的至少 2 段）。數字越小越圓滑、點越多">
+             title="曲線切多細：每隔幾公分一段（長的那段自動切多一點，太短的至少 2 段）。數字越小越圓滑、點越多。另外每一段離真的曲線不會超過 0.2 mm（跟匯入 SVG 的曲線精度一樣）—— 小孔會自動切得比這個數字細">
       <span class="lbl" id="curveStepUnit" hidden>cm 一段</span>
       <!--
         曲線刀具 3a（kang 2026-10-13）：點一下已經放好的點 ⇒ 選它 ⇒ 打「離左邊／離下邊」（正對那個面看的左與下），點就搬過去；
