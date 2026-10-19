@@ -17750,6 +17750,36 @@ section('實體⛔ 寫看不見的板厚（2026-10-19 綜合評估 ①-9）');
   ok('★★ 紙模的實體楔形也⛔ 寫 0.2', rw.pieces.every(p => spec(p).endsWith('板厚 —（實體）')));
 }
 
+section('金屬收起來、折板講 K（2026-10-19 綜合評估 ①-13 後半）');
+{
+  /**
+   * kang 2026-10-19：「其實實際上..我們並沒有"金屬"材料...也不會使用"金屬"材質運用處理...所以當初才會不考慮K因子」
+   * → AI 建議（金屬從清單收起來、資料留著；折板這一輪⛔ 改長度、只在卡片講照哪個 K）→「同意」。
+   */
+  const { PICKABLE_MATERIAL_KEYS } = await import('../js/unfold/rules.js');
+  const { titleLines } = await import('../js/out/sheet.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  eq('★★★ 展開圖的材質清單：帆布、壓克力／木板、珍珠板、紙模（金屬三種收起來）', PICKABLE_MATERIAL_KEYS.join(','), 'canvas,acrylic,foamboard,paper');
+  ok('★★ 　 金屬的資料還在（規則照樣做得出來）', !!MATERIALS.steel && makeRule('steel', 0.2).label === '鐵板／鍍鋅鋼板');
+  const div = k => new io.ModelObject({ name: '隔板', kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'bend', ...PRIM_DEFAULTS.bend, w: 11, first: 1, k, bends: [{ angle: 90, ri: 0.2, len: 7.5 }] } });
+  const kLine = p => titleLines(p, { rule: p.rule }).find(t => t.startsWith('折彎長度照折板自己的 K'));
+  for (const [k, len] of [[0.4, '9.1243'], [0.3, '9.0463']]) {
+    for (const mat of ['foamboard', 'paper', 'canvas']) {
+      const p = unfoldObject(div(k), { material: mat }).pieces[0];
+      eq(`★★★ T3 隔板 K ${k}（${mat}）：長度照舊 ${len}、卡片講「照折板自己的 K ${k} 算…跟這裡選的材質無關」`,
+        `${p.width.toFixed(4)} ${kLine(p) || '（沒有）'}`, `${len} 折彎長度照折板自己的 K ${k} 算（在物件面板改），跟這裡選的材質無關`);
+    }
+  }
+  const sharp = unfoldObject(new io.ModelObject({ name: '尖角折板', kind: io.KIND.SHEET, src: { type: 'bend', ...PRIM_DEFAULTS.bend, bends: [{ angle: 90, ri: 0, len: 30 }] } }), { material: 'foamboard' }).pieces[0];
+  ok('★★ 　 尖角的折板（沒有圓弧）⛔ 講', !kLine(sharp));
+  const bx = unfoldObject(new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', ...PRIM_DEFAULTS.box } }), { material: 'foamboard' }).pieces[0];
+  ok('★★ 　 不是折板⛔ 講', !kLine(bx));
+  const arr = new io.ModelObject({ name: '隔板×2', kind: io.KIND.SHEET, thickness: 0.5, src: { type: 'array', mode: 'linear', count: 2, step: [6.67, 0, 0], count2: 1, step2: [0, 0, 20],
+    child: { src: div(0.4).src, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], name: '隔板' } } });
+  ok('★★ 　 排列 2 份的折板也講', unfoldObject(arr, { material: 'foamboard' }).pieces.every(p => !!kLine(p)));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

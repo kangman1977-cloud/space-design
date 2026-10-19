@@ -62,6 +62,7 @@ const RAD = Math.PI / 180;
  */
 export const MATERIALS = {
   steel: {
+    hidden: true,                // 不出現在展開圖的材質清單（kang 2026-10-19：不用金屬）—— 見 `PICKABLE_MATERIAL_KEYS`
     label: '鐵板／鍍鋅鋼板',
     k: 0.40,
     foldable: true,
@@ -69,6 +70,7 @@ export const MATERIALS = {
     minFlange: (ri, t) => ri + 5 * t
   },
   stainless: {
+    hidden: true,
     label: '不鏽鋼',
     k: 0.45,
     foldable: true,
@@ -76,6 +78,7 @@ export const MATERIALS = {
     minFlange: (ri, t) => ri + 6 * t
   },
   aluminum: {
+    hidden: true,
     label: '鋁板',
     k: 0.35,
     foldable: true,
@@ -136,6 +139,14 @@ export const MATERIALS = {
 };
 
 export const MATERIAL_KEYS = Object.keys(MATERIALS);
+
+/**
+ * 🔴 **展開圖的材質清單只放用得到的**（2026-10-19，`實驗-綜合評估.md` ①-13，kang：
+ * 「其實實際上..我們並沒有"金屬"材料...也不會使用"金屬"材質運用處理」→ AI 建議收起來 →「同意」）。
+ * ⭐ 金屬三種（`hidden: true`）**資料留著、⛔ 刪**：規則本身是對的，測試也用得到，日後外發或混用時再打開（拿掉 `hidden` 就好）。
+ * ⚠ 瀏覽器記住的材質是金屬的話，展開圖打開時換回 `DEFAULT_MATERIAL` 並講一句（`ui/unfoldPanel.js`）。
+ */
+export const PICKABLE_MATERIAL_KEYS = MATERIAL_KEYS.filter(k => !MATERIALS[k].hidden);
 
 /**
  * 預設材質 ＝ 珍珠板／發泡板。

@@ -13,7 +13,7 @@
  * 這裡只做三件事：收設定、把結果排出來、按鈕接到匯出函式。
  */
 
-import { MATERIALS, MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
+import { MATERIALS, PICKABLE_MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
 import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs } from '../out/sheet.js';
 import { packBoards, boardProgram, boardTitle, NEST_DEFAULTS } from '../out/nest.js';
@@ -124,7 +124,15 @@ export class UnfoldPanel {
     this.sum = $('uwSum');
 
     const mat = $('uwMat');
-    for (const k of MATERIAL_KEYS) {
+    /**
+     * ⚠ 記住的材質已經收起來了（金屬，2026-10-19 ①-13）或根本不存在 ⇒ 換回預設、第一次畫的時候講一句（⛔ 安靜地換）。
+     */
+    if (!PICKABLE_MATERIAL_KEYS.includes(this.opt.material)) {
+      const was = MATERIALS[this.opt.material];
+      if (was) this._matNote = `之前記住的材質是「${was.label}」—— 金屬已經從清單收起來（用不到），這次改用「${MATERIALS[DEFAULT_MATERIAL].label}」`;
+      this.opt.material = DEFAULT_MATERIAL;
+    }
+    for (const k of PICKABLE_MATERIAL_KEYS) {
       const o = document.createElement('option');
       o.value = k;
       o.textContent = MATERIALS[k].label;
@@ -367,6 +375,7 @@ export class UnfoldPanel {
         + `折彎 ${s.arcBends + s.sharpBends} 道`
       : '沒有可以展開的東西';
 
+    if (this._matNote) { this.body.appendChild(box('uwSkip', this._matNote)); this._matNote = null; }
     for (const msg of r.skipped) this.body.appendChild(box('uwSkip', msg));
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
 

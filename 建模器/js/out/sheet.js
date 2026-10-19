@@ -806,6 +806,8 @@ export function titleLines(piece, opt = {}) {
   if (piece.solidBody) spec.push('板厚 —（實體）');
   else if (rule.thickness) spec.push(`板厚 ${fmt(rule.thickness)} cm`);
   if (spec.length) out.push(spec.join('　'));
+  /** 折板的折彎長度照折板自己的 K（2026-10-19 ①-13，`unfold/part.js` `bendK`）—— 跟展開圖選的材質無關，講出來 */
+  if (piece.bendK !== undefined) out.push(`折彎長度照折板自己的 K ${fmt(piece.bendK)} 算（在物件面板改），跟這裡選的材質無關`);
   /** 🔴 實心的板只出一片外形＋洞（2026-10-19，`unfold/part.js` `solidPlate()`）—— 講出來，免得以為少了邊條 */
   if (piece.solidPlate) out.push(`實心板：只出一片外形＋洞（厚 ${fmt(piece.solidPlate.t)} cm，不是攤開的盒子）`);
 

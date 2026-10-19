@@ -15,6 +15,7 @@ import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
 import { Mesh } from '../core/mesh.js';
 import { mergeCoplanarFaces, cleanRebuild } from '../core/edit.js';
+import { PRIM_DEFAULTS } from '../build/prim.js';
 
 /**
  * 展開一個物件。
@@ -180,6 +181,14 @@ export function unfoldObject(obj, opt = {}) {
   if (obj.kind !== 'sheet' && !plate) for (const p of r.pieces) p.solidBody = true;
 
   /**
+   * 🔴 **折板的折彎長度照折板自己的 K 算 —— 講出來**（2026-10-19，實驗 T3：`實驗-綜合評估.md` ①-13，kang「同意」）。
+   * ⚠ 折板的形狀是照物件面板上的 K 建的（`build/prim.js`），展開圖選什麼材質都一樣（T3 隔板 K 0.4 ⇒ 9.1243、K 0.3 ⇒ 9.0463）——
+   * 以前畫面一句都沒講。⭐ 這一輪⛔ 改長度（要先知道實際怎麼折才知道該怎麼算），只在有圓弧折彎的片上寫是照哪個 K（`out/sheet.js`）。
+   */
+  const bk = bendSrcK(obj.src);
+  if (bk !== null) for (const p of r.pieces) if (p.bends.some(b => b.isArc)) p.bendK = bk;
+
+  /**
    * 🔴 **紙模的黏合片長在接縫的哪一邊**（2026-10-19，`實驗-綜合評估.md` ①-7；畫的人是 `out/sheet.js` `marginGeometry()`）。
    * 一條縫的兩側走的是同一串 3D 頂點、同一個方向（`flatten.js` `collectSeamRuns()`）⇒ 用頂點串當 key，
    * **先遇到的那一側長**（片的順序、縫的順序），另一側不長 —— 一對接縫只長一片，兩邊一定對得上。
@@ -303,6 +312,13 @@ function platePart(mesh, faces) {
   const narrow = Math.min(a1 - a0, b1 - b0);
   if (!(t > 0) || t > PLATE_MAX_T || t > narrow / 4) return null;
   return { t, top };
+}
+
+/** 折板（或排的是折板的陣列）面板上的 K；不是折板 ⇒ null（沒填 ⇒ 折板的預設）*/
+function bendSrcK(src) {
+  if (!src) return null;
+  if (src.type === 'bend') return Number.isFinite(+src.k) ? +src.k : PRIM_DEFAULTS.bend.k;
+  return src.type === 'array' && src.child ? bendSrcK(src.child.src) : null;
 }
 
 /** 這個物件是不是折板（陣列的話看排的那一個）*/
