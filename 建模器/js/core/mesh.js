@@ -525,11 +525,37 @@ export class Mesh {
   }
 
   /**
-   * 自我檢查。回傳 { ok, V, E, F, euler, closed, components, errors[] }
+   * 開口的邊緣有幾圈（綜合評估 ②-2，2026-10-19）。
+   *
+   * 開放的殼 χ ＝ 2c − 2g − b（b ＝ 邊緣幾圈）：一片板子 1 圈 ⇒ 1；
+   * 兩頭開口的筒子 2 圈 ⇒ 0；板子挖一個洞也是 2 圈 ⇒ 0。
+   * 以前一律說「開放的殼應為 1」⇒ 筒子、有洞的板都被打 ✗。
+   *
+   * ⚠ 數的是「邊緣上的邊連成幾串」（頂點相連就算同一串）——
+   * 兩圈只在一個點碰到時會算成 1 圈【推論：建模器做不出這種東西】。
+   * ⛔ 不靠邊界半邊的 next：那條鏈不是每支建網格的程式都接好。
+   */
+  boundaryLoops() {
+    const parent = new Map();
+    const find = x => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+    const add = x => { if (!parent.has(x)) parent.set(x, x); };
+    for (const he of this.halfEdges) {
+      if (he.face || !he.v) continue;
+      const a = he.v, b = (he.twin || he.next) ? he.to : null;
+      add(a);
+      if (b) { add(b); const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); }
+    }
+    let n = 0;
+    for (const x of parent.keys()) if (find(x) === x) n++;
+    return n;
+  }
+
+  /**
+   * 自我檢查。回傳 { ok, V, E, F, euler, closed, components, boundaryLoops, errors[] }
    *
    * 尤拉公式是驗證結構有沒有接錯最快的方法。封閉網格的
    * χ ＝ V−E+F ＝ 2×元件數 − 2×貫穿孔數，所以 χ 必為偶數；
-   * 開放的殼（一片板子）是 1。
+   * 開放的殼再減「邊緣幾圈」（一片板子是 1、兩頭開口的筒子是 0）。
    */
   validate() {
     const errors = [...this.issues];
@@ -564,6 +590,7 @@ export class Mesh {
       closed,
       components: this.componentCount(),
       boundaryHalfEdges: boundary,
+      boundaryLoops: closed ? 0 : this.boundaryLoops(),
       errors
     };
   }

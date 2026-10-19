@@ -11098,10 +11098,10 @@ section('量測：選到的東西有多大');
       const r1 = L(box, [e60], I, { mode: 'total' });
       eq('總計 單選一條邊 → 1 塊讀數', r1.items.length, 1);
       const a = rowsOf([e60]);
-      eq('　　三行：選到什麼／長度／重心', a.length, 3);
+      eq('　　三行：選到什麼／長度／中心', a.length, 3);
       eq('　　第一行 選到幾個（⛔ 沒有單位就不是數量）', a[0], '1 條邊');
       eq('　　第二行 長度＋單位', a[1], '長度 60.00 cm');
-      ok('　　最後一行是重心座標', a[2].startsWith('重心 X ') && a[2].endsWith(' cm'));
+      ok('　　最後一行是中心座標（②-11：叫「中心（點的平均）」，⛔ 叫重心）', a[2].startsWith('中心（點的平均） X ') && a[2].endsWith(' cm'), a[2]);
 
       /**
        * 🔴 **多選一定要連數量與單位一起寫。**
@@ -17914,6 +17914,52 @@ if (csgOK) {
   ok('★★ 　 一整塊 300 mm 照舊「可能要分件或縮小」', !!w1 && w1.text.includes('可能要分件或縮小'), w1 && w1.text);
 } else {
   ok('（略過：CSG 沒載入）', true);
+}
+
+section('綜合評估 ② 第三批：結構分析、中心、指出來（2026-10-19）');
+{
+  /** ②-11 讀數改名在「量測讀數」那一段測；②-12 的按鈕、②-2 的「個面」是畫面上的字，在本機／線上版用畫面驗 */
+  const P = (x, y, z) => new THREE.Vector3(x, y, z);
+  const cubePts = () => [P(0, 0, 0), P(10, 0, 0), P(10, 0, 10), P(0, 0, 10), P(0, 10, 0), P(10, 10, 0), P(10, 10, 10), P(0, 10, 10)];
+  const cubeFaces = [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]];
+
+  // ②-2 角虧：四邊形被拉歪（不再是平的）
+  const pts = cubePts(); pts[6] = P(10, 13, 12);
+  const warped = Mesh.fromFaceList(pts, cubeFaces);
+  const vw = warped.validate();
+  ok('　 歪掉的方塊本身是好的（封閉、無誤、χ 2、6 個四邊形）', vw.ok && vw.closed && vw.euler === 2 && vw.F === 6, JSON.stringify({ ok: vw.ok, c: vw.closed, e: vw.euler, F: vw.F }));
+  const sw = summarize(warped);
+  near('★★★ ②-2 四邊形拉歪的方塊：角虧總和照樣 ＝ 4π（以前用四邊形的內角算 ⇒ 打 ✗）', sw.totalDefect, 4 * Math.PI, 1e-9);
+  ok('★★ 　 結構分析打 ✓', topologyCheck(vw, sw.totalDefect).defectOK === true);
+
+  // ②-2 角虧：凹的多邊形（L 形柱子，上下各一個凹的六邊形）
+  const L = [[0, 0], [20, 0], [20, 10], [10, 10], [10, 20], [0, 20]];
+  const lp = [...L.map(([x, z]) => P(x, 0, z)), ...L.map(([x, z]) => P(x, 10, z))];
+  const lf = [[0, 1, 2, 3, 4, 5], [11, 10, 9, 8, 7, 6]];
+  for (let i = 0; i < 6; i++) { const j = (i + 1) % 6; lf.push([j, i, i + 6, j + 6]); }
+  const lm = Mesh.fromFaceList(lp, lf);
+  const vl = lm.validate();
+  ok('　 L 形柱子本身是好的（封閉、無誤、χ 2）', vl.ok && vl.closed && vl.euler === 2, JSON.stringify({ ok: vl.ok, c: vl.closed, e: vl.euler }));
+  near('★★ ②-2 凹的六邊形：角虧總和 ＝ 4π（以前凹進去那個角只拿得到 90°）', summarize(lm).totalDefect, 4 * Math.PI, 1e-9);
+
+  // ②-2 開放的殼：χ ＝ 2c − 2g − b
+  const openBox = Mesh.fromFaceList(cubePts(), cubeFaces.filter((_, i) => i !== 1));
+  const vo = openBox.validate();
+  eq('　 少一個面的方塊：開口 1 圈', vo.boundaryLoops, 1);
+  const to = topologyCheck(vo, summarize(openBox).totalDefect);
+  ok('★★ ②-2 少一個面的方塊 χ 1 ✓「＝2−1（開口的邊緣 1 圈）」', to.eulerOK === true && to.eulerNote === '＝2−1（開口的邊緣 1 圈）', to.eulerNote);
+  const tube = buildPrim('cylinder', { r: 25, h: 70, seg: 32, openEnded: true });
+  const vt = tube.validate();
+  eq('　 兩頭開口的筒子：開口 2 圈', vt.boundaryLoops, 2);
+  const tt = topologyCheck(vt, summarize(tube).totalDefect);
+  ok('★★★ ②-2 兩頭開口的筒子 χ 0 打 ✓（以前說「開放的殼應為 1」打 ✗）', tt.eulerOK === true && tt.eulerNote === '＝2−2（開口的邊緣 2 圈）' && tt.genus === null, tt.eulerNote);
+  const two = Mesh.fromFaceList([...cubePts(), ...cubePts().map(p => p.clone().add(P(30, 0, 0)))],
+    [...cubeFaces.filter((_, i) => i !== 1), ...cubeFaces.filter((_, i) => i !== 1).map(f => f.map(k => k + 8))]);
+  const t2 = topologyCheck(two.validate(), 0);
+  ok('★ 　 兩個少一個面的方塊（分開的）：χ 2「＝2×2−2」', t2.eulerOK === true && t2.eulerNote === '＝2×2−2（開口的邊緣 2 圈）', t2.eulerNote);
+  const bad = topologyCheck({ closed: false, euler: 3, components: 1, boundaryLoops: 1 }, 0);
+  ok('★ 　 開口 1 圈卻 χ 3：照樣抓得出來（打 ✗）', bad.eulerOK === false, bad.eulerNote);
+  ok('　 封閉的方塊照舊（開口 0 圈、χ 2 ✓）', buildPrim('box', { w: 60, h: 45, d: 40 }).validate().boundaryLoops === 0);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

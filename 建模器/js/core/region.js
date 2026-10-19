@@ -247,15 +247,26 @@ export function curvatureData(mesh) {
 
   const e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
 
+  /**
+   * 🔴 **一律拆成三角形再加角**（綜合評估 ②-2，2026-10-19 改）。
+   * 以前直接用多邊形的內角 ⇒ 兩種情況會錯：
+   * · 四邊形被拉歪、不再是平的（比例編輯、狐狸頭）：四個內角加起來不等於兩個三角形的角
+   *   ⇒ 角虧總和 12.5664 → 12.9753 打 ✗，模型其實沒壞（`HISTORY.md`「比例編輯 九項全過」那一則量過）。
+   * · 凹的多邊形：凹進去那個角用 `angleTo` 只拿得到 < 180° 的那一邊。
+   * 三角形怎麼拆都滿足高斯–博內 ⇒ 封閉的網格總和剛好 2πχ。
+   * ⭐ 平的凸多邊形拆完每個角的和跟原本一樣 ⇒ 方塊、圓柱、球這些數字⛔ 會變。
+   * ⚠ 走 `faceTriangles()`（全專案唯一的三角化入口），跟面積、體積、STL 同一種拆法。
+   * 這支只有結構分析在用（`summarize()`）⇒ 展開圖⛔ 受影響【已查證：只有 `ui/toolbar.js` 呼叫】。
+   */
   for (const f of mesh.faces) {
-    const vs = mesh.faceVerts(f);
-    const n = vs.length;
-    for (let i = 0; i < n; i++) {
-      const v = vs[i];
-      e1.subVectors(vs[(i - 1 + n) % n].p, v.p);
-      e2.subVectors(vs[(i + 1) % n].p, v.p);
-      if (e1.lengthSq() < 1e-20 || e2.lengthSq() < 1e-20) continue;
-      sums.set(v, (sums.get(v) || 0) + e1.angleTo(e2));
+    for (const tri of mesh.faceTriangles(f)) {
+      for (let i = 0; i < 3; i++) {
+        const v = tri[i];
+        e1.subVectors(tri[(i + 2) % 3].p, v.p);
+        e2.subVectors(tri[(i + 1) % 3].p, v.p);
+        if (e1.lengthSq() < 1e-20 || e2.lengthSq() < 1e-20) continue;
+        sums.set(v, (sums.get(v) || 0) + e1.angleTo(e2));
+      }
     }
   }
 

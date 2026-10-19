@@ -1073,7 +1073,12 @@ export class Panel {
 
     box.innerHTML = `選到 <b>${what}</b>，在「${el.obj.name}」上<br>`
       + (dim.length ? dim.join('　') + '<br>' : '')
-      + `${many ? (sel.editPivot === 'active' ? '中心（最後選的）' : '中心（重心）') : '重心'} `
+      /**
+       * ②-11：這個點是頂點的平均，⛔ 叫「重心」；只選一個點就是它自己 ⇒「座標」
+       * （三種說法都跟左下角讀數一樣，見 `measure.js`）
+       */
+      + `${!many && el.kind === 'vertex' ? '座標'
+        : many && sel.editPivot === 'active' ? '中心（最後選的）' : '中心（點的平均）'} `
       + `X <b>${f(c.x)}</b>　Y <b>${f(c.y)}</b>　Z <b>${f(c.z)}</b> cm`
       + (many ? '<br><span class="dim2">橘色的那個是最後選的（active）——'
               + '法向的扭轉方向與「最後選的」中心都看它</span>' : '');
@@ -1978,7 +1983,7 @@ export class Panel {
       <table class="ana">
         <tr><th colspan="2" class="grp">拓 撲</th></tr>
         <tr><td>頂點 / 邊 / 面</td><td>${v.V} / ${v.E} / ${v.F}</td></tr>
-        <tr><td title="封閉網格的尤拉數 χ ＝ 2×分開的實體數 − 2×貫穿孔數。一個沒有洞的實體是 2，挖穿一個孔變 0，兩塊分開的實體是 4。開放的殼是 1。χ 一定是偶數，出現奇數就表示結構接錯了">尤拉數 V−E+F</td>
+        <tr><td title="封閉網格的尤拉數 χ ＝ 2×分開的實體數 − 2×貫穿孔數。一個沒有洞的實體是 2，挖穿一個孔變 0，兩塊分開的實體是 4，χ 一定是偶數。開放的殼再減掉開口的邊緣有幾圈：一片板子是 1，兩頭開口的筒子是 0">尤拉數 V−E+F</td>
             <td>${v.euler} ${mark(t.eulerOK)}<span class="dim"> ${t.eulerNote}</span></td></tr>
         ${t.genus !== null
           ? `<tr><td title="貫穿的洞有幾個。挖穿一個孔＝1，甜甜圈也是 1。沒挖穿的盲孔不算">貫穿孔數</td>
@@ -1993,8 +1998,8 @@ export class Panel {
 
         <tr><th colspan="2" class="grp">展開相關</th></tr>
 
-        <tr><td title="共面且相鄰的三角形已合併。展開時一片就是一個單位">平面區域</td>
-            <td>${s.regions} 片<span class="dim"> ← ${v.F} 個三角形合併而來</span></td></tr>
+        <tr><td title="共面且相鄰的面已合併。展開時一片就是一個單位">平面區域</td>
+            <td>${s.regions} 片<span class="dim"> ← ${v.F} 個面合併而來</span></td></tr>
         <tr><td title="用高斯曲率判定。可展開的才有精確解，不可展的必須切分近似">曲面判定</td>
             <td>${SURFACE_TEXT[s.surface] || s.surface}</td></tr>
         <tr><td title="360度減去頂點周圍所有夾角。高斯–博內定理：封閉曲面的總和恆等於 2π×尤拉數。沒有洞時就是常見的 4π">角虧總和</td>
@@ -2047,13 +2052,28 @@ export class Panel {
  */
 export function topologyCheck(v, totalDefect) {
   if (!v.closed) {
-    // 開放的殼（板件）：一片沒有洞的板子是 1。
-    // 角虧總和的高斯–博內版本含邊界積分項，這裡不做判定，
-    // 免得給出似是而非的數字。
+    /**
+     * 開放的殼：χ ＝ 2c − 2g − b（b ＝ 開口的邊緣有幾圈）。
+     * 一片板子 b＝1 ⇒ 1；兩頭開口的筒子、挖一個洞的板子 b＝2 ⇒ 0。
+     * 🔴 以前寫死「應為 1」⇒ 筒子、燈罩、有洞的板都被打 ✗（綜合評估 ②-2）。
+     * 角虧總和的高斯–博內版本含邊界積分項，這裡照舊不做判定，
+     * 免得給出似是而非的數字。
+     */
+    const c = v.components ?? 1;
+    const b = v.boundaryLoops;
+    if (!(b >= 1)) {
+      return { genus: null, eulerOK: v.euler === 1, eulerNote: '一片板子應為 1', defectExpect: null, defectOK: null };
+    }
+    const g = (2 * c - b - v.euler) / 2;
+    const valid = Number.isInteger(g) && g >= 0;
+    const base = c === 1 ? `＝2−${b}` : `＝2×${c}−${b}`;
+    const note = !valid ? `開口 ${b} 圈的殼不可能是這個值`
+      : `${base}${g ? `−2×${g}` : ''}（開口的邊緣 ${b} 圈）`;
     return {
-      genus: null,
-      eulerOK: v.euler === 1,
-      eulerNote: '開放的殼應為 1',
+      genus: valid && g > 0 ? g : null,
+      components: c,
+      eulerOK: valid,
+      eulerNote: note,
       defectExpect: null,
       defectOK: null
     };

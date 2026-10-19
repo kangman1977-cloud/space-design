@@ -594,9 +594,12 @@ export function measureLabels(mesh, els, M, opt = {}) {
      * 最後一行：座標。
      * ⚠ 單選一個點時上面那些量全是 `null`，所以這一行就是它**自己的位置**，
      * ⛔ 不要寫「重心」—— 一個點的重心就是它自己，那兩個字只會讓人多想一次。
+     * 🔴 其他情況也⛔ 叫「重心」（綜合評估 ②-11，2026-10-19）：這個點是**頂點的平均**，
+     * 面的邊上多一個點就會偏過去（補測報 Z 0.60，真正的面中心是 0）⇒ 照實叫「中心（點的平均）」。
+     * ⛔ 改成面積加權：gizmo 掛的也是這個點，改了箭頭會跟著跑（kang 同意只改名）。
      */
     const isOneVert = kind === 'vertex' && !many;
-    rows.push((isOneVert ? '座標' : (many && pivot === 'active' ? '中心（最後選的）' : '重心'))
+    rows.push((isOneVert ? '座標' : (many && pivot === 'active' ? '中心（最後選的）' : '中心（點的平均）'))
       + ` X ${fmtCm(ms.center.x)}　Y ${fmtCm(ms.center.y)}　Z ${fmtCm(ms.center.z)} cm`);
 
     /** 第 4 步（一）：剛好兩個 → 多報距離。⛔ 三個以上不硬湊 */

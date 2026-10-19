@@ -217,11 +217,25 @@ export class ExportPanel {
          ${it.shelled ? (it.obj.kind === 'sheet'
             ? '<div class="dim">開放的面，已依板厚 ' + f(it.obj.thickness) + ' cm 自動加厚</div>'
             /** ⚠ 實體沒封口（2026-10-19 ①-9）：講清楚是照哪個厚度、去哪裡改 —— 以前那個厚度在面板上看不到 */
-            : '<div class="bad">⚠ 這個實體沒有封口（例如刪過面），已照板厚 ' + f(it.obj.thickness)
+            : '<div class="bad uwOpenSolid">⚠ 這個實體沒有封口（例如刪過面），已照板厚 ' + f(it.obj.thickness)
               + ' cm 加厚成一層殼 —— 板厚在右邊物件面板改；要實心的話請把洞補起來</div>') : ''}
        </div>
        <table class="exTab">${rows.map(r =>
          `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table>`;
+
+    /**
+     * 🔴 **紅字叫人「把洞補起來」，就要指得出洞在哪**（綜合評估 ②-12，2026-10-19）。
+     * 實體沒封口會先被加厚 ⇒ 加厚後是封閉的 ⇒ 下面那則「不是封閉的」不會出現 ⇒
+     * 原本的「指出來」**永遠走不到**。⇒ 紅字後面也放一顆，按下去一樣畫紅線。
+     * ⛔ 不改自動加厚本身（kang 同意只加按鈕）。
+     */
+    const openNote = card.querySelector('.uwOpenSolid');
+    if (openNote) {
+      openNote.appendChild(document.createTextNode(' '));
+      openNote.appendChild(this._pointBtn(
+        '把沒封口的地方在畫面上標成紅線，並關掉這個視窗',
+        () => this._showHoles(it.obj)));
+    }
 
     for (const i of c.issues) {
       const b = box(i.level === 'bad' ? 'uwWarn' : 'uwSkip',
@@ -262,7 +276,7 @@ export class ExportPanel {
     return card;
   }
 
-  /** 兩顆「指出來」共用的按鈕。⚠ `mini` 是這組面板既有的樣式，⛔ 不要發明新的 */
+  /** 三顆「指出來」共用的按鈕。⚠ `mini` 是這組面板既有的樣式，⛔ 不要發明新的 */
   _pointBtn(title, onclick) {
     const btn = document.createElement('button');
     btn.className = 'mini';
