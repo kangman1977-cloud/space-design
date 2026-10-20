@@ -18305,6 +18305,52 @@ section('綜合評估 ④ 第二批（一）之後的一小輪：鋼筆細分改
   eq('　 SVG 匯入沒有單位時用的 DEFAULT_TOL ⛔ 動（0.2）', svgp.DEFAULT_TOL, 0.2);
 }
 
+section('綜合評估 ④ 第二批（二）：干涉檢查（2026-10-20）');
+if (csgOK) {
+  /** 面板的「檢查」、紅色那幾塊、點一列選起來（main.js、toolbar.js、scene.js）在本機／線上版用畫面驗 */
+  const C = await import('../js/core/interfere.js');
+  const box = (name, w, h, d, x, y, z) => {
+    const o = new io.ModelObject({ name, kind: io.KIND.SOLID, src: { type: 'box', w, h, d } });
+    o.pos.set(x, y, z);
+    return o;
+  };
+  const wall = box('盒壁', 1, 20, 40, 0, 10, 0);          // X −0.5～0.5、Y 0～20
+  const div = box('隔板', 30, 18, 0.5, 15.3, 10, 0);     // X 0.3～30.3 ⇒ 穿進盒壁 0.2
+  const floor = box('盒底', 40, 1, 40, 15, -0.5, 0);      // Y −1～0：盒壁剛好站在上面
+  const r = C.findClashes([wall, div, floor]);
+  ok('★★★ ④-20 隔板穿進盒壁 0.2 cm ⇒ 列出 1 對、重疊 0.2 × 18 × 0.5 ＝ 1.8 cm³', r.ok && r.list.length === 1
+    && Math.abs(r.list[0].volume - 1.8) < 1e-6 && r.list[0].size.map(v => +v.toFixed(6)).join() === '0.2,18,0.5', r.list.map(C.clashLine).join('｜'));
+  ok('★★ 　 列出來的是那兩個（盒壁 × 隔板），重疊那一塊有網格（畫紅色用）', r.ok && [r.list[0].a.name, r.list[0].b.name].sort().join() === '盒壁,隔板' && !!r.list[0].mesh);
+  ok('★★★ 　 盒壁站在盒底上（面碰面）⇒ ⛔ 算，只數成「貼在一起」', r.ok && r.touching >= 1 && !r.list.some(c => [c.a.name, c.b.name].includes('盒底')), r.touching);
+  eq('★ 　 講給人看的那一行', C.clashLine(r.list[0]).replace(/「(盒壁|隔板)」×「(盒壁|隔板)」/, 'AB'), 'AB：重疊 1.8 cm³（範圍 0.2 × 18 × 0.5 cm）');
+
+  const plate = new io.ModelObject({ name: '平板', kind: io.KIND.SHEET, src: { type: 'plate', w: 20, d: 20 } });
+  plate.thickness = 0.5; plate.pos.set(0, 5, 0);
+  const rp = C.findClashes([wall, plate]);
+  ok('★★★ 板件照板厚算：板厚 0.5 的平板穿過 1 cm 厚的盒壁 ⇒ 重疊 1 × 0.5 × 20 ＝ 10 cm³', rp.ok && rp.list.length === 1 && Math.abs(rp.list[0].volume - 10) < 1e-6, rp.list.map(C.clashLine).join());
+  const thin = new io.ModelObject({ name: '紙', kind: io.KIND.SHEET, src: { type: 'plate', w: 20, d: 20 } });
+  thin.thickness = 0; thin.pos.set(0, 5, 0);
+  const rt = C.findClashes([wall, thin]);
+  ok('★★ 　 板厚 0 的板件 ⇒ ⛔ 算、講原因（沒有厚度）', rt.ok && rt.list.length === 0 && rt.skipped.length === 1 && rt.skipped[0].reason.includes('板厚'), JSON.stringify(rt.skipped));
+
+  const far = box('遠的', 5, 5, 5, 200, 2.5, 0);
+  const rf = C.findClashes([wall, far]);
+  ok('★ 離很遠 ⇒ 連布林都⛔ 做（外框先擋掉）、沒有穿到', rf.ok && rf.pairs === 0 && rf.list.length === 0);
+  const tilt = box('斜的', 10, 10, 10, 3, 10, 0); tilt.rot.set(0, Math.PI / 4, 0);
+  const rr = C.findClashes([wall, tilt]);
+  ok('★★ 轉過角度的零件照世界座標算（轉 45° 的方塊壓在盒壁上 ⇒ 穿到）', rr.ok && rr.list.length === 1 && rr.list[0].volume > 1, rr.list.map(C.clashLine).join());
+  const big = box('大', 10, 10, 10, 0, 5, 50), small = box('小', 2, 2, 2, 1, 5, 50);
+  const rb = C.findClashes([big, small]);
+  ok('★★ 一個整個包在另一個裡面 ⇒ 重疊 ＝ 小的那個（8 cm³）', rb.ok && rb.list.length === 1 && Math.abs(rb.list[0].volume - 8) < 1e-6);
+  ok('　 少於兩個物件 ⇒ 講原因', !C.findClashes([wall]).ok);
+  const near = box('差一點', 10, 10, 10, 5.505, 5, 0);   // X 0.505～：跟盒壁差 0.005
+  const rn = C.findClashes([wall, near]);
+  ok('★ 　 只差 0.005 cm（還沒碰到）⇒ ⛔ 列', rn.ok && rn.list.length === 0);
+  const shallow = box('擦到', 10, 10, 10, 5.495, 5, 0);   // 疊 0.005 cm（比 0.01 薄）⇒ 當成貼著
+  const rs = C.findClashes([wall, shallow]);
+  ok('★★ 　 只疊 0.005 cm（比 0.01 cm 薄）⇒ 當成貼在一起、⛔ 列', rs.ok && rs.list.length === 0 && rs.touching === 1);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

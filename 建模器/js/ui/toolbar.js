@@ -45,6 +45,7 @@ const fmtPct = v => `${Math.round(v * 1000) / 10}%`;
 import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
+import { clashLine } from '../core/interfere.js';
 import { unfoldObject } from '../unfold/part.js';
 import { landPositions, lowestY } from '../core/align.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
@@ -85,6 +86,11 @@ export class Panel {
         <h2>結構分析 <button id="anaRun" class="mini">重新計算</button></h2>
         <div id="anaBody" class="empty">選一個物件後按「重新計算」</div>
       </section>
+      <!-- 干涉檢查（綜合評估 ④-20，2026-10-20）：跟程式版本一樣，不管有沒有選到物件都在 -->
+      <section id="pClash">
+        <h2>干涉檢查 <button id="clashRun" class="mini" title="查零件有沒有穿進彼此裡面：沒選東西（或只選一個）就查全部，選了兩個以上就只查選到的。板件照板厚算；只是貼在一起不算">檢查</button></h2>
+        <div id="clashBody" class="empty">按「檢查」<br><span>沒選東西就查全部；選了兩個以上只查選到的</span></div>
+      </section>
       <!--
         🔴🔴 程式版本（2026-08-31，kang 提的）。⛔ 這一段⛔ 不可以用反引號！
         （它住在一個 template literal 裡面 —— 見這一段底下那則註解）
@@ -111,6 +117,12 @@ export class Panel {
     this.empty = this.root.querySelector('#pEmpty');
     this.anaBody = this.root.querySelector('#anaBody');
     this.root.querySelector('#anaRun').onclick = () => this.analyse(true);
+
+    this.clashBody = this.root.querySelector('#clashBody');
+    this.root.querySelector('#clashRun').onclick = () => {
+      if (this.app.runClash) this.app.runClash();
+      this.renderClash();
+    };
 
     this.verBody = this.root.querySelector('#verBody');
     this.root.querySelector('#verGet').onclick = () => this.fetchLatestVersion();
@@ -193,7 +205,47 @@ export class Panel {
   //  物件屬性
   // ═══════════════════════════════════════════════════
 
+  /**
+   * 干涉檢查的結果清單（④-20）。一列 ＝ 一對穿到的零件，點下去 ＝ 選起那兩個、拉近入鏡（`app.clashPick()`）。
+   * ⚠ 形狀改過 ⇒ 清單留著但標「形狀改過了」、⛔ 點（紅色已經收掉 —— `main.js` `clashStale()`）。
+   */
+  renderClash() {
+    const b = this.clashBody;
+    if (!b) return;
+    const r = this.app.getClash ? this.app.getClash() : null;
+    b.innerHTML = '';
+    if (!r) {
+      b.className = 'empty';
+      b.innerHTML = '按「檢查」<br><span>沒選東西就查全部；選了兩個以上只查選到的</span>';
+      return;
+    }
+    b.className = '';
+    const head = document.createElement('div');
+    head.className = 'note';
+    head.textContent = (r.stale ? '形狀改過了 —— 再按一次「檢查」看新的結果。上一次：' : '')
+      + `${r.scope === 'sel' ? '選到的' : '全部'} ${r.checked} 個物件，`
+      + (r.list.length ? `${r.list.length} 對穿進去了（重疊的地方畫成紅色；點一列就選起那兩個）` : '沒有零件穿進彼此裡面')
+      + (r.touching ? `；${r.touching} 對只是貼在一起（不算）` : '');
+    b.appendChild(head);
+    r.list.forEach((c, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'clashItem';
+      btn.textContent = clashLine(c);
+      btn.disabled = !!r.stale;
+      btn.onclick = () => this.app.clashPick(i);
+      btn.style.cssText = 'display:block;width:100%;text-align:left;margin:4px 0;white-space:normal';
+      b.appendChild(btn);
+    });
+    for (const s of r.skipped) {
+      const d = document.createElement('div');
+      d.className = 'note';
+      d.textContent = `沒辦法算：「${s.name}」${s.reason}`;
+      b.appendChild(d);
+    }
+  }
+
   refresh() {
+    this.renderClash();
     const obj = this.app.sel.active;
     const many = this.app.sel.count > 1;
     /**

@@ -48,6 +48,7 @@ import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges,
          boundaryRingFrom } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
+import { findClashes, clashLine } from './core/interfere.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
@@ -463,6 +464,10 @@ const app = {
   getUnfoldSettings: () => ({ material: unfoldWin.opt.material, mode: unfoldWin.mode, dartStyle: unfoldWin.opt.dartStyle || 'cut', dartFolds: !!unfoldWin.opt.dartFolds }),
   openUnfold: () => unfoldWin.open(),
   onUnfoldClosed: () => panel.refresh(),
+  /** 🔴 干涉檢查（④-20）：面板按「檢查」／點清單的一列（`runClash()`、`clashPick()` 在下面才定義，⛔ 在建構時呼叫） */
+  runClash: () => runClash(),
+  clashPick: i => clashPick(i),
+  getClash: () => clashResult,
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
 };
@@ -489,6 +494,7 @@ function commit(label) {
       + '已經脫鉤（形狀不變；之後拖那條參考線不會再影響它）'), 0);
   }
   hist.commit(label);
+  clashStale();
   view.sync(doc);
   sel.revalidate();
   autosave(doc);
@@ -736,6 +742,7 @@ function newDoc() {
   sel.clear();
   view.sync(doc);
   hist.reset('新建檔案');
+  clashStale();
   panel.analysisCache.clear();
   panel.refresh();
   updateBar();
@@ -751,6 +758,7 @@ async function loadFile() {
     sel.clear();
     view.sync(doc);
     hist.reset('讀取檔案');
+  clashStale();
     panel.analysisCache.clear();
     panel.refresh();
     view.frameAll(doc);
@@ -1654,6 +1662,7 @@ function dropPendingPicks() {
 function jumpHistory(redo) {
   const dropped = dropPendingPicks();
   const l = redo ? hist.redo() : hist.undo();
+  if (l) clashStale();
   if (l) {
     autosave(doc);
     toast((redo ? '重做：' : '復原：') + l
@@ -6524,6 +6533,44 @@ function frameSelected() {
   view.frameAll(doc, sel.ids);
 }
 $('frameSel').onclick = frameSelected;
+
+/**
+ * 🔴 **干涉檢查**（綜合評估 ④-20，2026-10-20，kang「照建議」）：計算在 `core/interfere.js` `findClashes()`。
+ * 沒選（或只選一個）⇒ 查全部；選了兩個以上 ⇒ 只查選到的。重疊那幾塊畫紅色（`view.setClash()`）。
+ * ⚠ 形狀一改（存一步、復原、新建、讀檔）紅色就收掉、清單標「形狀改過了」（`clashStale()`）——
+ * ⛔ 留著舊的紅塊，人會以為那裡還穿著。
+ */
+let clashResult = null;
+function runClash() {
+  const picked = sel.objects.length >= 2;
+  const objs = picked ? sel.objects.slice() : doc.objects.slice();
+  const r = findClashes(objs);
+  clashResult = r.ok ? { ...r, scope: picked ? 'sel' : 'all', stale: false } : null;
+  view.setClash(r.ok ? r.list.map(c => c.mesh) : null);
+  if (!r.ok) { toast(r.reason, true); return r; }
+  const skip = r.skipped.length ? `；${r.skipped.length} 個沒辦法算（${r.skipped.slice(0, 2).map(s => `「${s.name}」${s.reason}`).join('、')}）` : '';
+  const touch = r.touching ? `；${r.touching} 對只是貼在一起（不算）` : '';
+  toast(r.list.length
+    ? `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：${r.list.length} 對穿進去了，重疊的地方畫成紅色${touch}${skip}`
+    : `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：沒有零件穿進彼此裡面${touch}${skip}`, !!r.list.length);
+  return r;
+}
+function clashPick(i) {
+  const c = clashResult && clashResult.list[i];
+  if (!c || clashResult.stale) return;
+  if (!doc.objects.includes(c.a) || !doc.objects.includes(c.b)) { toast('這兩個物件已經不在了 —— 再按一次「檢查」', true); return; }
+  exitOtherModes();
+  sel.set([c.a.id, c.b.id]);
+  view.frameAll(doc, sel.ids);
+  panel.refresh();
+  updateBar();
+  toast(clashLine(c));
+}
+function clashStale() {
+  if (!clashResult || clashResult.stale) return;
+  clashResult.stale = true;
+  view.setClash(null);
+}
 
 $('save').onclick = () => { download(doc); toast('已存檔'); };
 $('load').onclick = loadFile;

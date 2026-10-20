@@ -441,6 +441,29 @@ export function splitByCutter(mesh, cutter, label = '物件') {
 }
 
 /**
+ * 🔴 **干涉檢查：兩個實體重疊的那一塊**（綜合評估 ④-20，2026-10-20，kang「照建議」）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。⚠ 兩個都要是**世界座標、封閉**的網格
+ * （板件先照板厚加厚 —— `core/interfere.js` `solidForClash()`）。
+ * @returns {{mesh: Mesh|null, volume: number}} 沒重疊 ⇒ `mesh` 是 null、體積 0
+ */
+export function overlapOf(meshA, meshB, labelA = '第一個', labelB = '第二個') {
+  const { Manifold } = need();
+  const made = [];
+  try {
+    const a = toManifold(meshA, labelA); made.push(a);
+    const b = toManifold(meshB, labelB); made.push(b);
+    const inn = Manifold.intersection(a, b); made.push(inn);
+    if (inn.isEmpty()) return { mesh: null, volume: 0 };
+    const m = fromManifold(inn);
+    return { mesh: m, volume: Math.abs(m.volume()) };
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 只做結構檢查，不真的運算。介面在按鈕按下去之前先問一次，
  * 才能給「板件不能布林」這種看得懂的提示，而不是跳一堆英文。
  *

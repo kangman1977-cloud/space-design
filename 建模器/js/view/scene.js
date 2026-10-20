@@ -1961,6 +1961,40 @@ export class SceneView {
     }
   }
 
+  /**
+   * 🔴 **干涉檢查：重疊的那幾塊畫成紅色**（綜合評估 ④-20，2026-10-20，kang「照建議」）。
+   * ⭐ ⛔ 看深度（穿過零件也看得到 —— 重疊的那塊本來就包在兩個零件裡面）、半透明、⛔ 擋點選。
+   * @param {Array<import('../core/mesh.js').Mesh>|null} meshes 世界座標；null／空 ⇒ 收掉
+   */
+  setClash(meshes) {
+    if (this._clashOv) {
+      this.scene.remove(this._clashOv);
+      this._clashOv.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      this._clashOv = null;
+    }
+    if (!meshes || !meshes.length) return;
+    const g = new THREE.Group();
+    for (const m of meshes) {
+      const geo = m.toGeometry();
+      const solid = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0xff3b30, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false
+      }));
+      solid.renderOrder = 8;
+      solid.raycast = () => {};
+      g.add(solid);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
+        new THREE.LineBasicMaterial({ color: 0xff0000, depthTest: false }));
+      edges.renderOrder = 8;
+      edges.raycast = () => {};
+      g.add(edges);
+    }
+    this._clashOv = g;
+    this.scene.add(g);
+  }
+
   clearPenPreview() {
     if (!this._penPrev) return;
     this.scene.remove(this._penPrev);
