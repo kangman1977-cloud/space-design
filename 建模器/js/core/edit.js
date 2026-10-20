@@ -2948,7 +2948,7 @@ export function curveCutFace(mesh, face, ptsIn) {
   };
   const s = locate(pts[0]), e = locate(pts[pts.length - 1]);
   if (!s || !e) {
-    return { ok: false, reason: '曲線要從這個面的【邊上】開始、在【邊上】結束（要在面中間畫一圈，第一點就點在面的中間）' };
+    return { ok: false, reason: '曲線要從這個面的邊上開始、在邊上結束（要在面中間畫一圈，第一點就點在面的中間）' };
   }
 
   /** 2D：投影到面自己的平面上，檢查「留在面裡、不穿出、不自己交叉」*/
@@ -3310,7 +3310,7 @@ function regionCut(mesh, face, ptsIn, closed) {
       return best && best.d <= TOL && best.t > 1e-9 && best.t < 1 - 1e-9 ? best : null;
     };
     const s = locate(pts[0]), e = locate(pts[pts.length - 1]);
-    if (!s || !e) return { ok: false, reason: '曲線要從這個面的【外框】開始、在【外框】結束（要在面中間畫一圈，第一點就點在面的中間）' };
+    if (!s || !e) return { ok: false, reason: '曲線要從這個面的外框開始、在外框結束（要在面中間畫一圈，第一點就點在面的中間）' };
     const chain = pts.map(to2);
     for (let k = 1; k + 1 < chain.length; k++) if (!insideRegion(chain[k])) return { ok: false, reason: OUT };
     for (let k = 0; k + 1 < chain.length; k++) {
@@ -6182,7 +6182,7 @@ export function bevelEdges(mesh, hes, w, opt = {}) {
     const bs = bevAtVert(V).length;
     if (partialAtVert(V) && bs !== 2) {
       return '這個角落只導了一部分的邊，圓角在那裡接不起來。'
-           + '把這個角落的邊**全部一起選**就可以了（例如方塊要整個圓角，12 條邊一起選）。'
+           + '把這個角落的邊全部一起選就可以了（例如方塊要整個圓角，12 條邊一起選）。'
            + '只想導幾條的話，段數改成 1 的斜切邊可以做';
     }
     return '這個角落不是直角，圓角還做不出來 —— 兩邊的圓弧接不到一起。'
@@ -7736,7 +7736,7 @@ export function extrudeBoundaryEdges(mesh, hes, dist) {
     if (he.twin && he.twin.face) {
       return {
         ok: false,
-        reason: '這條邊的兩邊都有面了 —— 擠出邊只能從板子的【外緣】長。'
+        reason: '這條邊的兩邊都有面了 —— 擠出邊只能從板子的外緣長。'
               + '想在這裡加東西，請改用「擠出」選那個面'
       };
     }

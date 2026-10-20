@@ -393,7 +393,7 @@ function edgeChain(els) {
     }
   }
   if (blocks > 1) {
-    return { reason: `這 ${els.length} 條邊分成 ${blocks} 段，⛔ 不是一整圈` };
+    return { reason: `這 ${els.length} 條邊分成 ${blocks} 段，不是一整圈` };
   }
 
   /** ③ 端點數：0 ＝ 接回來了、2 ＝ 一段開放的弧，其餘不成立 */

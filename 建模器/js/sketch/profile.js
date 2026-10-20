@@ -242,7 +242,7 @@ function resolveScale(svg, opt, notes) {
   }
 
   notes.push('⚠ 這個檔沒有寫實際尺寸（只有 viewBox），'
-    + '所以下面的大小是**猜的**（照 CSS 的 96dpi 換算）。'
+    + '所以下面的大小是猜的（照 CSS 的 96dpi 換算）。'
     + '請對照你原稿的尺寸，不對的話手動指定單位或拉一段已知長度校正。');
   return { cmPerUnit: UNIT_CM.px, from: 'guess', label: '檔案沒寫尺寸，猜 px' };
 }

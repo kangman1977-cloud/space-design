@@ -527,7 +527,7 @@ export class ModelObject {
      */
     if (m.isClosed()) {
       return { ok: false,
-        reason: '這個物件本來就是封閉的實體，⛔ 不必加厚 —— 直接按「轉成可編輯網格」' };
+        reason: '這個物件本來就是封閉的實體，不必加厚 —— 直接按「轉成可編輯網格」' };
     }
     let s;
     try { s = m.shell(t); }

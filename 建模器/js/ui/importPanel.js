@@ -157,7 +157,7 @@ export class ImportPanel {
       this.body.innerHTML = '';
       this.body.appendChild(box('uwSkip',
         '按「選 SVG 檔」挑一個 Illustrator 匯出的線稿。'
-        + '匯出設定建議：樣式「簡報屬性」、**取消勾選「回應式」**'
+        + '匯出設定建議：樣式「簡報屬性」、取消勾選「回應式」'
         + '（勾了會把尺寸資訊拿掉）、物件 ID 用「圖層名稱」。'
         + '圖上如果有文字，先在 Illustrator 裡「建立外框」。'));
       return;

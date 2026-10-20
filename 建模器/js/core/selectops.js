@@ -739,11 +739,11 @@ export function similarTo(mesh, seed, mode, opt = {}) {
   const wantFace = mode === 'normal' || mode === 'area' || mode === 'sides';
 
   if (wantFace && seed.kind !== 'face') {
-    out.reason = '「同法向／同面積／同邊數」要先選一個【面】當範本';
+    out.reason = '「同法向／同面積／同邊數」要先選一個「面」當範本';
     return out;
   }
   if (mode === 'length' && seed.kind !== 'edge') {
-    out.reason = '「同邊長」要先選一條【邊】當範本';
+    out.reason = '「同邊長」要先選一條「邊」當範本';
     return out;
   }
 
@@ -855,7 +855,7 @@ export function checkerPick(mesh, els, opt = {}) {
 
   const kind = els[0].kind;
   if (kind !== 'face' && kind !== 'edge') {
-    out.reason = '「隔一個選一個」只吃【面】或【邊】，⛔ 點還沒有做';
+    out.reason = '「隔一個選一個」只吃「面」或「邊」，點還沒有做';
     return out;
   }
   if (els.some(e => e.kind !== kind)) {

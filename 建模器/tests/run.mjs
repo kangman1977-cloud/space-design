@@ -18601,6 +18601,74 @@ section('綜合評估 ⑤-28 ＋ ④-16：量孔徑、孔心、孔心距（2026-
   ok('★ 　 不平行（夾 90°）⇒ 兩個孔心的直線距離 5、講夾幾度', !skew.parallel && Math.abs(skew.dist - 5) < 1e-9 && Math.abs(skew.angle - 90) < 1e-6);
 }
 
+section('綜合評估 ⑤-3：畫面上的字⛔ 用文件寫法（2026-10-21）');
+{
+  /**
+   * 🔴 **畫面上的字（提示、按鈕說明）⛔ 出現 ⛔、`**`、【】**（kang 2026-10-21「同意你的建議」）——
+   * 那是文件寫法：畫面上 ⛔ 是一個看不懂的符號、`**` 不會變粗只會顯示星號、【】只是多兩個括號（T3、T5～T8、補測）。
+   * 掃的範圍：`js/` 底下每一支的字串（含中文的；⛔ 掃註解、⛔ 掃樣板字串 `${…}` 裡面的程式、⛔ 掃字串裡的 HTML 註解），
+   * `index.html` 的 title／placeholder 與標籤之間的字（⛔ 掃 <!-- 註解 -->、<style>、<script>）。
+   * ⚠ 寫畫面上的字時：⛔ → 寫「不／沒有／不要」；強調就用一般的字，按鈕名稱用「」。
+   */
+  const { readFileSync, readdirSync, statSync } = await import('node:fs');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const files = [];
+  const walk = d => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (n.endsWith('.js')) files.push(p); } };
+  walk(join(root, 'js'));
+  /** 字串字面值（跳過註解；樣板字串只取 ${…} 以外的字）*/
+  const literals = code => {
+    const out = []; let i = 0; const n = code.length;
+    while (i < n) {
+      if (code.startsWith('//', i)) { const j = code.indexOf('\n', i); i = j < 0 ? n : j; continue; }
+      if (code.startsWith('/*', i)) { const j = code.indexOf('*/', i + 2); i = j < 0 ? n : j + 2; continue; }
+      const c = code[i];
+      if (c === '\'' || c === '"' || c === '`') {
+        let j = i + 1, text = '';
+        while (j < n) {
+          const d = code[j];
+          if (d === '\\') { text += code.slice(j, j + 2); j += 2; continue; }
+          if (c === '`' && code.startsWith('${', j)) {
+            let k = j + 2, b = 1;
+            while (k < n && b) { if (code[k] === '{') b++; else if (code[k] === '}') b--; k++; }
+            text += ' '; j = k; continue;
+          }
+          if (d === c || (d === '\n' && c !== '`')) break;
+          text += d; j++;
+        }
+        /** 字串裡放的 HTML（面板的骨架）有自己的 <!-- 註解 -->，那不是畫面上的字 */
+        out.push({ at: i, text: text.replace(/<!--[\s\S]*?-->/g, ' ') });
+        i = j + 1; continue;
+      }
+      i++;
+    }
+    return out;
+  };
+  const MARK = /⛔|\*\*|【|】/;
+  const bad = [];
+  for (const f of files) {
+    const code = readFileSync(f, 'utf8');
+    for (const L of literals(code)) {
+      if (/[一-鿿]/.test(L.text) && MARK.test(L.text)) {
+        bad.push(`${f.slice(root.length + 1)}:${code.slice(0, L.at).split('\n').length}`);
+      }
+    }
+  }
+  const html = readFileSync(join(root, 'index.html'), 'utf8');
+  for (const m of html.matchAll(/(title|placeholder)="([^"]*)"/g)) {
+    if (MARK.test(m[2])) bad.push(`index.html:${html.slice(0, m.index).split('\n').length}`);
+  }
+  const masked = html.replace(/<!--[\s\S]*?-->/g, s => ' '.repeat(s.length))
+    .replace(/<(style|script)\b[\s\S]*?<\/\1>/g, s => ' '.repeat(s.length))
+    .replace(/"[^"]*"/g, s => ' '.repeat(s.length));
+  for (const m of masked.matchAll(/>([^<>]+)</g)) {
+    if (/[一-鿿]/.test(m[1]) && MARK.test(m[1])) bad.push(`index.html（字）:${html.slice(0, m.index).split('\n').length}`);
+  }
+  ok(`★★★ ⑤-3 畫面上的字⛔ 有 ⛔、**、【】（掃了 ${files.length} 支 js ＋ index.html）`, bad.length === 0, bad.slice(0, 8).join('、'));
+  const titles = [...html.matchAll(/title="([^"]*)"/g)].map(m => m[1]);
+  const longT = titles.filter(t => t.length > 150);
+  ok('★ 　 index.html 的滑鼠提示都在 150 字以內（⑤-3：以前最長 397 字）', longT.length === 0, longT.map(t => t.slice(0, 12)).join('、'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -175,9 +175,9 @@ const sel = new Selection(view, {
    */
   onPenHover: (i, n) => {
     if (i === 0 && n >= 3) {
-      toast('按下去就接回起點　⭐ 想讓最後那一段也是彎的，就【按住拖】');
+      toast('按下去就接回起點　⭐ 想讓最後那一段也是彎的，就按住拖');
     } else if (i === n - 1 && n >= 1) {
-      toast('在這個點上：【點一下】＝ 下一段走直線、【按住拖】＝ 下一段走曲線');
+      toast('在這個點上：點一下＝ 下一段走直線、按住拖＝ 下一段走曲線');
     }
   },
   /**
@@ -191,16 +191,16 @@ const sel = new Selection(view, {
    * ⚠ ⛔ 不講的話，使用者只會覺得「按了沒反應」（坑第 21 條）——
    * 而他按的那一下在別的狀態下是有作用的，這種沉默最難查。
    */
-  onPenNoClose: () => toast('開著「不封口」時⛔ 不接起來 —— '
+  onPenNoClose: () => toast('開著「不封口」時不接起來 —— '
     + '這支鋼筆畫的是一條線。要圍成形狀請先關掉「不封口」', true),
   /**
    * ⚠ **轉尖角一定要講一句** —— 畫面上只有一根把手消失，
    * ⛔ 不講的話跟「按錯了」分不出來（坑第 21 條）。
    */
   onPenConvert: (had, dragged) => toast(dragged
-    ? '這個點長出把手了 —— 接下來那一段會是【曲線】（已經畫好的那一段沒有變）'
+    ? '這個點長出把手了 —— 接下來那一段會是曲線（已經畫好的那一段沒有變）'
     : (had
-        ? '這個點轉成尖角了 —— 接下來那一段會是【直線】（已經畫好的那一段沒有變）'
+        ? '這個點轉成尖角了 —— 接下來那一段會是「直線」（已經畫好的那一段沒有變）'
         : '這個點本來就是尖角，接下來那一段本來就是直線')),
   /**
    * 🔴 **`改點`：選到一個錨點要講一句** —— 畫面上的變化只有「多了兩根把手」，
@@ -212,8 +212,8 @@ const sel = new Selection(view, {
     const sm = sel.penIsSmoothAt(i);
     toast(`選到第 ${i + 1} 個點（共 ${n} 個）　`
       + (sm
-          ? '⭐ 這是【圓滑】的點：拖一根把手，另一根會跟著轉方向'
-          : '⭐ 這是【尖角】的點：兩根把手各拖各的　'
+          ? '⭐ 這是圓滑的點：拖一根把手，另一根會跟著轉方向'
+          : '⭐ 這是「尖角」的點：兩根把手各拖各的　'
             + '（在它身上按住拖就長得出把手）')
       + '　拖這個點本身＝搬位置');
   },
@@ -230,7 +230,7 @@ const sel = new Selection(view, {
   onPenEditAdd: (at, n) => toast(
     `在線上加了一個點（第 ${at + 1} 個，共 ${n} 個）　`
     + '⭐ 曲線還是同一條，形狀看不出差別 —— 這個點是拿來調的，拖它才會變　'
-    + '⚠ 體積會差千分之幾（那是拉直成折線的取樣不同，⛔ 不是形狀變了）'),
+    + '⚠ 體積會差千分之幾（那是拉直成折線的取樣不同，不是形狀變了）'),
   /** 一筆畫：畫的當下只更新預覽（⛔ 這裡不算切點，見 `stroke.js` 檔頭） */
   onKnifeStrokeMove: pts => drawKnifeStroke(pts),
   onKnifeMove: (i, hit) => knifeMoveTo(i, hit),
@@ -865,7 +865,7 @@ $('vLock').onclick = () => {
   const now = view.setViewLock(!view.viewLocked);
   $('vLock').classList.toggle('on', now);
   toast(now
-    ? '視角鎖定：拖曳⛔ 不再轉動畫面　⭐ 平移（右鍵拖／兩指）與縮放照樣可以用'
+    ? '視角鎖定：拖曳不再轉動畫面　⭐ 平移（右鍵拖／兩指）與縮放照樣可以用'
     : '視角解鎖：拖曳又可以轉了');
 };
 
@@ -1251,8 +1251,8 @@ $('penOpen').onclick = () => {
   penFlagsToObject();
   updateBar();
   toast(sel.penNoClose
-    ? '不封口：開。這支鋼筆畫的是【一條線】，回到起點也⛔ 不會接起來　'
-      + `⭐ 收工後做成【${penUpFlag ? '牆（數字是高度）' : '板（數字是寬度）'}】，`
+    ? '不封口：開。這支鋼筆畫的是一條線，回到起點也不會接起來　'
+      + `⭐ 收工後做成${penUpFlag ? '牆（數字是高度）' : '板（數字是寬度）'}，`
       + '厚薄改走物件的「板厚」'
     : '不封口：關。回到原本的行為 —— 頭尾接起來圍成形狀，往上擠成實心塊');
 };
@@ -1263,12 +1263,12 @@ $('penUp').onclick = () => {
   /** 🔴 乙 第 2 輪：畫在牆上（或物件的側面）時「上」其實是往外 */
   toast(penWallPlane()
     ? (penUpFlag
-        ? '往外長：開。沿著線往外伸出一片 —— 旁邊的數字是【伸出多遠】'
-        : '往外長：關。沿著線在那一片上加寬成一條帶子 —— 旁邊的數字是【寬度】，線在正中間、兩側各一半')
+        ? '往外長：開。沿著線往外伸出一片 —— 旁邊的數字是伸出多遠'
+        : '往外長：關。沿著線在那一片上加寬成一條帶子 —— 旁邊的數字是寬度，線在正中間、兩側各一半')
     : (penUpFlag
-        ? '往上長：開。沿著線【立成一道牆】—— 旁邊的數字是【高度】'
-        : '往上長：關。沿著線【加厚成一片板】平躺在地上 —— '
-          + '旁邊的數字是【寬度】，線在正中間、兩側各一半'));
+        ? '往上長：開。沿著線立成一道牆—— 旁邊的數字是高度'
+        : '往上長：關。沿著線加厚成一片板平躺在地上 —— '
+          + '旁邊的數字是寬度，線在正中間、兩側各一半'));
 };
 $('penPark').onclick = () => {
   if (!sel.parkPen()) toast('還沒有畫任何點', true);
@@ -1320,7 +1320,7 @@ $('curveNotch').onclick = () => {
   curveCircleArm = false;
   updateBar();
   toast(curveNotchArm
-    ? `半圓：在面上靠近要開缺口的那條【邊】點一下（半徑先用上一次的 ${curveShow(curveRadius)} ${curveUnit}）`
+    ? `半圓：在面上靠近要開缺口的那條「邊」點一下（半徑先用上一次的 ${curveShow(curveRadius)} ${curveUnit}）`
       + (curve ? '　⚠ 現在畫的會被換掉' : '')
     : '取消放半圓');
 };
@@ -2164,15 +2164,15 @@ function toggleKnifeMode() {
    * `knifeCurve` 跨進出刀具會記著，⛔ 一律講直線那段的話，會叫他「按住拖劃一條線」，而曲線模式下按住拖是拉把手。
    */
   if (sel.knifeCurve) {
-    toast('刀具（曲線）：【點一下】＝尖角、【按住拖】＝圓滑。第一點點在面的【邊上】⇒ 最後點在邊上（切成兩塊）；'
-        + '第一點點在面的【中間】⇒ 點回第一點（封閉圈）。畫好按「切下去」。要回原本的刀具，按控制列的「曲線」切回「直線」。'
+    toast('刀具（曲線）：點一下＝尖角、按住拖＝圓滑。第一點點在面的邊上⇒ 最後點在邊上（切成兩塊）；'
+        + '第一點點在面的中間⇒ 點回第一點（封閉圈）。畫好按「切下去」。要回原本的刀具，按控制列的「曲線」切回「直線」。'
         + '轉視角：桌機按右鍵拖、平板兩指');
     return;
   }
   toast('刀具：在模型上點你要切過的位置，或直接按住拖劃一條線（兩種可以混用）。'
       + '點完再按一次「刀具」就切下去，或在最後一點快點兩下接回起點。'
-      + '⭐ 下錯了就【點那一個點】把它刪掉（游標靠近它會變大），刪錯按「退一步」；'
-      + '【按住那個點拖】就是搬它（會一直吸在邊上，拖到模型的角上會吸住）。'
+      + '⭐ 下錯了就點那一個點把它刪掉（游標靠近它會變大），刪錯按「退一步」；'
+      + '按住那個點拖就是搬它（會一直吸在邊上，拖到模型的角上會吸住）。'
       + '轉視角改成：桌機按右鍵拖、平板兩指');
 }
 
@@ -2220,7 +2220,7 @@ function togglePenEdit() {
   updateBar();
   toast(sel.penEdit
     ? '改點：開。點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線。'
-      + '⛔ 這時候【不會】放新的點　⭐ 選到的那個點才看得到把手'
+      + '這時候不會放新的點　⭐ 選到的那個點才看得到把手'
     : '改點：關。回到畫的模式，按左鍵就是放下一個點');
 }
 
@@ -2242,8 +2242,8 @@ function addPenPath() {
   if (sel.penEdit) sel.setPenEdit(false);
   updateBar();
   toast(`開始畫第 ${r.n} 條　`
-      + '⭐ 畫在剛才那個形狀【裡面】＝ 挖一個洞；'
-      + '畫在【外面】＝ 同一個物件裡多一塊');
+      + '⭐ 畫在剛才那個形狀裡面＝ 挖一個洞；'
+      + '畫在外面＝ 同一個物件裡多一塊');
 }
 
 /**
@@ -2260,9 +2260,9 @@ function deletePenAnchor() {
   updateBar();
   toast(r.fitted
     ? `刪掉一個點，剩 ${sel.penCount} 個　`
-      + '⭐ 兩側那兩段已經【擬合】成一段 —— 形狀盡量保住了'
+      + '⭐ 兩側那兩段已經擬合成一段 —— 形狀盡量保住了'
     : `刪掉一個點，剩 ${sel.penCount} 個　`
-      + '⚠ 這一次【擬合無解】（兩邊的方向幾乎平行），'
+      + '⚠ 這一次擬合無解（兩邊的方向幾乎平行），'
       + '所以是直接接起來的 —— 形狀會比較明顯地變一下');
 }
 
@@ -2361,8 +2361,8 @@ function editPenPath(obj) {
   toast(`編輯「${obj.name}」的路徑（${list.length} 條、${np} 個點）　`
       + (penEditing.wall ? '（它立在牆上，攤平之後先切到上視給你改）　' : '')
       + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線、點線上＝加一個點。'
-      + '⭐ 按「加一條」可以再畫一條 —— **包在裡面的那條就是洞**。做錯了按 Ctrl+Z 一步一步退。'
-      + '⚠ 這個物件暫時被【攤平】而且變半透明，按「完成」就轉回原本的角度');
+      + '⭐ 按「加一條」可以再畫一條 —— 包在裡面的那條就是洞。做錯了按 Ctrl+Z 一步一步退。'
+      + '⚠ 這個物件暫時被攤平而且變半透明，按「完成」就轉回原本的角度');
 }
 
 /**
@@ -2466,11 +2466,11 @@ function togglePenMode() {
    * ⚠ **一定要把「轉視角換手勢了」講出來** —— 跟刀具同一條理由：
    * 使用者按住拖的時候模型不再跟著轉，那看起來就是「壞掉了」。
    */
-  toast(`鋼筆：在${penPlaneName(sel.penPlane)}上【點一下】放尖角、【按住拖】放圓滑（拖出來的就是把手）。`
-      + '【右鍵按一下】＝ 確定這一段曲線（平板按「確定曲線」）。'
-      + '【按住 Shift】＝ 鎖角度（度數在旁邊調，平板按「鎖角度」）。'
-      + '畫完【回到第一個點按下去】就接起來（想讓最後那段也彎就按住拖）。'
-      + '【換直線或曲線】：回到剛畫好的那個點 —— 點一下＝下一段直線、'
+  toast(`鋼筆：在${penPlaneName(sel.penPlane)}上點一下放尖角、按住拖放圓滑（拖出來的就是把手）。`
+      + '右鍵按一下＝ 確定這一段曲線（平板按「確定曲線」）。'
+      + '按住 Shift＝ 鎖角度（度數在旁邊調，平板按「鎖角度」）。'
+      + '畫完回到第一個點按下去就接起來（想讓最後那段也彎就按住拖）。'
+      + '換直線或曲線：回到剛畫好的那個點 —— 點一下＝下一段直線、'
       + '按住拖＝下一段曲線。'
       + '（也可以在最後一點快點兩下）'
       + '　轉視角改成：桌機按右鍵拖、平板兩指');
@@ -2549,7 +2549,7 @@ function finishPen() {
     const area = m ? m.area() : 0;
     toast(`已建立「${obj.name}」（畫在${where}）：${paths.length} 條線、${n} 個點、`
         + `${up ? '牆高' : '板寬'} ${h} cm　`
-        + `⭐ 這是【板件】，面積 ${area.toFixed(2)} cm²（＝ 線長 × ${h}）—— `
+        + `⭐ 這是板件，面積 ${area.toFixed(2)} cm²（＝ 線長 × ${h}）—— `
         + '厚薄請改右側的「板厚」');
   } else {
     /**
@@ -2560,7 +2560,7 @@ function finishPen() {
     toast(`已建立「${obj.name}」（畫在${where}）：${paths.length} 條路徑、${n} 個點、`
         + `${sel.penPlane ? '厚' : '高'} ${h} cm　`
         + (paths.length > 1
-            ? '⭐ 包在裡面的那條已經變成【洞】'
+            ? '⭐ 包在裡面的那條已經變成洞'
             : (curved ? '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）　' : '')
               + '要挖洞：右側面板按「加一條（挖洞）」'));
   }
@@ -2596,7 +2596,7 @@ function togglePenCorner() {
     if (r === null) { toast('先點一個錨點，再按「尖角」', true); return; }
     if (r === 'need-drag') {
       toast('這個點本來就是尖角 —— 要讓它變圓滑，'
-          + '在它身上【按住拖】就長得出把手（憑空長的話方向不唯一）');
+          + '在它身上按住拖就長得出把手（憑空長的話方向不唯一）');
       return;
     }
     applyPenEdit();
@@ -2620,7 +2620,7 @@ function togglePenCorner() {
   updateBar();
   if (sel.penCorner) {
     toast(cut
-      ? '尖角：開。【接下來那一段就是直線】—— 剛才那個點的把手已經收掉'
+      ? '尖角：開。接下來那一段就是直線—— 剛才那個點的把手已經收掉'
       : '尖角：開。接下來放的點一律是尖角（就算你用拖的）');
     return;
   }
@@ -2670,8 +2670,8 @@ function toggleKnifeCurve() {
   hideKnifeLine();
   updateBar();
   toast(sel.knifeCurve
-    ? '曲線：【點一下】＝尖角、【按住拖】＝圓滑。第一點點在面的【邊上】⇒ 最後點在邊上就畫好（切成兩塊）；'
-      + '第一點點在面的【中間】⇒ 點回第一點就封成一圈。畫好再按「切下去」。⚠ 這個模式裡按住拖是拉曲線，⛔ 不是一筆畫'
+    ? '曲線：點一下＝尖角、按住拖＝圓滑。第一點點在面的邊上⇒ 最後點在邊上就畫好（切成兩塊）；'
+      + '第一點點在面的中間⇒ 點回第一點就封成一圈。畫好再按「切下去」。⚠ 這個模式裡按住拖是拉曲線，不是一筆畫'
     : '直線：跟原本的刀具一樣（點在邊上、按住拖＝一筆畫）');
 }
 
@@ -2765,7 +2765,7 @@ function curvePlaceNotch(x, y) {
    */
   const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal, { grabScale: 3, corners: false });
   const at = snap ? notchAt(frame, ...frame.st(h.node.localToWorld(snap.p.clone()))) : null;
-  if (!at) { toast('半圓要放在面的【邊上】—— 在面上靠近那條邊的地方點一下', true); return; }
+  if (!at) { toast('半圓要放在面的邊上—— 在面上靠近那條邊的地方點一下', true); return; }
   /** ⑤-7（2026-10-20）：跟圓一樣 —— 上一次的半徑在這條邊放不下 ⇒ 先用放得下的（邊長一半的 0.8 倍、往下取到 0.1 cm），記住的⛔ 改 */
   const r = notchFits(at.edge, curveRadius) ? curveRadius : Math.max(0.1, Math.floor(at.edge.len / 2 * 0.8 * 10) / 10);
   curveNotchArm = false;
@@ -2907,7 +2907,7 @@ function curveDown(x, y) {
       updateBar();
       return;
     }
-    if (curve.closed) toast('封閉圈：在面裡面點下去，最後【點回第一點】就封起來（在第一點上按住拖 ＝ 那裡也是圓滑的）');
+    if (curve.closed) toast('封閉圈：在面裡面點下去，最後點回第一點就封起來（在第一點上按住拖 ＝ 那裡也是圓滑的）');
     drawCurve();
     updateBar();
     return;
@@ -3458,7 +3458,7 @@ function knifeDeleteAt(i) {
   const n = knifePicks.length;
   toast(n >= 2
     ? `刪掉第 ${i + 1} 個切點，還有 ${n} 個　按「退一步」可以放回原位`
-    : `刪掉第 ${i + 1} 個切點，還有 ${n} 個 —— ⛔ 不到兩個切不下去`);
+    : `刪掉第 ${i + 1} 個切點，還有 ${n} 個 —— 不到兩個切不下去`);
 }
 
 /**
@@ -3510,7 +3510,7 @@ function knifeMoveEnd(ok) {
  */
 function undoKnifeDelete() {
   const r = knifeRestoreLastDelete();
-  if (!r) { toast('⛔ 沒有刪掉的切點可以放回來', true); return; }
+  if (!r) { toast('沒有刪掉的切點可以放回來', true); return; }
   toast(r.at === r.want
     ? `放回第 ${r.at + 1} 個，共 ${knifePicks.length} 個`
     : `原來那一格已經不在了，放到最後面 —— 第 ${r.at + 1} 個，共 ${knifePicks.length} 個`);
@@ -4475,7 +4475,7 @@ function offsetLoopSelected() {
   if (r.clamped) {
     bits.push(`⚠ 有 ${r.clamped} 個地方頂到底了（偏移量比那一段還長，已經停在端點）`);
   }
-  bits.push(`體積 ${r.mesh.volume().toFixed(2)} cm³（⛔ 沒變，它只加線）`);
+  bits.push(`體積 ${r.mesh.volume().toFixed(2)} cm³（沒變，它只加線）`);
   toast(bits.join('　'));
 }
 
@@ -5461,7 +5461,7 @@ function selectSharpEdges() {
      * 「整圈都是開口邊緣」是調數字永遠沒救。
      */
     if (r.scanned === 0 && r.boundarySkipped > 0) {
-      toast(`沒有選到 —— 這個物件看得見的邊全部是【開口邊緣】`
+      toast(`沒有選到 —— 這個物件看得見的邊全部是開口邊緣`
           + `（${r.boundarySkipped} 條，只有一側有面，例如平板的四周）。`
           + `開口邊緣沒有夾角可以算，它本來就是外輪廓`, true);
     } else {
@@ -5522,7 +5522,7 @@ function selectSimilar() {
         + `${r.kind === 'face' ? '面' : '邊'}（掃過 ${r.scanned} 個）`, true);
     return;
   }
-  toast(`已依【${label}】選起 ${got} 個${r.kind === 'face' ? '面' : '邊'}`
+  toast(`已依「${label}」選起 ${got} 個${r.kind === 'face' ? '面' : '邊'}`
       + `（掃過 ${r.scanned} 個）`);
 }
 
@@ -5578,7 +5578,7 @@ function selectChecker() {
    */
   if (r.seamAdjacent) {
     parts.push(`⚠ 繞回起點的地方有兩個連在一起 —— ${r.total} 個除不盡 ${nth}，`
-      + `這是躲不掉的，⛔ 不是漏掉一個`);
+      + `這是躲不掉的，不是漏掉一個`);
   }
   if (!r.closed) parts.push('（這是一條，沒有繞回來）');
   toast(parts.join('　'));
@@ -6797,7 +6797,7 @@ $('guideNum').addEventListener('change', () => {
      */
     doc.addGuide(guideAxis, from);
     syncGuideRow();
-    toast(`${fmtGuide(v)} cm 已經有一條參考線了，⛔ 沒有搬過去`, true);
+    toast(`${fmtGuide(v)} cm 已經有一條參考線了，沒有搬過去`, true);
     return;
   }
   guidePicked = v;
@@ -6855,7 +6855,7 @@ $('guideDel').onclick = () => {
 
 $('guideClear').onclick = () => {
   const n = doc.guideCount();
-  if (!n) { toast('現在⛔ 沒有任何參考線'); return; }
+  if (!n) { toast('現在沒有任何參考線'); return; }
   doc.clearGuides();
   guidePicked = null;
   const detAll = revDetachGuide(doc);
@@ -6891,7 +6891,7 @@ $('showGuides').onclick = function () {
    */
   toast(on
     ? `顯示參考線（現在有 ${doc.guideCount()} 條）`
-    : `參考線隱藏了 —— ⚠ 線還在、存檔也還在（共 ${doc.guideCount()} 條），⛔ 不是刪掉`);
+    : `參考線隱藏了 —— ⚠ 線還在、存檔也還在（共 ${doc.guideCount()} 條），不是刪掉`);
 };
 
 /**
@@ -7201,7 +7201,7 @@ function updateBar() {
   const ew = sel.snapStep > 0 ? sel.snapStep : 1;
   $('extrudeEdge').hidden = !anyEdge;
   $('extrudeEdge').title = anyEdge
-    ? `從選到的【外緣】各長出一片面，寬 ${ew} cm（＝吸附現在的值）。長完可以再用「拉點線面」調`
+    ? `從選到的外緣各長出一片面，寬 ${ew} cm（＝吸附現在的值）。長完可以再用「拉點線面」調`
     : (sel.editMode ? '先選至少一條板子外緣的邊（把過濾器切到「邊」）'
                     : '先按「拉點線面」進入編輯模式，再選外緣的邊');
 
@@ -7361,7 +7361,7 @@ function updateBar() {
 
   $('selRing').hidden = !edge1;
   $('selRing').title = edge1
-    ? '從這條邊【橫著跨過】四邊形繞一圈全部選起來（也可以先按它看環切會切在哪）'
+    ? '從這條邊橫著跨過四邊形繞一圈全部選起來（也可以先按它看環切會切在哪）'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**
@@ -7374,7 +7374,7 @@ function updateBar() {
   $('selLoop').title = edge2
     ? '選了兩條邊：兩條是相鄰的外緣（開口的邊）⇒ 把那一整圈開口選起來'
     : edge1
-    ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）。要選一整圈開口：選兩條相鄰的外緣再按'
+    ? '從這條邊順著同一條線走到底（球的一條經線＝從極走到極）。要選一整圈開口：選兩條相鄰的外緣再按'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**
@@ -7384,7 +7384,7 @@ function updateBar() {
    */
   $('selRingFaces').hidden = !edge1;
   $('selRingFaces').title = edge1
-    ? '跟「選一圈」走同一條路，但選起來的是【面】（一整圈側面）。按下去會自動切到「面」'
+    ? '跟「選一圈」走同一條路，但選起來的是「面」（一整圈側面）。按下去會自動切到「面」'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**
@@ -7407,7 +7407,7 @@ function updateBar() {
   $('selSharp').hidden = !canAll;
   $('sharpDeg').hidden = !canAll;
   $('selSharp').title = canAll
-    ? '把所有【折起來】的邊一次選起來（夾角大於旁邊那個度數）。標分片切割線的捷徑'
+    ? '把所有折起來的邊一次選起來（夾角大於旁邊那個度數）。標分片切割線的捷徑'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
 
   /**
@@ -7419,7 +7419,7 @@ function updateBar() {
   $('selSimilar').hidden = !canSimilar;
   $('similarMode').hidden = !canSimilar;
   $('selSimilar').title = canSimilar
-    ? `跟【最後選的那一個${sel.editSel.kind === 'edge' ? '邊' : sel.editSel.kind === 'face' ? '面' : '點'}】同一類的全部選起來`
+    ? `跟最後選的那一個${sel.editSel.kind === 'edge' ? '邊' : sel.editSel.kind === 'face' ? '面' : '點'}同一類的全部選起來`
     : (sel.editMode ? '先選一個面或一條邊當範本'
                     : '先按「拉點線面」進入編輯模式，再選一個面或一條邊');
 
@@ -7517,10 +7517,10 @@ function updateBar() {
        : curveNotchArm ? '半圓：在面上靠近要開缺口的那條邊點一下'
        : curvePolyOn && !curve ? '折線：先在面上點起點（邊上 ⇒ 最後延伸到邊；中間 ⇒ 最後接回起點）'
        : curve && curve.poly && !curve.done ? `折線：${curve.anchors.length} 點　打長度、角度按「加一段」（Enter）`
-       : !curve ? '曲線：第一點點在面的【邊上】（切成兩塊）或【中間】（封閉圈）；或按「圓」放一個圓、按「半圓」在邊上開缺口'
+       : !curve ? '曲線：第一點點在面的邊上（切成兩塊）或中間（封閉圈）；或按「圓」放一個圓、按「半圓」在邊上開缺口'
        : curve.done ? ''
-       : curve.closed ? `封閉圈：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後【點回第一點】`
-       : `曲線：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後一點點在【邊上】`)
+       : curve.closed ? `封閉圈：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後點回第一點`
+       : `曲線：${curve.anchors.length} 點　點一下＝尖角、按住拖＝圓滑，最後一點點在邊上`)
     : sel.knifeMode
     ? (knifePicks.length >= 2 ? '' : `刀具：在模型上點兩個以上的位置（現在 ${knifePicks.length} 個）`)
     : sel.penMode
@@ -7643,8 +7643,8 @@ function updateBar() {
     ? (sel.penEdit
         ? `改點模式：${sel.penCount} 個點。點一個點就選它，拖它＝搬位置、`
           + '拖把手＝調曲線。再按一次「改點」回到畫的模式'
-        : `畫到 ${sel.penCount} 個點了。【點一下】＝ 尖角、【按住拖】＝ 圓滑，`
-          + '最後一點【快點兩下】完成（或再按一次這顆）')
+        : `畫到 ${sel.penCount} 個點了。點一下＝ 尖角、按住拖＝ 圓滑，`
+          + '最後一點快點兩下完成（或再按一次這顆）')
     : '鋼筆：在地板上畫一個形狀，畫完自動變成可以拉厚度的物件';
 
   $('knifeCancel').hidden = !sel.knifeMode;
