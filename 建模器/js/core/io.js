@@ -1279,7 +1279,8 @@ export class Doc {
   static fromJSON(d) { return new Doc().loadJSON(d); }
 }
 
-function today() {
+/** 本地的今天（YYYY-MM-DD）。⑤-25（2026-10-20）：匯出給 STL 檔頭共用（以前那邊用世界時間，台灣早上 8 點前會寫成昨天）*/
+export function today() {
   const d = new Date();
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;

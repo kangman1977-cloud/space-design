@@ -18,6 +18,7 @@ import { triangles, bedLayout, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
 import { boundaryEdges, nonManifoldEdges } from '../core/selectops.js';
+import { today } from '../core/io.js';
 
 const LS_KEY = 'modeler_export3d';
 
@@ -375,17 +376,18 @@ export class ExportPanel {
 
     const bin = this.opt.format === 'binary';
     const u = STL_UNITS[this.opt.unit].label;
-    const head = `modeler unit=${u} ${new Date().toISOString().slice(0, 10)}`;
-    const mk = (tris, name) => bin
+    /** ⑤-25（2026-10-20）：檔頭日期用本地的今天（以前 `toISOString()` 是世界時間，早上 8 點前會寫成昨天）*/
+    const head = `modeler unit=${u} ${today()}`;
+    const mk = (tris, name, fallback) => bin
       ? binaryBlob(toSTLBinary(tris, { header: head }), 'model/stl')
-      : textBlob(toSTLAscii(tris, { name }), 'model/stl');
+      : textBlob(toSTLAscii(tris, { name, fallback }), 'model/stl');
 
     const together = this.opt.group === 'one' || this.items.length === 1;
     // 各物件的三角形帶著世界座標；合成一個檔時整組一起落，相對位置因此完全保留
     const laid = bedLayout(this.items.map(it => it.tris), together);
 
     if (together) {
-      await saveBlob(mk(laid[0], this._base()), `${this._base()}_${u}.stl`,
+      await saveBlob(mk(laid[0], this._base(), 'model'), `${this._base()}_${u}.stl`,
         TYPES.stl, this.opt.askPath);
       return;
     }
@@ -393,7 +395,7 @@ export class ExportPanel {
     const jobs = this.items.map((it, i) => ({
       name: `${this._base()}_${String(i + 1).padStart(2, '0')}_`
           + `${safeName(it.obj.name, '物件')}_${u}.stl`,
-      blob: mk(laid[i], it.obj.name)
+      blob: mk(laid[i], it.obj.name, `part${String(i + 1).padStart(2, '0')}`)
     }));
     const n = await saveMany(jobs, this.opt.askPath);
     if (n > 1) this.sum.textContent = `已存 ${n} 個 STL。　` + this.sum.textContent;

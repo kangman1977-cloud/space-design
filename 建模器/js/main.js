@@ -2012,6 +2012,15 @@ function toggleKnifeMode() {
     toast('至少要點兩個位置才切得下去 —— 或按「取消」離開', true);
     return;
   }
+  /** ⑤-7：還不能進來 ⇒ 講差什麼（以前按鈕灰掉、按了沒反應）*/
+  if (!sel.active) {
+    toast('刀具要先選好一個物件再按（進了刀具之後點畫面是在放切點，就不能再選物件了）', true);
+    return;
+  }
+  if (sel.active.isParametric) {
+    toast(`「${sel.active.name}」是參數物件（照尺寸算出來的）—— 先在右側面板按「轉成可編輯網格」，才能用刀具切它`, true);
+    return;
+  }
   exitOtherModes('knife');
   sel.setKnifeMode(true);
   $('knife').classList.add('on');
@@ -2587,13 +2596,23 @@ function curvePlaceCircle(x, y) {
   const frame = faceDimFrame(loop.map(p => h.node.localToWorld(p.clone())));
   if (!frame) { toast('這個面是斜的 —— 放圓（打數字）只能用在跟座標軸對齊的面（頂面、側面…）', true); return; }
   const [s, t] = frame.st(h.world);
+  /**
+   * ⑤-7（2026-10-20，kang「照建議」）：**上一次的半徑放不下 ⇒ 這一次先用放得下的**（以前一律用上一次的 ⇒
+   * 小面上第一個圓就比面大，T3、T6 的 5、15 mm）。放不放得下 ＝ 圓心到面的外框四邊最近的那一邊；
+   * 放得下的 ＝ 那個距離的 0.8 倍、往下取到 0.1 cm（最少 0.1）。⚠ 記住的半徑⛔ 改（下一個大面照樣用上一次的）。
+   */
+  const sMax = Math.max(...frame.ring.map(q => q[0])), tMax = Math.max(...frame.ring.map(q => q[1]));
+  const room = Math.min(s - frame.sMin, sMax - s, t - frame.tMin, tMax - t);
+  const r = curveRadius <= room + 1e-9 ? curveRadius : Math.max(0.1, Math.floor(room * 0.8 * 10) / 10);
   curveCircleArm = false;
   curveNotchArm = false;
   curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: true, closing: false,
             anchors: [], done: true, hover: null, sel: -1, selecting: false,
-            circle: { s, t, r: curveRadius } };
+            circle: { s, t, r } };
   curveCircleRebuild();
-  toast('放好一個圓 —— 在上方改「圓心離左邊／離下邊、半徑或直徑」，好了按「切下去」');
+  toast('放好一個圓'
+    + (r !== curveRadius ? `（上一次的半徑 ${curveShow(curveRadius)} ${curveUnit} 放不下，先用 ${curveShow(r)} ${curveUnit}）` : '')
+    + ' —— 在上方改「圓心離左邊／離下邊、半徑或直徑」，好了按「切下去」');
   drawCurve();
   updateBar();
 }
@@ -2610,17 +2629,25 @@ function curvePlaceNotch(x, y) {
   const { h, nf, loop, n, d } = fa;
   const frame = faceDimFrame(loop.map(p => h.node.localToWorld(p.clone())));
   if (!frame) { toast('這個面是斜的 —— 放半圓（打數字）只能用在跟座標軸對齊的面（頂面、側面…）', true); return; }
-  const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal);
+  /**
+   * ⑤-7（2026-10-20）：**點邊的範圍放寬到 3 倍、⛔ 吸角**（以前跟切點一樣只有 14 像素內，T6 點了好幾下才中）——
+   * 半圓本來就只能放在邊上，點在面上靠近哪條邊就是哪條；角不能放半圓，吸過去反而點不中。
+   */
+  const snap = sel.curveSnapBoundary(x, y, h.node, loop, h.pLocal, { grabScale: 3, corners: false });
   const at = snap ? notchAt(frame, ...frame.st(h.node.localToWorld(snap.p.clone()))) : null;
   if (!at) { toast('半圓要放在面的【邊上】—— 在面上靠近那條邊的地方點一下', true); return; }
+  /** ⑤-7（2026-10-20）：跟圓一樣 —— 上一次的半徑在這條邊放不下 ⇒ 先用放得下的（邊長一半的 0.8 倍、往下取到 0.1 cm），記住的⛔ 改 */
+  const r = notchFits(at.edge, curveRadius) ? curveRadius : Math.max(0.1, Math.floor(at.edge.len / 2 * 0.8 * 10) / 10);
   curveNotchArm = false;
   curve = { obj: h.obj, node: h.node, face: nf.face, n, d, loop, closed: false, closing: false,
             anchors: [], done: true, hover: null, sel: -1, selecting: false,
-            circle: { s: 0, t: 0, r: curveRadius, edge: at.edge, along: at.along } };
+            circle: { s: 0, t: 0, r, edge: at.edge, along: at.along } };
   curveCircleRebuild();
-  toast(notchFits(at.edge, curveRadius)
-    ? '放好一個半圓 —— 在上方改圓心位置（只能沿著這條邊）、半徑或直徑，好了按「切下去」'
-    : `這條邊只有 ${curveShow(at.edge.len)} ${curveUnit}，放不下直徑 ${curveShow(2 * curveRadius)} 的半圓 —— 把半徑改小`, !notchFits(at.edge, curveRadius));
+  toast(notchFits(at.edge, r)
+    ? '放好一個半圓'
+      + (r !== curveRadius ? `（上一次的半徑 ${curveShow(curveRadius)} ${curveUnit} 在這條邊放不下，先用 ${curveShow(r)} ${curveUnit}）` : '')
+      + ' —— 在上方改圓心位置（只能沿著這條邊）、半徑或直徑，好了按「切下去」'
+    : `這條邊只有 ${curveShow(at.edge.len)} ${curveUnit}，放不下直徑 ${curveShow(2 * r)} 的半圓 —— 把半徑改小`, !notchFits(at.edge, r));
   drawCurve();
   updateBar();
 }
@@ -2895,6 +2922,10 @@ function polyAdd() {
   if (nx.where === 'edge') {
     curve.done = true;
     toast(`折線走到邊上了（${curve.anchors.length} 個點）—— 按「切下去」；要改就按「退一點」`);
+  } else {
+    /** ⑤-7（2026-10-20）：每加一段就講一次（以前提示停在「起點放好了」，加了幾段都看不出來，T3）*/
+    toast(`加了第 ${curve.anchors.length - 1} 段（共 ${curve.anchors.length} 個點）—— 再打下一段按「加一段」，`
+      + (curve.closed ? '最後按「接回起點」' : '最後按「延伸到邊」') + '；要改就按「退一點」');
   }
   drawCurve();
   updateBar();
@@ -7279,7 +7310,11 @@ function updateBar() {
    * （kang 選的：再按一次取消，平板沒有 Esc）。**鎖起來就出不去了。**
    */
   const canKnife = !!sel.active && !sel.active.isParametric;
-  $('knife').disabled = !canKnife && !sel.knifeMode;
+  /**
+   * ⑤-7（2026-10-20，kang「照建議」）：**⛔ 再用 `disabled`** —— 灰掉的按鈕按了沒反應，原因只寫在滑鼠提示裡，
+   * 平板沒有滑鼠提示（T3、T6）。⇒ 看起來一樣是淡的（`.blocked`），但按得下去、按了講差什麼（`toggleKnifeMode()`）。
+   */
+  $('knife').classList.toggle('blocked', !canKnife && !sel.knifeMode);
   /**
    * 🔴🔴 **「現在按下去會發生什麼」現在講在【控制列】，⛔ 不在工具鈕上。**
    * （2026-08-31 改；**kang 拍板：主工具在直條，其餘選了工具之後在控制列顯示**）
@@ -7701,7 +7736,8 @@ function updateBar() {
   const act = sel.active;
   $('sInfo').textContent = act
     ? `${act.name}${act.copies > 1 ? ` ×${act.copies}` : ''}`
-      + `　X ${f1(act.pos.x)}　Y ${f1(act.pos.y)}　Z ${f1(act.pos.z)} cm`
+      /** ⑤-14（2026-10-20）：兩位小數、跟量測同一支（以前一位 ⇒ 0.05 cm 的差別看不出來，量測卻看得到）*/
+      + `　X ${fmtCm(act.pos.x)}　Y ${fmtCm(act.pos.y)}　Z ${fmtCm(act.pos.z)} cm`
     : (hist.undoLabel ? '上一步：' + hist.undoLabel : '點一下物件選取它');
 
   /**
@@ -7791,8 +7827,6 @@ function hideEmptyGroups() {
     g.hidden = !live;
   }
 }
-
-const f1 = v => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(1);
 
 // ── 提示條 ────────────────────────────────────────────
 

@@ -941,31 +941,62 @@ export class SceneView {
    * 而症狀是「亮起來的那條跟原本那條差了一點點」。
    * 〔坑第 31 條：與其讓兩條路對齊，不如只留一條路〕
    */
-  _guideSegments(g, cross = true) {
+  _guideSegments(g, cross = true, extG = g) {
     const R = 300;                       // ＝ 地板 600cm 的一半
     const seg = [];                      // ⚠ LineSegments：每兩點一段
     const push = (a, b) => { seg.push(a, b); };
     const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    /**
+     * ⑤-17（2026-10-20）：「畫成面」時那一圈邊線跟面同一個大小（`_guideExtent()`，本機畫面試出來的：
+     * 面縮小了、邊線還是 600 ⇒ 一條長線橫過整個畫面）。原本的畫法（有十字）照舊 600。
+     */
+    const ext = cross ? null : this._guideExtent(extG);   // 高亮只畫幾條，但大小要跟全部那幾片一樣
+    const half = k => (ext ? ext.s[k] / 2 : R), mid = k => (ext ? ext.c[k] : 0);
 
     /**
      * 一個平面畫五樣東西：四條邊 ＋ 中央的十字。
      * @param {(u:number, v:number) => THREE.Vector3} at 平面上的座標 → 世界座標
+     * @param {string} ku u 沿哪個軸（量大小用）
+     * @param {string} kw w 沿哪個軸
      */
-    const frame = at => {
-      push(at(-R, -R), at(R, -R));
-      push(at(R, -R), at(R, R));
-      push(at(R, R), at(-R, R));
-      push(at(-R, R), at(-R, -R));
+    const frame = (at, ku, kw) => {
+      const u0 = mid(ku) - half(ku), u1 = mid(ku) + half(ku), w0 = mid(kw) - half(kw), w1 = mid(kw) + half(kw);
+      push(at(u0, w0), at(u1, w0));
+      push(at(u1, w0), at(u1, w1));
+      push(at(u1, w1), at(u0, w1));
+      push(at(u0, w1), at(u0, w0));
       /** ⚠ 「畫成面」時⛔ 十字 —— 面本身已經看得出是一片，十字只會讓畫面更亂 */
       if (!cross) return;
       push(at(-R, 0), at(R, 0));         // 十字：橫
       push(at(0, -R), at(0, R));         // 十字：直
     };
 
-    for (const v of (g && g.x) || []) frame((u, w) => V(v, w, u));
-    for (const v of (g && g.y) || []) frame((u, w) => V(u, v, w));
-    for (const v of (g && g.z) || []) frame((u, w) => V(u, w, v));
+    for (const v of (g && g.x) || []) frame((u, w) => V(v, w, u), 'z', 'y');
+    for (const v of (g && g.y) || []) frame((u, w) => V(u, v, w), 'x', 'z');
+    for (const v of (g && g.z) || []) frame((u, w) => V(u, w, v), 'x', 'y');
     return seg;
+  }
+
+  /**
+   * 🔴 **「畫成面」的大小：模型的外框（連參考線自己的位置）加一圈**（綜合評估 ⑤-17，2026-10-20，kang「照建議」）。
+   * 以前固定 600 × 600 ⇒ 小模型時一片淡青蓋滿整個畫面（T7）。一圈 ＝ 最大邊的 0.15 倍、最少 10 cm；
+   * 沒有物件 ⇒ 照舊 600 × 600、中心在原點。面與邊線都問這一支（⛔ 兩份）。
+   * ⚠ 拖曳時每一幀都會跑（`sync()` → `syncGuides()`）⇒ 用 three.js 存著的網格外框（`expandByObject` 的預設、⛔ 逐點算），
+   * 成本只跟物件個數有關（鐵律四）。
+   * @returns {{c:THREE.Vector3, s:THREE.Vector3}} 中心、三個方向的大小
+   */
+  _guideExtent(g) {
+    const box = new THREE.Box3();
+    for (const n of this.byId.values()) box.expandByObject(n);
+    const c = new THREE.Vector3(), s = new THREE.Vector3(600, 600, 600);
+    if (box.isEmpty()) return { c, s };
+    for (const v of (g && g.x) || []) box.expandByPoint(new THREE.Vector3(v, box.min.y, box.min.z));
+    for (const v of (g && g.y) || []) box.expandByPoint(new THREE.Vector3(box.min.x, v, box.min.z));
+    for (const v of (g && g.z) || []) box.expandByPoint(new THREE.Vector3(box.min.x, box.min.y, v));
+    box.getCenter(c);
+    box.getSize(s);
+    s.addScalar(2 * Math.max(10, 0.15 * Math.max(s.x, s.y, s.z)));
+    return { c, s };
   }
 
   /**
@@ -1035,19 +1066,21 @@ export class SceneView {
   }
 
   /**
-   * 「畫成面」的那幾片：跟邊線同一個大小（600 × 600）、很淡、兩面都看得到。
+   * 「畫成面」的那幾片：照模型外框加一圈的大小（⑤-17；以前跟邊線同一個大小 600 × 600）、很淡、兩面都看得到。
    * ⚠ ⛔ 寫進深度 —— 不然後面的物件會被一片看不見的牆擋掉一半。
    * ⚠ 點不到（raycast 關掉）—— 參考線本來就⛔ 是靠射線點的（`select.js` 用螢幕像素）。
    */
   _addGuideFaces(g) {
-    const R = 300;
-    const mk = () => new THREE.Mesh(new THREE.PlaneGeometry(2 * R, 2 * R),
+    /** ⑤-17：大小照模型的外框加一圈（`_guideExtent()`，邊線也問同一支）*/
+    const { c, s } = this._guideExtent(g);
+    const mk = (w, h) => new THREE.Mesh(new THREE.PlaneGeometry(w, h),
       new THREE.MeshBasicMaterial({ color: 0x2ad4d4, transparent: true, opacity: 0.1,
         side: THREE.DoubleSide, depthWrite: false }));
     const add = m => { m.renderOrder = 4; m.raycast = () => {}; this._guides.add(m); };
-    for (const v of (g && g.x) || []) { const m = mk(); m.rotation.y = Math.PI / 2; m.position.set(v, 0, 0); add(m); }
-    for (const v of (g && g.y) || []) { const m = mk(); m.rotation.x = -Math.PI / 2; m.position.set(0, v, 0); add(m); }
-    for (const v of (g && g.z) || []) { const m = mk(); m.position.set(0, 0, v); add(m); }
+    /** 平面本來在 XY 上：轉 Y 90° ⇒ 寬沿 Z、高沿 Y；轉 X −90° ⇒ 寬沿 X、高沿 Z */
+    for (const v of (g && g.x) || []) { const m = mk(s.z, s.y); m.rotation.y = Math.PI / 2; m.position.set(v, c.y, c.z); add(m); }
+    for (const v of (g && g.y) || []) { const m = mk(s.x, s.z); m.rotation.x = -Math.PI / 2; m.position.set(c.x, v, c.z); add(m); }
+    for (const v of (g && g.z) || []) { const m = mk(s.x, s.y); m.position.set(c.x, c.y, v); add(m); }
   }
 
   /**
@@ -1134,7 +1167,7 @@ export class SceneView {
     const g = { x: [], y: [], z: [] };
     for (const h of hits) if (g[h.ax]) g[h.ax].push(h.v);
 
-    const seg = this._guideSegments(g, !this.guideFaces);
+    const seg = this._guideSegments(g, !this.guideFaces, this._lastGuides);
     if (!seg.length) return;
 
     this._guidesHot = this._buildLineOverlay('guidesHot', seg, null, 0x9ffcfc);

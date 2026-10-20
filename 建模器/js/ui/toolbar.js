@@ -1102,10 +1102,13 @@ export class Panel {
      * 均分做完之後這排數字應該全部一樣 —— 使用者不必相信我，看數字就好。
      * 這跟分片的「展開後 N 片」是同一件事：**讓操作有沒有生效變成看得見的**。
      */
-    const g = currentGaps(objs, 'x');
-    if (g.length) {
-      this.form.appendChild(note(
-        'X 空隙 ' + g.map(v => round(v)).join('　') + ' cm'));
+    /** ⑤-17（2026-10-20）：三個方向都列（以前只列 X ⇒ 往上疊、往後排的均分做完看不到有沒有生效，T7）*/
+    for (const ax of ['x', 'y', 'z']) {
+      const g = currentGaps(objs, ax);
+      if (g.length) {
+        this.form.appendChild(note(
+          `${ax.toUpperCase()} 空隙 ` + g.map(v => round(v)).join('　') + ' cm'));
+      }
     }
   }
 
@@ -1122,7 +1125,23 @@ export class Panel {
    */
   _gearPairBox() {
     const objs = this.app.sel.objects;
-    if (objs.length !== 2 || !objs.every(o => o.src && o.src.type === 'gear')) return;
+    const isGear = o => !!(o.src && o.src.type === 'gear');
+    /** 布林做出來的、母體（第一個）是齒輪 ⇒ 打過孔的齒輪（可能好幾層）*/
+    const holedGear = src => !!src && src.type === 'bool' && !!src.items && !!src.items[0]
+      && (src.items[0].src.type === 'gear' || holedGear(src.items[0].src));
+    /**
+     * ⑤-19（2026-10-20，kang「照建議」）：**選了兩個、其中有打過孔的齒輪 ⇒ 講為什麼沒有「咬上去」**。
+     * 以前整塊不出現、也⛔ 講 ⇒ T9 打了中心孔的齒輪怎麼選都咬不上，看不出差在哪。
+     * ⚠ 這一輪只講原因；要讓它咬得上，得改「從布林裡面讀出齒輪」的判斷結構（之後再說，`實驗-綜合評估.md` ⑤-19）。
+     */
+    if (objs.length === 2 && !objs.every(isGear) && objs.every(o => isGear(o) || holedGear(o.src))) {
+      const holed = objs.filter(o => !isGear(o)).map(o => `「${o.name}」`).join('、');
+      this.form.appendChild(head('齒輪'));
+      this.form.appendChild(note(`${holed}是布林做出來的（齒輪打過孔，或跟別的東西併過）——「咬上去」要讀齒輪自己的齒數與模數，`
+        + '布林過的物件讀不到，所以這裡沒有那顆按鈕。要咬：先把兩個齒輪咬好再打孔（或按 Ctrl+Z 退回打孔之前，咬好再打）'));
+      return;
+    }
+    if (objs.length !== 2 || !objs.every(isGear)) return;
     const [mover, anchor] = objs;
     this.form.appendChild(head('齒輪'));
     this._rowBtn(`咬上去：把「${mover.name}」移過去咬住「${anchor.name}」`,

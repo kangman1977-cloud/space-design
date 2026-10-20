@@ -18490,6 +18490,31 @@ section('綜合評估 ⑤ 第一批（一）：操作類（2026-10-20）');
   ok('★ 　 對照組：球中間的緯線走得下去（32 條）⇒ 照常當起點', nRim === 32, nRim);
 }
 
+section('綜合評估 ⑤ 第一批（二）：讀數、匯入、輸出、刀具、鋼筆、齒輪（2026-10-20）');
+{
+  /** 左下角讀數、均分空隙三個方向、參考線面的大小、匯入入鏡與線寬、刀具與鋼筆、齒輪那一句（main.js／toolbar.js／scene.js／importPanel.js）在本機版用畫面驗 */
+  const box = buildPrim('box', { w: 10, h: 10, d: 10 });
+  const at = (x, y, z) => triangles(box, { matrix: new THREE.Matrix4().makeTranslation(x, y, z), scale: 10 });
+  const far = at(300, 5, -200);                  // 擺在旁邊的零件（世界 X 300、Z −200 cm）
+  const [solo] = bedLayout([far], false);
+  const bs = trisBounds(solo), cs = bs.getCenter(new THREE.Vector3());
+  ok('★★★ ⑤-26 分開存：每一個的外框中心移到平台中間（X、Y ＝ 0；以前照世界座標、在平台外面）', Math.abs(cs.x) < 1e-9 && Math.abs(cs.y) < 1e-9, cs.toArray().join());
+  near('★★ 　 照樣落到平台（最低點 Z 0）', bs.min.z, 0, 1e-9);
+  near('★ 　 大小不變（100 mm 寬）', bs.max.x - bs.min.x, 100, 1e-6);
+  const [both] = bedLayout([at(0, 5, 0), far], true);
+  const bb = trisBounds(both);
+  near('★★ 　 合成一個檔 ⇒ X／Y ⛔ 動（相對位置就是要的：X 從 −50 到 3050 mm）', bb.min.x, -50, 1e-6);
+  ok('★ 　 原本那一份⛔ 被動到', Math.abs(trisBounds(far).getCenter(new THREE.Vector3()).x - 3000) < 1e-6);
+
+  const tris = triangles(box, { scale: 10 });
+  const nameOf = s => s.split('\n')[0];
+  eq('★★★ ⑤-25 ASCII：名稱全是中文 ⇒ 改用給的代號（以前只剩「-」）', nameOf(toSTLAscii(tris, { name: '左側板', fallback: 'part01' })), 'solid part01');
+  eq('★ 　 沒給代號 ⇒ modeler', nameOf(toSTLAscii(tris, { name: '左側板' })), 'solid modeler');
+  eq('★ 　 有英文或數字 ⇒ 照舊用名稱（中文的那幾個字照舊變「-」）', nameOf(toSTLAscii(tris, { name: 'T7 展示櫃', fallback: 'part01' })), 'solid T7_-');
+  const d = new Date(), p2 = n => String(n).padStart(2, '0');
+  eq('★★ ⑤-25 檔頭日期 ＝ 本地的今天（以前用世界時間，台灣早上 8 點前是昨天）', io.today(), `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

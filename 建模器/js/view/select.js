@@ -4428,14 +4428,15 @@ export class Selection {
    * ⚠ 比的是**螢幕距離**，沿用 `EDGE_GRAB_PX`／`_TOUCH`，⛔ 不新定一個值（跟刀具一樣）。
    * ⭐ 角優先 —— 跟刀具「吸到角」同一條（規格「刀具『吸到角』」）。
    * @param {THREE.Vector3[]} loop 那個面的角（物件座標，照順序）
+   * @param {{grabScale?:number, corners?:boolean}} [opt] ⑤-7：半圓用 —— 範圍放大幾倍、要不要吸角（預設 1 倍、吸角）
    */
-  curveSnapBoundary(clientX, clientY, node, loop, pLocal) {
+  curveSnapBoundary(clientX, clientY, node, loop, pLocal, opt = {}) {
     const r = this._toCanvasPx(clientX, clientY);
     if (!r.w || !r.h || !loop || loop.length < 3) return null;
-    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+    const grab = (isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX) * (opt.grabScale || 1);
     const px = p => this._project(node.localToWorld(p.clone()), r);
     let best = null;
-    for (const c of loop) {
+    for (const c of opt.corners === false ? [] : loop) {
       const s = px(c), dd = Math.hypot(s.x - r.x, s.y - r.y);
       if (dd <= grab && (!best || dd < best.d)) best = { p: c.clone(), d: dd, corner: true };
     }
@@ -5076,8 +5077,15 @@ export class Selection {
        */
       const d = this._snapIf(e, g.x - this._penDragA.gx, g.z - this._penDragA.gz);
       const i = this._penDragA.i;
-      this._pen.a[i * 2] = this._penDragA.ax + d.dx;
-      this._pen.a[i * 2 + 1] = this._penDragA.az + d.dz;
+      let nx = this._penDragA.ax + d.dx, nz = this._penDragA.az + d.dz;
+      /**
+       * ⑤-8（2026-10-20，kang「照建議」）：**沒鎖角度時，拖錨點吸「吸附」那一組的格子**（格距開 1 ⇒ 落在整數 cm；
+       * 按「關」⇒ 自由）——以前拖錨點只認鎖角度，拖完是 12.37 這種數字（T5、T7）。
+       * ⚠ 鎖角度開著（或按著 Shift）⇒ 照舊只鎖角度：那是明講要的，兩個一起吸會兩個都不準。
+       */
+      if (!this._wantPenSnap(e)) { nx = this._snapGuideVal(nx); nz = this._snapGuideVal(nz); }
+      this._pen.a[i * 2] = nx;
+      this._pen.a[i * 2 + 1] = nz;
       this._drawPenPreview();
       return;
     }

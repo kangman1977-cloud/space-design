@@ -25,6 +25,7 @@ import { readSVG, UNIT_KEYS } from '../sketch/profile.js';
 import { flatPts, cornerIdx, shapeBounds, shapesBounds, shiftShape }
   from '../build/prim.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
+import { worldBounds, unionBounds, freeSpot } from '../core/align.js';
 
 const LS_KEY = 'modeler_import';
 
@@ -33,7 +34,8 @@ export class ImportPanel {
   constructor(app) {
     this.app = app;
     // split ＝ 一個形狀一個物件（預設）。false ＝ 整份稿合成一個物件。
-    this.opt = { tolMm: 0.2, h: 3, unit: '', split: true, ...loadOpt() };
+    /** w ＝ 沒封口的線變成鋼筆帶子時的寬（⑤-18，2026-10-20；以前直接用擠出高度 h）*/
+    this.opt = { tolMm: 0.2, h: 3, w: 1, unit: '', split: true, ...loadOpt() };
     this.text = '';
     this.fileName = '';
     this.result = null;
@@ -62,6 +64,8 @@ export class ImportPanel {
           <input type="number" id="imTol" step="0.05" min="0.01" style="width:70px">
           <span class="lbl">擠出高度 cm</span>
           <input type="number" id="imH" step="0.5" min="0.05" style="width:70px">
+          <span class="lbl" id="imWLbl" hidden>線寬 cm</span>
+          <input type="number" id="imW" step="0.1" min="0.05" style="width:70px" hidden>
           <label class="uwCk"><input type="checkbox" id="imSplit"> 一個形狀一個物件</label>
           <span class="sp"></span>
           <button id="imGo" disabled>匯入成 3D 物件</button>
@@ -91,6 +95,17 @@ export class ImportPanel {
     this.hIn.value = this.opt.h;
     this.hIn.title = '往上擠出多高。匯入之後在右側面板還可以改';
     this.hIn.onchange = () => { this.opt.h = num(this.hIn.value, 3); save(this.opt); };
+
+    /**
+     * ⑤-18（2026-10-20，kang「照建議」）：**沒封口的線變成帶子時多寬** —— 以前直接拿擠出高度（預設 3 cm），
+     * 細線匯進來變成 3 cm 寬的帶子（T6）。⚠ 只在讀到沒封口的線時出現（`_render()` 管）。
+     */
+    this.wIn = $('imW');
+    this.wLbl = $('imWLbl');
+    this.wIn.value = this.opt.w;
+    this.wIn.title = '沒封口的線會變成平躺的帶子（鋼筆、不封口），這是帶子的寬。匯入之後在右側面板還可以改';
+    this.wLbl.title = this.wIn.title;
+    this.wIn.onchange = () => { this.opt.w = num(this.wIn.value, 1); save(this.opt); };
 
     this.splitIn = $('imSplit');
     this.splitIn.checked = this.opt.split !== false;
@@ -170,6 +185,7 @@ export class ImportPanel {
     const pieces = r.loops.length;
     const holes = r.loops.reduce((n, l) => n + l.holes.length, 0);
     const nLines = (r.lines || []).length;
+    this.wIn.hidden = this.wLbl.hidden = !nLines;
     this.sum.textContent = `${pieces} 個形狀　內孔 ${holes} 個　`
       + `淨面積 ${f(r.area)} cm²`
       + (nLines ? `　${nLines} 條線（會變成鋼筆）` : '');
@@ -416,7 +432,7 @@ export class ImportPanel {
       const o = new ModelObject({
         name: l.name ? `${base ? base + '－' : ''}${l.name}` : `${base || '線'} 線 ${i + 1}`,
         kind: KIND.SHEET,
-        src: { type: 'pen', h: this.opt.h, open: true, up: false,
+        src: { type: 'pen', h: this.opt.w, open: true, up: false,
                paths: [{ closed: true, a, hi: l.bez.hi.slice(), ho: l.bez.ho.slice() }] }
       });
       recenterOrigin(o);
@@ -433,14 +449,28 @@ export class ImportPanel {
       }
     }
 
+    /**
+     * ⑤-18（2026-10-20，本機畫面試出來的）：**整份稿照 ⑤-1 的規則擺** —— 放在畫面正中間附近、⛔ 跟原有的東西疊在一起
+     * （kang 2026-10-20 定的「新物件」規則；以前稿的中心一律在原點 ⇒ 場上有東西時匯進來壓在裡面，入鏡也只看到別人的面）。
+     * ⭐ 整份一起挪、彼此的相對位置⛔ 變（版面維持原樣）。找空位在 `core/align.js` 的 `freeSpot()`。
+     */
+    const view = this.app.view;
+    if (view && view.orbit && objs.length) {
+      const t = view.orbit.target;
+      const spot = freeSpot(unionBounds(objs), { x: t.x, z: t.z }, this.app.doc.objects.map(worldBounds));
+      for (const o of objs) { o.pos.x += spot.x; o.pos.z += spot.z; }
+    }
+
     for (const o of objs) this.app.doc.objects.push(o);
     this.app.sel.set(objs.map(o => o.id));
     this.app.onEdit(`匯入線稿（${objs.length} 個物件）`);
+    /** ⑤-18（2026-10-20）：匯入完把鏡頭拉到匯進來的那幾個（以前⛔ 入鏡 ⇒ 大的稿常常在畫面外，T6）*/
+    if (this.app.view) this.app.view.frameAll(this.app.doc, objs.map(o => o.id));
     if (this.app.toast) {
       this.app.toast(`已匯入 ${objs.length} 個物件、${r.loops.length} 個形狀，`
-        + `${f(r.size.w)} × ${f(r.size.h)} × ${f(this.opt.h)} cm`
+        + `${f(r.size.w)} × ${f(r.size.h)} × ${f(this.opt.h)} cm（鏡頭已拉到它們）`
         + (lines.length
-          ? `　⭐ ${lines.length} 條沒封口的線變成鋼筆（平躺的帶子）：`
+          ? `　${lines.length} 條沒封口的線變成鋼筆（平躺的帶子，寬 ${f(this.opt.w)} cm）：`
             + '右側面板可以「編輯路徑」、勾「旋轉成形」'
           : ''));
     }

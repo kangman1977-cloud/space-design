@@ -182,7 +182,21 @@ export function trisBounds(tris) {
 export function bedLayout(lists, together) {
   const copy = tris => tris.map(t => ({ a: t.a.clone(), b: t.b.clone(), c: t.c.clone(), n: t.n }));
   if (together) return [dropToBed(lists.flatMap(copy))];
-  return lists.map(l => dropToBed(copy(l)));
+  /**
+   * ⑤-26（2026-10-20，kang「照建議」）：**分開存的每一個也移到平台中間**（外框中心 X、Y ＝ 0）——
+   * 以前只落 Z、X／Y 照世界座標 ⇒ 擺在旁邊的零件存出來，切片軟體打開在平台外面（T9）。
+   * ⚠ 合成一個檔的那一份⛔ 動 X／Y：相對位置就是它要的。
+   */
+  return lists.map(l => centerOnBed(dropToBed(copy(l))));
+}
+
+/** 整批平移，讓外框中心的 X、Y 在 0（⑤-26；Z 不動）*/
+export function centerOnBed(tris) {
+  if (!tris.length) return tris;
+  const c = trisBounds(tris).getCenter(new THREE.Vector3());
+  if (Math.abs(c.x) < 1e-12 && Math.abs(c.y) < 1e-12) return tris;
+  for (const t of tris) for (const v of [t.a, t.b, t.c]) { v.x -= c.x; v.y -= c.y; }
+  return tris;
 }
 
 /** 整批往下平移，讓最低點貼在 Z=0 的列印平台上 */
@@ -236,7 +250,12 @@ export function toSTLBinary(tris, opt = {}) {
  * 座標用 6 位小數 —— 以 mm 計就是奈米級，遠比任何機台精細。
  */
 export function toSTLAscii(tris, opt = {}) {
-  const name = ascii(opt.name || 'modeler').replace(/\s+/g, '_') || 'modeler';
+  /**
+   * ⑤-25（2026-10-20）：名稱全是中文 ⇒ 每個字都變「-」，以前整個名稱只剩「-」（T9）。
+   * ⇒ 換完一個英文字母或數字都沒有，就改用 `opt.fallback`（呼叫端給 model／part01…），再沒有才用 modeler。
+   */
+  const raw = ascii(opt.name || 'modeler').replace(/\s+/g, '_');
+  const name = /[A-Za-z0-9]/.test(raw) ? raw : (opt.fallback || 'modeler');
   const f = v => v.toFixed(6);
   const out = [`solid ${name}`];
   for (const t of tris) {
