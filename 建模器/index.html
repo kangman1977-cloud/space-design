@@ -488,6 +488,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 <div id="app">
 
   <div id="bar">
+      <!--
+        🔴 **⑤-2（2026-10-20，kang「同意你的建議」：方案 2「一排、跟著的排最後」）各組的順序就是畫面上的順序**：
+        前 7 組「一直都在、寬度也不變」（檔案、新增、編輯、展開、模式、視角、檢視）—— 選了什麼、進了哪個工具，它們的位置都⛔ 動；
+        後 8 組「跟著選取／工具才出現或會變寬」，照出現得多寡排：陣列（選一個就有）→ 布林（選兩個才有）→ 吸附 → 方向（一直在但會變寬）
+        → 拉點線面／鋼筆／刀具那一大組 → 法向 → 貼合 → 參考線。
+        ⚠ 以前「跟著的」插在中間 ⇒ 後面的視角、檢視被推來推去（T1、T3、T4、T7：按錯、誤按聯集）；
+        陣列排在布林後面 ⇒ 選第二個物件時「排列」被推開。樣板：`樣板-工具列分兩排.html`。
+        ⚠ 新增一組時：會不會跟著選取出現或變寬？會 ⇒ 放到後面那一區；⛔ 插進前 7 組。
+      -->
     <div class="grp">
       <span class="lbl">檔案</span>
       <button id="newDoc">新建</button>
@@ -506,8 +515,77 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">編輯</span>
       <button id="undo" disabled>復原</button>
       <button id="redo" disabled>重做</button>
-      <button id="dup" hidden>複製</button>
-      <button id="del" class="warn" hidden>刪除</button>
+      <!-- ⑤-2（2026-10-20）：一直在、沒選東西時淡掉（`.blocked`，按了講原因）—— ⛔ 再一出一沒，不然整排常駐的會跟著跑 -->
+      <button id="dup" class="blocked">複製</button>
+      <button id="del" class="warn blocked">刪除</button>
+    </div>
+
+    <div class="grp" id="gUnfold">
+      <span class="lbl">展開</span>
+      <button id="unfold" title="把板件攤平成下料圖：含尺寸標註、折線、折彎補償，可列印或輸出 DXF 送雷切">展開圖</button>
+      <button id="slice" title="剖面分切：切成一疊板，每片一張輪廓送 CNC，切完照號碼疊起來黏合。任何形狀都切得開，不受可展性限制">剖面分切</button>
+      <button id="export3d" title="匯出 STL 給 3D 列印或 CAM。匯出前會先檢查模型封不封閉、法向對不對">3D 列印</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">模式</span>
+      <button id="multi">加選</button>
+      <button id="marquee" title="框選：拖曳畫一個矩形，碰到的物件全部選起來。開著時空白處拖曳不再旋轉視角，箭頭也先收起來（才不會一拖就把物件拖走）；要移動物件時把框選關掉">框選</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">視角</span>
+      <button id="vFront" title="正視圖（從前面看）。對齊要靠這個 —— 透視圖裡對不準">前</button>
+      <button id="vRight" title="右側視圖">側</button>
+      <button id="vTop" title="上視圖（俯視）">上</button>
+      <button id="vIso" class="on" title="等角（斜看）">等角</button>
+      <button id="vOrtho" title="正交投影：關掉近大遠小。要精確對位一定要開">正交</button>
+      <!--
+        🔴🔴 視角鎖定（2026-09-01，kang 提的）。
+
+        ⚠ 只鎖【轉】—— 平移與縮放照用（在平面視圖上還是要放大看細節）。
+        ⛔ 也不擋「前／側／上／等角」那幾顆：那是跳到固定角度，不是拖著轉。
+
+        ⭐ 它還把「參考線第 3 階段」的手勢衝突消滅掉：鎖住之後
+        左鍵／單指拖沒有別的用途，拖參考線就天經地義。
+        理由全文在 scene.js 的 setViewLock。
+      -->
+      <button id="vLock" title="鎖定視角：拖曳不再轉動畫面，⚠ 但平移（右鍵拖／兩指）與縮放照樣可以用。做精確對位時很有用 —— 尤其平板，手指很容易誤觸把視角轉掉。⭐ 「前／側／上／等角」那幾顆仍然按得動（那是跳到固定角度，不是拖著轉）">鎖定</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">檢視</span>
+      <!--
+        🔴 `顯示點`／`標尺寸`／`量圓` 2026-08-31 從「編輯」那一組搬過來（第 3 段）。
+
+        ⭐ 判準是【這東西是什麼性質】，⛔ 不是「它跟誰一起用」：
+        這三顆管的都是**看得見什麼**（點要不要標白圈、讀數要不要顯示），
+        ⛔ 它們一個都不會改變模型 —— 那正是「檢視」的定義。
+        ⚠ 而它們原本擠在「編輯」那 47 顆裡，害那一組**永遠空不掉**。
+        〔kang 2026-08-31 選的：⛔ 不另外開一組「量測」〕
+      -->
+      <button id="vertDots" class="on" title="顯示點：把這個物件所有的點標成小白圈。「邊上加點」加在邊中間的點沒有它就看不到位置。⚠ 只在過濾器是「點」或「自動」時有作用；覺得卡就關掉">顯示點</button>
+      <button id="measureHud" class="on" title="標尺寸：選到的點／邊／面有多大，顯示在【畫面左下角】那一塊（⛔ 不會擋住 XYZ 拉桿）。邊看長度、面看面積與周長、多選看總計與外框，每一種都附重心座標。⭐ 剛好選到【兩個】同一種的時候，還會多報「距離」與 XYZ 各差多少。⚠ 右邊面板那一行不受這顆按鈕影響">標尺寸</button>
+      <button id="measureCircle" title="量圓：把選到的那一圈邊【當成圓】來看，在畫面左下角多報半徑、幾段、每段弦長，以及「網格真值 vs 視為理想圓差多少」。⚠ 它不會判斷這一圈是不是真的圓（方塊的四個角在數學上也共圓）—— 你按了就表示你要問。🔴 那個差額是資訊⛔不是誤差，想更接近圓要回頭把 seg 開高">量圓</button>
+      <!--
+        🔴 參考線的顯示開關放這裡，判準就是這一組上面那則註解自己寫的：
+        「管的都是**看得見什麼**，⛔ 一個都不會改變模型」。
+        ⚠ **關掉是⛔ 不畫，線還在、存檔也還在** —— 那跟「全部清掉」是兩回事，
+        所以 title 與提示訊息都要把這句講出來（看不見 ≠ 不存在）。
+      -->
+      <button id="showGuides" class="on" title="顯示參考線：把三個方向的參考線畫出來（青色）。⚠ 關掉只是【看不到】—— 線還在、存檔也還在，⛔ 不是刪掉。要真的刪請用左邊「參考線」那一組">顯示參考線</button>
+      <button id="guideFaces" title="參考線畫成面：每一條參考線畫成很淡的半透明牆（前後線、左右線）或樓板（高度），外加一圈邊線、不畫十字 —— 斜著看比較分得出誰是誰。⚠ 只改畫法：線的位置、存檔、吸附都不變。關著（預設）＝ 原本的方框＋十字">參考線畫成面</button>
+      <button id="edges" class="on">稜線</button>
+      <button id="wire">線框</button>
+      <button id="frame">全部入鏡</button>
+      <button id="frameSel" title="選到的入鏡：只把選到的東西拉近、擺在畫面正中間（視角方向不變）。沒選東西時跟「全部入鏡」一樣。快速鍵 Shift＋F">選到的入鏡</button>
+    </div>
+
+    <div class="grp" id="gArray">
+      <span class="lbl">陣列</span>
+      <button id="aLinear" hidden title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
+      <button id="aRadial" hidden title="環形陣列：繞一個軸平均分佈，例如法蘭上的螺栓孔">環形</button>
+      <button id="aMirror" hidden title="鏡射：對稱複製一份，例如機箱的左右側板">鏡射</button>
     </div>
 
     <div class="grp" id="gBool">
@@ -517,11 +595,111 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="bInt" hidden title="交集：只留下互相重疊的部分">∩ 交集</button>
     </div>
 
-    <div class="grp" id="gArray">
-      <span class="lbl">陣列</span>
-      <button id="aLinear" hidden title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
-      <button id="aRadial" hidden title="環形陣列：繞一個軸平均分佈，例如法蘭上的螺栓孔">環形</button>
-      <button id="aMirror" hidden title="鏡射：對稱複製一份，例如機箱的左右側板">鏡射</button>
+    <div class="grp">
+      <!--
+        🔴🔴 吸附 2026-08-31 改成【三套，跟著模式換】。
+
+        ⭐ 判準：吸附格距【只在對應的模式裡有意義】——
+        移動的公分數在旋轉模式裡沒有意義，反之亦然。
+        三者不會同時需要，所以永遠只顯示一組 ⇒ 版面成本 ≈ 0。
+
+        ⚠ `data-sm` ＝ 這一顆屬於哪個模式（translate／rotate／scale）。
+        顯示邏輯在 main.js 的 syncSnapRow()，⛔ 掛在 syncModeButtons() 裡
+        （setMode() ⛔ 不叫 updateBar()，只寫在那裡按了不會換 —— 鐵律二）。
+
+        ⭐ 欄位是唯一的真相，按鈕只是【幫你把數字填進去】：
+        打 2.5 進去，四顆全部不亮。〔跟 editNum 同一條路〕
+
+        ✘ 縮放刻意只有開關、⛔ 沒有輸入欄（kang 2026-08-31 收回自由輸入）——
+        理由寫在 select.js 的 setSnapScale 上面。
+      -->
+      <span class="lbl">吸附</span>
+
+      <!-- 移動 -->
+      <button class="snapBtn" data-sm="translate" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="translate" data-s="1">1</button>
+      <button class="snapBtn" data-sm="translate" data-s="5">5</button>
+      <button class="snapBtn" data-sm="translate" data-s="10">10</button>
+
+      <!-- 旋轉：15／45／90，kang 2026-08-31 選的（做盒子、折板 90 最常用）-->
+      <button class="snapBtn" data-sm="rotate" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="rotate" data-s="15">15</button>
+      <button class="snapBtn" data-sm="rotate" data-s="45">45</button>
+      <button class="snapBtn" data-sm="rotate" data-s="90">90</button>
+
+      <!-- 縮放 -->
+      <button class="snapBtn" data-sm="scale" data-s="0">關</button>
+      <button class="snapBtn on" data-sm="scale" data-s="0.05">0.05</button>
+
+      <input id="snapNum" type="number" step="any" min="0" hidden
+             title="吸附格距：直接打一個精確的數字按 Enter（移動＝cm、旋轉＝度）。打了之後左邊那幾顆就不亮了，因為你用的不是它們給的值。打 0 ＝ 關閉">
+      <span id="snapNumUnit" class="unit" hidden>cm</span>
+
+      <!--
+        🔴🔴 吸到參考線（2026-09-01，參考線第 2 階段）。
+
+        ⚠ `data-sm="translate"` ＝ **只在移動模式出現** —— 旋轉與縮放時
+        外框每一幀都在變形，吸上去會變成「東西自己抖」。
+
+        ⭐ class 刻意⛔ 不是 `snapBtn`：那一群是「格距那四顆」，
+        它們是**互斥的一組值**，而這一顆是**獨立的開關**。
+        混在一起的話 syncSnapRow() 的 `Number(dataset.s) === cur` 會把它
+        當成一個值去比〔鐵律二：⛔ 不要讓兩種東西共用一條判斷〕。
+
+        🔴 兩個吸附同時開著時【參考線贏】（kang 2026-09-01 拍板）——
+        理由寫在 select.js 的 setSnapGuides 上面。
+      -->
+      <button id="snapGuide" class="snapGuideBtn" data-sm="translate" hidden
+              title="吸到參考線：拖物件時，物件的邊緣或中心靠近參考線就自動貼上去（三個軸各自吸，所以可以一次對到一個角）。⭐ 跟左邊的格距同時開著時【參考線贏】——參考線在 47.3 這種位置也吸得到。吸中的那條線會亮起來">吸到參考線</button>
+    </div>
+
+    <!--
+      編輯模式專用。**只在按下「拉點線面」之後才出現** ——
+      平常工具列已經很擠，而這兩樣東西在編輯模式以外沒有意義。
+      「模式」那一組（移動／旋轉／縮放）不搬過來，它本來就在，
+      而且編輯模式下用的是同一組按鈕（同一件事只給一個入口）。
+    -->
+    <div class="grp" id="gEditXf" hidden>
+      <span class="lbl">方向</span>
+      <button id="spWorld" class="spBtn on" data-s="world" title="箭頭朝世界的 X／Y／Z">世界</button>
+      <!--
+        🔴 **這一顆的字會被 JS 換**（見 main.js `syncEditXfRow()`）：
+        編輯模式＝「法向」（元素自己的方向）、物件模式＝「物件」（物件自己的角度）。
+        ⛔ 不要改回固定字串 —— **物件沒有法向**，那是面／邊／點才有的東西。
+        ⚠ 這裡寫「法向」只是初始值；那一排預設是 hidden，第一次顯示前
+        一定會先經過 `syncEditXfRow()`。
+      -->
+      <button id="spNormal" class="spBtn" data-s="normal" title="箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個">法向</button>
+      <!--
+        ⚠ 「中心」這兩顆 2026-09-01 起**只在編輯模式出現** ——
+        物件層級的基準點還沒做（下一輪），而按了沒作用比看不到更糟。
+      -->
+      <span class="lbl" id="pvLbl">中心</span>
+      <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
+      <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
+      <button id="pvBounds" class="pvBtn" data-p="bounds" title="中心＝選到的點的外框正中間（只看最外圍）。點分布不均時（例如一邊加了很多點）「重心」會偏過去，這個不會 —— 整顆轉、整塊縮放用它">外框中心</button>
+      <!--
+        🔴 這個字會跟著動作換成「移動／旋轉／縮放」（見 main.js updateEditNum）。
+        原本固定寫「數值」，而 kang 2026-08-25 的回報是
+        「看座標無法真正知道我移動多少」—— 位移量其實一直都印在這裡，
+        只是欄位名稱看不出那是什麼。⛔ 不要改回固定字串。
+      -->
+      <span class="lbl" id="editNumLbl"
+            title="拖曳中會即時顯示這一次移動／旋轉／縮放了多少，放開之後可以直接打精確數字按 Enter">數值</span>
+      <input id="editNum" type="number" step="0.1" hidden
+             title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
+      <span id="editNumUnit" class="unit">—</span>
+      <!--
+        🔴 **比例編輯的影響半徑**（kang 2026-09-02 拍板要做，三顆裡的第一顆）。
+        ⭐ **做成欄位⛔ 不做成滾輪**：Blender 是拖曳中滾滾輪即時改，
+        而**平板沒有滾輪** —— 那會讓一半的驗收環境用不了這個功能。
+        ⚠ **0 ＝ 關掉**，行為跟沒有這個功能時一模一樣（那是保命線）。
+      -->
+      <span class="lbl" id="propRLbl"
+            title="拉一個點的時候，周圍多大範圍要跟著動。填 0 ＝ 關掉，只動選到的那些點（會拉出一個尖角）。填了之後，越靠近的點動越多、越遠的越少，到這個距離就完全不動">影響半徑</span>
+      <input id="propR" type="number" step="1" min="0" value="0"
+             title="單位公分。⚠ 拉得越猛，這裡就要開得越大 —— 順不順看的是「拉多遠 ÷ 這個半徑」。填完畫面上的點會依「跟著動多少」由白轉橘，橘的就是會動的">
+      <span class="unit">公分</span>
     </div>
 
     <div class="grp" id="gEdit">
@@ -1092,126 +1270,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     </div>
 
     <!--
-      編輯模式專用。**只在按下「拉點線面」之後才出現** ——
-      平常工具列已經很擠，而這兩樣東西在編輯模式以外沒有意義。
-      「模式」那一組（移動／旋轉／縮放）不搬過來，它本來就在，
-      而且編輯模式下用的是同一組按鈕（同一件事只給一個入口）。
-    -->
-    <div class="grp" id="gEditXf" hidden>
-      <span class="lbl">方向</span>
-      <button id="spWorld" class="spBtn on" data-s="world" title="箭頭朝世界的 X／Y／Z">世界</button>
-      <!--
-        🔴 **這一顆的字會被 JS 換**（見 main.js `syncEditXfRow()`）：
-        編輯模式＝「法向」（元素自己的方向）、物件模式＝「物件」（物件自己的角度）。
-        ⛔ 不要改回固定字串 —— **物件沒有法向**，那是面／邊／點才有的東西。
-        ⚠ 這裡寫「法向」只是初始值；那一排預設是 hidden，第一次顯示前
-        一定會先經過 `syncEditXfRow()`。
-      -->
-      <button id="spNormal" class="spBtn" data-s="normal" title="箭頭朝選到那個元素自己的方向：藍色那根（Z）就是面的法向。推斜面、拉梯形靠這個">法向</button>
-      <!--
-        ⚠ 「中心」這兩顆 2026-09-01 起**只在編輯模式出現** ——
-        物件層級的基準點還沒做（下一輪），而按了沒作用比看不到更糟。
-      -->
-      <span class="lbl" id="pvLbl">中心</span>
-      <button id="pvMedian" class="pvBtn on" data-p="median" title="中心＝全部選取頂點的重心。選兩個面要縮放時，東西會往兩面中間收">重心</button>
-      <button id="pvActive" class="pvBtn" data-p="active" title="中心＝最後點的那一個元素（畫成橘色的那個）。選兩個面要縮放時，東西會往那一面收。單選時跟「重心」是同一個點">最後選的</button>
-      <button id="pvBounds" class="pvBtn" data-p="bounds" title="中心＝選到的點的外框正中間（只看最外圍）。點分布不均時（例如一邊加了很多點）「重心」會偏過去，這個不會 —— 整顆轉、整塊縮放用它">外框中心</button>
-      <!--
-        🔴 這個字會跟著動作換成「移動／旋轉／縮放」（見 main.js updateEditNum）。
-        原本固定寫「數值」，而 kang 2026-08-25 的回報是
-        「看座標無法真正知道我移動多少」—— 位移量其實一直都印在這裡，
-        只是欄位名稱看不出那是什麼。⛔ 不要改回固定字串。
-      -->
-      <span class="lbl" id="editNumLbl"
-            title="拖曳中會即時顯示這一次移動／旋轉／縮放了多少，放開之後可以直接打精確數字按 Enter">數值</span>
-      <input id="editNum" type="number" step="0.1" hidden
-             title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
-      <span id="editNumUnit" class="unit">—</span>
-      <!--
-        🔴 **比例編輯的影響半徑**（kang 2026-09-02 拍板要做，三顆裡的第一顆）。
-        ⭐ **做成欄位⛔ 不做成滾輪**：Blender 是拖曳中滾滾輪即時改，
-        而**平板沒有滾輪** —— 那會讓一半的驗收環境用不了這個功能。
-        ⚠ **0 ＝ 關掉**，行為跟沒有這個功能時一模一樣（那是保命線）。
-      -->
-      <span class="lbl" id="propRLbl"
-            title="拉一個點的時候，周圍多大範圍要跟著動。填 0 ＝ 關掉，只動選到的那些點（會拉出一個尖角）。填了之後，越靠近的點動越多、越遠的越少，到這個距離就完全不動">影響半徑</span>
-      <input id="propR" type="number" step="1" min="0" value="0"
-             title="單位公分。⚠ 拉得越猛，這裡就要開得越大 —— 順不順看的是「拉多遠 ÷ 這個半徑」。填完畫面上的點會依「跟著動多少」由白轉橘，橘的就是會動的">
-      <span class="unit">公分</span>
-    </div>
-
-    <div class="grp" id="gUnfold">
-      <span class="lbl">展開</span>
-      <button id="unfold" title="把板件攤平成下料圖：含尺寸標註、折線、折彎補償，可列印或輸出 DXF 送雷切">展開圖</button>
-      <button id="slice" title="剖面分切：切成一疊板，每片一張輪廓送 CNC，切完照號碼疊起來黏合。任何形狀都切得開，不受可展性限制">剖面分切</button>
-      <button id="export3d" title="匯出 STL 給 3D 列印或 CAM。匯出前會先檢查模型封不封閉、法向對不對">3D 列印</button>
-    </div>
-
-    <div class="grp">
-      <span class="lbl">模式</span>
-      <button id="multi">加選</button>
-      <button id="marquee" title="框選：拖曳畫一個矩形，碰到的物件全部選起來。開著時空白處拖曳不再旋轉視角，箭頭也先收起來（才不會一拖就把物件拖走）；要移動物件時把框選關掉">框選</button>
-    </div>
-
-    <div class="grp">
-      <!--
-        🔴🔴 吸附 2026-08-31 改成【三套，跟著模式換】。
-
-        ⭐ 判準：吸附格距【只在對應的模式裡有意義】——
-        移動的公分數在旋轉模式裡沒有意義，反之亦然。
-        三者不會同時需要，所以永遠只顯示一組 ⇒ 版面成本 ≈ 0。
-
-        ⚠ `data-sm` ＝ 這一顆屬於哪個模式（translate／rotate／scale）。
-        顯示邏輯在 main.js 的 syncSnapRow()，⛔ 掛在 syncModeButtons() 裡
-        （setMode() ⛔ 不叫 updateBar()，只寫在那裡按了不會換 —— 鐵律二）。
-
-        ⭐ 欄位是唯一的真相，按鈕只是【幫你把數字填進去】：
-        打 2.5 進去，四顆全部不亮。〔跟 editNum 同一條路〕
-
-        ✘ 縮放刻意只有開關、⛔ 沒有輸入欄（kang 2026-08-31 收回自由輸入）——
-        理由寫在 select.js 的 setSnapScale 上面。
-      -->
-      <span class="lbl">吸附</span>
-
-      <!-- 移動 -->
-      <button class="snapBtn" data-sm="translate" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="translate" data-s="1">1</button>
-      <button class="snapBtn" data-sm="translate" data-s="5">5</button>
-      <button class="snapBtn" data-sm="translate" data-s="10">10</button>
-
-      <!-- 旋轉：15／45／90，kang 2026-08-31 選的（做盒子、折板 90 最常用）-->
-      <button class="snapBtn" data-sm="rotate" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="rotate" data-s="15">15</button>
-      <button class="snapBtn" data-sm="rotate" data-s="45">45</button>
-      <button class="snapBtn" data-sm="rotate" data-s="90">90</button>
-
-      <!-- 縮放 -->
-      <button class="snapBtn" data-sm="scale" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="scale" data-s="0.05">0.05</button>
-
-      <input id="snapNum" type="number" step="any" min="0" hidden
-             title="吸附格距：直接打一個精確的數字按 Enter（移動＝cm、旋轉＝度）。打了之後左邊那幾顆就不亮了，因為你用的不是它們給的值。打 0 ＝ 關閉">
-      <span id="snapNumUnit" class="unit" hidden>cm</span>
-
-      <!--
-        🔴🔴 吸到參考線（2026-09-01，參考線第 2 階段）。
-
-        ⚠ `data-sm="translate"` ＝ **只在移動模式出現** —— 旋轉與縮放時
-        外框每一幀都在變形，吸上去會變成「東西自己抖」。
-
-        ⭐ class 刻意⛔ 不是 `snapBtn`：那一群是「格距那四顆」，
-        它們是**互斥的一組值**，而這一顆是**獨立的開關**。
-        混在一起的話 syncSnapRow() 的 `Number(dataset.s) === cur` 會把它
-        當成一個值去比〔鐵律二：⛔ 不要讓兩種東西共用一條判斷〕。
-
-        🔴 兩個吸附同時開著時【參考線贏】（kang 2026-09-01 拍板）——
-        理由寫在 select.js 的 setSnapGuides 上面。
-      -->
-      <button id="snapGuide" class="snapGuideBtn" data-sm="translate" hidden
-              title="吸到參考線：拖物件時，物件的邊緣或中心靠近參考線就自動貼上去（三個軸各自吸，所以可以一次對到一個角）。⭐ 跟左邊的格距同時開著時【參考線贏】——參考線在 47.3 這種位置也吸得到。吸中的那條線會亮起來">吸到參考線</button>
-    </div>
-
-    <!--
       🔴🔴 參考線那一組（2026-08-31，第 1 階段）。
 
       ⚠ 整組 `hidden` —— **只在按了左邊那顆 `參考線` 之後才出現**
@@ -1254,54 +1312,6 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="guideAdd" title="照左邊的方向與位置加一條新的參考線。⚠ 同一個位置已經有線了就不會重複加">加一條</button>
       <button id="guideDel" disabled title="刪掉下拉裡選中的那一條。⚠ 要先在下拉裡選一條">刪這條</button>
       <button id="guideClear" title="把【全部三個方向】的參考線都刪掉。⚠ 這是刪除⛔ 不是隱藏 —— 只想暫時看不到請用「檢視」那組的「顯示參考線」">全部清掉</button>
-    </div>
-
-    <div class="grp">
-      <span class="lbl">視角</span>
-      <button id="vFront" title="正視圖（從前面看）。對齊要靠這個 —— 透視圖裡對不準">前</button>
-      <button id="vRight" title="右側視圖">側</button>
-      <button id="vTop" title="上視圖（俯視）">上</button>
-      <button id="vIso" class="on" title="等角（斜看）">等角</button>
-      <button id="vOrtho" title="正交投影：關掉近大遠小。要精確對位一定要開">正交</button>
-      <!--
-        🔴🔴 視角鎖定（2026-09-01，kang 提的）。
-
-        ⚠ 只鎖【轉】—— 平移與縮放照用（在平面視圖上還是要放大看細節）。
-        ⛔ 也不擋「前／側／上／等角」那幾顆：那是跳到固定角度，不是拖著轉。
-
-        ⭐ 它還把「參考線第 3 階段」的手勢衝突消滅掉：鎖住之後
-        左鍵／單指拖沒有別的用途，拖參考線就天經地義。
-        理由全文在 scene.js 的 setViewLock。
-      -->
-      <button id="vLock" title="鎖定視角：拖曳不再轉動畫面，⚠ 但平移（右鍵拖／兩指）與縮放照樣可以用。做精確對位時很有用 —— 尤其平板，手指很容易誤觸把視角轉掉。⭐ 「前／側／上／等角」那幾顆仍然按得動（那是跳到固定角度，不是拖著轉）">鎖定</button>
-    </div>
-
-    <div class="grp">
-      <span class="lbl">檢視</span>
-      <!--
-        🔴 `顯示點`／`標尺寸`／`量圓` 2026-08-31 從「編輯」那一組搬過來（第 3 段）。
-
-        ⭐ 判準是【這東西是什麼性質】，⛔ 不是「它跟誰一起用」：
-        這三顆管的都是**看得見什麼**（點要不要標白圈、讀數要不要顯示），
-        ⛔ 它們一個都不會改變模型 —— 那正是「檢視」的定義。
-        ⚠ 而它們原本擠在「編輯」那 47 顆裡，害那一組**永遠空不掉**。
-        〔kang 2026-08-31 選的：⛔ 不另外開一組「量測」〕
-      -->
-      <button id="vertDots" class="on" title="顯示點：把這個物件所有的點標成小白圈。「邊上加點」加在邊中間的點沒有它就看不到位置。⚠ 只在過濾器是「點」或「自動」時有作用；覺得卡就關掉">顯示點</button>
-      <button id="measureHud" class="on" title="標尺寸：選到的點／邊／面有多大，顯示在【畫面左下角】那一塊（⛔ 不會擋住 XYZ 拉桿）。邊看長度、面看面積與周長、多選看總計與外框，每一種都附重心座標。⭐ 剛好選到【兩個】同一種的時候，還會多報「距離」與 XYZ 各差多少。⚠ 右邊面板那一行不受這顆按鈕影響">標尺寸</button>
-      <button id="measureCircle" title="量圓：把選到的那一圈邊【當成圓】來看，在畫面左下角多報半徑、幾段、每段弦長，以及「網格真值 vs 視為理想圓差多少」。⚠ 它不會判斷這一圈是不是真的圓（方塊的四個角在數學上也共圓）—— 你按了就表示你要問。🔴 那個差額是資訊⛔不是誤差，想更接近圓要回頭把 seg 開高">量圓</button>
-      <!--
-        🔴 參考線的顯示開關放這裡，判準就是這一組上面那則註解自己寫的：
-        「管的都是**看得見什麼**，⛔ 一個都不會改變模型」。
-        ⚠ **關掉是⛔ 不畫，線還在、存檔也還在** —— 那跟「全部清掉」是兩回事，
-        所以 title 與提示訊息都要把這句講出來（看不見 ≠ 不存在）。
-      -->
-      <button id="showGuides" class="on" title="顯示參考線：把三個方向的參考線畫出來（青色）。⚠ 關掉只是【看不到】—— 線還在、存檔也還在，⛔ 不是刪掉。要真的刪請用左邊「參考線」那一組">顯示參考線</button>
-      <button id="guideFaces" title="參考線畫成面：每一條參考線畫成很淡的半透明牆（前後線、左右線）或樓板（高度），外加一圈邊線、不畫十字 —— 斜著看比較分得出誰是誰。⚠ 只改畫法：線的位置、存檔、吸附都不變。關著（預設）＝ 原本的方框＋十字">參考線畫成面</button>
-      <button id="edges" class="on">稜線</button>
-      <button id="wire">線框</button>
-      <button id="frame">全部入鏡</button>
-      <button id="frameSel" title="選到的入鏡：只把選到的東西拉近、擺在畫面正中間（視角方向不變）。沒選東西時跟「全部入鏡」一樣。快速鍵 Shift＋F">選到的入鏡</button>
     </div>
   </div>
 

@@ -591,7 +591,7 @@ function deleteSelected() {
     return;
   }
   const list = sel.objects;
-  if (!list.length) return;
+  if (!list.length) { toast('先點一下要刪的物件（選起來）再按「刪除」', true); return; }
   for (const o of list) doc.remove(o);
   sel.clear();
   commit(`刪除 ${list.length} 個物件`);
@@ -600,7 +600,7 @@ function deleteSelected() {
 
 function duplicateSelected() {
   const list = sel.objects;
-  if (!list.length) return;
+  if (!list.length) { toast('先點一下要複製的物件（選起來）再按「複製」', true); return; }
   /**
    * 🔴 **⑤-1（2026-10-20，kang 定的）：照寬度並排在旁邊（+X）、留一點間隙**；選了好幾個就整組一起挪、相對位置⛔ 變。
    * 以前固定 +30、+30 ⇒ 比 30 cm 大的東西複製出來疊在原本那個上面。旁邊還有東西就再挪一個寬（`besideShift()`）。
@@ -6999,8 +6999,12 @@ function updateBar() {
   /** ⑤-13：按鈕的提示寫上下一步是什麼、快捷鍵是哪個 */
   $('undo').title = hist.canUndo ? `復原：${hist.undoLabel}（Ctrl+Z）` : histFloorText();
   $('redo').title = hist.canRedo ? `重做：${hist.redoLabel}（Ctrl+Y 或 Ctrl+Shift+Z）` : '沒有可以重做的（Ctrl+Y 或 Ctrl+Shift+Z）';
-  $('del').hidden = sel.count === 0;
-  $('dup').hidden = sel.count === 0;
+  /**
+   * ⑤-2（2026-10-20，kang「同意你的建議」）：複製、刪除**一直在**，沒選東西時淡掉（按了講原因）——
+   * 以前沒選東西就整顆不見 ⇒ 「編輯」那一組忽寬忽窄，後面一直都在的組全被推（工具列排法見 `index.html` `#bar` 開頭）。
+   */
+  $('del').classList.toggle('blocked', sel.count === 0);
+  $('dup').classList.toggle('blocked', sel.count === 0);
 
   /**
    * 🔴 **布林與陣列 2026-08-31（第 4 段）改成「沒輪到就不出現」。**

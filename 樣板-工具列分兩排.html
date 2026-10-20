@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工具列排法比較</title>
+<!--
+  樣板：綜合評估 ⑤-2（2026-10-20，kang「同意你的建議」：先做樣板給 kang 選）。
+  病因：工具列各組照固定順序排、一律換行；選了東西才出現的組（布林、陣列、拉點線面那一大組、方向、法向…）
+  插在中間 ⇒ 後面的「視角」「檢視」被往右、往下推（T1、T3、T4、T7、補測：按鈕跑位、誤按聯集）。
+  2026-10-14 選的 B「浮在畫面上」只解決了「畫面跳」，按鈕照樣跑位。
+
+  三種排法，同一個假的工具列（組與按鈕照建模器 2026-10-20 的 index.html 抄）：
+    A 現在：照原本順序，跟著選取出現的組插在中間
+    1 分兩排：上排只放一直都在的（檔案、新增、編輯、展開、模式、視角、檢視），位置永遠不動；
+      下排放「選了東西／進了工具才有的」，沒有就整排不出現
+    2 一排、跟著的排最後：一直都在的排前面，跟著選取出現的接在它們後面（放不下才換行）
+  業界：Microsoft Ribbon「核心分頁」＋「選到東西才出現的情境分頁、排在核心的右邊」；
+       Fusion 360 開草圖時多一個「草圖」分頁並排（都是官方文件）。
+  ⭐ 1、2 都把「複製」「刪除」改成一直在、沒選東西時淡掉（按了講原因，跟 ⑤-7 刀具同一招）——
+     不然它們一出一沒，連上排都會跑。
+  底下的「量一量」：三顆一直都在的按鈕（前、全部入鏡、加選）跟「沒選東西」時比移了多少；「排列」跟「選一個物件」時比
+  （看選第二個時會不會被布林推開）；工具列多高。1、2 裡「跟著的」照出現的頻率排：陣列在布林前面。
+-->
+<style>
+  :root { --bg: #1b1e23; --bar: #24272e; --line: #3a3f48; --ink: #e8eaed; --muted: #8b93a1; --accent: #2f6fd0; --ctx: #c9862b; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #111316; color: var(--ink);
+    font: 14px/1.5 "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  #ctl { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; background: #0d0f12; border-bottom: 1px solid #2a2e35; }
+  #ctl h1 { font-size: 16px; margin: 0; }
+  .g { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .g > span { color: var(--muted); }
+  #ctl button { padding: 5px 11px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); cursor: pointer; font: inherit; }
+  #ctl button.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  #desc { padding: 8px 16px; color: #c9cfd8; }
+  #meas { margin: 0 16px 10px; padding: 8px 12px; border: 1px solid #2f3540; border-radius: 8px; background: #161a20; color: #c9cfd8; }
+  #meas b { color: #ffe07a; font-weight: 600; }
+  #meas .ok { color: #7cf29a; }
+  #meas .bad { color: #ff8a8a; }
+  #frameWrap { padding: 0 16px 16px; overflow-x: auto; }
+  /* ── 假的建模器 ── */
+  #app { position: relative; height: 460px; border: 1px solid var(--line); background: var(--bg); overflow: hidden; }
+  #bar { position: absolute; left: 0; right: 0; top: 0; z-index: 2; padding: 6px 8px; background: var(--bar); border-bottom: 1px solid var(--line);
+    box-shadow: 0 6px 14px rgba(0,0,0,.35); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .row + .row { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #4a4f59; }
+  .row.ctxRow::before { content: '跟著選取／工具'; font-size: 11px; color: var(--ctx); margin-right: 4px; white-space: nowrap; }
+  .grp { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 8px; }
+  .grp > .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; white-space: nowrap; }
+  .grp.ctx { border-color: var(--ctx); }
+  #app button.b { flex: none; white-space: nowrap; padding: 5px 10px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); font: 13px/1.4 inherit; font-family: inherit; }
+  #app button.b.dim { opacity: .35; }
+  #app button.b.track { outline: 2px solid #ffe07a; outline-offset: 1px; }
+  #app input.f { width: 52px; padding: 4px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); }
+  #stage { position: absolute; left: 0; right: 0; bottom: 0; }
+  #stage .box { position: absolute; left: 50%; top: 55%; width: 120px; height: 90px; margin: -45px 0 0 -60px; background: #4b7fd0; border-radius: 4px; opacity: .8; }
+  #stage .note { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="ctl">
+  <h1>工具列排法比較（⑤-2）</h1>
+  <div class="g" id="cLay"><span>排法</span></div>
+  <div class="g" id="cSc"><span>狀況</span></div>
+  <div class="g" id="cW"><span>視窗寬</span></div>
+</div>
+<div id="desc"></div>
+<div id="meas"></div>
+<div id="frameWrap"><div id="app"><div id="bar"></div><div id="stage"><div class="box"></div><div class="note">（假的 3D 畫面）黃框 ＝ 拿來量的四顆按鈕</div></div></div></div>
+
+<script>
+/** 組與按鈕照建模器 index.html（2026-10-20）抄；when ＝ 在哪些狀況出現（沒寫 ＝ 一直都在） */
+const B = s => s.split(' ');
+const GROUPS = [
+  { k: 'file', lbl: '檔案', btn: B('新建 讀檔 存檔') },
+  { k: 'add', lbl: '新增', btn: ['[方塊 ▾]', '加入', '匯入線稿'] },
+  { k: 'edit', lbl: '編輯', btn: B('復原 重做 複製 刪除'), selOnly: ['複製', '刪除'] },
+  { k: 'bool', lbl: '布林', btn: B('∪聯集 −差集 ∩交集'), when: ['two'], ctx: true },
+  { k: 'array', lbl: '陣列', btn: B('排列 環形 鏡射'), when: ['one', 'two'], ctx: true },
+  { k: 'tool', lbl: '編輯', ctx: true, when: ['face', 'pen'],
+    by: { face: B('自動 點 邊 面 含外緣 擠出 往內擠出 壓平 變成正圓 [R] 環切 [刀數] 選一圈 選一條線 選一圈面 全選邊 全選面 全選點 選轉角 [度] 選相似 切成實心 內縮 導角 [寬]'),
+          pen: B('完成 畫在 [地板 ▾] 尖角 改點 加一條 不封口 厚度 [3] 鎖角度 [45] 智慧參考線 長度 [cm] 角度（0°朝右） [度] 照長度放點 X [cm] Z [cm] 放在這裡 確定曲線 退一點 取消') } },
+  { k: 'normal', lbl: '法向', btn: B('修法向 翻面'), when: ['face'], ctx: true },
+  { k: 'xf', lbl: '方向', btn: B('世界 法向 重心 最後選的 外框中心 [數值] 影響半徑 [0]'), when: ['face'], ctx: true },
+  { k: 'out', lbl: '展開', btn: B('展開圖 剖面分切 3D列印') },
+  { k: 'mode', lbl: '模式', btn: B('加選 框選') },
+  { k: 'view', lbl: '視角', btn: B('前 側 上 等角 正交 鎖定') },
+  { k: 'show', lbl: '檢視', btn: B('顯示點 標尺寸 量圓 顯示參考線 參考線畫成面 稜線 線框 全部入鏡 選到的入鏡') }
+];
+const TRACK = ['前', '全部入鏡', '加選', '排列'];
+/**
+ * 1、2 的「跟著的」排列順序：**出現得越常的越前面** —— 陣列（選一個就有）排在布林（選兩個才有）前面，
+ * 選第二個物件時布林接在後面、⛔ 把陣列推開（T7：多選時布林那組把「排列」擠走，誤按聯集）。
+ */
+const CTX_ORDER = ['array', 'bool', 'tool', 'xf', 'normal'];
+const ctxGroups = s => CTX_ORDER.map(k => GROUPS.find(g => g.k === k)).filter(g => shows(g, s));
+const LAYOUTS = {
+  A: { name: 'A 現在', desc: '照原本的順序排，選了東西才有的組（橘框）插在中間、一律換行 —— 後面的「視角」「檢視」會被往右、往下推。複製、刪除沒選東西時整顆不見。' },
+  '1': { name: '1 分兩排', desc: '上排只放一直都在的，位置永遠不動；選了東西／進了工具才有的放下排（橘色虛線以下），沒有就整排不出現。複製、刪除一直在、沒選東西時淡掉（按了講原因）。代價：選了東西時多一排，蓋住畫面上方多一點（畫面本身不跳 —— 照舊浮在畫面上）。' },
+  '2': { name: '2 一排、跟著的排最後（量起來比較省）', desc: '一直都在的排前面，跟著選取出現的接在它們後面（放不下才換行）。複製、刪除一直在、淡掉。比「分兩排」省一排高度；但寬度不夠時，一直都在的那幾組自己也可能換行，跟著的會插進第二排的空位。' }
+};
+const SCENES = { none: '沒選東西', one: '選一個物件', two: '選兩個物件', face: '拉點線面（選了一個面）', pen: '鋼筆（正在畫）' };
+const WIDTHS = [1024, 1280, 1396, 1920];
+let lay = '1', sc = 'none', w = 1280;
+
+function mkBtn(t, dim) {
+  if (/^\[.*\]$/.test(t)) {
+    const x = t.slice(1, -1);
+    if (x.endsWith('▾')) { const b = document.createElement('button'); b.className = 'b'; b.textContent = x; return b; }
+    const i = document.createElement('input'); i.className = 'f'; i.placeholder = x; return i;
+  }
+  const b = document.createElement('button');
+  b.className = 'b' + (dim ? ' dim' : '') + (TRACK.includes(t) ? ' track' : '');
+  b.textContent = t; b.dataset.t = t;
+  return b;
+}
+function mkGrp(g, s, l) {
+  const el = document.createElement('div');
+  el.className = 'grp' + (g.ctx ? ' ctx' : '');
+  const lb = document.createElement('span'); lb.className = 'lbl'; lb.textContent = g.lbl; el.appendChild(lb);
+  const list = g.by ? g.by[s] : g.btn;
+  const sel = s !== 'none';
+  for (const t of list) {
+    if (g.selOnly && g.selOnly.includes(t) && !sel && l === 'A') continue;   // 現在：沒選東西時整顆不見
+    el.appendChild(mkBtn(t, g.selOnly && g.selOnly.includes(t) && !sel));
+  }
+  return el;
+}
+const shows = (g, s) => !g.when || g.when.includes(s);
+
+function build(l, s) {
+  const bar = document.getElementById('bar');
+  bar.innerHTML = '';
+  const rows = [];
+  const row = () => { const r = document.createElement('div'); r.className = 'row'; bar.appendChild(r); rows.push(r); return r; };
+  if (l === 'A') {
+    const r = row();
+    for (const g of GROUPS) if (shows(g, s)) r.appendChild(mkGrp(g, s, l));
+  } else if (l === '1') {
+    const r1 = row();
+    for (const g of GROUPS) if (!g.ctx) r1.appendChild(mkGrp(g, s, l));
+    const ctx = ctxGroups(s);
+    if (ctx.length) { const r2 = row(); r2.classList.add('ctxRow'); for (const g of ctx) r2.appendChild(mkGrp(g, s, l)); }
+  } else {
+    const r = row();
+    for (const g of GROUPS) if (!g.ctx) r.appendChild(mkGrp(g, s, l));
+    for (const g of ctxGroups(s)) r.appendChild(mkGrp(g, s, l));
+  }
+}
+
+function measure(l, s) {
+  const app = document.getElementById('app');
+  const pos = () => {
+    const a = app.getBoundingClientRect(), out = {};
+    for (const t of TRACK) {
+      const b = app.querySelector(`button[data-t="${t}"]`);
+      if (b) { const r = b.getBoundingClientRect(); out[t] = { x: Math.round(r.left - a.left), y: Math.round(r.top - a.top) }; }
+    }
+    return out;
+  };
+  const barH = () => Math.round(document.getElementById('bar').getBoundingClientRect().height);
+  /** 「排列」沒選東西時不在 ⇒ 它跟「選一個物件」比（看選第二個時會不會被推開）*/
+  build(l, 'none'); const p0 = pos(), h0 = barH();
+  build(l, 'one'); const pOne = pos();
+  for (const t of TRACK) if (!p0[t] && pOne[t]) p0[t] = pOne[t];
+  build(l, s); const p1 = pos(), h1 = barH();
+  document.getElementById('stage').style.top = h0 + 'px';
+  const bits = TRACK.map(t => {
+    const a = p0[t], b = p1[t];
+    if (!a || !b) return `「${t}」—`;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    return dx === 0 && dy === 0 ? `「${t}」<span class="ok">沒動</span>`
+      : `「${t}」<span class="bad">${dx ? (dx > 0 ? '往右 ' : '往左 ') + Math.abs(dx) + ' px' : ''}${dx && dy ? '、' : ''}${dy ? (dy > 0 ? '往下 ' : '往上 ') + Math.abs(dy) + ' px' : ''}</span>`;
+  });
+  document.getElementById('meas').innerHTML =
+    `<b>量一量</b>（${LAYOUTS[l].name}、${SCENES[s]}、寬 ${w}，跟「沒選東西」比；「排列」跟「選一個物件」比）：${bits.join('　')}<br>`
+    + `工具列高 <b>${h1}</b> px（沒選東西時 ${h0} px）—— 多出來的 <b>${h1 - h0}</b> px 蓋在畫面上方（畫面本身不跳）`;
+}
+
+function render() {
+  document.getElementById('app').style.width = w + 'px';
+  document.getElementById('desc').textContent = LAYOUTS[lay].desc;
+  measure(lay, sc);
+  for (const b of document.querySelectorAll('#ctl button')) b.classList.toggle('on',
+    b.dataset.k === 'lay' ? b.dataset.v === lay : b.dataset.k === 'sc' ? b.dataset.v === sc : +b.dataset.v === w);
+}
+function ctlBtn(box, k, v, label) {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.k = k; b.dataset.v = v;
+  b.onclick = () => { if (k === 'lay') lay = v; else if (k === 'sc') sc = v; else w = +v; render(); };
+  document.getElementById(box).appendChild(b);
+}
+for (const k of Object.keys(LAYOUTS)) ctlBtn('cLay', 'lay', k, LAYOUTS[k].name);
+for (const k of Object.keys(SCENES)) ctlBtn('cSc', 'sc', k, SCENES[k]);
+for (const v of WIDTHS) ctlBtn('cW', 'w', String(v), v + (v === 1024 ? '（平板）' : ''));
+render();
+</script>
+</body>
+</html>
