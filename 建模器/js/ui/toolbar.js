@@ -1546,6 +1546,30 @@ export class Panel {
   _seamProposalBox(obj) {
     if (!this.app.proposeSeams) return;
     this.form.appendChild(head('智慧分切'));
+    /**
+     * 🔴 **三個設定**（2026-10-21，分片成群第三件，kang 定案 → `分片成群-設計方向.md` 第 8 節）。
+     * ⭐ 預設：片裡不要細切口、張開小於 30° 算細、凹處尖角先切；改了而且正在看提案 ⇒ 馬上照新的重新提案。
+     */
+    if (this.app.getProposeOpt) {
+      const po = this.app.getProposeOpt();
+      this._rowSelect('片裡的切口', po.slits, [
+        ['none', '不要細切口（片多一點）'],
+        ['allow', '片少一點（允許細切口）']
+      ], v => this.app.setProposeOpt({ slits: v }),
+      '細切口 ＝ 切線走到片中間就停、攤開只張開一點點的 V 形切口 —— 組裝時要對準黏回去，很費工。'
+      + '方塊攤成十字形那種外框的切線不算。'
+      + '「片少一點」：允許細切口，片會少一兩片');
+      /** ⚠ 「片少一點」時也顯示：提案照樣用這個角度數細切口給你看（藏起來的話面板寫「小於 30°」卻改不到）*/
+      this._rowNum('細切口：張開小於（度）', po.notchDeg, { min: 0, max: 180, step: 5 },
+        v => this.app.setProposeOpt({ notchDeg: v }),
+        '預設 30°。V 形切口攤開張開的角度比這個小，就算細切口 —— 「不要細切口」時提案會避開它；改大 ⇒ 避開得多、片也多');
+      this._rowSelect('切的先後', po.cutOrder, [
+        ['feature', '凹處、尖角先切'],
+        ['fewest', '片數最少']
+      ], v => this.app.setProposeOpt({ cutOrder: v }),
+      '凹處、尖角先切：平的、長的邊先接起來，凹進去的地方（眼窩、嘴巴）跟尖的轉角最後才接 ⇒ 縫多半落在凹處與轉角（Blender 紙模外掛預設也是這樣）。'
+      + '片數最少：共用邊長的先接，片會少一兩片，但縫可能斜斜地跨過臉');
+    }
     const cur = this.app.getSeamProposal(obj);
     if (cur && cur.stale) this.form.appendChild(note('標記改了，提案收起來了 —— 要再按一次「提案」'));
     const p = cur && cur.proposal;
@@ -1573,6 +1597,12 @@ export class Panel {
       if (rest > 0) fitLines.push(red(`有 <b>${rest}</b> 片放不進 ${boardTxt} 板子`) + `（${cond}）`);
     }
     if (p.overlap) fitLines.push(red('提案的片還有重疊') + (p.nonGrid ? '' : ' —— 自己標縫切開'));
+    /** 細切口（第三件）：花瓣的 V 形切口是設計（沿經線切到極點附近），⛔ 講成問題 */
+    if (p.edges.length && p.kind !== 'petal') {
+      fitLines.push(p.notch
+        ? `細切口 <b>${p.notch}</b> 個（攤開張開小於 ${fmt1(p.notchDeg)}° 的 V 形切口）` + (p.slits === 'none' ? ' —— 避不開的' : '')
+        : '沒有細切口');
+    }
     // 不是格子的曲面：只在結果還有問題時講（圓錐那種照沿轉角切就好好的，⛔ 多嘴）
     if (p.nonGrid && (p.big || p.overlap)) fitLines.push('這塊曲面不是一圈一圈的格子，還不會整齊地切 —— 照沿轉角的切法提案');
     if (p.timedOut) fitLines.push('算到 2 秒先交出目前最好的');

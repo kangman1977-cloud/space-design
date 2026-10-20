@@ -16150,10 +16150,16 @@ section('智慧分切 第二步：放得進板子（2026-10-13）');
   ok('★★★ 使用者先標的縫：⛔ 出現在提案裡、照樣切開', !pu.edges.includes(mine) && isSeam(mine) && pu.big === 0, `${pu.total} 片`);
 
   // ── 小東西⛔ 變差 ──
+  /**
+   * ⚠ 2026-10-21 分片成群第三件（kang 定案「預設不要細切口」）：小圓柱程式本來剪成 1 片，但蓋子邊上留 4 個只張開 11° 的細切口
+   * ⇒ 預設改成側面 ＋ 兩蓋 3 片；選「片少一點（允許細切口）」才照舊 ≤ 程式本來剪的。
+   */
   for (const [t, over] of [['box', { w: 20, h: 20, d: 20 }], ['cylinder', { r: 10, h: 30 }], ['prism', { r: 10, h: 20 }]]) {
     const before = unfoldObject(mk(t, over), { material: 'foamboard' }).stats.total;
-    const p = P(mk(t, over));
-    ok(`★★ 小${t}：提案片數 ≤ 程式本來剪的（${before} 片）`, p.total <= before && p.big === 0, `${p.total} 片`);
+    const p = proposeSeams(mk(t, over), { material: 'foamboard', board: B, slits: 'allow' });
+    ok(`★★ 小${t}（片少一點）：提案片數 ≤ 程式本來剪的（${before} 片）`, p.total <= before && p.big === 0, `${p.total} 片`);
+    const q = P(mk(t, over));
+    ok(`★★ 　 小${t}（預設：不要細切口）：細切口 0、全放得進`, q.notch === 0 && q.big === 0, `${q.total} 片 細切口 ${q.notch}`);
   }
 
   // ── 還放不進的：講是哪一種 ──
@@ -16161,10 +16167,11 @@ section('智慧分切 第二步：放得進板子（2026-10-13）');
   const cornerOf = p => p.options.find(o => o.kind === 'corner');
   const ps = P(mk('sphere'));
   const psc = cornerOf(ps);
-  ok('★★★ 球「只沿轉角」那一份 ⇒ 1 片是「一整個曲面、沒有轉角可以切」', psc.big === 1 && psc.bigCurved === 1 && psc.bigFlat === 0, `${psc.big}/${psc.bigCurved}/${psc.bigFlat}`);
+  // ⚠ 2026-10-21 第三件：「只沿轉角」改成從每一塊平面開始接 ⇒ 球不再是「一整個曲面放不進」，切成平面一塊一塊、全放得進、沒有細切口
+  ok('★★★ 球「只沿轉角」那一份 ⇒ 全放得進、沒有細切口（以前 1 片一整個曲面放不進）', psc.big === 0 && psc.notch === 0, `${psc.total} 片 ${psc.big}/${psc.bigCurved}/${psc.bigFlat} 細 ${psc.notch}`);
   const pp = P(mk('plate', { w: 300, d: 50 }));
   ok('★★★ 300×50 的平板 ⇒ 1 片是「本身就是一個比板子大的平面」', pp.big === 1 && pp.bigFlat === 1 && pp.bigCurved === 0, `${pp.big}/${pp.bigCurved}/${pp.bigFlat}`);
-  ok('★★ 圓環「只沿轉角」那一份 ⇒ 還有重疊要講', cornerOf(P(mk('torus'))).overlap);
+  ok('★★ 圓環「只沿轉角」那一份 ⇒ 不重疊、全放得進（以前 1 片重疊、放不進）', !cornerOf(P(mk('torus'))).overlap && cornerOf(P(mk('torus'))).big === 0);
   ok('★★ 都沒有算到時間上限', !pb.timedOut && !pc.timedOut && !ps.timedOut);
 }
 
@@ -16213,7 +16220,7 @@ section('智慧分切 第三步：曲面切成整齊的長線（2026-10-13）');
   ok('★★★ 球 ⇒ 提案是花瓣、2 片、全放得進（沙箱：兩朵花 94×94）', ps.kind === 'petal' && ps.total === 2 && ps.big === 0 && !ps.overlap, kinds(ps));
   const strip = ps.options.find(o => o.kind === 'strip');
   ok('★★★ 　 其他切法裡有長條：32 片', !!strip && strip.total === 32, kinds(ps));
-  ok('★★ 　 「只沿轉角」也在（1 片放不進）', ps.options.some(o => o.kind === 'corner' && o.big === 1), kinds(ps));
+  ok('★★ 　 「只沿轉角」也在（2026-10-21 起全放得進）', ps.options.some(o => o.kind === 'corner' && o.big === 0), kinds(ps));
   ok('★★ 　 第 0 份 ＝ 提案本身', ps.options[0].kind === ps.kind && ps.options[0].edges === ps.edges);
   const as = accept(sp, ps);
   ok('★★★ 　 接受之後再展開 ⇒ 2 片、每片程式補剪 0～1 條', as.total === 2 && as.maxAuto <= 1, `${as.total} 片 補剪 ${as.maxAuto}`);
@@ -18879,6 +18886,62 @@ section('分片成群 第二件：選一群面切成一片（2026-10-21）');
   const withMap = dp(pcs[0], { pieceFill: () => '#4fc3f7' }).items.filter(i => i.style === 'map');
   eq('★★ 分片地圖：預覽每個面都塗那一片的顏色', withMap.length, pcs[0].faces.length);
   eq('★★ 　 沒傳（存 SVG／DXF、列印）⇒ ⛔ 塗', dp(pcs[0], {}).items.filter(i => i.style === 'map').length, 0);
+}
+
+section('分片成群 第三件：智慧分切 片裡不要細切口（2026-10-21）');
+{
+  /** 獅子頭、狐狸頭的數字在沙箱量（`分片成群-設計方向.md` 第 8 節；模型在 `輸出`，⛔ 進版控 ⇒ 這裡只用基本形狀）*/
+  const { proposeSeams, NOTCH_DEG, MIN_PIECE_CM, SLIT_LABEL, ORDER_LABEL } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const B = { w: 240, h: 120, gap: 1, rotate: false };
+  const P = (o, opt = {}) => proposeSeams(o, { material: 'foamboard', board: B, ...opt });
+  const accept = (o, p) => { for (const h of p.edges) seam.setSeam(o.mesh(), h, true); return unfoldObject(o, { material: 'foamboard' }); };
+
+  eq('★ 預設值：細切口 30°、小片 2 cm', [NOTCH_DEG, MIN_PIECE_CM].join(), '30,2');
+  ok('★ 　 兩個選項都有名字（面板用）', SLIT_LABEL.none && SLIT_LABEL.allow && ORDER_LABEL.feature && ORDER_LABEL.fewest);
+  const p0 = P(mk('box'));
+  eq('★★ 沒指定 ⇒ 預設：不要細切口、30°、凹處尖角先切', [p0.slits, p0.notchDeg, p0.cutOrder].join(), 'none,30,feature');
+
+  // ① 細切口：小圓柱程式本來剪成 1 片，蓋子邊上留 V 形小口（張開 11°）
+  const cyl = { r: 10, h: 30 };
+  const pa = P(mk('cylinder', cyl), { slits: 'allow' });
+  ok('★★★ 小圓柱、允許細切口 ⇒ 1 片、講得出細切口幾個', pa.total === 1 && pa.notch > 0, `${pa.total} 片 細切口 ${pa.notch}`);
+  const pn = P(mk('cylinder', cyl));
+  ok('★★★ 　 預設（不要細切口）⇒ 側面 ＋ 兩蓋 3 片、細切口 0', pn.total === 3 && pn.notch === 0 && pn.kind === 'corner', `${pn.total} 片 細切口 ${pn.notch} ${pn.label}`);
+  const pz = P(mk('cylinder', cyl), { notchDeg: 0 });
+  ok('★★ 　 角度改 0 ⇒ 什麼都不算細 ⇒ 跟允許一樣 1 片', pz.total === 1 && pz.notch === 0, `${pz.total} 片`);
+  ok('★★ 　 「長條」那一種有細切口 ⇒ 預設⛔ 挑它（以前 2 片長條會勝過 3 片）', pn.options.some(o => o.kind === 'strip' && o.notch > 0) && pn.options[0].kind === 'corner');
+
+  // ② 方塊十字形那種外框切線⛔ 算細切口；三角塊照樣 1 片
+  ok('★★★ 楔形 ⇒ 照樣 1 片（外框的切線⛔ 算細切口）', P(mk('wedge')).total === 1 && P(mk('wedge')).notch === 0);
+  // ③ 只攤接起來的那一片：面要照原本的順序（擺的方向才對）—— 以前 150×60×50 方塊 2 片變 4 片
+  for (const order of ['feature', 'fewest']) {
+    const pb = P(mk('box', { w: 150, h: 60, d: 50 }), { cutOrder: order });
+    ok(`★★★ 150×60×50 方塊（${order}）⇒ 2 片全放得進`, pb.total === 2 && pb.big === 0, `${pb.total}/${pb.big}`);
+  }
+  // ④ 切的先後：樓梯內側的凹角 —— 凹處尖角先切 ⇒ 3 片；片數最少 ⇒ 2 片
+  const sf = P(mk('stairs')), sl = P(mk('stairs'), { cutOrder: 'fewest' });
+  ok('★★ 樓梯：凹處尖角先切 3 片、片數最少 2 片（都沒有細切口）', sf.total === 3 && sl.total === 2 && sf.notch === 0 && sl.notch === 0, `${sf.total} / ${sl.total}`);
+  // ⑤ 提案講的片數 ＝ 接受之後真的展開（只攤一片算出來的，跟最後整個攤的對得上）
+  for (const t of ['cone', 'roundBox', 'tube', 'stairs']) {
+    const o = mk(t), p = P(o);
+    const r = accept(o, p);
+    ok(`★★★ ${t}：接受之後展開 ＝ 提案講的 ${p.total} 片、沒重疊、全放得進`, r.stats.total === p.total && !r.pieces.some(q => q.overlap) && p.big === 0, `${r.stats.total} 片`);
+  }
+  // ⑥ 曲面照舊：球、圓環還是花瓣（花瓣的 V 形切口是設計，⛔ 算）
+  ok('★★★ 球 ⇒ 照舊花瓣 2 片', P(mk('sphere')).kind === 'petal' && P(mk('sphere')).total === 2);
+  ok('★★ 圓環 ⇒ 照舊花瓣 1 片', P(mk('torus')).kind === 'petal');
+  // ⑦ 不准切、使用者的縫照舊守
+  const bk = mk('box');
+  const top = [...bk.mesh().edges()].find(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y - h.to.p.y) < 1e-6 && h.v.p.y > 0);
+  seam.setKeep(bk.mesh(), top, true);
+  const pk = P(bk);
+  ok('★★★ 不准切的邊 ⇒ 提案⛔ 碰', !pk.edges.some(h => seam.isKeep(h)) && pk.big === 0);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

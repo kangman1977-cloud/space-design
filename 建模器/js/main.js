@@ -29,7 +29,7 @@ import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
          setKeep, isKeep, markSignature, nearestFace }
   from './unfold/seam.js';
-import { proposeSeams } from './unfold/propose.js';
+import { proposeSeams, NOTCH_DEG } from './unfold/propose.js';
 import { unfoldObject, pieceWorldPolys } from './unfold/part.js';
 import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, components, applyGroup, checkGroup, GROW_DEG, TINY_MM2 }
   from './unfold/group.js';
@@ -459,6 +459,9 @@ const app = {
   getSeamMarkKind: () => seamMarkKind,
   setSeamMarkKind: k => { seamMarkKind = k === 'keep' ? 'keep' : 'cut'; dropSeamSpan(); },
   proposeSeams: obj => makeSeamProposal(obj),
+  /** 第三件（2026-10-21，`分片成群-設計方向.md` 第 8 節）：智慧分切的三個設定 —— 片裡的切口、細切口角度、切的先後 */
+  getProposeOpt: () => ({ ...proposeOpt }),
+  setProposeOpt: o => setProposeOpt(o),
   getSeamProposal: obj => currentSeamProposal(obj),
   acceptSeamProposal: () => acceptSeamProposal(),
   useSeamAlternative: i => useSeamAlternative(i),
@@ -6373,6 +6376,29 @@ let seamMarkKind = 'cut';
  */
 let seamProposal = null;
 let seamProposalStale = false;
+/**
+ * 🔴 **智慧分切的三個設定**（2026-10-21，分片成群第三件，kang 定案；`分片成群-設計方向.md` 第 8 節）：
+ * ⭐ 預設：片裡不要細切口、張開小於 30° 算細、凹處尖角先切 —— 面板上可以改，記在瀏覽器裡。
+ * 改了而且正在看提案 ⇒ 照新的設定馬上重新提案（⛔ 留著照舊設定算的那一份）。
+ */
+const proposeOpt = (() => {
+  const d = { slits: 'none', notchDeg: NOTCH_DEG, cutOrder: 'feature' };
+  try {
+    const v = JSON.parse(localStorage.getItem('modeler.proposeOpt') || '{}');
+    if (v.slits === 'allow') d.slits = 'allow';
+    if (Number.isFinite(+v.notchDeg)) d.notchDeg = Math.max(0, Math.min(180, +v.notchDeg));
+    if (v.cutOrder === 'fewest') d.cutOrder = 'fewest';
+  } catch (e) { /* 讀不到就用預設 */ }
+  return d;
+})();
+function setProposeOpt(o) {
+  if (o.slits) proposeOpt.slits = o.slits === 'allow' ? 'allow' : 'none';
+  if (o.notchDeg !== undefined) proposeOpt.notchDeg = o.notchDeg;
+  if (o.cutOrder) proposeOpt.cutOrder = o.cutOrder === 'fewest' ? 'fewest' : 'feature';
+  try { localStorage.setItem('modeler.proposeOpt', JSON.stringify(proposeOpt)); } catch (e) { /* 存不了就算了 */ }
+  if (seamProposal) makeSeamProposal(seamProposal.obj);
+  else panel.refresh();
+}
 const edgeKeyOf = he => Math.min(he.id, he.twin ? he.twin.id : he.id);
 
 function dropSeamProposal() {
@@ -6385,7 +6411,7 @@ function makeSeamProposal(obj) {
   const N = unfoldWin.opt.nest || {};
   let p;
   try {
-    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, gap: N.gap, rotate: !!N.rotate } });
+    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, gap: N.gap, rotate: !!N.rotate }, ...proposeOpt });
   } catch (e) {
     toast('提案算不出來：' + e.message, true);
     return null;
@@ -6395,7 +6421,9 @@ function makeSeamProposal(obj) {
   view.setSeamProposal(obj, seamProposal.edges);
   panel.refresh();
   const kind = p.options.length > 1 ? `（${p.label}）` : '';
-  toast(p.edges.length ? `智慧分切提案${kind} ${p.edges.length} 條縫（青色虛線）—— 結果在右側面板` : '已經攤得開，沒有要補的縫');
+  toast(p.edges.length ? `智慧分切提案${kind} ${p.edges.length} 條縫（青色虛線）、${p.total} 片`
+    + (p.kind !== 'petal' ? (p.notch ? `、細切口 ${p.notch} 個` : '、沒有細切口') : '') + ' —— 結果在右側面板'
+    : '已經攤得開，沒有要補的縫');
   return seamProposal;
 }
 
