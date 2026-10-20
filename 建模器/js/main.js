@@ -3701,6 +3701,11 @@ function editBlockText(obj, n = 1) {
 function escapeLayer() {
   if (sel.inPickMode) {
     if (dropPendingPicks()) { updateBar(); toast('點到一半的已經清掉了（模式還開著）'); return; }
+    /**
+     * ⑤-28（2026-10-20，線上先驗抓到的）：量孔沒有點到一半的 ⇒ Esc 離開量孔（提示寫的就是「再按一次量孔或 Esc 離開」）。
+     * ⚠ 別的點選類模式照舊（刀具、鋼筆…各有自己的「取消」，這一輪⛔ 動）。
+     */
+    if (sel.holeMode) { toggleHoleMode(); return; }
     sel.clear();
     return;
   }
