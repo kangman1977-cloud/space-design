@@ -179,6 +179,8 @@ export class Selection {
      * 「把**這個**貼到**那個**」，所以先點的那個會動。
      */
     this.mateMode = false;
+    /** ⑤-28（2026-10-20）：量孔模式 —— 點孔的內壁（或軸的側面）報直徑、孔心；點第二個報孔心距（`main.js` `holePick()`）*/
+    this.holeMode = false;
 
     /**
      * 🔴🔴 **原點指定模式**（2026-09-01，kang 要的「原點搬到我點的地方」）。
@@ -1984,6 +1986,13 @@ export class Selection {
         const el = this.pickElement(e.clientX, e.clientY,
                                     { vertex: true, requireMarkable: false });
         if (el && this.hooks.onMatePick) this.hooks.onMatePick(el);
+        return;
+      }
+      /** ⑤-28：量孔跟貼合用同一組點選參數（點到點或邊 ⇒ `main.js` 拿旁邊的面試）*/
+      if (this.holeMode) {
+        const el = this.pickElement(e.clientX, e.clientY,
+                                    { vertex: true, requireMarkable: false });
+        if (this.hooks.onHolePick) this.hooks.onHolePick(el);
         return;
       }
       /**
@@ -4283,7 +4292,7 @@ export class Selection {
    * 而 gizmo 會把按下去的事件吃掉，第一筆就畫不出來。
    */
   get inPickMode() {
-    return this.seamMode || this.mateMode || this.knifeMode || this.penMode
+    return this.seamMode || this.mateMode || this.holeMode || this.knifeMode || this.penMode
       || this.guideMode || this.originMode;
   }
 
@@ -4340,6 +4349,15 @@ export class Selection {
     this._refresh();
     if (this.helper) this.helper.visible = !this.gizmoHidden;
     return this.mateMode;
+  }
+
+  /** ⑤-28：量孔模式（跟貼合同一套：點選類的模式、箭頭收起來）*/
+  setHoleMode(on) {
+    this.holeMode = !!on;
+    this.tc.enabled = !this.gizmoHidden;
+    this._refresh();
+    if (this.helper) this.helper.visible = !this.gizmoHidden;
+    return this.holeMode;
   }
 
   /**

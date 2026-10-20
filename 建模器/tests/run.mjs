@@ -18564,6 +18564,43 @@ section('綜合評估 ⑤ 第二批（前 6 條）：展開合併複本、選一
   ok('★★ 　 預覽⛔ 動任何點', Math.abs(ring[0].v.p.y - y0) < 1e-12);
 }
 
+section('綜合評估 ⑤-28 ＋ ④-16：量孔徑、孔心、孔心距（2026-10-20）');
+{
+  /** 工具列「量孔」、點兩下、畫線、提示（main.js）在本機版用畫面驗 */
+  const M = await import('../js/core/mate.js');
+  const shaft = new io.ModelObject({ name: '軸', src: { type: 'cylinder', r: 0.3, h: 6, seg: 32 } });
+  const sm = shaft.mesh(); sm.computeNormals();
+  const fs = M.cylinderFrame(shaft, sm.faces.find(f => Math.abs(f.normal.y) < 0.1));
+  ok('★★ ⑤-28 軸的外面 ⇒ 認成「軸」（法線朝外）', fs.ok && fs.inward === false);
+  if (csgOK) {
+    const B = await import('../js/build/bool.js');
+    const board = new io.ModelObject({ name: '板', src: { type: 'box', w: 30, h: 2, d: 20 } }); board.pos.set(0, 1, 0);
+    const h1 = new io.ModelObject({ name: '孔1', src: { type: 'cylinder', r: 1, h: 4, seg: 32 } }); h1.pos.set(-8, 1, 2);
+    const h2 = new io.ModelObject({ name: '孔2', src: { type: 'cylinder', r: 1.5, h: 4, seg: 32 } }); h2.pos.set(7, 1, -2);
+    const plate = new io.ModelObject({ name: '兩孔板', src: io.boolSrcFrom([board, h1, h2], B.BOOL_OPS.SUBTRACT), pos: board.pos.clone() });
+    plate.bake();                                       // 「凍結」之後是三角形網格（T4：一圈選不起來）
+    const pm = plate.mesh(); pm.computeNormals();
+    const wallNear = (x, z, r) => pm.faces.find(f => {
+      if (Math.abs(f.normal.y) > 0.1) return false;
+      const vs = pm.faceVerts(f).map(v => v.p);
+      const cx = vs.reduce((s, p) => s + p.x, 0) / vs.length, cz = vs.reduce((s, p) => s + p.z, 0) / vs.length;
+      return Math.abs(Math.hypot(cx - x, cz - z) - r) < 0.2;
+    });
+    const a = M.cylinderFrame(plate, wallNear(-8, 2, 1)), b = M.cylinderFrame(plate, wallNear(7, -2, 1.5));
+    ok('★★★ ⑤-28 凍結過的板，點孔 1 的內壁 ⇒ 直徑 2、孔心 (−8, 1, 2)、認成「孔」', a.ok && a.inward && Math.abs(2 * a.radius - 2) < 1e-6
+      && a.point.distanceTo(new THREE.Vector3(-8, 1, 2)) < 1e-6, a.reason || `${a.radius} ${a.point && a.point.toArray().join()}`);
+    ok('★★ 　 孔 2：直徑 3、孔心 (7, 1, −2)', b.ok && b.inward && Math.abs(2 * b.radius - 3) < 1e-6 && b.point.distanceTo(new THREE.Vector3(7, 1, -2)) < 1e-6);
+    const d = M.holeDistance(a, b);
+    near('★★★ ④-16 孔心距 ＝ √(15² ＋ 4²) ＝ 15.52（兩條中心線平行、量垂直距離）', d.dist, Math.hypot(15, 4), 1e-6);
+    ok('★ 　 平行、沿中心線⛔ 錯開', d.parallel && d.along < 1e-6);
+  }
+  const fr = (p, dv) => ({ point: new THREE.Vector3(...p), dir: new THREE.Vector3(...dv).normalize() });
+  const up = M.holeDistance(fr([0, 0, 0], [0, 1, 0]), fr([3, 5, 4], [0, -1, 0]));
+  ok('★★ 　 平行但錯開高度（Y 差 5）⇒ 孔心距 ＝ 垂直距離 5、另外講錯開 5', up.parallel && Math.abs(up.dist - 5) < 1e-9 && Math.abs(up.along - 5) < 1e-9);
+  const skew = M.holeDistance(fr([0, 0, 0], [0, 1, 0]), fr([3, 0, 4], [1, 0, 0]));
+  ok('★ 　 不平行（夾 90°）⇒ 兩個孔心的直線距離 5、講夾幾度', !skew.parallel && Math.abs(skew.dist - 5) < 1e-9 && Math.abs(skew.angle - 90) < 1e-6);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

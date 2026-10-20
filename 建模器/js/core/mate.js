@@ -328,7 +328,8 @@ export function mateVertexToVertex(src, srcPoint, dstPoint) {
  * ⚠ 平的面、球面這種⛔ 是一圈繞同一條線的 ⇒ 講原因、⛔ 猜。
  *
  * @returns {{ok:boolean, reason?:string, point?:THREE.Vector3, dir?:THREE.Vector3, radius?:number,
- *           ends?:THREE.Vector3[], count?:number}} 世界座標；`point` 在這一圈的中段
+ *           ends?:THREE.Vector3[], count?:number, inward?:boolean}} 世界座標；`point` 在這一圈的中段；
+ *           `inward` ＝ 法線朝中心線（＝ 孔的內壁）；⛔ 朝外 ＝ 軸的外面（⑤-28 量孔要分孔與軸）
  */
 const COAX_GROW_DEG = 40;
 export function cylinderFrame(obj, face, mesh = null) {
@@ -372,13 +373,13 @@ export function cylinderFrame(obj, face, mesh = null) {
     axis.addScaledVector(x, it.w);
   }
   if (spread < Math.sin(15 * Math.PI / 180) || axis.lengthSq() < 1e-16) {
-    return { ok: false, reason: '點到的是平的面（或彎得太少）—— 同軸要點圓的側面：軸的外面、孔的內壁' };
+    return { ok: false, reason: '點到的是平的面（或彎得太少）—— 要點圓的側面：軸的外面、孔的內壁' };
   }
   axis.normalize();
   /** 法線要大致垂直於中心線（圓柱 0°；圓錐容許到 30°）—— 球面、自由曲面這裡會被擋下來 */
   for (const it of items) {
     if (Math.abs(it.n.dot(axis)) > 0.5) {
-      return { ok: false, reason: '點到的那一圈不是繞同一條中心線的圓（可能是球面、或連到別的面）—— 同軸要點圓柱的側面' };
+      return { ok: false, reason: '點到的那一圈不是繞同一條中心線的圓（可能是球面、或連到別的面）—— 要點圓柱的側面' };
     }
   }
   const u = new THREE.Vector3(1, 0, 0);
@@ -406,6 +407,13 @@ export function cylinderFrame(obj, face, mesh = null) {
   const M = obj.matrix();
   const point = local.clone().applyMatrix4(M);
   const dir = axis.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(M)).normalize();
+  /** ⑤-28：法線朝中心線的多 ⇒ 孔（內壁）；朝外的多 ⇒ 軸（物件座標裡比，面積當權重）*/
+  let inSide = 0;
+  for (const it of items) {
+    const r = it.c.clone().sub(local);
+    r.addScaledVector(axis, -r.dot(axis));
+    inSide += it.w * Math.sign(-it.n.dot(r));
+  }
   let rs = 0, rn = 0, tMin = Infinity, tMax = -Infinity;
   for (const it of items) {
     for (const p of it.vs) {
@@ -416,9 +424,33 @@ export function cylinderFrame(obj, face, mesh = null) {
     }
   }
   return {
-    ok: true, point, dir, radius: rn ? rs / rn : 0, count: list.length,
+    ok: true, point, dir, radius: rn ? rs / rn : 0, count: list.length, inward: inSide > 0,
     ends: [point.clone().addScaledVector(dir, tMin), point.clone().addScaledVector(dir, tMax)]
   };
+}
+
+/**
+ * 🔴 **兩條中心線（兩個孔、或孔與軸）的距離**（綜合評估 ⑤-28 ＋ ④-16 孔心距，2026-10-20，kang「同意你的建議」）。
+ * T4：布林挖的孔轉成網格之後一圈選不起來 ⇒ 量不到孔徑、孔心距只好自己算。
+ * | 兩條線 | 回答 |
+ * |---|---|
+ * | 平行（夾角 < 1°）| **孔心距 ＝ 兩條線之間的垂直距離**（沿中心線錯開多少⛔ 算進去，另外講 `along`）|
+ * | ⛔ 平行 | 兩個孔心（各自那一圈的中段）的直線距離，另外講夾幾度 |
+ * ⚠ 都是世界座標、公分；這支⛔ 改任何東西。
+ * @returns {{parallel:boolean, angle:number, dist:number, along:number, from:THREE.Vector3, to:THREE.Vector3}}
+ *          `from`／`to` ＝ 畫連線用的兩端（平行時是垂直的那一段）
+ */
+export function holeDistance(a, b) {
+  const cos = Math.min(1, Math.abs(a.dir.dot(b.dir)));
+  const angle = Math.acos(cos) * 180 / Math.PI;
+  const d = b.point.clone().sub(a.point);
+  if (angle < 1) {
+    const along = d.dot(a.dir);
+    const perp = d.clone().addScaledVector(a.dir, -along);
+    return { parallel: true, angle, dist: perp.length(), along: Math.abs(along),
+             from: a.point.clone(), to: a.point.clone().add(perp) };
+  }
+  return { parallel: false, angle, dist: d.length(), along: 0, from: a.point.clone(), to: b.point.clone() };
 }
 
 /**

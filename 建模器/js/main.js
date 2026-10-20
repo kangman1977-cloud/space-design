@@ -32,7 +32,7 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkab
 import { proposeSeams } from './unfold/propose.js';
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
-         mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial } from './core/mate.js';
+         mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial, holeDistance } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
@@ -386,6 +386,7 @@ const sel = new Selection(view, {
     + `想點空的地方放 ${GUIDE_AXIS_LABEL[ax]}，切到 ${GUIDE_AXIS_VIEW[ax]} 再點`, true),
   onSeamPick: hit => seamPick(hit),
   onMatePick: el => matePick(el),
+  onHolePick: el => holePick(el),
   /** 🔴 原點指定：點到什麼就把原點搬到那裡（2026-09-01） */
   onOriginPick: el => originPick(el),
   onEditPick: (el, info) => editPick(el, info),
@@ -1349,6 +1350,7 @@ $('solidCut').onclick = () => solidCutSelected();
 $('vertDots').onclick = () => toggleVertexDots();
 $('measureHud').onclick = () => toggleMeasureHud();
 $('measureCircle').onclick = () => toggleMeasureCircle();
+$('measureHole').onclick = () => toggleHoleMode();
 $('subdivEdge').onclick = () => subdivideEdgesSelected();
 $('connectVerts').onclick = () => connectVertsSelected();
 $('faceFromVerts').onclick = () => faceFromVertsSelected();
@@ -1518,6 +1520,79 @@ function mateCoaxPick(el) {
   /** 粗細講出來：軸比孔粗就是插不進去（⛔ 擋 —— 有時候就是要量看看差多少） */
   const fit = a.radius > fr.radius + 1e-3 ? `　⚠ 半徑 ${r2(a.radius)} 比 ${r2(fr.radius)} 大，插不進去` : '';
   toast(`同軸完成：「${src.name}」的中心線對到「${el.obj.name}」的（轉了 ${r2(r.angle)}°、往旁邊移了 ${r2(r.shift)} cm；上下位置沒動）${fit}`);
+}
+
+// ═══════════════════════════════════════════════════════
+//  ⑤-28 量孔（＋ ④-16 孔心距）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **量孔：點孔的內壁（或軸的側面）報直徑與孔心；點第二個報孔心距**
+ * （綜合評估 ⑤-28 ＋ ④-16，2026-10-20，kang「同意你的建議」）。
+ * T4：布林挖的孔「凍結」之後是三角形網格，選一圈選不起來 ⇒ 量不到孔徑；孔心距只好自己算。
+ * ⭐ 計算全用同軸貼合那一支（`mate.js` `cylinderFrame()`，布林挖的孔測試驗過）＋ `holeDistance()`；⛔ 改任何東西。
+ * ⚠ 第三下 ⇒ 重新開始（那一個當第一個）。
+ */
+let holePick1 = null;
+
+function toggleHoleMode() {
+  if (!sel.holeMode) exitOtherModes('hole');
+  const on = sel.setHoleMode(!sel.holeMode);
+  $('measureHole').classList.toggle('on', on);
+  holePick1 = null;
+  view.clearPickMarks();
+  updateBar();
+  toast(on ? '量孔：點孔的內壁（或軸的側面）—— 報直徑與孔心；再點另一個孔報孔心距。再按一次「量孔」或 Esc 離開'
+           : '已離開量孔');
+}
+
+/** 點到的那一下 ⇒ 那一圈的中心線（點到邊或點 ⇒ 旁邊的面都試，跟同軸一樣）*/
+function holeFrameOf(el) {
+  if (!el || el.kind === 'blocked') return { fr: null, why: '這裡點不到物件 —— 點孔的內壁或軸的側面' };
+  const m = el.obj.mesh();
+  const cands = el.kind === 'face' ? [el.face]
+    : el.kind === 'edge' ? [el.he.face, el.he.twin && el.he.twin.face]
+    : (el.vert ? m.vertOutgoing(el.vert).map(he => he.face) : []);
+  let fr = null;
+  for (const f of cands.filter(Boolean)) {
+    const r = cylinderFrame(el.obj, f, m);
+    if (r.ok) return { fr: r };
+    if (!fr) fr = r;
+  }
+  return { fr: null, why: fr ? fr.reason : '這裡點不到面 —— 點孔的內壁或軸的側面' };
+}
+
+function holePick(el) {
+  const { fr, why } = holeFrameOf(el);
+  if (!fr) { toast(why, true); return; }
+  const c = v => fmtCm(v);
+  const axisName = d => {
+    const a = [Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)];
+    const k = a.indexOf(Math.max(...a));
+    return a[k] > 0.999 ? ['X', 'Y', 'Z'][k] : `斜的（${c(d.x)}, ${c(d.y)}, ${c(d.z)}）`;
+  };
+  const what = fr.inward ? '孔' : '軸';
+  const line = { kind: 'edge', points: fr.ends, role: holePick1 ? 'dst' : 'src' };
+  const desc = `「${el.obj.name}」的${what}：直徑 ${c(2 * fr.radius)} cm（半徑 ${c(fr.radius)}）　`
+    + `${what}心 X ${c(fr.point.x)}　Y ${c(fr.point.y)}　Z ${c(fr.point.z)} cm　中心線朝 ${axisName(fr.dir)}`;
+  if (!holePick1) {
+    holePick1 = { fr, name: el.obj.name, what };
+    view.setPickMarks([line]);
+    toast(desc + '　（再點另一個孔量孔心距）');
+    return;
+  }
+  const a = holePick1;
+  const r = holeDistance(a.fr, fr);
+  view.setPickMarks([
+    { kind: 'edge', points: a.fr.ends, role: 'src' }, line,
+    { kind: 'edge', points: [r.from, r.to], role: 'active' }
+  ]);
+  holePick1 = null;
+  toast(desc + `　⇒ ${a.what}心距 ${c(r.dist)} cm`
+    + (r.parallel
+      ? `（兩條中心線平行，量的是兩條線之間的垂直距離${r.along > 0.005 ? `；沿中心線另外錯開 ${c(r.along)} cm` : ''}）`
+      : `（兩條中心線不平行、夾 ${c(r.angle)}°，量的是兩個${a.what}心的直線距離）`)
+    + '　點下一個就重新開始');
 }
 
 const MATE_NAME = { vertex: '點', edge: '邊', face: '面' };
@@ -1720,6 +1795,10 @@ function exitOtherModes(keep) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
   }
+  if (keep !== 'hole' && sel.holeMode) {
+    sel.setHoleMode(false); $('measureHole').classList.remove('on');
+    holePick1 = null; view.clearPickMarks();
+  }
   if (keep !== 'pen' && sel.penMode) {
     /**
      * 🔴 **正在改既有物件的路徑 → 一定要走 `endPenEdit()`**，
@@ -1791,6 +1870,10 @@ function dropPendingPicks() {
   }
   if (sel.mateMode && matePick1) {
     matePick1 = null; view.clearPickMarks();
+    dropped = true;
+  }
+  if (sel.holeMode && holePick1) {
+    holePick1 = null; view.clearPickMarks();
     dropped = true;
   }
   /** 分片「標一段」點了起點（2026-10-12）—— Undo 會換掉網格，那條起點就不存在了 */
