@@ -403,6 +403,14 @@ function mapEdgesBack(hes, from, to, orig) {
  * 一次展開多個物件，並把結果併成一份。
  * 不同物件之間不合併相同的片 —— 名稱要對得回原件，
  * 現場才知道這張圖是哪個零件。
+ *
+ * 🔴 **例外：確定一模一樣的複本合成一種 ×N，卡片上把每個名字都列出來**
+ * （綜合評估 ⑤-16，2026-10-20，kang「同意你的建議」；補測：折板 Ctrl+D 之後出「12 種、共 12 片」）。
+ * 「確定一模一樣」＝ 種類、板厚、縮放都相同，而且：參數物件的參數一字不差（`src` 整份比）；
+ * 網格物件是同一份網格（Ctrl+D 複製網格物件就是共用同一份）。
+ * ⚠ **⛔ 用寬、高、面積去比** —— 左右對稱的兩片數字一樣、其實是鏡像，硬合會切錯（Pepakura 論壇就有人碰到）。
+ * ⭐ 業界：SolidWorks 下料表的「收集一模一樣的件」也是相同的才合、多一個孔就分開（經銷商教學與 SolidWorks 部落格）。
+ * ⚠ 位置、旋轉⛔ 管（攤的是物件自己的網格，轉個方向攤出來一樣）。
  */
 export function unfoldMany(objs, opt = {}) {
   const pieces = [];
@@ -410,12 +418,32 @@ export function unfoldMany(objs, opt = {}) {
   const skipped = [];
   let rule = null;
 
+  const meshIds = new Map();
+  const keyOf = o => {
+    const base = [o.kind, o.thickness, o.scale.x, o.scale.y, o.scale.z].join('|');
+    if (o.isParametric) return base + '|' + JSON.stringify(o.src);
+    const m = o.mesh();
+    if (!meshIds.has(m)) meshIds.set(m, meshIds.size);
+    return base + '|mesh#' + meshIds.get(m);
+  };
+  const groups = [];
   for (const o of objs) {
+    const k = keyOf(o);
+    const g = groups.find(q => q.key === k);
+    if (g) g.objs.push(o); else groups.push({ key: k, objs: [o] });
+  }
+  /** 名字：三個以內全列，再多列前兩個 ＋「等 N 個」 */
+  const namesOf = list => list.length <= 3 ? list.map(o => o.name).join('、')
+    : `${list.slice(0, 2).map(o => o.name).join('、')} 等 ${list.length} 個`;
+
+  for (const g of groups) {
+    const o = g.objs[0], n = g.objs.length;
     const r = unfoldObject(o, opt);
     rule = rule || r.rule;
-    if (!r.ok) { skipped.push(`${o.name}：${r.reason}`); continue; }
+    if (!r.ok) { skipped.push(`${namesOf(g.objs)}：${r.reason}`); continue; }
     for (const p of r.pieces) {
-      p.name = objs.length > 1 ? `${o.name}－${p.name}` : `${o.name}`;
+      p.name = objs.length > 1 ? `${namesOf(g.objs)}－${p.name}` : `${o.name}`;
+      if (n > 1) { p.qty *= n; p.sameAs = g.objs.map(q => q.name); }
       pieces.push(p);
     }
     for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);

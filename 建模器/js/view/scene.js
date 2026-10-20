@@ -1606,6 +1606,32 @@ export class SceneView {
    * @param {object} [only] 給了 ⇒ 只在現在畫的就是那一份時才收（⑤-21：切成實心的紅線跟著選取收掉，
    *   ⛔ 順手收掉 3D 列印標的破洞 —— 那個要留著讓人找洞補）
    */
+  /**
+   * ⑤-15（2026-10-20）：沿面滑動「正值往哪邊」的箭頭（世界座標，每兩點一段；`tips` ＝ 箭頭尖的點）。給 null ⇒ 收掉。
+   * ⚠ 自己一個槽，⛔ 跟問題標示共用 —— 改形狀時問題標示會收掉，箭頭由 `main.js` 照選取重畫。
+   */
+  setSlideArrows(segs, tips) {
+    if (this._slideArrows) {
+      this.scene.remove(this._slideArrows);
+      this._slideArrows.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      this._slideArrows = null;
+    }
+    if (segs && segs.length) this._slideArrows = this._buildLineOverlay('slideArrows', segs, tips, 0x7cf29a);
+  }
+
+  /**
+   * ⑤-6（2026-10-20）：「選一條線」停下來的那幾個點（世界座標）—— 琥珀色的點。給 null ⇒ 收掉。
+   * ⚠ 自己一個槽；換選取、離開編輯模式由 `main.js` 收（`dropSolidCutMark()`）。
+   */
+  setLoopStops(pts) {
+    if (this._loopStops) {
+      this.scene.remove(this._loopStops);
+      this._loopStops.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      this._loopStops = null;
+    }
+    if (pts && pts.length) this._loopStops = this._buildLineOverlay('loopStops', null, pts, 0xffb347);
+  }
+
   clearIssuePreview(only) {
     if (!this._issuePrev) return;
     if (only && only !== this._issuePrev) return;

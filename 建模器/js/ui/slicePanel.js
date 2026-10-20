@@ -199,6 +199,28 @@ export class SlicePanel {
   close() { this.el.hidden = true; }
   get isOpen() { return !this.el.hidden; }
 
+  /**
+   * 🔴 **新建、開檔 ⇒ 跟著模型走的設定回到預設**（綜合評估 ⑤-24，2026-10-20，kang「同意你的建議」）。
+   * 以前整包記在瀏覽器 ⇒ 補測新建一個方塊，帶出了 T6 的「1 cm × 2 ＋ 0.5 cm」。
+   * | 回到預設（跟模型走）| 照舊記著（跟人走）|
+   * |---|---|
+   * | 切的方向、分段表（板厚、片數、孔數）、照最大外形切 | 孔徑、離邊、DXF 單位、存檔時選資料夾、排版的板子 |
+   * ⭐ 業界的分法一樣：Fusion 360 單位跟著每一份設計、另有一份「我的預設」給新設計（Autodesk 官方教學）。
+   * ⚠ 存進檔案、開檔時還原那一份分段表 ⇒ 要改存檔格式，之後再說（`實驗-綜合評估.md` ⑤-24）。
+   */
+  resetForNewDoc() {
+    this.opt.axis = DEFAULT_AXIS;
+    this.opt.bands = [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }];
+    this.opt.maxOutline = false;
+    const $ = id => this.el.querySelector('#' + id);
+    $('slAxis').value = this.opt.axis;
+    $('slMax').checked = false;
+    this.result = null;
+    this.pegs = null;
+    save(this.opt);
+    if (this.isOpen) this.run();
+  }
+
   // ── 算一次並重畫 ────────────────────────────────────
 
   run() {

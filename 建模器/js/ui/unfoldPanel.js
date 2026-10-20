@@ -176,7 +176,7 @@ export class UnfoldPanel {
     /**
      * 🔴 **相同的折線合成一行**（2026-10-09，kang 拍板：做開關、整個視窗共用）。
      * 預設在 `open()` 決定：有自己標過切線的物件（打版）→ 勾；都沒有 → 不勾（原本的展開圖一個字都不變）。
-     * ⚠ ⛔ 不存進 localStorage —— 每次打開照「這次展開的是什麼」重新決定。
+     * ⚠ ⛔ 存進 localStorage（換一份檔案就照內容重新決定）；同一份檔案開著時記住人自己勾的（⑤-16，見 `open()`）。
      */
     // ── 排版 ──
     const N = this.opt.nest;
@@ -194,7 +194,12 @@ export class UnfoldPanel {
     for (const k of Object.keys(nestIn)) nestIn[k].onchange = nestChanged;
 
     this.foldIn = $('uwFold');
-    this.foldIn.onchange = () => { if (this.result) this._render(this.result, this.objs); };
+    /** ⑤-16：人自己勾過 ⇒ 這一份檔案開著的時候記住（`open()`）；新建、開檔清掉（`resetForNewDoc()`）*/
+    this._foldUser = null;
+    this.foldIn.onchange = () => {
+      this._foldUser = this.foldIn.checked;
+      if (this.result) this._render(this.result, this.objs);
+    };
 
     /**
      * 🔴 **展開方式**（2026-10-12，kang 拍板 → `規格\建模器-省道打版.md`「定案」3）。
@@ -296,9 +301,17 @@ export class UnfoldPanel {
 
   open() {
     this.el.hidden = false;
-    this.foldIn.checked = this._targets().some(hasSeams);
+    /**
+     * 🔴 **「相同的折線合成一行」：同一份檔案開著的時候記住人自己勾的**（綜合評估 ⑤-16，2026-10-20，kang「同意你的建議」）。
+     * 沒勾過 ⇒ 照舊照內容決定（有自己標過切線的物件 → 勾）；新建、開檔 ⇒ 回到照內容決定（`resetForNewDoc()`）。
+     * 〔更正：這裡以前寫「⛔ 不存」，查過那是 AI 自己的註解、⛔ 是 kang 定的；kang 2026-10-09 定的只有「做成開關、關掉要提醒」〕
+     */
+    this.foldIn.checked = this._foldUser != null ? this._foldUser : this._targets().some(hasSeams);
     this.run();
   }
+
+  /** ⑤-16：換了一份檔案（新建、開檔）⇒ 「合成一行」回到照內容決定 */
+  resetForNewDoc() { this._foldUser = null; }
 
   /** 這次要展開的物件：沒選東西就整份文件 —— 一個案子通常就是要全部出圖 */
   _targets() {
@@ -370,10 +383,16 @@ export class UnfoldPanel {
     this.body.innerHTML = '';
 
     const s = r.stats;
+    /**
+     * ⑤-16（2026-10-20）：**只展開選到的就講出來**（以前標題只有「1 種 1 片」，補測選了盒身以為整份只有一片）。
+     * 沒選東西 ⇒ 展開整份，⛔ 多講。
+     */
+    const all = this.app.doc.objects.length, n = (objs || []).length;
+    const only = this.app.sel.objects.length && n < all ? `只展開選到的 ${n} 個（共 ${all} 個；沒選東西就是全部）　` : '';
     this.sum.textContent = r.pieces.length
-      ? `${s.pieces} 種、共 ${s.total} 片　總面積 ${fmt(s.area / 10000)} m²　`
+      ? only + `${s.pieces} 種、共 ${s.total} 片　總面積 ${fmt(s.area / 10000)} m²　`
         + `折彎 ${s.arcBends + s.sharpBends} 道`
-      : '沒有可以展開的東西';
+      : only + '沒有可以展開的東西';
 
     if (this._matNote) { this.body.appendChild(box('uwSkip', this._matNote)); this._matNote = null; }
     for (const msg of r.skipped) this.body.appendChild(box('uwSkip', msg));

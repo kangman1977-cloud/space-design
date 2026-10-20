@@ -18515,6 +18515,55 @@ section('綜合評估 ⑤ 第一批（二）：讀數、匯入、輸出、刀具
   eq('★★ ⑤-25 檔頭日期 ＝ 本地的今天（以前用世界時間，台灣早上 8 點前是昨天）', io.today(), `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`);
 }
 
+section('綜合評估 ⑤ 第二批（前 6 條）：展開合併複本、選一條線停在哪、滑動箭頭（2026-10-20）');
+{
+  /** 剖面分段新建重設、展開「合成一行」記住、只展開選到的那一句、滑動 ％／公分各記、旋轉成形提示、鋼筆「加一條（挖洞）」在本機版用畫面驗 */
+  const bend = () => ({ type: 'bend', w: 30, first: 20, arcSeg: 4, k: 0.4, bends: [{ angle: 90, ri: 1, len: 15 }] });
+  const mk = (name, src, sx = 1) => {
+    const o = new io.ModelObject({ name, kind: io.KIND.SHEET, thickness: 0.5, src });
+    o.scale.x = sx;
+    return o;
+  };
+  const one = unfoldMany([mk('隔板', bend())]);
+  const a = mk('隔板', bend()), b = mk('隔板 複本', bend());
+  b.pos.set(80, 0, 0); b.rot.set(0, 1, 0);           // 擺在別處、轉過 ⇒ 照樣算一樣
+  const two = unfoldMany([a, b]);
+  eq('★★★ ⑤-16 兩個一模一樣的複本 ⇒ 種數跟一個時一樣（以前多一倍：12 種）', two.stats.pieces, one.stats.pieces);
+  eq('★★★ 　 總片數 ＝ 一個時的 2 倍', two.stats.total, one.stats.total * 2);
+  ok('★★ 　 卡片名字兩個都列', two.pieces.every(p => p.name.includes('隔板、隔板 複本') && p.sameAs && p.sameAs.length === 2), two.pieces[0] && two.pieces[0].name);
+  const c = mk('隔板 長', { ...bend(), first: 25 });
+  eq('★★ 　 參數差一點（第一段 25）⇒ ⛔ 合', unfoldMany([a, c]).stats.pieces, one.stats.pieces * 2);
+  const m = mk('隔板 鏡像', bend(), -1);
+  eq('★★★ 　 鏡像（X 縮放 −1）⇒ ⛔ 合（看起來一樣、其實是左右相反）', unfoldMany([a, m]).stats.pieces, one.stats.pieces * 2);
+  const plate = () => ({ type: 'plate', w: 100, d: 60 });
+  const p1 = mk('板 A', plate()), p2 = mk('板 B', plate()), p3 = mk('板 C', plate()), p4 = mk('板 D', plate());
+  const four = unfoldMany([p1, p2, p3, p4]);
+  ok('★ 　 四個一樣的 ⇒ 一種 ×4、名字列前兩個 ＋「等 4 個」', four.stats.pieces === 1 && four.stats.total === 4 && four.pieces[0].name.startsWith('板 A、板 B 等 4 個'), four.pieces[0] && four.pieces[0].name);
+
+  const so = await import('../js/core/selectops.js');
+  const sph = baked('sphere', { r: 30, segW: 32, segH: 16 });
+  const mer = [...sph.edges()].find(e => Math.abs(e.v.p.x - e.to.p.x) + Math.abs(e.v.p.z - e.to.p.z) > 1e-6
+    && Math.abs(e.v.p.y - e.to.p.y) > 1 && Math.abs(e.v.p.y) < 20 && Math.abs(e.to.p.y) < 20);
+  const L = so.edgeLoop(sph, mer);
+  ok('★★★ ⑤-6 球的經線：停在兩個極點、每個點講有幾條邊交會（32 條）', L.stopAt.length === 2 && L.stopAt.every(q => q.why === 'valence' && q.n === 32)
+    && L.stopAt.every(q => Math.abs(Math.abs(q.p.y) - 30) < 1e-6), JSON.stringify(L.stopAt.map(q => [q.n, +q.p.y.toFixed(2)])));
+  const lat = [...sph.edges()].find(e => Math.abs(e.v.p.y - e.to.p.y) < 1e-9 && Math.abs(e.v.p.y) < 5);
+  ok('★ 　 對照組：緯線繞回起點 ⇒ ⛔ 停的點', so.edgeLoop(sph, lat).closed && !so.edgeLoop(sph, lat).stopAt.length);
+
+  const bx = baked('box', { w: 60, d: 45, h: 40 });
+  const he0 = [...bx.edges()].find(h => h.face && h.twin && h.twin.face && Math.abs(h.v.p.y - h.to.p.y) > 1e-6);
+  const cut = edit.loopCut(bx, he0, { cuts: 1 });
+  const out = cut.mesh; out.computeNormals();
+  const vi = out._vertIndex();
+  const kk = (x, y) => (x < y ? `${x}-${y}` : `${y}-${x}`);
+  const want = new Set(cut.newEdges.map(([x, y]) => kk(x, y)));
+  const ring = [...out.edges()].filter(h => want.has(kk(vi.get(h.v.id), vi.get(h.to.id))));
+  const y0 = ring[0].v.p.y;
+  const pv = edit.slideEdges(out, ring, 1, { preview: true });
+  ok('★★★ ⑤-15 滑動箭頭：預覽 ⇒ 每個點一支箭頭（4 支）、方向往上（正值那邊）', pv.ok && pv.arrows.length === 4 && pv.arrows.every(q => q.d.y > 0), pv.arrows && pv.arrows.map(q => q.d.y.toFixed(1)).join());
+  ok('★★ 　 預覽⛔ 動任何點', Math.abs(ring[0].v.p.y - y0) < 1e-12);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

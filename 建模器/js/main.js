@@ -441,6 +441,8 @@ const app = {
   onExplode: obj => explodeSelected(obj),
   /** 🔴 右側面板的 `編輯路徑` —— 回頭改鋼筆物件那一串錨點（第 2 階段） */
   onEditPenPath: obj => editPenPath(obj),
+  /** ⑤-8：右側面板「加一條（挖洞）」＝ 編輯路徑 ＋ 加一條 */
+  onAddPenHole: obj => { editPenPath(obj); if (penEditing) addPenPath(); },
   /** 這個物件是不是正在「編輯路徑」（暫時攤平中）—— 右側面板據此鎖住位置／旋轉／縮放（E4）*/
   isPenEditing: obj => !!penEditing && !!obj && penEditing.id === obj.id,
   /** 分片模式「點一條線時標多少」（2026-10-09）：'edge' 只標那一條（原本的用法、預設）／'loop' 一整圈／'all' 連同方向全部 */
@@ -498,6 +500,7 @@ function commit(label, opt) {
       + '已經脫鉤（形狀不變；之後拖那條參考線不會再影響它）'), 0);
   }
   hist.commit(label, opt);
+  editTick++;                         // ⑤-15：形狀可能變了 ⇒ 滑動箭頭重畫
   clashStale();
   view.sync(doc);
   sel.revalidate();
@@ -768,6 +771,9 @@ function newDoc() {
    */
   doc.clearGuides();
   Object.assign(doc.head, new Doc().head);
+  /** ⑤-24（2026-10-20）：剖面分切跟著模型走的設定（方向、分段表）回到預設 —— 理由在 `slicePanel.js` `resetForNewDoc()` */
+  sliceWin.resetForNewDoc();
+  unfoldWin.resetForNewDoc();       // ⑤-16：展開圖「合成一行」回到照內容決定
   sel.clear();
   view.sync(doc);
   hist.reset('新建檔案');
@@ -784,6 +790,8 @@ async function loadFile() {
     const data = await openFile();
     exitOtherModes();
     doc.loadJSON(data);
+    sliceWin.resetForNewDoc();        // ⑤-24：同上（開別的檔 ＝ 換一個模型）
+    unfoldWin.resetForNewDoc();       // ⑤-16
     sel.clear();
     view.sync(doc);
     hist.reset('讀取檔案');
@@ -882,19 +890,52 @@ $('loopCut').onclick = () => loopCutSelected();
 $('slide').onclick = () => slideSelected();
 $('offsetLoop').onclick = () => offsetLoopSelected();
 /** 單顆切換：按鈕上的字就是目前的單位（⛔ 不用 class="on"，見 index.html 那則） */
+/**
+ * ⑤-15（2026-10-20，kang「同意你的建議」）：**公分、％ 各記上一次打的值**（第一次照舊 1 公分、25％）。
+ * 以前一換單位就重設成 1／25 ⇒ T8 打了 40％ 切回公分再切回來又變 25。只記在這次開著的頁面。
+ */
+const slideMem = { cm: 1, pct: 25 };
 $('slideUnit').onclick = () => {
   const b = $('slideUnit');
   const toPct = b.dataset.u === 'cm';
+  /** 先記住這個單位現在的值（⛔ 記 0、⛔ 記不是數字的）*/
+  const cur = +$('slideAmt').value;
+  if (Number.isFinite(cur) && cur !== 0) slideMem[toPct ? 'cm' : 'pct'] = cur;
   b.dataset.u = toPct ? 'pct' : 'cm';
   b.textContent = toPct ? '％' : '公分';
   /**
-   * ⚠ 換單位時把數字也換成該單位的合理預設，⛔ 不要留著上一個單位的值 ——
-   * 「1」在公分是 1 公分、在 ％ 是 1%（幾乎看不出動靜），
-   * 使用者會以為按鈕壞了（坑第 21 條）。
+   * ⚠ 換單位時⛔ 留著上一個單位的值 ——
+   * 「1」在公分是 1 公分、在 ％ 是 1%（幾乎看不出動靜），使用者會以為按鈕壞了（坑第 21 條）。
+   * ⇒ 換成那個單位上一次打的（第一次 ＝ 合理的預設）。
    */
-  $('slideAmt').value = toPct ? 25 : 1;
+  $('slideAmt').value = toPct ? slideMem.pct : slideMem.cm;
   $('slideAmt').step = toPct ? 5 : 0.5;
 };
+
+/**
+ * ⑤-15：選著一圈邊（沿面滑動那一組出現時）⇒ 在每個點畫一小段綠色箭頭，標出「正值往哪邊」。
+ * 選取、形狀一變就重畫（`updateBar()` 比對 `slideKey`）；箭頭長 ＝ 那條軌道的 0.35 倍。
+ */
+let slideKey = '';
+let editTick = 0;
+function refreshSlideArrows(on) {
+  const k = on ? `${sel.editSel.obj.id}|${sel.editSels.map(e => e.he && e.he.id).join(',')}|${editTick}` : '';
+  if (k === slideKey) return;
+  slideKey = k;
+  if (!on) { view.setSlideArrows(null); return; }
+  const obj = sel.editSel.obj;
+  const hes = sel.editSels.filter(e => e.kind === 'edge' && e.he).map(e => e.he);
+  const r = slideEdges(obj.mesh(), hes, 1, { preview: true });
+  if (!r.ok) { view.setSlideArrows(null); return; }
+  const M = obj.matrix(), segs = [], tips = [];
+  for (const a of r.arrows) {
+    const p0 = a.from.clone().applyMatrix4(M);
+    const p1 = a.from.clone().addScaledVector(a.d, 0.35).applyMatrix4(M);
+    segs.push(p0, p1);
+    tips.push(p1);
+  }
+  view.setSlideArrows(segs, tips);
+}
 $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
 $('selRingFaces').onclick = () => selectFaceRingFromEdge();
@@ -1674,7 +1715,7 @@ const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
  */
 function exitOtherModes(keep) {
   if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); dropSolidCutMark(); }
-  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); }
+  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); view.setLoopStops(null); }
   if (keep !== 'mate' && sel.mateMode) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
@@ -1770,7 +1811,7 @@ function dropPendingPicks() {
 function jumpHistory(redo) {
   const dropped = dropPendingPicks();
   const l = redo ? hist.redo() : hist.undo();
-  if (l) clashStale();
+  if (l) { clashStale(); editTick++; }
   if (l) {
     autosave(doc);
     toast((redo ? '重做：' : '復原：') + l
@@ -2428,11 +2469,17 @@ function finishPen() {
         + `⭐ 這是【板件】，面積 ${area.toFixed(2)} cm²（＝ 線長 × ${h}）—— `
         + '厚薄請改右側的「板厚」');
   } else {
+    /**
+     * ⑤-8（2026-10-20）：「曲線被拉直」只在真的有曲線時講（T7 畫的全是直線卻看到這一句）；
+     * 一條路徑 ⇒ 多講要挖洞按哪裡（右側面板「加一條（挖洞）」）。
+     */
+    const curved = paths.some(p => [...(p.hi || []), ...(p.ho || [])].some(v => Math.abs(v) > 1e-9));
     toast(`已建立「${obj.name}」（畫在${where}）：${paths.length} 條路徑、${n} 個點、`
         + `${sel.penPlane ? '厚' : '高'} ${h} cm　`
         + (paths.length > 1
             ? '⭐ 包在裡面的那條已經變成【洞】'
-            : '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）'));
+            : (curved ? '⚠ 曲線是照容許值拉直成折線的（跟匯入線稿同一支）　' : '')
+              + '要挖洞：右側面板按「加一條（挖洞）」'));
   }
 }
 
@@ -4271,7 +4318,7 @@ function slideSelected() {
    * 🔴 **一定要講「實際往哪邊」** —— 打數字沒有滑鼠可以指方向，
    * 使用者事先猜不到正值是哪一側。⭐ 看到不對就打負數，⛔ 不必重猜。
    */
-  const bits = [`${r.moved} 個點沿著表面往「${r.dir}」滑了 ${r.appliedCm.toFixed(2)} cm`];
+  const bits = [`${r.moved} 個點沿著表面往「${r.dir}」滑了 ${r.appliedCm.toFixed(2)} cm（正值 ＝ 綠色箭頭那邊）`];
   if (mode === 'pct') bits.push(`（${amt}%）`);
   if (r.clamped) {
     bits.push(`⚠ 有 ${r.clamped} 個點滑到底了（最多只能滑 ${r.maxCm.toFixed(2)} cm）`);
@@ -4633,6 +4680,7 @@ let solidCutMark = null;
 function dropSolidCutMark() {
   if (solidCutMark) view.clearIssuePreview(solidCutMark);
   solidCutMark = null;
+  view.setLoopStops(null);            // ⑤-6：「選一條線」停在哪的點，跟著同一批時機收
 }
 
 function solidCutSelected() {
@@ -5268,14 +5316,25 @@ function selectLoopFromEdge() {
    * ⚠ 而在方塊與圓柱上**它本來就只會選到一條**（角是三價），
    * 那是正確行為，不是壞掉。
    */
+  /**
+   * 🔴 **停下來的點畫出來、講為什麼**（綜合評估 ⑤-6，2026-10-20，kang「同意你的建議」）。
+   * 停是對的（那裡往哪走不唯一 —— Blender 也停，官方手冊：只設計給四邊形、線不一定繞成一圈）；
+   * 問題是以前⛔ 講停在哪（T1 走到 64 條邊交會的頂點就停、T8 眼窩只選到 1 條）。
+   */
+  const M = el.obj.matrix();
+  view.setLoopStops(r.stopAt.map(s => s.p.clone().applyMatrix4(M)));
+  const whyOf = s => s.why === 'valence' ? `一個點有 ${s.n} 條邊交會（往哪走不唯一）`
+    : s.why === 'hidden' ? '對面那一條在畫面上看不見（兩邊的面幾乎是平的）'
+    : '那個點找不到「對面那一條」';
+  const whys = [...new Set(r.stopAt.map(whyOf))].join('；');
   if (got <= 1) {
-    toast('只選到這一條 —— 這條線的兩頭都撞到「不是四個邊交會」的點了。'
+    toast(`只選到這一條 —— 兩頭停下來的地方（琥珀色的點）：${whys || '這條邊沒有另一側'}。`
         + '方塊與圓柱的角就是這種點；球的經線才走得長', true);
     return;
   }
   toast(r.closed
     ? `已選起一整條 ${got} 條邊（繞回起點了）`
-    : `已選起一整條 ${got} 條邊（兩頭停在不是四個邊交會的點，那是正常的）`);
+    : `已選起一整條 ${got} 條邊　停在琥珀色的點：${whys}`);
 }
 
 /**
@@ -5938,6 +5997,7 @@ function toggleSeamMode() {
   if (on) {
     toast('分片模式：點稜線＝切開／取消，點面的中央＝整圈切開。再按一次「分片」離開');
   } else {
+    view.setLoopStops(null);          // ⑤-6
     dropSeamSpan();
     dropSeamProposal();
     toast('已離開分片模式');
@@ -6066,6 +6126,7 @@ function acceptSeamProposal() {
  * 這裡只負責「改了文件之後要做什麼」——記一步 Undo、更新畫面、講一句話。
  */
 function seamPick(hit) {
+  view.setLoopStops(null);            // ⑤-6：上一次「標一整圈」停在哪的點，點下一下就收
   if (hit.kind === 'blocked') {
     toast(seamBlockReason(hit.obj), true);
     return;
@@ -6153,7 +6214,22 @@ function seamPick(hit) {
     for (const h of hes) if (isM(h) !== on && setM(mesh, h, on)) n++;
     if (!n) { toast('這一圈已經是' + (on ? word : '沒有標記') + '了', true); return; }
     const what = seamLineMode === 'all' ? '同方向的全部' : '一整圈';
-    commitSeam(hit.obj, `${on ? '標記' : '取消'}${what}${keep ? '不准切' : ''}（${n} 條邊）`);
+    /**
+     * ⑤-6（2026-10-20）：「標一整圈」沒繞回起點 ⇒ 停下來的點畫出來、講為什麼（T8：只標 5 條就停，也沒講停在哪）。
+     * 「同方向的全部」是好幾圈，停的點太多 ⇒ 這一輪只管一整圈。
+     */
+    let extra = '';
+    if (seamLineMode === 'loop') {
+      const L = edgeLoop(mesh, hit.he);
+      if (!L.closed && L.stopAt.length) {
+        const M = hit.obj.matrix();
+        view.setLoopStops(L.stopAt.map(q => q.p.clone().applyMatrix4(M)));
+        const ns = [...new Set(L.stopAt.filter(q => q.why === 'valence').map(q => q.n))];
+        extra = '　沒有繞一圈：停在琥珀色的點'
+          + (ns.length ? `（那裡有 ${ns.join('、')} 條邊交會，往哪走不唯一）` : '');
+      }
+    }
+    commitSeam(hit.obj, `${on ? '標記' : '取消'}${what}${keep ? '不准切' : ''}（${n} 條邊）`, extra);
     return;
   }
 
@@ -6176,7 +6252,7 @@ function seamPick(hit) {
  * 因為標一條邊通常什麼都不會發生 —— 要切到能把面的鄰接關係切斷才會多一片。
  * 不講的話使用者會以為功能壞掉（踩過的坑第 5、18 條那個病）。
  */
-function commitSeam(obj, label) {
+function commitSeam(obj, label, extra = '') {
   // 一定要在 commit()（裡面會 view.sync）之前講，不然這一輪畫面不會重畫接縫
   view.markSeamsDirty();
   commit(label);
@@ -6186,7 +6262,7 @@ function commitSeam(obj, label) {
     const r = unfoldObject(obj, {});
     msg += `　→ 展開 ${r.stats.total} 片`;
   } catch (e) { /* 算不出來就只講標記本身 */ }
-  toast(msg);
+  toast(msg + extra);
 }
 
 function setMode(m) {
@@ -7147,6 +7223,7 @@ function updateBar() {
    * 「工具列在、CSS 也對，但一行 JS 都沒跑」，**⛔ 完全看不出是哪裡的錯**。
    */
   const slideOk = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
+  refreshSlideArrows(!!slideOk);      // ⑤-15：綠色箭頭
   $('slide').hidden = !slideOk;
   $('slideAmt').hidden = !slideOk;
   $('slideUnit').hidden = !slideOk;

@@ -113,14 +113,16 @@ const THRESH_TOL_DEG = 0.01;
  * @param {HalfEdge} he0 種子邊
  * @param {{tolDeg?:number, markableOnly?:boolean}} [opt]
  *        `markableOnly`（預設 true）＝ 只走**畫面上看得見**的邊
- * @returns {{hes:HalfEdge[], keys:string[], closed:boolean, stopped:string[], split:number}}
+ * @returns {{hes:HalfEdge[], keys:string[], closed:boolean, stopped:string[], stopAt:object[], split:number}}
+ *          `stopAt` ＝ 停下來的那幾個點 `{ p, n, why }`（物件座標、那裡交會幾條邊、原因）——
+ *          ⑤-6（2026-10-20）：畫面拿去標出停在哪、講為什麼（T1、T4、T8：停了不講，看不出停在哪）
  *          `hes` 每條邊只出現一次，`keys` 是「小索引-大索引」字串
  *          `split` ＝ 第一個方向走完時 `hes` 有幾條（`hes[0]` 是種子；
  *          `hes[1..split-1]` 是第一個方向、照走的順序；`hes[split..]` 是另一個方向、照走的順序）——
  *          `seamSpanEdges()` 靠它切出「從起點到終點」那一段（2026-10-12）
  */
 export function edgeLoop(mesh, he0, opt = {}) {
-  const out = { hes: [], keys: [], closed: false, stopped: [], split: 1 };
+  const out = { hes: [], keys: [], closed: false, stopped: [], stopAt: [], split: 1 };
   if (!mesh || !he0) return out;
 
   const vi = mesh._vertIndex();
@@ -154,7 +156,11 @@ export function edgeLoop(mesh, he0, opt = {}) {
        * ⚠ 這不是缺陷：三價點（方塊、圓柱的角）**本來就沒有「對面那一條」**，
        * 而球的極點是「所有經線交會的地方」—— 停在那裡才對。
        */
-      if (inc.length !== 4) { out.stopped.push(`停在 ${inc.length} 價的點`); break; }
+      if (inc.length !== 4) {
+        out.stopped.push(`停在 ${inc.length} 價的點`);
+        out.stopAt.push({ p: v.p.clone(), n: inc.length, why: 'valence' });
+        break;
+      }
 
       const myFaces = new Set([h.face, h.twin && h.twin.face].filter(Boolean));
       const nxt = inc.find(o => {
@@ -162,8 +168,8 @@ export function edgeLoop(mesh, he0, opt = {}) {
         const fs = [o.face, o.twin && o.twin.face].filter(Boolean);
         return !fs.some(f => myFaces.has(f));
       });
-      if (!nxt) { out.stopped.push('找不到對面那一條'); break; }
-      if (!ok(nxt)) { out.stopped.push('對面那一條在畫面上看不見'); break; }
+      if (!nxt) { out.stopped.push('找不到對面那一條'); out.stopAt.push({ p: v.p.clone(), n: inc.length, why: 'noOpposite' }); break; }
+      if (!ok(nxt)) { out.stopped.push('對面那一條在畫面上看不見'); out.stopAt.push({ p: v.p.clone(), n: inc.length, why: 'hidden' }); break; }
 
       const k = keyOf(nxt);
       if (seen.has(k)) { out.closed = true; out.stopped.push('繞回起點'); break; }

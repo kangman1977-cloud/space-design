@@ -1723,6 +1723,14 @@ export function slideEdges(mesh, hes, amount, opt = {}) {
   });
 
   /**
+   * ⑤-15（2026-10-20，kang「同意你的建議」）：`opt.preview` ⇒ **⛔ 動任何點**，只回答「正值往哪邊走」——
+   * 畫面拿去畫箭頭（Blender 的 Edge Slide 也是在畫面上標出往哪一側，官方手冊）。T8：字寫「往上」，實際是往頭那邊，看不懂。
+   */
+  if (opt.preview) {
+    return { ok: true, dir, arrows: picks.map(p => ({ from: p.v.p.clone(), d: p.d.clone(), len: p.len })) };
+  }
+
+  /**
    * 🔴 **負值走的是另一條軌道，而它的長度不一定跟正的那條一樣** ——
    * 所以上下限要**各自算**，⛔ 不可以拿同一條的長度當兩邊的極限。
    * 〔方塊拉高一個角之後，同一個點往上 40、往下 20〕
