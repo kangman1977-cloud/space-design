@@ -18408,6 +18408,85 @@ section('綜合評估 ④ 第二批（三）：同軸貼合（2026-10-20）');
   ok('★★ 　 方向剛好反過來的 ⇒ 挑轉最少的那一邊（⛔ 無故翻 180°）', r2.angle < 30, r2.angle);
 }
 
+section('綜合評估 ⑤ 第一批（一）：操作類（2026-10-20）');
+{
+  /** 新增擺放、Ctrl+D、Ctrl+Y、Esc、貼合改用面、確認框、點的大小、提示換行（main.js／scene.js／index.html）在本機版用畫面驗 */
+  const { History } = await import('../js/core/history.js');
+  let st = 0;
+  const h = new History({ get: () => st, set: v => { st = v; } });
+  h.reset('開始');
+  st = 1; h.commit('A');
+  st = 1; h.commit('點一下已選的點');
+  eq('★★★ ⑤-11 跟上一步一模一樣 ⇒ ⛔ 記（以前多一步「拉點」）', h.stack.length, 2);
+  eq('★★ 　 復原撤銷的是 A（⛔ 是那個什麼都沒改的）', h.undo(), 'A');
+  st = 0; h.commit('沒改');
+  ok('★ 　 在復原之後「什麼都沒改」⇒ 重做那條也⛔ 被砍掉', h.canRedo);
+  h.redo();
+  st = 2; h.commit('拉面', { tag: 7 });
+  st = 3; h.commit('拉面', { tag: 7, replace: true });
+  eq('★★★ ⑤-11 拖完接著打數字 ⇒ 取代剛才那一步（⛔ 多一步）', h.stack.length, 3);
+  eq('★★ 　 復原一次就回到拖之前', (h.undo(), st), 1);
+  h.redo();
+  st = 4; h.commit('別的');
+  st = 5; h.commit('拉面', { tag: 7, replace: true });
+  eq('★★ 　 中間做過別的事 ⇒ 照舊記成新的一步（⛔ 吃掉「別的」）', h.stack.map(e => e.label).join(), '開始,A,拉面,別的,拉面');
+  st = 6; h.commit('拉點', { tag: 9 });
+  st = 5; h.commit('拉點', { tag: 9, replace: true });
+  eq('★ 　 打的數字等於沒動（回到上一步的樣子）⇒ 那一步整個拿掉', h.stack.map(e => e.label).join(), '開始,A,拉面,別的,拉面');
+  const big = new History({ get: () => st, set: v => { st = v; } });
+  eq('★★ ⑤-11 預設記 200 步（以前 60）', big.limit, 200);
+  big.reset();
+  for (let i = 1; i <= 210; i++) { st = 1000 + i; big.commit('第 ' + i + ' 步'); }
+  ok('★★ 　 超過 200 步 ⇒ 丟最舊的、記下「丟過」（退到底時講只記得最近 200 步）', big.stack.length === 200 && big.trimmed);
+  const fat = new History({ get: () => 'x'.repeat(1000) + st, set: () => {}, maxBytes: 5000 });
+  fat.reset();
+  for (let i = 0; i < 10; i++) { st = 2000 + i; fat.commit('大'); }
+  ok('★ 　 總量超過上限 ⇒ 也丟最舊的（大模型⛔ 吃光記憶體）', fat.bytes <= 5000 && fat.trimmed, fat.bytes);
+
+  const A = await import('../js/core/align.js');
+  const B = (x0, y0, z0, x1, y1, z1) => new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1));
+  const cube = B(-30, 0, -20, 30, 45, 20);                     // 預設方塊 60 × 45 × 40，貼地
+  const s0 = A.freeSpot(cube, { x: 103.4, z: -50.6 }, []);
+  ok('★★★ ⑤-1 空的地方 ⇒ 放在畫面正中間（四捨五入到整數 cm）', s0.x === 103 && s0.z === -51 && !s0.moved, JSON.stringify(s0));
+  const occ = [B(-30, 0, -20, 30, 45, 20)];
+  const s1 = A.freeSpot(cube, { x: 0, z: 0 }, occ);
+  ok('★★★ 　 中間有東西 ⇒ 挪到最近的空位、⛔ 疊到', s1.moved && !occ.some(o => o.intersectsBox(cube.clone().translate(new THREE.Vector3(s1.x, 0, s1.z)))), JSON.stringify(s1));
+  ok('★★ 　 挪一格（深 40 ＋ 間隙 10 ⇒ 50），⛔ 跳到 90 cm 外', s1.x === 0 && Math.abs(s1.z) === 50, JSON.stringify(s1));
+  const sf = A.freeSpot(cube, { x: 0, z: 0 }, occ, { right: { x: 1, z: 0 }, eye: { x: 0, z: 500 } });
+  ok('★★ 　 給了畫面的右方（正視圖）⇒ 先排左右兩邊（X ±70），⛔ 排到正後方', Math.abs(sf.x) === 70 && sf.z === 0, JSON.stringify(sf));
+  const r45 = { x: Math.SQRT1_2, z: -Math.SQRT1_2 };
+  const si = A.freeSpot(cube, { x: 0, z: 0 }, occ, { right: r45, eye: { x: 340, z: 340 } });
+  ok('★ 　 等角視圖：一樣好的兩個位置 ⇒ 挑靠鏡頭那邊（Z +50，⛔ 躲在後面）', si.x === 0 && si.z === 50, JSON.stringify(si));
+  const high = [B(-30, 100, -20, 30, 140, 20)];
+  ok('★ 　 正上方懸空的東西 ⇒ ⛔ 算疊到（物件貼地放）', !A.freeSpot(cube, { x: 0, z: 0 }, high).moved);
+  eq('★★ ⑤-1 間隙：60 cm 寬 ⇒ 10（最多 10）', A.placeGap(60), 10);
+  eq('★ 　 2 cm 寬 ⇒ 1（最少 1）', A.placeGap(2), 1);
+  near('★ 　 20 cm 寬 ⇒ 4（寬度的 0.2 倍）', A.placeGap(20), 4);
+  eq('★★★ ⑤-1 Ctrl+D：旁邊空著 ⇒ 往 +X 挪「寬 ＋ 間隙」（60 ＋ 10 ＝ 70，以前固定 +30／+30 會疊到）', A.besideShift(cube, [cube]), 70);
+  eq('★★ 　 旁邊已經有一個複本 ⇒ 再挪一個寬（140）', A.besideShift(cube, [cube, cube.clone().translate(new THREE.Vector3(70, 0, 0))]), 140);
+
+  const box = baked('box', { w: 60, d: 45, h: 40 });
+  const bb = box.bounds();
+  const r7 = edit.solidCut(box, box.faces.filter(f => {
+    const ps = box.faceVerts(f).map(v => v.p);
+    return ps.every(p => Math.abs(p.y - bb.max.y) < 1e-6) || ps.every(p => Math.abs(p.z - bb.max.z) < 1e-6);
+  }).map(face => ({ kind: 'face', face })));
+  ok('★★★ ⑤-21 切成實心擋下來 ⇒ 交出交界那一圈邊（方塊相鄰兩面：6 條）', !r7.ok && r7.edges && r7.edges.length === 6, r7.edges && r7.edges.length);
+  ok('★ 　 每一條是兩個點（物件自己的座標）', r7.edges.every(e => e.length === 2 && e[0].isVector3));
+  ok('★ 　 還沒分組就擋下的（沒選東西）⇒ ⛔ 交邊', !edit.solidCut(box, []).edges);
+
+  const so = await import('../js/core/selectops.js');
+  const cyl = baked('cylinder', { r: 20, h: 40 });
+  const sph = baked('sphere', { r: 30, segW: 32, segH: 16 });
+  const lat = [...sph.edges()].find(e => Math.abs(e.v.p.y - e.to.p.y) < 1e-9 && Math.abs(e.v.p.y) < 5);
+  const sideEdge = [...cyl.edges()].find(e => e.face && e.twin && e.twin.face
+    && cyl.faceLoop(e.face).length === 4 && cyl.faceLoop(e.twin.face).length === 4
+    && Math.abs(e.v.p.y - e.to.p.y) > 1);
+  const nSide = so.edgeLoop(cyl, sideEdge).hes.length, nRim = so.edgeLoop(sph, lat).hes.length;
+  ok('★★ ⑤-21（前提）圓柱側面的直邊順著走只有它自己 ⇒ 「標一段」第一下就講', nSide === 1, nSide);
+  ok('★ 　 對照組：球中間的緯線走得下去（32 條）⇒ 照常當起點', nRim === 32, nRim);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

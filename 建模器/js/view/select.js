@@ -2234,13 +2234,18 @@ export class Selection {
     const toPx = pl => this._project(node.localToWorld(pl.clone()), r);
 
     const only = opt.only;
+    /**
+     * ⑤-20（2026-10-20）：點成點或邊時，**滑鼠底下其實打到的那個面**也一起交出去（`hitFace`）——
+     * 貼合兩下種類不同時拿它改成面對面（小東西的面很窄，14 px 內就先算成點或邊）。要用才算。
+     */
+    const hitFace = () => { const f = nearestFace(mesh, pLocal); return f ? f.face : null; };
 
     if (opt.vertex && (!only || only === 'vertex')) {
       const nv = nearestVertex(mesh, pLocal);
       if (nv) {
         const s = toPx(nv.vert.p);
         if (Math.hypot(r.x - s.x, r.y - s.y) <= grab) {
-          return { obj, kind: 'vertex', vert: nv.vert };
+          return { obj, kind: 'vertex', vert: nv.vert, hitFace: hitFace() };
         }
       }
       /**
@@ -2256,7 +2261,7 @@ export class Selection {
       if (near) {
         const a = toPx(near.he.v.p), b = toPx(near.he.to.p);
         if (distPointSeg2(r.x, r.y, a.x, a.y, b.x, b.y) <= grab) {
-          return { obj, kind: 'edge', he: near.he };
+          return { obj, kind: 'edge', he: near.he, hitFace: hitFace() };
         }
       }
       if (only === 'edge') return null;
@@ -3987,6 +3992,8 @@ export class Selection {
     const prop = proportionalVerts(el.obj.mesh(), core, this.propRadius);
     const verts = prop.verts;
     this._drag = {
+      /** ⑤-11（2026-10-20）：這一次拖曳的編號 —— 放手記一步、接著打數字就取代那一步（`core/history.js` `commit()`）*/
+      id: (this._dragSeq = (this._dragSeq || 0) + 1),
       verts,
       /** ⚠ 對應 `verts` 的權重。⛔ 拖曳中不重算 —— 它是初始狀態的一部分。 */
       weights: prop.weights,
@@ -4062,7 +4069,7 @@ export class Selection {
        */
       this._rememberEnd(d);
     }
-    if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el);
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el, committing ? { tag: d.id } : undefined);
   }
 
   /**
@@ -4189,7 +4196,8 @@ export class Selection {
     this.view.markGeomDirty();
     this._drawEditMark();
     this._rememberEnd(d);
-    if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel);
+    /** ⑤-11：打數字是改「剛才那一次」⇒ 取代那一步，⛔ 多記一步（以前要按兩次復原）*/
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel, { tag: d.id, replace: true });
     return true;
   }
 

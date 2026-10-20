@@ -47,7 +47,7 @@ import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges,
          boundaryRingFrom } from './core/selectops.js';
-import { worldBounds } from './core/align.js';
+import { worldBounds, unionBounds, freeSpot, besideShift } from './core/align.js';
 import { findClashes, clashLine } from './core/interfere.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -389,7 +389,7 @@ const sel = new Selection(view, {
   /** 🔴 原點指定：點到什麼就把原點搬到那裡（2026-09-01） */
   onOriginPick: el => originPick(el),
   onEditPick: (el, info) => editPick(el, info),
-  onEditDrag: (committing, el) => editDrag(committing, el),
+  onEditDrag: (committing, el, opt) => editDrag(committing, el, opt),
   onEditCancel: () => editCancelled(),
   // 框選要回報選到幾個，不然拉了一個空框跟拉到東西看起來一樣
   onMarquee: n => toast(n ? `框選到 ${n} 個物件` : '框選範圍內沒有物件', !n),
@@ -424,8 +424,8 @@ const hist = new History({
     view.sync(doc);
     sel.revalidate();
     panel.analysisCache.clear();
-  },
-  limit: 60
+  }
+  /** ⑤-11（2026-10-20）：步數的上限改用 `History` 自己的預設（200 步＋總量上限，理由在那支的建構子）*/
 });
 
 const app = {
@@ -482,7 +482,11 @@ const importWin = new ImportPanel(app);
 //  動作
 // ═══════════════════════════════════════════════════════
 
-function commit(label) {
+/**
+ * @param {string} label
+ * @param {{tag?:any, replace?:boolean}} [opt] ⑤-11：拖完接著打數字 ⇒ 取代剛才那一步（規則在 `core/history.js` 的 `commit()`）
+ */
+function commit(label, opt) {
   /**
    * 🔴 **旋轉成形 第 2 輪 規則 2**：每一步存檔前問一次「中心線還在它跟著的參考線上嗎」——
    * 搬走、轉了 ⇒ 自動脫鉤（kang 2026-10-15）。⭐ 放在這裡 ＝ 搬物件的每一條路（拉箭頭、打數字、對齊…）都管得到，
@@ -493,7 +497,7 @@ function commit(label) {
     setTimeout(() => toast(`${det.map(o => `「${o.name}」`).join('、')}的中心線離開了它跟著的參考線，`
       + '已經脫鉤（形狀不變；之後拖那條參考線不會再影響它）'), 0);
   }
-  hist.commit(label);
+  hist.commit(label, opt);
   clashStale();
   view.sync(doc);
   sel.revalidate();
@@ -513,19 +517,38 @@ function addPrim(type) {
     color: PALETTE[doc.objects.length % PALETTE.length]
   });
 
-  // 擺在不重疊的地方，並且讓底部貼齊地面
+  /**
+   * 🔴 **⑤-1（2026-10-20，kang 定的）：放在目前畫面正中間附近、⛔ 跟別的東西重疊、鏡頭⛔ 動**；底部照舊貼地。
+   * 以前每 6 個一圈、半徑 90 起跳 ⇒ 新東西常常在畫面外。找空位的規則在 `core/align.js` 的 `freeSpot()`。
+   */
   const box = obj.mesh().bounds();
-  const n = doc.objects.length;
-  const ring = Math.floor(n / 6);
-  const ang = (n % 6) * Math.PI / 3 + ring * 0.4;
-  const r = ring === 0 && n === 0 ? 0 : 90 + ring * 90;
-  obj.pos.set(Math.cos(ang) * r, -box.min.y, Math.sin(ang) * r);
+  obj.pos.set(0, -box.min.y, 0);
+  const t = view.orbit.target, cam = view.camera;
+  const rv = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion).setY(0);
+  const spot = freeSpot(worldBounds(obj), { x: t.x, z: t.z }, doc.objects.map(worldBounds), {
+    right: rv.lengthSq() > 1e-6 ? { x: rv.normalize().x, z: rv.z } : null,
+    eye: { x: cam.position.x, z: cam.position.z }
+  });
+  obj.pos.x = spot.x; obj.pos.z = spot.z;
 
   doc.add(obj);
   view.sync(doc);
   sel.set([obj.id]);
   commit('新增' + (spec ? spec.label : type));
-  toast('新增：' + obj.name);
+  toast('新增：' + obj.name + placeNote([obj], spot.moved ? '畫面中間已經有東西，放在旁邊' : '放在畫面中間'));
+}
+
+/**
+ * ⑤-1：新放的東西在不在畫面裡 —— 不在就講按什麼看得到（鏡頭⛔ 自己動，kang 定的）。
+ * @param {ModelObject[]} objs
+ * @param {string} where 在畫面裡時講的那一句
+ */
+function placeNote(objs, where) {
+  const b = unionBounds(objs);
+  if (b.isEmpty()) return '';
+  const p = b.getCenter(new THREE.Vector3()).project(view.camera);
+  const inView = Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z < 1;
+  return inView ? `（${where}）` : '（在畫面外 —— 按「選到的入鏡」或 Shift＋F 看它）';
 }
 
 function deleteSelected() {
@@ -575,13 +598,18 @@ function deleteSelected() {
 function duplicateSelected() {
   const list = sel.objects;
   if (!list.length) return;
+  /**
+   * 🔴 **⑤-1（2026-10-20，kang 定的）：照寬度並排在旁邊（+X）、留一點間隙**；選了好幾個就整組一起挪、相對位置⛔ 變。
+   * 以前固定 +30、+30 ⇒ 比 30 cm 大的東西複製出來疊在原本那個上面。旁邊還有東西就再挪一個寬（`besideShift()`）。
+   */
+  const dx = besideShift(unionBounds(list), doc.objects.map(worldBounds));
   const made = [];
   for (const o of list) {
     const fresh = new ModelObject({
       name: o.name + ' 複本',
       kind: o.kind,
       src: JSON.parse(JSON.stringify(o.src)),
-      pos: o.pos.clone().add(new THREE.Vector3(30, 0, 30)),
+      pos: o.pos.clone().add(new THREE.Vector3(dx, 0, 0)),
       rot: o.rot.clone(),
       scale: o.scale.clone(),
       color: o.color,
@@ -596,6 +624,7 @@ function duplicateSelected() {
   view.sync(doc);
   sel.set(made);
   commit(`複製 ${made.length} 個物件`);
+  toast(`複製 ${made.length} 個物件` + placeNote(sel.objects, `往右（+X）並排、挪了 ${+dx.toFixed(2)} cm`));
 }
 
 /**
@@ -1480,7 +1509,8 @@ function matePick(el) {
     matePick1 = el;
     sel.set([el.obj.id]);
     view.setPickMarks([{ kind: el.kind, points: mateMarkPoints(el), role: 'src' }]);
-    toast(`來源：「${el.obj.name}」的${MATE_NAME[el.kind]}（黃色）　接著點目標`);
+    toast(`來源：「${el.obj.name}」的${MATE_NAME[el.kind]}（黃色）　接著點目標`
+      + (el.kind !== 'face' && el.hitFace ? '（要面對面的話，目標點一個面就好 —— 會改用這裡旁邊的面）' : ''));
     return;
   }
 
@@ -1500,9 +1530,23 @@ function matePick(el) {
    * 「把一個點貼到一個面」在數學上做得到（點落到面上），但**面上哪裡？**
    * 沒有唯一答案，做出來的行為使用者猜不到。寧可講清楚，不要亂猜。
    */
+  /**
+   * 🔴 **⑤-20（2026-10-20，kang「照建議」）：一邊是面、另一邊點成點或邊 ⇒ 點或邊那一邊改用滑鼠底下的那個面**
+   * （跟同軸一樣的招）。小東西的面很窄、14 px 內就先算成點或邊 ⇒ 以前「軸立到板上」怎麼點都被擋（T2、T9）。
+   * ⚠ 只在其中一邊是面時才改；點對邊照舊擋（那兩種要的東西不一樣，⛔ 猜）。
+   */
+  let swapped = '';
   if (el.kind !== matePick1.kind) {
-    toast(`要點同一種：來源是${MATE_NAME[matePick1.kind]}，目標也要點${MATE_NAME[matePick1.kind]}`, true);
-    return;
+    if (matePick1.kind === 'face' && el.hitFace) {
+      swapped = `目標點到的是${MATE_NAME[el.kind]}，改用它旁邊的面　`;
+      el = { obj: el.obj, kind: 'face', face: el.hitFace };
+    } else if (el.kind === 'face' && matePick1.hitFace) {
+      swapped = `來源點到的是${MATE_NAME[matePick1.kind]}，改用它旁邊的面　`;
+      matePick1 = { obj: matePick1.obj, kind: 'face', face: matePick1.hitFace };
+    } else {
+      toast(`要點同一種：來源是${MATE_NAME[matePick1.kind]}，目標也要點${MATE_NAME[matePick1.kind]}`, true);
+      return;
+    }
   }
 
   const src = matePick1.obj;
@@ -1535,9 +1579,9 @@ function matePick(el) {
    * 講出來讓人知道「轉出來的方位可能不是你想的那個，自己再轉一下就好」，
    * 比默默轉一個奇怪的方向好 —— 沉默地做怪事最難查。
    */
-  toast(r.ambiguous
+  toast(swapped + (r.ambiguous
     ? `貼合完成。這次要轉 180 度，轉軸不唯一，方位若不對請自己再轉`
-    : `貼合完成：「${src.name}」已貼到「${el.obj.name}」`);
+    : `貼合完成：「${src.name}」已貼到「${el.obj.name}」`));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1629,7 +1673,7 @@ const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
  * **畫面說「分片開著」，實際上沒有作用**，那比按鈕沒反應更難查。
  */
 function exitOtherModes(keep) {
-  if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); }
+  if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); dropSolidCutMark(); }
   if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); }
   if (keep !== 'mate' && sel.mateMode) {
     sel.setMateMode(false); $('mate').classList.remove('on');
@@ -1731,8 +1775,18 @@ function jumpHistory(redo) {
     autosave(doc);
     toast((redo ? '重做：' : '復原：') + l
       + (dropped ? '（點到一半的位置已清掉，請重新點）' : ''));
+  } else {
+    /** ⑤-11（2026-10-20）：退到底／沒得重做以前⛔ 出聲（按鍵盤的人不知道是沒按到還是到底了）*/
+    toast(redo ? '沒有可以重做的了（重做只接得回剛剛復原掉的那幾步）' : histFloorText());
   }
   updateBar();
+}
+
+/** ⑤-11：退到底時講什麼 —— 丟過最舊的幾步就講只記得幾步 */
+function histFloorText() {
+  return hist.trimmed
+    ? `最早只能退到這裡（復原只記得最近 ${hist.limit} 步）`
+    : '最早只能退到這裡（已經是這次新建、開檔或重新整理網頁時的樣子）';
 }
 
 /**
@@ -3436,6 +3490,7 @@ function toggleEditMode() {
   if (!sel.editMode) exitOtherModes('edit');
   const on = sel.setEditMode(!sel.editMode);
   $('edit').classList.toggle('on', on);
+  if (!on) dropSolidCutMark();
   /**
    * ⚠ **⛔ 這裡原本是 `$('gEditXf').hidden = !on`** —— 而**同一件事在別的
    * 兩個地方還各有一份**，結果 `exitOtherModes()` 那條路漏掉，
@@ -3448,10 +3503,58 @@ function toggleEditMode() {
   sel.refreshVertexDots();
   panel.refresh();
   updateBar();
+  /** ⑤-10（2026-10-20）：選著的是參數物件 ⇒ 一進來就講（以前要點下去才知道點不到）*/
+  const para = on ? sel.objects.filter(o => o.isParametric) : [];
   toast(on
-    /** ⚠ 2026-10-19（補測：`實驗-綜合評估.md` ②-17）過濾器是「自動」時以前變成「點一個自動」—— 改照要點的東西講 */
-    ? `編輯模式：點選一個${PICK_NOUN[sel.editFilter] || '點、邊或面'}，再用箭頭把它拉走。再按一次「拉點線面」離開`
+    ? (para.length
+      ? editBlockText(para[0], para.length)
+      /** ⚠ 2026-10-19（補測：`實驗-綜合評估.md` ②-17）過濾器是「自動」時以前變成「點一個自動」—— 改照要點的東西講 */
+      : `編輯模式：點選一個${PICK_NOUN[sel.editFilter] || '點、邊或面'}，再用箭頭把它拉走。再按一次「拉點線面」或 Esc 離開`)
     : '已離開編輯模式');
+}
+
+/**
+ * ⑤-10：編輯模式碰到參數物件時講的話（點下去、或進來時選著的就是）。
+ * @param {ModelObject} obj
+ * @param {number} [n=1] 選著的參數物件有幾個
+ */
+function editBlockText(obj, n = 1) {
+  const who = n > 1 ? `「${obj.name}」等 ${n} 個` : `「${obj.name}」`;
+  return `${who}是參數物件（照尺寸算出來的），編輯模式點不到它的點、邊、面 —— `
+    + '要拉點線面，先在右側面板按「轉成可編輯網格」（之後就不能再改尺寸'
+    + (obj.src && obj.src.type === 'pen' ? '，鋼筆的錨點也會不見' : '')
+    + '；按 Ctrl+Z 可以反悔）';
+}
+
+/**
+ * 🔴 **Esc 一層一層退**（⑤-10，2026-10-20，kang「照建議」）。以前一律只清物件的選取 ——
+ * 編輯模式裡選了點按 Esc，點還選著、物件卻沒了（T4、T8）。
+ * | 在哪 | 按一下 Esc |
+ * |---|---|
+ * | 點選類的模式（刀具、貼合、分片…）點到一半 | 清掉點到一半的（模式還開著）|
+ * | 編輯模式、選著點線面 | 取消點線面 |
+ * | 編輯模式、沒選點線面 | 離開編輯模式 |
+ * | 其他 | 取消選取物件（原本的行為）|
+ * ⚠ 鋼筆正在打長度時的 Esc 在更前面就被吃掉了（`penTypeKey()`），⛔ 走到這裡。
+ */
+function escapeLayer() {
+  if (sel.inPickMode) {
+    if (dropPendingPicks()) { updateBar(); toast('點到一半的已經清掉了（模式還開著）'); return; }
+    sel.clear();
+    return;
+  }
+  if (sel.editMode) {
+    if (sel.editCount) {
+      sel.clearEditSel();
+      dropSolidCutMark();
+      panel.refresh(); updateBar(); updateEditNum();
+      toast('已取消選到的點線面　再按一次 Esc 離開編輯模式');
+      return;
+    }
+    toggleEditMode();
+    return;
+  }
+  sel.clear();
 }
 
 /**
@@ -3617,6 +3720,7 @@ function syncPivotBtns() {
  * 而使用者無從分辨「我沒點準」跟「這個功能壞了」（坑第 21 條）。
  */
 function editPick(el, info = {}) {
+  dropSolidCutMark();
   if (!el) {
     /**
      * 取消選了一個（加選時再點一次同一個）也要講 ——
@@ -3632,7 +3736,8 @@ function editPick(el, info = {}) {
     updateEditNum();
     return;
   }
-  if (el.kind === 'blocked') { toast(seamBlockReason(el.obj), true); return; }
+  /** ⑤-10（2026-10-20）：編輯模式講編輯模式自己的話（以前跳的是分片那一句「分片標記存不進檔案」）*/
+  if (el.kind === 'blocked') { toast(editBlockText(el.obj), true); return; }
 
   /**
    * ⚠ **型別／物件不合而被重設時一定要講。**
@@ -3696,7 +3801,7 @@ function editPick(el, info = {}) {
  * 放手時才跑一次，而且**非跑不可** —— 不跑的話法向、折線、`smooth`
  * 三件事同時變成謊話，展開長度會錯，而圖看起來完全正常。
  */
-function editDrag(committing, el) {
+function editDrag(committing, el, opt) {
   /**
    * ⚠ **拖曳中不重繪面板。** `panel.refresh()` 會把整個表單的 DOM 重建一次，
    * 而這支拖曳時每一幀都會跑 —— 那是坑第 22 條（熱路徑上的 O(全部)）的
@@ -3713,7 +3818,7 @@ function editDrag(committing, el) {
    * 三種都寫「拉面」的話，他分不出要退回哪一步。
    */
   const n = sel.editCount;
-  commit(`${XF_NAME[sel.mode] || '拉'}${n > 1 ? `${n} 個` : ''}${EDIT_NAME[el.kind]}`);
+  commit(`${XF_NAME[sel.mode] || '拉'}${n > 1 ? `${n} 個` : ''}${EDIT_NAME[el.kind]}`, opt);
   panel.refresh();
   updateEditNum();
 
@@ -4020,7 +4125,16 @@ function toCircleSelected() {
   const oldMesh = obj.mesh();
 
   const typed = parseFloat($('circleR').value);
-  const want = Number.isFinite(typed) && typed > 0 ? typed : undefined;
+  /**
+   * ⑤-22（2026-10-20，kang「照建議」）：**有填、但 ≤ 0 ⇒ 擋下、講原因**。
+   * 以前打 0 被當成沒打 ⇒ 用擬合的半徑、還說「本來就是圓」，人以為 0 有被吃進去。
+   * ⚠ 空著（或打的不是數字）照舊 ＝ 用擬合的半徑。
+   */
+  if (Number.isFinite(typed) && typed <= 0) {
+    toast(`半徑要大於 0（打的是 ${typed}）—— 空著就照這一圈現在的大小推成圓`, true);
+    return;
+  }
+  const want = Number.isFinite(typed) ? typed : undefined;
 
   /** 先量一次，決定要不要動手 */
   const probe = toCircle(oldMesh, sel.editSels, { radius: want, dryRun: true });
@@ -4480,6 +4594,16 @@ function separateSelected() {
  * ① 點／邊／面都吃（`分離` 只吃邊）
  * ② 切口是新長出來的稜線 → 每一塊要跑 `refreshAfterEdit()` 重標折線（跟 `補洞` 同一條）
  */
+/**
+ * ⑤-21：「切成實心」擋下來時畫的那條紅線 —— 改了選取、離開編輯模式就收掉（本機畫面試出來的：
+ * 以前只有形狀改了才收，離開編輯模式紅線還賴在物件上）。只收自己畫的那一份（`clearIssuePreview(only)`）。
+ */
+let solidCutMark = null;
+function dropSolidCutMark() {
+  if (solidCutMark) view.clearIssuePreview(solidCutMark);
+  solidCutMark = null;
+}
+
 function solidCutSelected() {
   const els = sel.editSels;
   if (!sel.editMode || !els.length) {
@@ -4490,7 +4614,16 @@ function solidCutSelected() {
   if (els.some(e => e.obj !== obj)) { toast('一次只能切一個物件', true); return; }
 
   const r = solidCut(obj.mesh(), els);
-  if (!r.ok) { toast(r.reason, true); return; }
+  if (!r.ok) {
+    /** ⑤-21（2026-10-20）：交界那一圈畫成紅線（跟 3D 列印標破洞同一招；改了形狀就自己收掉）*/
+    if (r.edges && r.edges.length) {
+      const M = obj.matrix();
+      solidCutMark = view.setHolePreview(r.edges.flat().map(p => p.clone().applyMatrix4(M)));
+    }
+    toast(r.reason + (r.edges && r.edges.length ? '（紅線 ＝ 選到的範圍跟其他部分的交界）' : ''), true);
+    return;
+  }
+  view.clearIssuePreview();
 
   for (const m of r.meshes) refreshAfterEdit(m);
   /** 名字、變換、原點：跟 `分離` 一模一樣（理由見 `separateSelected()` 那一段）*/
@@ -5939,6 +6072,17 @@ function seamPick(hit) {
   if (hit.kind === 'edge' && seamLineMode === 'span') {
     const s = seamSpanStart;
     if (!s || s.obj !== hit.obj || s.mesh !== mesh) {
+      /**
+       * ⑤-21（2026-10-20，kang「照建議」）：**第一下就先走一次那條線** —— 只有它自己一條（兩頭碰到的都不是
+       * 四條邊交會的點）⇒ 第二下點哪裡都不在同一條線上，以前要點到第二下才講。現在當場講、⛔ 當成起點。
+       */
+      const line = edgeLoop(mesh, hit.he);
+      if (line.hes.length <= 1) {
+        if (s) dropSeamSpan();
+        toast('這條邊順著走不下去（兩頭碰到的點不是四條邊交會）——「標一段」在這裡只會有它自己一條。'
+          + '要標這一條，「點一條稜線時」改成「只標那一條」再點', true);
+        return;
+      }
       seamSpanStart = { obj: hit.obj, mesh, he: hit.he };
       const m4 = hit.obj.matrix();
       view.setSeamSpanStart([hit.he.v.p.clone().applyMatrix4(m4), hit.he.to.p.clone().applyMatrix4(m4)]);
@@ -6670,13 +6814,15 @@ window.addEventListener('keydown', e => {
   }
 
   const k = e.key.toLowerCase();
-  if ((e.ctrlKey || e.metaKey) && k === 'z') {
+  /** ⑤-13（2026-10-20）：Ctrl+Y 也是重做（Windows 的軟體大多兩個都認）；Ctrl+Shift+Z 照舊 */
+  if ((e.ctrlKey || e.metaKey) && (k === 'z' || k === 'y')) {
     e.preventDefault();
+    const redo = e.shiftKey || k === 'y';
     /**
      * 改點時先退這次編輯的上一步（拖點、拖把手、加點、刪點、尖角、倒圓角，一次退一次 —— `sel.penUndoEdit()`）；
      * 沒有可退的才走原本的復原。⚠ 重做（Shift）⛔ 做：退回去之後再動一下，原本那一步就接不回來了，跟一般軟體一樣
      */
-    if (!e.shiftKey && sel.penMode && sel.penEdit && sel.penUndoEdit()) {
+    if (!redo && sel.penMode && sel.penEdit && sel.penUndoEdit()) {
       applyPenEdit();
       updateBar();
       toast('退回上一步' + (sel.penCanUndo ? '' : '（這次編輯已經全部退完了）'));
@@ -6687,11 +6833,11 @@ window.addEventListener('keydown', e => {
      * 退掉的是「畫鋼筆」那一步，物件整個不見、畫面卻還停在編輯路徑。新提示叫人按 Ctrl+Z，多按一下就碰到
      */
     if (penEditing) {
-      toast((e.shiftKey ? '編輯路徑中不能重做' : '這次編輯已經沒有可以退的了')
+      toast((redo ? '編輯路徑中不能重做' : '這次編輯已經沒有可以退的了')
         + ' —— 要整個不改按「取消」；其他的復原、重做等按「完成」之後再按', true);
       return;
     }
-    jumpHistory(e.shiftKey);
+    jumpHistory(redo);
     return;
   }
   if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); duplicateSelected(); return; }
@@ -6703,7 +6849,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'r') setMode('scale');
   else if (k === 'f') { if (e.shiftKey) frameSelected(); else view.frameAll(doc); }   // ④-3：Shift＋F ＝ 選到的入鏡
   else if (k === 'delete' || k === 'backspace') deleteSelected();
-  else if (k === 'escape') sel.clear();
+  else if (k === 'escape') escapeLayer();
 });
 
 // ── 狀態列 ────────────────────────────────────────────
@@ -6743,6 +6889,9 @@ function updateBar() {
 
   $('undo').disabled = !hist.canUndo;
   $('redo').disabled = !hist.canRedo;
+  /** ⑤-13：按鈕的提示寫上下一步是什麼、快捷鍵是哪個 */
+  $('undo').title = hist.canUndo ? `復原：${hist.undoLabel}（Ctrl+Z）` : histFloorText();
+  $('redo').title = hist.canRedo ? `重做：${hist.redoLabel}（Ctrl+Y 或 Ctrl+Shift+Z）` : '沒有可以重做的（Ctrl+Y 或 Ctrl+Shift+Z）';
   $('del').hidden = sel.count === 0;
   $('dup').hidden = sel.count === 0;
 

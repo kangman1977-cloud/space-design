@@ -2438,11 +2438,16 @@ export function solidCut(mesh, els, tolDeg = 0.5) {
     const a = gid.get(he.face), b = gid.get(he.twin.face);
     if (a < b) cut.push(he);
   }
+  /**
+   * ⑤-21（2026-10-20，kang「照建議」）：**擋下來時把交界的那一圈邊也交出去**（物件自己的座標），
+   * 呼叫端畫成紅線 —— 以前只回一句話，畫面⛔ 標，看不出差在哪（補測）。
+   */
+  const fail = reason => ({ ok: false, reason, edges: cut.map(he => [he.v.p.clone(), he.to.p.clone()]) });
   const nextOf = new Map();
   for (const he of cut) {
     const k = `${gid.get(he.face)}|${vi.get(he.v.id)}`;
     if (nextOf.has(k)) {
-      return { ok: false, reason: '切線在一個點上交叉或碰在一起（兩圈共用一個點）—— 這種形狀目前切不出實心，把範圍改小一點或分兩次切' };
+      return fail('切線在一個點上交叉或碰在一起（兩圈共用一個點）—— 這種形狀目前切不出實心，把範圍改小一點或分兩次切');
     }
     nextOf.set(k, he);
   }
@@ -2459,13 +2464,13 @@ export function solidCut(mesh, els, tolDeg = 0.5) {
     let he = he0, guard = 0;
     do {
       if (gid.get(he.face) !== ga || gid.get(he.twin.face) !== gb) {
-        return { ok: false, reason: '切線分岔了（一圈線同時隔開三塊以上）—— 這種形狀目前切不出實心，分兩次切' };
+        return fail('切線分岔了（一圈線同時隔開三塊以上）—— 這種形狀目前切不出實心，分兩次切');
       }
       used.add(he);
       loop.push(vi.get(he.v.id));
       he = nextOf.get(`${ga}|${vi.get(he.to.id)}`);
     } while (he && he !== he0 && guard++ < 1e6);
-    if (he !== he0) return { ok: false, reason: '切線沒有繞回來（不是完整的一圈）' };
+    if (he !== he0) return fail('切線沒有繞回來（不是完整的一圈）');
     loops++;
     const cap = capPolys(loop, points);
     capKinds.push(cap.kind);
@@ -2483,7 +2488,7 @@ export function solidCut(mesh, els, tolDeg = 0.5) {
     faces.push(...(extra.get(g) || []));
     for (const part of splitFaceComponents(faces)) {
       const pre = preflightRebuild(points, part);
-      if (!pre.ok) return { ok: false, reason: `切出來的一塊壞掉了：${pre.fatal[0]}` };
+      if (!pre.ok) return fail(`切出來的一塊壞掉了：${pre.fatal[0]}`);
       const clean = cleanRebuild(points, part);
       const m = Mesh.fromFaceList(clean.points, clean.faces);
       m.computeNormals();
@@ -2506,20 +2511,17 @@ export function solidCut(mesh, els, tolDeg = 0.5) {
    */
   const flatMsg = '切不出東西：選到的範圍本身是平的，或切口跟選到的面疊在一起（切下來沒有厚度）。'
     + '範圍要「包住一塊有厚度的東西」，例如一整個圓角、半顆球';
-  if (out.some(m => !m.isClosed() || !m.validate().ok)) return { ok: false, reason: flatMsg };
+  if (out.some(m => !m.isClosed() || !m.validate().ok)) return fail(flatMsg);
   if (capPiercesSkin(points, mesh, vi, extra)) {
-    return {
-      ok: false,
-      reason: '切口會穿出模型外面（形狀有凹進去或中空的地方，刀子往裡面走時穿過了另一面外皮）—— 把範圍改小一點，或分兩次切'
-    };
+    return fail('切口會穿出模型外面（形狀有凹進去或中空的地方，刀子往裡面走時穿過了另一面外皮）—— 把範圍改小一點，或分兩次切');
   }
   const v0 = mesh.volume();
   const vols = out.map(m => m.volume());
   const thin = Math.max(1e-6, Math.abs(v0) * 1e-6);
-  if (vols.some(v => !(v > thin))) return { ok: false, reason: flatMsg };
+  if (vols.some(v => !(v > thin))) return fail(flatMsg);
   const sum = vols.reduce((s, v) => s + v, 0);
   if (Math.abs(sum - v0) > Math.max(1e-6, Math.abs(v0) * 1e-6)) {
-    return { ok: false, reason: `切完的體積對不起來（${sum.toFixed(2)} ≠ 原本 ${v0.toFixed(2)}），已取消` };
+    return fail(`切完的體積對不起來（${sum.toFixed(2)} ≠ 原本 ${v0.toFixed(2)}），已取消`);
   }
 
   /** 大的排前面 —— 呼叫端拿第一塊沿用原本的名字順序（跟 `分離` 一樣） */

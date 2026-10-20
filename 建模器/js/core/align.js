@@ -324,3 +324,105 @@ export function currentGaps(objs, ax) {
   }
   return out;
 }
+
+// ═══════════════════════════════════════════════════════
+//  ⑤-1 新物件擺哪（2026-10-20，kang「照建議」）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **新物件、複製品擺在哪**（綜合評估 ⑤-1；T3、T4、T7、T8、T9 都撞到）。
+ *
+ * 以前：第 1 個放原點，之後每 6 個一圈、半徑 90 cm 起跳；Ctrl+D 固定往 +X、+Z 各偏 30 ——
+ * 人看著的是別的地方 ⇒ 新東西出現在畫面外（離原有的東西 90 cm）；大的東西複製還會疊在一起。
+ *
+ * kang 2026-10-20 定的：**新物件放在目前畫面正中間附近、不跟別的東西重疊、鏡頭⛔ 動**；
+ * **Ctrl+D 的複製品照寬度並排在旁邊、留一點間隙**。
+ *
+ * ⭐ 「畫面正中間」用的是鏡頭看著的那一點（轉視角繞的那一點）的 X、Z —— 物件照舊貼地。
+ * ⭐ 間隙 ＝ 物件寬度的 0.2 倍，**最少 1 cm、最多 10 cm**（60 cm 的方塊留 10 cm；2 cm 的小軸留 1 cm）。
+ * ⚠ 這裡都是純函式：只回傳「要放在哪」，由呼叫端擺（跟這個檔的其他函式一樣，才測得到）。
+ */
+export function placeGap(size) {
+  return Math.min(10, Math.max(1, size * 0.2));
+}
+
+/** 兩個外框是不是疊到（X、Z 先各撐開 gap；剛好碰到不算）*/
+function crowds(a, b, gap) {
+  const e = 1e-6;
+  return a.min.x - gap < b.max.x - e && a.max.x + gap > b.min.x + e
+      && a.min.y < b.max.y - e && a.max.y > b.min.y + e
+      && a.min.z - gap < b.max.z - e && a.max.z + gap > b.min.z + e;
+}
+
+function shifted(box, dx, dz) {
+  return box.clone().translate(new THREE.Vector3(dx, 0, dz));
+}
+
+/**
+ * 新物件：先試畫面正中間，疊到了就一圈一圈往外找（一格 ＝ 物件的寬／深 ＋ 間隙）。
+ *
+ * @param {THREE.Box3} box 新物件放在 X 0、Z 0 時的世界外框（已經貼地）
+ * @param {{x:number, z:number}} center 畫面正中間
+ * @param {THREE.Box3[]} others 已經有的東西的外框
+ * @param {object} [opt]
+ * @param {{x:number, z:number}} [opt.right] 畫面的「右」在地上朝哪（鏡頭的右方投到地上、長度 1）
+ * @param {{x:number, z:number}} [opt.eye] 鏡頭在地上的位置
+ * @param {number} [opt.maxRing=30] 最多找幾圈
+ * @returns {{x:number, z:number, moved:boolean}} 物件原點的 X、Z（四捨五入到整數 cm）；moved ＝ 中間有東西、往旁邊挪了
+ *
+ * ⭐ **同一圈裡先挑畫面左右兩邊的**（本機畫面試出來的）：只看距離的話，方塊深 40 比寬 60 小 ⇒ 第二個排到第一個的
+ *    正後方，等角視圖裡被擋掉一半。⇒ 往畫面深處（離鏡頭遠近）走的距離算 2 倍重；一樣好時挑靠鏡頭的那邊（⛔ 躲在後面）。
+ */
+export function freeSpot(box, center, others, opt = {}) {
+  const { right = null, eye = null, maxRing = 30 } = opt;
+  const size = box.getSize(new THREE.Vector3());
+  const mid = box.getCenter(new THREE.Vector3());
+  const gap = placeGap(Math.max(size.x, size.z));
+  const bx = Math.round(center.x - mid.x), bz = Math.round(center.z - mid.z);
+  const sx = Math.ceil(size.x + gap), sz = Math.ceil(size.z + gap);
+  const live = others.filter(b => b && !b.isEmpty());
+  const clear = (dx, dz) => {
+    const b = shifted(box, dx, dz);
+    return !live.some(o => crowds(b, o, gap));
+  };
+  for (let k = 0; k <= maxRing; k++) {
+    const ring = [];
+    for (let i = -k; i <= k; i++) {
+      for (let j = -k; j <= k; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) === k) ring.push([i * sx, j * sz]);
+      }
+    }
+    const score = ([ox, oz]) => {
+      if (!right) return ox * ox + oz * oz;
+      const r = ox * right.x + oz * right.z, f = -ox * right.z + oz * right.x;
+      return r * r + 4 * f * f;
+    };
+    const toEye = ([ox, oz]) => eye ? Math.hypot(bx + ox + mid.x - eye.x, bz + oz + mid.z - eye.z) : 0;
+    ring.sort((p, q) => (score(p) - score(q)) || (toEye(p) - toEye(q)));
+    for (const [ox, oz] of ring) {
+      if (clear(bx + ox, bz + oz)) return { x: bx + ox, z: bz + oz, moved: k > 0 };
+    }
+  }
+  return { x: bx + (maxRing + 1) * sx, z: bz, moved: true };
+}
+
+/**
+ * Ctrl+D：整組往 +X 挪「整組的寬 ＋ 間隙」，還疊到就再挪一個寬（彼此的相對位置⛔ 變）。
+ *
+ * @param {THREE.Box3} group 選到的那幾個合起來的外框
+ * @param {THREE.Box3[]} others 已經有的東西的外框（含原本那幾個）
+ * @param {number} [max=30]
+ * @returns {number} 往 +X 挪多少 cm
+ */
+export function besideShift(group, others, max = 30) {
+  const w = group.getSize(new THREE.Vector3()).x;
+  const gap = placeGap(w);
+  const step = w + gap;
+  const live = others.filter(b => b && !b.isEmpty());
+  for (let k = 1; k <= max; k++) {
+    const b = shifted(group, k * step, 0);
+    /** ⚠ 撐開 gap 的一半：並排的那個跟原本的剛好隔 gap，⛔ 會被自己的間隙擋掉 */
+    if (!live.some(o => crowds(b, o, gap / 2))) return k * step;
+  }
+  return (max + 1) * step;
+}

@@ -59,8 +59,33 @@ export function edgeLineColor(hex) {
  */
 const _gizmoSize = new THREE.Vector2();
 
-const HOVER_VERT_R = 2.6;
 const HOVER_EDGE_R = 0.35;
+
+/**
+ * 🔴 **選到的點、指到的點：固定螢幕像素**（綜合評估 ⑤-4，2026-10-20，kang「照建議」）。
+ * 以前是世界單位的小球（半徑 1.4 cm、指到 2.6 cm）⇒ 拉近看小零件時變成 45 像素的大圓盤，蓋住旁邊的點（T2、T8、T9）。
+ * ⇒ 改成跟「顯示點」同一招（`sizeAttenuation:false`），只是大一點、畫成圓的。
+ */
+const PICK_VERT_PX = 12;
+const HOVER_VERT_PX = 18;
+
+/**
+ * 圓點的貼圖（白色實心＋深色外圈，顏色由材質染）。
+ * ⚠ **第一次要用才畫**（⛔ 在模組載入或建構子裡做副作用 —— `STATUS.md`「穩定參考」）。
+ */
+let _roundDot = null;
+function roundDotTex() {
+  if (_roundDot) return _roundDot;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const c = cv.getContext('2d');
+  c.beginPath(); c.arc(32, 32, 30, 0, Math.PI * 2);
+  c.fillStyle = '#202020'; c.fill();
+  c.beginPath(); c.arc(32, 32, 23, 0, Math.PI * 2);
+  c.fillStyle = '#ffffff'; c.fill();
+  _roundDot = new THREE.CanvasTexture(cv);
+  return _roundDot;
+}
 
 export class SceneView {
   constructor(canvas) {
@@ -1206,8 +1231,8 @@ export class SceneView {
   /**
    * 一段細圓柱，用來當「有厚度的線」。
    *
-   * ⚠ 半徑是**世界單位（cm）**，所以拉遠會變細 —— 跟既有的選取小球
-   * （`SphereGeometry(1.4)`）同一個行為，⛔ 不要為 hover 另發明一套。
+   * ⚠ 半徑是**世界單位（cm）**，所以拉遠會變細 —— 以前跟選取小球
+   * （`SphereGeometry(1.4)`）同一個行為。〔2026-10-20 ⑤-4：點改成固定像素（`PICK_VERT_PX`），邊照舊〕
    * 〔「顯示點」用的是固定螢幕像素，那是因為它要在拉遠時還找得到；
    * 　hover 是「你的游標就在那裡」，本來就在看得清楚的距離〕
    *
@@ -1269,12 +1294,13 @@ export class SceneView {
                 : 0xffd23f;
 
       if (m.kind === 'vertex') {
-        // 點要畫得夠大才看得見，但太大會蓋住旁邊的角
-        const s = new THREE.Mesh(
-          new THREE.SphereGeometry(m.hover ? HOVER_VERT_R : 1.4, 12, 8),
-          new THREE.MeshBasicMaterial({ color: col, depthTest: false })
-        );
-        s.position.copy(m.points[0]);
+        /** 點要畫得夠大才看得見，但太大會蓋住旁邊的角 ⇒ 固定螢幕像素（⑤-4，理由在 `PICK_VERT_PX`）*/
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(m.points[0].toArray(), 3));
+        const s = new THREE.Points(geo, new THREE.PointsMaterial({
+          color: col, size: m.hover ? HOVER_VERT_PX : PICK_VERT_PX, sizeAttenuation: false,
+          map: roundDotTex(), transparent: true, alphaTest: 0.5, depthTest: false
+        }));
         s.renderOrder = m.hover ? 7 : 6;
         g.add(s);
       } else if (m.hover) {
@@ -1501,8 +1527,10 @@ export class SceneView {
    * ⚠ **它 ⛔ 不是選取** —— 選取那條路要為邊界邊開第二個例外
    * （`isMarkable()` 刻意擋掉它們），而使用者要的只是看得到。
    */
+  /** @returns {object} 這一次畫的那一份（⑤-21：呼叫端拿它 `clearIssuePreview(它)`，只收自己畫的）*/
   setHolePreview(worldPts) {
     this._setIssuePreview('holePreview', worldPts, 0xff2d55);
+    return this._issuePrev;
   }
 
   /**
@@ -1541,8 +1569,13 @@ export class SceneView {
     this._issuePrev = this._buildLineOverlay(name, worldPts, null, color);
   }
 
-  clearIssuePreview() {
+  /**
+   * @param {object} [only] 給了 ⇒ 只在現在畫的就是那一份時才收（⑤-21：切成實心的紅線跟著選取收掉，
+   *   ⛔ 順手收掉 3D 列印標的破洞 —— 那個要留著讓人找洞補）
+   */
+  clearIssuePreview(only) {
     if (!this._issuePrev) return;
+    if (only && only !== this._issuePrev) return;
     this.scene.remove(this._issuePrev);
     this._issuePrev.traverse(o => {
       if (o.geometry) o.geometry.dispose();

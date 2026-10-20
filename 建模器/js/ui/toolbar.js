@@ -486,6 +486,10 @@ export class Panel {
                 + '⭐ 形狀本身一格都不會變'
               : ''),
           () => {
+            /** ⑤-12（2026-10-20，kang「照建議」）：照「凍結」的寫法先問一句（T5 按下去才發現參數全沒了）*/
+            if (!confirm('轉成網格之後就不能再改上面的參數了'
+              + (isPen ? '，而且那串錨點會不見（「編輯路徑」回不去，形狀本身不會變）' : '')
+              + '（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
             obj.bake();
             this._edit('轉成網格');
             /**
@@ -532,6 +536,9 @@ export class Panel {
         + '（一片 100×60、板厚 1 → 展開後是 202×260 的六片攤開），'
         + '⛔ 不再是原本那一片板',
         () => {
+          /** ⑤-12：先問一句（理由同上一顆）*/
+          if (!confirm('板厚會烤進網格裡、變成實體：之後就不能再改板厚，展開圖也會變成盒子的展開'
+            + '（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
           const before = obj.mesh().faces.length;
           const r = obj.bakeShelled();
           if (!r.ok) { this.app.toast(r.reason, true); return; }
@@ -1394,6 +1401,8 @@ export class Panel {
       const parts = [n ? `切開 ${n} 條` : '', keeps ? `不准切 ${keeps} 條` : ''].filter(Boolean).join('、');
       this._rowBtn(`清除全部標記（${parts}）`,
         '回到自動判斷。取消標記是把決定交還給材料規則，不是強迫它折起來', () => {
+          /** ⑤-12（2026-10-20）：一條一條標的東西一下就沒了 ⇒ 先問一句（T8）*/
+          if (!confirm(`會清掉全部的標記（${parts}）、回到自動判斷（要反悔可以馬上按 Ctrl+Z），確定嗎？`)) return;
           clearSeams(obj.mesh());
           clearKeeps(obj.mesh());
           this.app.view.markSeamsDirty();

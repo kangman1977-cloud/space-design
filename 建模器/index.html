@@ -347,9 +347,12 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
 /* ══ 提示條 ════════════════════════════════════════ */
 #toast {
   position: absolute; left: 50%; transform: translateX(-50%);
-  top: calc(12px + var(--barExtra, 0px)); padding: 7px 14px; border-radius: 999px;   /* E11：躲開蓋下來的工具列 */
+  top: calc(12px + var(--barExtra, 0px)); padding: 7px 14px; border-radius: 14px;   /* E11：躲開蓋下來的工具列 */
   background: rgba(47,111,208,.94); color: #fff;
-  font-size: 13px; white-space: nowrap;
+  /* ⑤-3（2026-10-20）：以前 nowrap ⇒ 長提示比畫面寬、兩頭被切掉（T3、T5～T8）。
+     改成會換行：短的照舊一行（max-content），長的折在畫面寬減 32px 以內；圓角跟著改小（多行時 999px 會變成橢圓） */
+  font-size: 13px; white-space: normal; width: max-content; max-width: calc(100% - 32px);
+  text-align: center; line-height: 1.45;
   opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 5;
 }
 #toast.show { opacity: 1; }
