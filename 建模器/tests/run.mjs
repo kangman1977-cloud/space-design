@@ -18278,10 +18278,31 @@ section('綜合評估 ④ 第二批：鋼筆轉角圓角（2026-10-20）');
   const fine = buildPrim('pen', { type: 'pen', h: 3, tol: 0.001, paths: [qf] });
   near('★★★ 倒好的鋼筆照樣做得出實體：細分夠細時體積 ＝ 圓角矩形面積 × 厚 3', fine.volume(), (800 - (4 - Math.PI) * 25) * 3, 0.1);
   /**
-   * ⚠ 鋼筆預設的細分（0.2 cm）切圓弧比較粗：R 5 的角少一點點（實測體積少 0.25%、圓弧最多差約 0.1 cm）——
-   * 這是鋼筆本來的行為，⛔ 這一輪改（會動到所有鋼筆物件）；改不改要問 kang。
+   * ⚠ 鋼筆預設的細分切圓弧會少一點點（當時 0.2 cm：體積少 0.25%、圓弧最多差約 0.1 cm）——
+   * kang 2026-10-20 同意改成 0.05 cm（`PEN_TOL`，見下一段）
    */
   ok('　 預設細分做出來的少一點點（< 0.5%）', solid.volume() < fine.volume() && (fine.volume() - solid.volume()) / fine.volume() < 0.005, `${solid.volume()} vs ${fine.volume()}`);
+}
+
+section('綜合評估 ④ 第二批（一）之後的一小輪：鋼筆細分改 0.05 cm（2026-10-20）');
+{
+  /** 編輯路徑每一步都能退（select.js、main.js）在本機／線上版用畫面驗 */
+  eq('★★ 鋼筆的預設細分 ＝ 0.05 cm（以前跟 SVG 共用 0.2 cm）', prim.PEN_TOL, 0.05);
+  const q = { closed: true, a: [0, 0, 60, 0, 60, 40, 0, 40], hi: Array(8).fill(0), ho: Array(8).fill(0) };
+  prim.penFilletAll(q, 5);
+  const pts = prim.flattenPenPath(q);
+  let dev = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const u = pts[i], v = pts[(i + 1) % pts.length];
+    if (Math.max(u.x, v.x) <= 5 + 1e-9 && Math.max(u.y, v.y) <= 5 + 1e-9) dev = Math.max(dev, 5 - Math.hypot((u.x + v.x) / 2 - 5, (u.y + v.y) / 2 - 5));
+  }
+  ok('★★★ 　 R 5 的圓角跟真的圓弧最多差 0.03 cm 以內（以前約 0.1 cm）', dev > 0 && dev < 0.03, dev.toFixed(4));
+  ok('★ 　 點數合理：60 × 40 四角 R 5 不到 50 個點（以前 20 個）', pts.length > 20 && pts.length < 50, pts.length);
+  const v1 = buildPrim('pen', { type: 'pen', h: 3, paths: [q] }).volume();
+  near('★★ 　 做成實體的體積貼近圓角矩形（差不到 0.05%）', v1, (2400 - (4 - Math.PI) * 25) * 3, (2400 - (4 - Math.PI) * 25) * 3 * 5e-4);
+  const own = buildPrim('pen', { type: 'pen', h: 3, tol: 0.2, paths: [q] }).volume();
+  ok('★ 　 物件自己記了 tol（例如 0.2）就照它的 ⇒ 比較粗、體積少一點', own < v1, `${own} vs ${v1}`);
+  eq('　 SVG 匯入沒有單位時用的 DEFAULT_TOL ⛔ 動（0.2）', svgp.DEFAULT_TOL, 0.2);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -4755,6 +4755,9 @@ export class Selection {
     /** ⚠ **最後一條當成「目前這一條」** —— 其餘進 `_penDone` */
     this._pen = list.pop();
     this._penDone = list;
+    /** 新的一次編輯：上一次的退回清單一筆都⛔ 留 */
+    this._penEditUndo = [];
+    this._penPending = null;
     this._penSel = -1;
     this._penDragA = null;
     this._penDragH = null;
@@ -4836,6 +4839,7 @@ export class Selection {
     const has = Math.hypot(this._pen.hi[i * 2], this._pen.hi[i * 2 + 1]) > 1e-9
              || Math.hypot(this._pen.ho[i * 2], this._pen.ho[i * 2 + 1]) > 1e-9;
     if (!has) return 'need-drag';
+    this._penPushUndo(this._penSnap());
     this._pen.hi[i * 2] = 0; this._pen.hi[i * 2 + 1] = 0;
     this._pen.ho[i * 2] = 0; this._pen.ho[i * 2 + 1] = 0;
     this._drawPenPreview();
@@ -4909,14 +4913,17 @@ export class Selection {
    */
   _penDownEdit(e, g) {
     if (!g || !this._pen) return;
+    this._penPending = null;
     const hh = this._penHitHandle(e.clientX, e.clientY);
-    if (hh) { this._penDragH = hh; return; }
+    /** 拖之前先存一份；放手時真的動過才收進退回清單（`_penUpEdit()`） */
+    if (hh) { this._penPending = this._penSnap(); this._penDragH = hh; return; }
     const ha = this._penHitAnchorAny(e.clientX, e.clientY);
     if (ha) {
       /** ⚠ 命中在別條 → **換過去**，換完「目前這一條」仍然叫 `_pen` */
       if (ha.k >= 0) this._penSwitchTo(ha.k);
       const ia = ha.i;
       this._penSel = ia;
+      this._penPending = this._penSnap();
       this._penDragA = {
         i: ia, gx: g.x, gz: g.z,
         ax: this._pen.a[ia * 2], az: this._pen.a[ia * 2 + 1]
@@ -4934,8 +4941,11 @@ export class Selection {
     if (hs) {
       if (hs.k >= 0) this._penSwitchTo(hs.k);
       const seg = hs.seg;
+      const before = this._penSnap();
       const r = penAddAnchor(this._pen, seg.seg, seg.t);
       if (r.ok) {
+        /** 加點＋接著拖 ＝ 一步（退一次就回到沒加之前） */
+        this._penPushUndo(before);
         this._penSel = r.at;
         /** ⚠ 加完就**直接進入拖曳** —— 使用者多半是想把它拉到別的地方 */
         this._penDragA = {
@@ -4970,8 +4980,10 @@ export class Selection {
       return { ok: false, reason: '先點一個錨點，再按「刪點」' };
     }
     /** ⚠ 下限要**傳下去** —— 不封口的話 2 個點還是一條線（見 `penMinPts`） */
+    const before = this._penSnap();
     const r = penRemoveAnchor(this._pen, i, 24, this.penMinPts);
     if (!r.ok) return r;
+    this._penPushUndo(before);
     this._penSel = -1;
     this._penDragA = null;
     this._penDragH = null;
@@ -4982,18 +4994,15 @@ export class Selection {
   /**
    * 🔴 **倒圓角**（④-13 第三件，2026-10-20）：`whole` ＝ false 只倒選到的那個角、true 整條（目前這一條）的尖角一起倒。
    * 規則的權威版在 `build/prim.js` 的 `penFilletAt()`／`penFilletAll()`。
-   * ⭐ 倒之前存一份 ⇒ 倒錯了按 Ctrl+Z 一次退一次（`penUndoFillet()`）—— kang 定「倒一次就定下來，要換就退回去重倒」。
+   * ⭐ 倒之前存一份 ⇒ 倒錯了按 Ctrl+Z 一次退一次（`penUndoEdit()`）—— kang 定「倒一次就定下來，要換就退回去重倒」。
    */
   penFillet(r, whole) {
     if (!this._pen) return { ok: false, reason: '先畫一條線或按「編輯路徑」' };
-    const snap = { ref: this._pen, a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice(), sel: this._penSel };
+    const snap = this._penSnap();
     const tmp = { closed: !this.penNoClose, a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice() };
     const res = whole ? penFilletAll(tmp, r) : penFilletAt(tmp, this._penSel, r);
     if (!res.ok) return res;
-    /** 留著的那幾份要是這次編輯裡的線（目前這一條或其他條）；換了一次編輯 ⇒ 清掉 */
-    const live = u => u.ref === this._pen || this._penDone.includes(u.ref);
-    if (!this._penFilletUndo || !this._penFilletUndo.every(live)) this._penFilletUndo = [];
-    this._penFilletUndo.push(snap);
+    this._penPushUndo(snap);
     this._pen.a = tmp.a; this._pen.hi = tmp.hi; this._pen.ho = tmp.ho;
     this._penSel = -1;
     this._penDragA = null;
@@ -5003,16 +5012,42 @@ export class Selection {
   }
 
   /**
-   * 退回上一次倒圓角。倒的是別條線（例如窗那一條，之後又點了外框）⇒ 先切回那一條再退。
+   * 🔴 **編輯路徑每一步都能退**（2026-10-20 kang「同意你的建議」；原本只有倒圓角能退）：
+   * 拖錨點、拖把手、點線上加點、刪點、尖角⇄圓滑、倒圓角 —— 每一步動手前先存一份那條線原本的樣子。
+   * ⚠ 存的是**整條**（錨點＋把手），所以退一次 ＝ 那一步之前的樣子；⛔ 存別條（別條沒動）。
+   */
+  _penSnap() {
+    if (!this._pen) return null;
+    return { ref: this._pen, a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice(), sel: this._penSel };
+  }
+
+  _penPushUndo(snap) {
+    if (!snap) return;
+    /** 留著的那幾份要是這次編輯裡的線（目前這一條或其他條）；換了一次編輯 ⇒ 清掉 */
+    const live = u => u.ref === this._pen || this._penDone.includes(u.ref);
+    if (!this._penEditUndo || !this._penEditUndo.every(live)) this._penEditUndo = [];
+    this._penEditUndo.push(snap);
+    /** 上限 200 步（每份只是一條線的數字，⛔ 會吃多少記憶體；只是免得無限長） */
+    if (this._penEditUndo.length > 200) this._penEditUndo.shift();
+  }
+
+  /** 還有沒有可以退的（給工具列講話用） */
+  get penCanUndo() {
+    const st = this._penEditUndo;
+    return !!(this._pen && st && st.length);
+  }
+
+  /**
+   * 退回上一步。那一步改的是別條線（例如窗那一條，之後又點了外框）⇒ 先切回那一條再退。
    * ⚠ 那條線已經不在這次編輯裡（重新載入、收工）⇒ ⛔ 退、回 false
    */
-  penUndoFillet() {
-    const st = this._penFilletUndo;
+  penUndoEdit() {
+    const st = this._penEditUndo;
     if (!this._pen || !st || !st.length) return false;
     const u = st[st.length - 1];
     if (u.ref !== this._pen) {
       const k = this._penDone.indexOf(u.ref);
-      if (k < 0 || !this._penSwitchTo(k)) { this._penFilletUndo = []; return false; }
+      if (k < 0 || !this._penSwitchTo(k)) { this._penEditUndo = []; return false; }
     }
     st.pop();
     this._pen.a = u.a; this._pen.hi = u.hi; this._pen.ho = u.ho;
@@ -5063,6 +5098,9 @@ export class Selection {
    */
   _penUpEdit(e, d, dist) {
     const moved = !!(this._penDragA || this._penDragH) && dist > TAP_MOVE;
+    /** 真的拖過才算一步（只是點一下選點 ⛔ 算） */
+    if (moved && this._penPending) this._penPushUndo(this._penPending);
+    this._penPending = null;
     this._penDragA = null;
     this._penDragH = null;
     this._drawPenPreview();

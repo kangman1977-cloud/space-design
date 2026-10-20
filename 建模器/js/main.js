@@ -898,7 +898,7 @@ $('penEdit').onclick = () => togglePenEdit();
 $('penDel').onclick = () => deletePenAnchor();
 /**
  * 🔴 **鋼筆轉角圓角**（綜合評估 ④-13 第三件，2026-10-20，kang「照建議」）。
- * 計算在 `prim.js` `penFilletAt()`／`penFilletAll()`；倒錯了 Ctrl+Z 一次退一次（`sel.penUndoFillet()`）。
+ * 計算在 `prim.js` `penFilletAt()`／`penFilletAll()`；倒錯了 Ctrl+Z 一次退一次（`sel.penUndoEdit()`，編輯路徑的每一步共用）。
  */
 function penFilletGo(whole) {
   const r = parseFloat($('penFilletR').value);
@@ -2101,7 +2101,7 @@ function editPenPath(obj) {
   toast(`編輯「${obj.name}」的路徑（${list.length} 條、${np} 個點）　`
       + (penEditing.wall ? '（它立在牆上，攤平之後先切到上視給你改）　' : '')
       + '點一個錨點＝選它、拖它＝搬位置、拖把手＝調曲線、點線上＝加一個點。'
-      + '⭐ 按「加一條」可以再畫一條 —— **包在裡面的那條就是洞**。'
+      + '⭐ 按「加一條」可以再畫一條 —— **包在裡面的那條就是洞**。做錯了按 Ctrl+Z 一步一步退。'
       + '⚠ 這個物件暫時被【攤平】而且變半透明，按「完成」就轉回原本的角度');
 }
 
@@ -6561,11 +6561,14 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === 'z') {
     e.preventDefault();
-    /** ④-13 第三件：改點時先退倒圓角（一次退一次）；沒有可退的才走原本的復原 */
-    if (!e.shiftKey && sel.penMode && sel.penEdit && sel.penUndoFillet()) {
+    /**
+     * 改點時先退這次編輯的上一步（拖點、拖把手、加點、刪點、尖角、倒圓角，一次退一次 —— `sel.penUndoEdit()`）；
+     * 沒有可退的才走原本的復原。⚠ 重做（Shift）⛔ 做：退回去之後再動一下，原本那一步就接不回來了，跟一般軟體一樣
+     */
+    if (!e.shiftKey && sel.penMode && sel.penEdit && sel.penUndoEdit()) {
       applyPenEdit();
       updateBar();
-      toast('退回上一次倒圓角');
+      toast('退回上一步' + (sel.penCanUndo ? '' : '（這次編輯已經全部退完了）'));
       return;
     }
     /**
@@ -6573,7 +6576,7 @@ window.addEventListener('keydown', e => {
      * 退掉的是「畫鋼筆」那一步，物件整個不見、畫面卻還停在編輯路徑。新提示叫人按 Ctrl+Z，多按一下就碰到
      */
     if (penEditing) {
-      toast((e.shiftKey ? '編輯路徑中不能重做' : '編輯路徑中沒有倒圓角可以退了')
+      toast((e.shiftKey ? '編輯路徑中不能重做' : '這次編輯已經沒有可以退的了')
         + ' —— 要整個不改按「取消」；其他的復原、重做等按「完成」之後再按', true);
       return;
     }

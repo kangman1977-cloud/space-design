@@ -923,7 +923,13 @@ export function penFilletAll(path, r) {
  * @param {number} tol 拉直的容許值（cm）
  * @returns {Array<{x:number,y:number,corner:boolean}>}
  */
-export function flattenPenPath(path, tol = DEFAULT_TOL) {
+/**
+ * 🔴 **鋼筆的預設細分 0.05 cm**（2026-10-20 kang「同意你的建議」；以前跟 SVG 共用 `DEFAULT_TOL` 0.2 cm）。
+ * 0.2 cm 時 R 5 的圓角只切 4 段、跟圓弧最多差約 1 mm（做實體、展開圖都看得出折線）；0.05 cm ⇒ 約 0.25 mm、點多不到一倍。
+ * ⚠ 物件自己記了 `tol`（匯入轉成鋼筆的 0.02）就照它的。⛔ 動 `DEFAULT_TOL`（SVG 匯入沒有單位時還在用）。
+ */
+export const PEN_TOL = 0.05;
+export function flattenPenPath(path, tol = PEN_TOL) {
   const a = (path && path.a) || [];
   const n = Math.floor(a.length / 2);
   if (n < 2) return [];
@@ -1055,7 +1061,7 @@ export function shiftShape(shape, dx, dy) {
  * ⭐ 匯入時多留了每一圈 Illustrator 的錨點與把手（`ob` 外圈、`hb` 每個洞）⇒ 轉過去點跟原稿一樣；
  * 　 舊的匯入沒有 ⇒ 每個折點當一個尖角的錨點（形狀一樣、點比較多），回傳 `approx` 讓畫面講出來。
  * ⚠ 兩邊都走 `extrudeMany()`、同一套 2D 座標與厚度 ⇒ 位置、大小⛔ 變（曲線重新細分，邊上的點可能差一點點）。
- * 🔴 **細分的容許值要跟著帶過去**（本機畫面試出來的）：鋼筆預設 `DEFAULT_TOL` 0.2 cm，匯入預設 0.2 mm ——
+ * 🔴 **細分的容許值要跟著帶過去**（本機畫面試出來的）：鋼筆預設當時是 0.2 cm（現在 `PEN_TOL` 0.05 cm），匯入預設 0.2 mm ——
  * 　 沒帶過去的話一段平緩的弧只切兩刀，體積少 0.7%。匯入時記在 `src.tol`（cm）；舊的匯入沒記 ⇒ 用匯入的預設 0.02 cm。
  * @returns {{ok:boolean, src?:object, approx?:number, anchors?:number, reason?:string}}
  */
@@ -1177,7 +1183,7 @@ export const PEN_REV_DEFAULTS = { dir: 'z', seg: 32, stand: true };
 
 /** 輪廓拉直成點串（形狀座標 {x,y}）；不只一條就講出來 */
 function penRevProfile(p) {
-  const tol = num(p.tol, DEFAULT_TOL);
+  const tol = num(p.tol, PEN_TOL);
   const paths = (p.paths || []).filter(path => path && (path.a || []).length >= 4);
   if (!paths.length) return { ok: false, reason: '這支鋼筆還沒有畫出任何一條線' };
   if (paths.length > 1) {
@@ -1377,7 +1383,7 @@ const BUILDERS = {
       r.mesh.autoMarkFolds();
       return r.mesh;
     }
-    const tol = num(p.tol, DEFAULT_TOL);
+    const tol = num(p.tol, PEN_TOL);
     /**
      * 🔴🔴 **`不封口`：整個物件一個旗標，⛔ 不是每條路徑各存一份**
      * （kang 2026-08-30 拍板的第 ③ 件，2026-08-31 實作）。
