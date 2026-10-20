@@ -18744,6 +18744,62 @@ section('綜合評估 ⑥ 第一批：片數來源、切幾段先講、拖曳標
   ok('★ 　 沒有孔 ⇒ ⛔ 講', !PRIM_SPECS.gear.noteOf({ ...PRIM_DEFAULTS.gear, hole: 0 }).some(s => s.startsWith('套軸')));
 }
 
+section('分片成群 第一件：重疊標出是哪幾個面、點一片在 3D 上標出來（2026-10-21）');
+{
+  /** 3D 上塗紅／塗藍、預覽點一片、離開分片模式收掉，在本機版用畫面驗；這裡守算的那幾支 */
+  const { previewProgram, pieceAt } = await import('../js/out/nest.js');
+  const { pieceWorldPolys } = await import('../js/unfold/part.js');
+  const { worldBounds } = await import('../js/core/align.js');
+
+  // ① 球冠攤成一片一定疊（上面「球冠 改由重疊偵測負責」那一條）⇒ 現在要講出是哪幾個面
+  const cap = Mesh.fromGeometry(new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3));
+  const rc = unfoldMesh(cap, makeRule('paper', 0.03));
+  const pc = rc.pieces[0];
+  ok('★★★ 球冠：疊在一起的面列得出來（以前找到第一對就停、不記哪兩個面）', pc.overlap && pc.overlapFaces.length >= 2 && pc.overlapPairs >= 1,
+     `${pc.overlapFaces.length} 面、${pc.overlapPairs} 對`);
+  ok('★★ 　 面的索引不重複、由小到大、都在這一片的面裡', pc.overlapFaces.every((v, i, a) => (i === 0 || a[i - 1] < v) && v >= 0 && v < pc.faces.length));
+  ok('★★ 　 警告講出幾個面、標在哪', rc.warnings.some(w => w.includes(`${pc.overlapFaces.length} 個面疊在一起`) && w.includes('圖上標紅')), rc.warnings.find(w => w.includes('重疊')));
+  eq('★★ 　 每個面都有 3D 位置（跟 faces 一樣多、點數一樣）', pc.faces3.length === pc.faces.length && pc.faces3.every((f, i) => f.length === pc.faces[i].length), true);
+
+  // ② 展開圖：畫面上塗紅、存檔（strainFill 關）⛔ 塗
+  const onScreen = drawProgram(pc, { rule: rc.rule, strainFill: true }).items.filter(i => i.style === 'overlap');
+  const toFile = drawProgram(pc, { rule: rc.rule, strainFill: false }).items.filter(i => i.style === 'overlap');
+  eq('★★★ 展開圖畫面上：疊在一起的每個面都塗紅', onScreen.length, pc.overlapFaces.length);
+  eq('★★★ 　 存 SVG／DXF 那一份 ⛔ 塗（送去切的檔不帶色塊）', toFile.length, 0);
+
+  // ③ 凹的面：L 形大面 ＋ 凹口裡一塊小方塊（中間一塊橋連著，全部平的）⇒ 沒疊；舊的分離軸判法會說疊（2026-10-21 沙箱驗過）
+  const P2 = [[0, 0], [4, 0], [4, 1], [1, 1], [1, 2], [1, 3], [1, 4], [0, 4], [2, 2], [2, 3], [3, 2], [3, 3]];
+  const L = Mesh.fromFaceList(P2.map(([x, z]) => new THREE.Vector3(x, 0, z)),
+    [[0, 1, 2, 3, 4, 5, 6, 7].reverse(), [4, 8, 9, 5].reverse(), [8, 10, 11, 9].reverse()]);
+  const rl = unfoldMesh(L, makeRule('paper', 0.03));
+  ok('★★★ 凹的面（L 形）跟凹口裡的小方塊 ⇒ ⛔ 算重疊（以前分離軸會誤判）', rl.pieces.length === 1 && rl.pieces[0].overlap === false && rl.pieces[0].overlapFaces.length === 0,
+     JSON.stringify(rl.pieces.map(p => [p.overlap, p.overlapFaces])));
+
+  // ④ 3D 位置換成世界座標：搬過、轉過的方塊 ⇒ 每個點都落在物件的世界外框上
+  const box = new io.ModelObject({ name: '方塊', src: { type: 'box', w: 20, h: 10, d: 6 }, kind: io.KIND.SHEET, thickness: 0.3 });
+  box.pos.set(40, 5, -12); box.rot.set(0, Math.PI / 4, 0);
+  const rb = unfoldObject(box, { material: 'paper' });
+  const wb = worldBounds(box);
+  const all = rb.pieces.flatMap(p => pieceWorldPolys(p).flat());
+  const onBox = v => [v.x - wb.min.x, wb.max.x - v.x, v.y - wb.min.y, wb.max.y - v.y, v.z - wb.min.z, wb.max.z - v.z].every(d => d > -1e-6);
+  ok('★★★ 一片的面換成世界座標 ⇒ 都在搬過、轉過的物件外框裡（縮放已經吃進去、只差位置與旋轉）', all.length > 0 && all.every(onBox), `${all.length} 點`);
+  const touch = ['x', 'y', 'z'].every(k => Math.abs(Math.min(...all.map(v => v[k])) - wb.min[k]) < 1e-6 && Math.abs(Math.max(...all.map(v => v[k])) - wb.max[k]) < 1e-6);
+  ok('★★ 　 而且頂到外框的六面（不是縮在裡面）', touch);
+  const sc = new io.ModelObject({ name: '縮放', src: { type: 'box', w: 10, h: 10, d: 10 }, kind: io.KIND.SHEET, thickness: 0.3 });
+  sc.scale.set(2, 1, 1);
+  const sall = unfoldObject(sc, { material: 'paper' }).pieces.flatMap(p => pieceWorldPolys(p).flat());
+  near('★★ 　 縮放過的（X × 2）：世界座標的寬 ＝ 20（縮放只算一次）', Math.max(...sall.map(v => v.x)) - Math.min(...sall.map(v => v.x)), 20, 1e-6);
+  eq('★ 　 只要其中幾個面：照給的索引', pieceWorldPolys(rb.pieces[0], [0]).length, 1);
+
+  // ⑤ 預覽點一片：點在某一片的面裡 ⇒ 那一片；點在外面 ⇒ null
+  const prog = previewProgram(rb.pieces, { rule: rb.rule });
+  ok('★★ 預覽交出每一片擺在哪（hits）', prog.hits && prog.hits.length === rb.pieces.length);
+  const h0 = prog.hits[0], f0 = h0.polys[0];
+  const cx = f0.reduce((a, p) => a + p.x, 0) / f0.length, cy = f0.reduce((a, p) => a + p.y, 0) / f0.length;
+  ok('★★★ 點在一片的面中間 ⇒ 就是那一片', pieceAt(prog, cx, cy) === h0.piece);
+  eq('★★ 　 點在預覽外面 ⇒ 沒有', pieceAt(prog, prog.box.x - 100, prog.box.y - 100), null);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -143,6 +143,15 @@ export function drawProgram(piece, opt = {}) {
   if (opt.strainFill && piece.strain) {
     piece.faces.forEach((poly, i) => items.push({ t: 'poly', style: 'strain', pts: poly, fill: strainColor(piece.strain.faces[i]) }));
   }
+  /**
+   * 疊在一起的面塗紅（2026-10-21，`分片成群-設計方向.md` 第一件）—— 跟拉伸色塊同一個開關：畫面、列印、即時預覽有，
+   * 存 SVG／DXF ⛔ 有（送去切的檔⛔ 帶色塊）。⚠ 有重疊的圖本來就不能下料，紅色是告訴你往哪裡切。
+   */
+  if (opt.strainFill && piece.overlapFaces && piece.overlapFaces.length) {
+    for (const i of piece.overlapFaces) {
+      if (piece.faces[i]) items.push({ t: 'poly', style: 'overlap', pts: piece.faces[i], fill: OVERLAP_FILL });
+    }
+  }
 
   // ── 輪廓與內孔（程式自己加的那幾段換成橘色、開口紫色：`outlineSegments()`）──
   for (const s of outlineSegments(piece, opt).segs) {
@@ -699,6 +708,9 @@ function loop(items, pts, style) {
     items.push({ t: 'line', style, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
   }
 }
+
+/** 疊在一起的面（`drawProgram()`）：半透明紅 ⇒ 底下的折線、切割線照樣看得到 */
+export const OVERLAP_FILL = 'rgba(231, 76, 60, 0.45)';
 
 /** 拉伸 → 顏色：紅＝拉長、藍＝壓縮、白＝幾乎沒變；5% 以上全色（跟 `樣板-省道打版-點法.html` 同一套）*/
 export function strainColor(e) {

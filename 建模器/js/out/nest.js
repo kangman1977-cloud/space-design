@@ -270,6 +270,8 @@ function rectPackBest(pieces, opt) {
  */
 export function boardProgram(board, opt = {}) {
   const items = [];
+  /** 每一片的面擺到板子上之後在哪（2026-10-21，分片成群第一件：即時預覽點一片 ⇒ 知道點到哪一片）*/
+  const hits = [];
   const line = (style, x1, y1, x2, y2) => items.push({ t: 'line', style, x1, y1, x2, y2 });
 
   // 板子外框：灰色、⛔ 不是切割線（SVG 是灰的註記色、DXF 在 SHEET 層）
@@ -294,6 +296,7 @@ export function boardProgram(board, opt = {}) {
      * 【實證 2026-10-09】AI 在線上排版預覽看到藍線伸出片外才發現。
      */
     const clampY = y => Math.max(0, Math.min(p.height, y));
+    if (p.faces) hits.push({ piece: p, polys: p.faces.map(poly => poly.map(q => T(q.x, q.y))) });
     for (let e of prog.items) {
       /** 省道打版的拉伸色塊（2026-10-12）：每個點搬到板子上 */
       if (e.t === 'poly') { items.push({ ...e, pts: e.pts.map(q => T(q.x, q.y)) }); continue; }
@@ -317,7 +320,7 @@ export function boardProgram(board, opt = {}) {
       });
     }
   }
-  return { box: { x: 0, y: 0, w: BW, h: BH }, items };
+  return { box: { x: 0, y: 0, w: BW, h: BH }, items, hits };
 }
 
 /**
@@ -348,7 +351,7 @@ export function previewProgram(pieces, opt = {}) {
     else if (i.t === 'poly') i.pts.forEach(p => take(p.x, p.y));
     else take(i.x, i.y);
   }
-  return { box: { x: x0 - gap, y: y0 - gap, w: x1 - x0 + 2 * gap, h: y1 - y0 + 2 * gap }, items, boards: nest.boards.length };
+  return { box: { x: x0 - gap, y: y0 - gap, w: x1 - x0 + 2 * gap, h: y1 - y0 + 2 * gap }, items, boards: nest.boards.length, hits: prog.hits };
 }
 
 /** 一張板子的標題（SVG 上方、畫面上那張卡片的說明）*/
@@ -416,3 +419,21 @@ export function sliceBoardTitle(sheet, i, n) {
 }
 
 const fmt = v => String(Math.round(v * 100) / 100);
+
+/**
+ * 預覽上這一點落在哪一片（2026-10-21，`分片成群-設計方向.md` 第一件：點預覽的一片 ⇒ 3D 上標出來）。
+ * `prog` 是 `previewProgram()` 的結果、`(x, y)` 是它的座標（cm、Y 朝上）；落在某一片的任一個面裡 ⇒ 那一片，否則 null。
+ */
+export function pieceAt(prog, x, y) {
+  if (!prog || !prog.hits) return null;
+  const inPoly = P => {
+    let c = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      const a = P[i], b = P[j];
+      if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c;
+    }
+    return c;
+  };
+  for (const h of prog.hits) if (h.polys.some(inPoly)) return h.piece;
+  return null;
+}

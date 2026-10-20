@@ -1791,7 +1791,7 @@ const XF_NAME = { translate: '拉', rotate: '轉', scale: '縮放' };
  */
 function exitOtherModes(keep) {
   if (keep !== 'edit' && sel.editMode) { sel.setEditMode(false); $('edit').classList.remove('on'); dropSolidCutMark(); }
-  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); view.setLoopStops(null); }
+  if (keep !== 'seam' && sel.seamMode) { sel.setSeamMode(false); $('seam').classList.remove('on'); dropSeamSpan(); dropSeamProposal(); view.setLoopStops(null); dropFaceMarks(); }
   if (keep !== 'mate' && sel.mateMode) {
     sel.setMateMode(false); $('mate').classList.remove('on');
     matePick1 = null; view.clearPickMarks();
@@ -6183,8 +6183,15 @@ function toggleSeamMode() {
     view.setLoopStops(null);          // ⑤-6
     dropSeamSpan();
     dropSeamProposal();
+    dropFaceMarks();
     toast('已離開分片模式');
   }
+}
+
+/** 分片的紅（疊在一起的面）、紫（預覽點到的那一片）—— 離開分片模式就收（2026-10-21，分片成群第一件）*/
+function dropFaceMarks() {
+  view.setFaceMarks('overlap', null);
+  view.setFaceMarks('piece', null);
 }
 
 /**

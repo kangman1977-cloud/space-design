@@ -182,6 +182,14 @@ export function unfoldObject(obj, opt = {}) {
   for (const p of r.pieces) { p.owner = obj.name; p.rule = rule; }
 
   /**
+   * 片的 3D 面換成世界座標要的矩陣（2026-10-21，分片成群第一件：3D 上標「疊在一起的面」「這一片是哪些面」）。
+   * ⚠ 攤的那份網格已經吃了縮放（上面的 `transformed()`），所以只差位置與旋轉 ⇒ 縮放用 1。
+   * 用法：`p.faces3[i]` 每個點套 `p.worldMatrix`（`ui/toolbar.js` 的 `pieceWorldPolys()`）。
+   */
+  const worldM = new THREE.Matrix4().compose(obj.pos, new THREE.Quaternion().setFromEuler(obj.rot), new THREE.Vector3(1, 1, 1));
+  for (const p of r.pieces) p.worldMatrix = worldM;
+
+  /**
    * 片數從哪來（2026-10-21，綜合評估 ⑥-1，kang「同意你的建議」）：陣列物件的片寫「陣列 N 份 × 每份 k 片」。
    * ⚠ 片數照舊只看攤的那份網格（上面那段）；這裡只是**把來源寫出來**，片數錯的時候一眼看得出來。
    * 除不盡（實體陣列連成一塊、鏡射的片沒併成一種）⇒ 只寫「陣列 N 份」，⛔ 硬算每份幾片。
@@ -483,6 +491,21 @@ export function unfoldMany(objs, opt = {}) {
 }
 
 /**
+ * 一片的面（全部，或 `which` 列的那幾個）換成世界座標的多邊形（2026-10-21，`分片成群-設計方向.md` 第一件）——
+ * 3D 上標「疊在一起的面」「這一片是哪些面」用（`view/scene.js` `setFaceMarks()`）。
+ * 沒有 3D 面資料的片（舊的、測試捏出來的）⇒ 空陣列。
+ * @param {object} piece `unfoldObject()` 的一片（要有 `faces3`、`worldMatrix`）
+ * @param {number[]|null} which `faces3` 的索引；null ⇒ 全部
+ * @returns {THREE.Vector3[][]}
+ */
+export function pieceWorldPolys(piece, which = null) {
+  if (!piece || !piece.faces3) return [];
+  const M = piece.worldMatrix || new THREE.Matrix4();
+  const idx = which || piece.faces3.map((_, i) => i);
+  return idx.filter(i => piece.faces3[i]).map(i => piece.faces3[i].map(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(M)));
+}
+
+/**
  * 備料明細：一片一列。可直接匯出 CSV，
  * 欄位刻意跟「組裝系統結構說明表」的備料表對齊，日後好合併。
  */
@@ -518,3 +541,4 @@ export function bomCSV(pieces, rule) {
 }
 
 const round = v => Math.round(v * 100) / 100;
+

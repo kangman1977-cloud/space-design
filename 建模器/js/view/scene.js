@@ -2087,6 +2087,61 @@ export class SceneView {
     this.scene.add(g);
   }
 
+  /**
+   * 🔴 **分片：在 3D 上塗一組面**（2026-10-21，`分片成群-設計方向.md` 第一件，kang「同意你的建議」）。
+   * 兩層各自獨立：`'overlap'` ＝ 攤平後疊在一起的面（紅）、`'piece'` ＝ 即時預覽點到的那一片（紫 —— 模型預設是淺藍、「不准切」是藍、開口是黃綠，⛔ 撞色）。
+   * ⭐ 跟干涉檢查同一種畫法（`setClash()`）：⛔ 看深度（包在嘴巴裡的面也看得到）、半透明、⛔ 擋點選。
+   * ⚠ 面可以是凹的（凍結後併成的多邊形）⇒ 投影到自己的平面再三角化（`ShapeUtils`），⛔ 用扇形（凹的會塗出界）。
+   * @param {'overlap'|'piece'} layer
+   * @param {Array<Array<THREE.Vector3>>|null} polys 世界座標；null／空 ⇒ 收掉這一層
+   */
+  setFaceMarks(layer, polys) {
+    this._faceMarks = this._faceMarks || {};
+    const old = this._faceMarks[layer];
+    if (old) {
+      this.scene.remove(old);
+      old.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      delete this._faceMarks[layer];
+    }
+    if (!polys || !polys.length) return;
+    const color = layer === 'overlap' ? 0xff3b30 : 0xb84dff;
+    const pos = [], line = [];
+    for (const P of polys) {
+      if (!P || P.length < 3) continue;
+      const n = new THREE.Vector3();                      // Newell 法向（凹的也對）
+      for (let i = 0; i < P.length; i++) {
+        const a = P[i], b = P[(i + 1) % P.length];
+        n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+      }
+      if (n.lengthSq() < 1e-20) continue;                 // 面積幾乎是 0 的碎面：塗不出東西
+      n.normalize();
+      const e1 = P.findIndex((p, i) => i > 0 && p.distanceToSquared(P[0]) > 1e-20);
+      if (e1 < 0) continue;
+      const u = new THREE.Vector3().subVectors(P[e1], P[0]).normalize(), v = new THREE.Vector3().crossVectors(n, u);
+      const flat = P.map(p => new THREE.Vector2(p.clone().sub(P[0]).dot(u), p.clone().sub(P[0]).dot(v)));
+      for (const t of THREE.ShapeUtils.triangulateShape(flat, [])) for (const k of t) pos.push(P[k].x, P[k].y, P[k].z);
+      for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; line.push(a.x, a.y, a.z, b.x, b.y, b.z); }
+    }
+    if (!pos.length) return;
+    const g = new THREE.Group();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.45, depthTest: false, depthWrite: false, side: THREE.DoubleSide
+    }));
+    fill.renderOrder = 8;
+    fill.raycast = () => {};
+    g.add(fill);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(line, 3));
+    const edges = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color, depthTest: false }));
+    edges.renderOrder = 8;
+    edges.raycast = () => {};
+    g.add(edges);
+    this._faceMarks[layer] = g;
+    this.scene.add(g);
+  }
+
   clearPenPreview() {
     if (!this._penPrev) return;
     this.scene.remove(this._penPrev);

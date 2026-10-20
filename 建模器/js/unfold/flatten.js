@@ -201,9 +201,11 @@ export function unfoldMesh(mesh, rule, opts = {}) {
      * 而且這一則叫人「用分片切開」，那一則叫人「多開口或多分片」—— 後者才對）。
      * 【實證 2026-10-12】AI 線上先驗：球只切兩條經線，每片都是兩則一樣意思的紅字。
      */
+    /** 2026-10-21（分片成群第一件）：講出幾個面疊在一起、標在哪 ⇒ 知道該往哪裡切 */
     if (p.overlap && !(dart && p.strain && p.strain.flips)) {
-      warnings.push(`「${p.name}」攤平後有重疊 —— 這張圖不能直接下料。`
-                  + `請用「分片」把它切開（沒有自動分片，分片是製造決定，由你決定切在哪）`);
+      const nf = (p.overlapFaces || []).length;
+      warnings.push(`「${p.name}」攤平後有重疊 —— ${nf} 個面疊在一起${p.overlapMore ? '（還不只）' : ''}，圖上標紅；`
+                  + `這張圖不能直接下料。請用「分片」在那幾個面附近切開（分片模式的即時預覽也會在 3D 上標紅）`);
     } else if (!p.overlapChecked) {
       warnings.push(`「${p.name}」面數超過 ${OVERLAP_MAX_POLYS} 片，重疊偵測跳過了 ——`
                   + `這一片是「沒有檢查」，不是「沒有問題」。`
@@ -1025,6 +1027,18 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      */
     overlap: ov.hit,
     overlapChecked: ov.checked,
+    /**
+     * 疊在一起的是哪幾個面（2026-10-21，`分片成群-設計方向.md` 第一件）：`faces` 的索引、由小到大、不重複；
+     * `overlapPairs` ＝ 幾對（`overlapMore` ＝ 收到上限就停了，實際更多）。畫面、展開圖、3D 都照這份標紅。
+     */
+    overlapFaces: [...new Set(ov.pairs.flat())].sort((a, b) => a - b),
+    overlapPairs: ov.pairs.length,
+    overlapMore: ov.more,
+    /**
+     * 每個面在 3D 的位置（攤之前那份網格的座標，跟 `faces` 同一個順序）—— 3D 上標「這一片是哪些面」「哪些面疊在一起」用。
+     * ⚠ 是**攤的那份網格**的座標（縮放已經吃進去、還沒套位置與旋轉）；換成世界座標是 `part.js` 的事。
+     */
+    faces3: faces.map(f => mesh.faceLoop(f).map(he => [he.v.p.x, he.v.p.y, he.v.p.z])),
     /** 永遠 false —— 還沒有可靠的判定方式，理由見上面那一大段說明 */
     nonDevelopable: false,
     /**
@@ -2200,23 +2214,91 @@ function measure(piece, mesh, faces) {
  *   checked=false → 太大，沒檢查（介面要講出來）
  *   checked=true, hit=false → 真的檢查過而且乾淨
  *
- * @returns {{hit: boolean, checked: boolean}}
+ * ── 🔴 記下是哪幾對面疊在一起（2026-10-21，`分片成群-設計方向.md` 第 5 節第一件，kang「同意你的建議」）──
+ * 以前找到第一對就停 ⇒ 畫面只能說「這片有重疊」、不知道疊在哪（T10 獅子頭卡在這裡）。
+ * 現在照樣掃完、把配對收進 `pairs`（`[i, j]` ＝ `polys` 的索引，也就是這一片 `faces` 的索引）；
+ * 收到 `OVERLAP_MAX_PAIRS` 對就停（夠標出位置了，⛔ 為了數完拖慢）、`more` 講還有沒有。
+ *
+ * ── 🔴 凹的面改用精確判法 ──
+ * 分離軸測試只對凸多邊形準；凍結成網格後同一平面併成的面可以是凹的 ⇒ 會把「沒疊」說成「疊」
+ * （獅子頭 128 個面裡凹的 20 個，攤成一片時 2 對是這樣誤判的 —— 2026-10-21 沙箱）。
+ * ⭐ 兩個都是凸的 ⇒ 照舊用分離軸（結果一個字都不變）；有一個凹的 ⇒ 看邊有沒有真的交叉、或一塊的內部點落在另一塊裡（`exactHit()`）。
+ *
+ * @returns {{hit: boolean, checked: boolean, pairs: number[][], more: boolean}}
  */
 const OVERLAP_MAX_POLYS = 3000;
+const OVERLAP_MAX_PAIRS = 500;
 
 function detectOverlap(polys) {
-  if (polys.length < 2) return { hit: false, checked: true };
-  if (polys.length > OVERLAP_MAX_POLYS) return { hit: false, checked: false };
+  if (polys.length < 2) return { hit: false, checked: true, pairs: [], more: false };
+  if (polys.length > OVERLAP_MAX_POLYS) return { hit: false, checked: false, pairs: [], more: false };
 
   const boxes = polys.map(bbox);
+  const cvx = polys.map(isConvex);
+  const pairs = [];
   for (let i = 0; i < polys.length; i++) {
     for (let j = i + 1; j < polys.length; j++) {
       if (!boxHit(boxes[i], boxes[j])) continue;
       if (sharesEdge(polys[i], polys[j])) continue;
-      if (polyHit(polys[i], polys[j])) return { hit: true, checked: true };
+      const hit = cvx[i] && cvx[j] ? polyHit(polys[i], polys[j]) : exactHit(polys[i], polys[j]);
+      if (!hit) continue;
+      if (pairs.length >= OVERLAP_MAX_PAIRS) return { hit: true, checked: true, pairs, more: true };
+      pairs.push([i, j]);
     }
   }
-  return { hit: false, checked: true };
+  return { hit: pairs.length > 0, checked: true, pairs, more: false };
+}
+
+/** 凸不凸：沿著走一圈，轉的方向都一樣（共線的角不算）*/
+function isConvex(P) {
+  let s = 0;
+  for (let i = 0; i < P.length; i++) {
+    const a = P[i], b = P[(i + 1) % P.length], c = P[(i + 2) % P.length];
+    const z = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(z) < 1e-12) continue;
+    if (s && Math.sign(z) !== s) return false;
+    s = Math.sign(z);
+  }
+  return true;
+}
+
+/**
+ * 精確判法（任意簡單多邊形）：兩條邊在端點以外真的交叉 ⇒ 疊；沒有交叉時，一塊的內部點落在另一塊裡 ⇒ 疊（整塊包在裡面）。
+ * ⚠ 只碰到邊、只碰到角 ⛔ 算（跟 `polyHit()` 的 1e-6 容許值同一個意思）。
+ */
+function exactHit(A, B) {
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < B.length; j++) {
+      if (segCross(A[i], A[(i + 1) % A.length], B[j], B[(j + 1) % B.length])) return true;
+    }
+  }
+  const a = interiorPoint(A), b = interiorPoint(B);
+  return !!((a && pointIn(a, B)) || (b && pointIn(b, A)));
+}
+
+const orient2 = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+function segCross(p, q, r, s) {
+  const e = 1e-9;
+  const d1 = orient2(p, q, r), d2 = orient2(p, q, s), d3 = orient2(r, s, p), d4 = orient2(r, s, q);
+  return ((d1 > e && d2 < -e) || (d1 < -e && d2 > e)) && ((d3 > e && d4 < -e) || (d3 < -e && d4 > e));
+}
+function pointIn(pt, P) {
+  let c = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x) c = !c;
+  }
+  return c;
+}
+/** 一個確定在內部的點：每個角往角平分方向挪一點點，第一個落在裡面的就是（面積幾乎是 0 的碎面可能找不到 ⇒ null）*/
+function interiorPoint(P) {
+  for (let i = 0; i < P.length; i++) {
+    const a = P[(i + P.length - 1) % P.length], b = P[i], c = P[(i + 1) % P.length];
+    const m = { x: (a.x + b.x + c.x) / 3, y: (a.y + b.y + c.y) / 3 };
+    const t = { x: b.x + (m.x - b.x) * 0.01, y: b.y + (m.y - b.y) * 0.01 };
+    if (pointIn(t, P)) return t;
+  }
+  return null;
 }
 
 function bbox(poly) {

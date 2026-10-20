@@ -20,7 +20,7 @@ import { ARRAY_MODES, ARRAY_LABEL, AXES, isArraySrc, withMode }
 import { seamCount, markableEdges, clearSeams, seamBlockReason, seamKinds,
          keepCount, clearKeeps, markSignature } from '../unfold/seam.js';
 import { renderCanvas } from '../out/sheet.js';
-import { previewProgram } from '../out/nest.js';
+import { previewProgram, pieceAt } from '../out/nest.js';
 
 /** 分片的即時預覽開關（2026-10-12）—— 記在瀏覽器裡；讀不到就當開（預設開）*/
 const SEAM_PREVIEW_KEY = 'modeler_seam_preview';
@@ -46,7 +46,7 @@ import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { clashLine } from '../core/interfere.js';
-import { unfoldObject } from '../unfold/part.js';
+import { unfoldObject, pieceWorldPolys } from '../unfold/part.js';
 import { landPositions, lowestY } from '../core/align.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
@@ -246,6 +246,14 @@ export class Panel {
 
   refresh() {
     this.renderClash();
+    /**
+     * 分片的紅（疊在一起的面）、紫（預覽點到的那一片）先收掉 —— 還在分片模式、預覽還開著的話，
+     * `_seamPreview()` 會照目前的結果馬上再標回來（快取命中是同步畫）；不在了就保持收起來（⛔ 留著舊的紅）。
+     */
+    if (this.app.view && this.app.view.setFaceMarks) {
+      this.app.view.setFaceMarks('overlap', null);
+      this.app.view.setFaceMarks('piece', null);
+    }
     const obj = this.app.sel.active;
     const many = this.app.sel.count > 1;
     /**
@@ -1579,8 +1587,24 @@ export class Panel {
         txt += `　最多拉 <b>${fmtPct(mx)}</b>　壓 <b>${fmtPct(-mn)}</b>`;
       }
       if (r.warnings.length) txt += `<br>⚠ ${r.warnings.length} 則警告 —— 放大看`;
+      /**
+       * 🔴 疊在一起的面：預覽與 3D 都標紅、講是哪幾片幾個面（2026-10-21，`分片成群-設計方向.md` 第一件）。
+       * ⭐ 點預覽裡的一片 ⇒ 3D 上把那一片的面標紫（再點同一片 ⇒ 收起來；點空白 ⇒ 收起來）。
+       */
+      const ovP = r.pieces.filter(p => p.overlapFaces && p.overlapFaces.length);
+      const no = p => p.no || 'P' + String(r.pieces.indexOf(p) + 1).padStart(2, '0');
+      if (ovP.length) {
+        txt += `<br>🔴 ${ovP.map(p => `${no(p)} 有 ${p.overlapFaces.length} 個面${p.overlapMore ? '以上' : ''}`).join('、')}疊在一起 —— 預覽與 3D 上標紅，在那附近切開`;
+      }
+      if (r.pieces.length) txt += '<br>點預覽裡的一片 ⇒ 3D 上標出那一片（紫）';
       if (pv.ms > 1000) txt += `<br>算一次要 ${(pv.ms / 1000).toFixed(1)} 秒 —— 覺得慢可以關掉即時預覽`;
       info.innerHTML = txt;
+      const view = this.app.view;
+      if (view && view.setFaceMarks) {
+        view.setFaceMarks('overlap', ovP.flatMap(p => pieceWorldPolys(p, p.overlapFaces)));
+        if (this._pvPick && !r.pieces.includes(this._pvPick)) this._pvPick = null;
+        view.setFaceMarks('piece', this._pvPick ? pieceWorldPolys(this._pvPick) : null);
+      }
       if (!prog) { cv.hidden = true; return; }
       const W = Math.max(200, cv.clientWidth || 270), H = Math.min(260, Math.max(120, W * prog.box.h / prog.box.w));
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -1590,8 +1614,27 @@ export class Panel {
       ctx.scale(dpr, dpr);
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
       const px = Math.min(W / prog.box.w, H / prog.box.h);
-      ctx.translate((W - prog.box.w * px) / 2, (H - prog.box.h * px) / 2);
+      const ox = (W - prog.box.w * px) / 2, oy = (H - prog.box.h * px) / 2;
+      ctx.translate(ox, oy);
       renderCanvas(ctx, prog, px);
+      /** 點一片 ⇒ 3D 上標紫；畫布座標 → 預覽的 cm（`renderCanvas()` 的反算：X ＝ (x − box.x)·px、Y ＝ (box.y + box.h − y)·px）*/
+      cv.style.cursor = 'pointer';
+      cv.onclick = ev => {
+        const rc = cv.getBoundingClientRect();
+        const x = (ev.clientX - rc.left - ox) / px + prog.box.x;
+        const y = prog.box.y + prog.box.h - (ev.clientY - rc.top - oy) / px;
+        const hit = pieceAt(prog, x, y);
+        const same = hit && hit === this._pvPick;
+        this._pvPick = same ? null : hit;
+        if (view && view.setFaceMarks) view.setFaceMarks('piece', this._pvPick ? pieceWorldPolys(this._pvPick) : null);
+        if (this._pvPick) {
+          this.app.toast(`${no(this._pvPick)}：${this._pvPick.faces.length} 個面 —— 3D 上標紫了（再點一次收起來）`);
+        } else if (same) {
+          this.app.toast(`${no(hit)}：紫色收起來了`);
+        } else if (!hit) {
+          this.app.toast('沒有點到任何一片 —— 點在片的線框裡面');
+        }
+      };
     };
 
     const key = seamPreviewKey(obj, st);
