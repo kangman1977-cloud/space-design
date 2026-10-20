@@ -18800,6 +18800,87 @@ section('分片成群 第一件：重疊標出是哪幾個面、點一片在 3D 
   eq('★★ 　 點在預覽外面 ⇒ 沒有', pieceAt(prog, prog.box.x - 100, prog.box.y - 100), null);
 }
 
+section('分片成群 第二件：選一群面切成一片（2026-10-21）');
+{
+  /** 點面、黃色、紅色、面板、復原在本機版用畫面驗；這裡守 `unfold/group.js` 算的那幾支（獅子頭那一份在沙箱試過）*/
+  const G = await import('../js/unfold/group.js');
+  const { drawProgram: dp } = await import('../js/out/sheet.js');
+  const mkObj = m => { const o = new io.ModelObject({ name: '盒', src: { type: 'mesh' }, kind: 'sheet', thickness: 0.3 }); o._mesh = m; return o; };
+  // 20 × 10 × 6 的方塊：±Z 面 200 cm²、±Y 面 120、±X 面 60
+  const box = mkObj(edit.mergeCoplanarFaces(buildPrim('box', { w: 20, h: 10, d: 6 })).mesh);
+  const m = box.mesh();
+  let R = G.regionInfo(m);
+  const by = (ax, sg) => [...R.values()].find(r => Math.abs(r.n[ax] - sg) < 1e-6).id;
+  const top = by('y', 1), front = by('z', 1), back = by('z', -1), right = by('x', 1), bottom = by('y', -1);
+  eq('★★ 方塊：6 塊面', R.size, 6);
+  near('★★ 　 面積（cm²）：上面 20 × 6', R.get(top).area, 120, 1e-6);
+  eq('★★ 　 每一塊面跟 4 塊相鄰', [...R.values()].every(r => r.nb.size === 4), true);
+  eq('★ 預設值：往外長 30°、碎面 1 mm²', [G.GROW_DEG, G.TINY_MM2].join(), '30,1');
+
+  // 往外長：30° ⇒ 隔壁都是 90° 轉折，只有自己；91° ⇒ 長到除了對面以外的 5 塊
+  eq('★★★ 往外長 30°：轉折 90° 的地方停（只有自己）', G.growRegions(R, top, 30).size, 1);
+  eq('★★ 　 往外長 91°：除了正對面全部（5 塊）', G.growRegions(R, top, 91).size, 5);
+  eq('★★ 選起整片：還沒標縫 ⇒ 整個方塊（6 塊）', G.pieceRegions(R, top).size, 6);
+  eq('★★ 連成幾塊：上＋前 ⇒ 1', G.components(R, new Set([top, front])), 1);
+  eq('★★★ 　 上＋下（沒有共用邊）⇒ 2（切下去會變 2 片，面板要先講）', G.components(R, new Set([top, bottom])), 2);
+
+  // 碎面：門檻 100 cm²（＝ 10000 mm²）⇒ ±X 兩塊（60 cm²）是碎面；它們跟著共用邊最長的 ±Z 走
+  const tiny = G.tinyRegions(R, 10000);
+  eq('★★ 碎面：小於門檻的才算（±X 兩塊）', [...tiny].sort().join(), [right, by('x', -1)].sort().join());
+  eq('★★★ 　 選了前、後 ⇒ 兩塊碎面跟著走（4 塊）', G.withTiny(R, new Set([front, back]), tiny).size, 4);
+  eq('★★ 　 只選上面 ⇒ 碎面⛔ 跟（它們的主人是前／後）', G.withTiny(R, new Set([top]), tiny).size, 1);
+  eq('★★ 　 門檻 0 ⇒ 沒有碎面', G.tinyRegions(R, 0).size, 0);
+  eq('★★ 　 往外長⛔ 長進碎面（朝向不可靠、跟著主人走）', G.growRegions(R, front, 91, tiny).has(right), false);
+
+  // 選的當下檢查：副本上攤一次，物件本身一條縫都⛔ 動
+  const n0 = seam.seamCount(m);
+  const c1 = G.checkGroup(box, new Set([top]), { material: 'paper' });
+  ok('★★★ 檢查（只選上面）：攤得出來、選到的在 1 片裡、沒疊', c1.ok && c1.pieces.length === 1 && c1.overlap === 0, JSON.stringify([c1.ok, c1.pieces.length, c1.overlap]));
+  eq('★★★ 　 檢查完，物件本身的縫一條都沒變', seam.seamCount(m), n0);
+
+  // 切成一片：外圈 4 條標縫 ⇒ 方塊攤成 2 片（上面自己一片）
+  const p0 = unfoldObject(box, { material: 'paper' }).stats.total;
+  R = G.regionInfo(m);
+  const r1 = G.applyGroup(m, new Set([top]));
+  eq('★★★ 切成一片（上面）：外圈標 4 條縫', r1.cut, 4);
+  const p1 = unfoldObject(box, { material: 'paper' }).stats.total;
+  ok('★★★ 　 片數多一片（上面自己一片）', p1 === p0 + 1, `${p0} → ${p1}`);
+  R = G.regionInfo(m);
+  eq('★★ 　 選起整片（點上面）⇒ 只有上面那一塊', G.pieceRegions(R, top).size, 1);
+  const r2 = G.applyGroup(m, new Set([top]));
+  eq('★★ 　 再切一次 ⇒ 什麼都沒標（本來就是一片了）', r2.cut + r2.uncut, 0);
+
+  // 改已經分好的片：上＋前一起 ⇒ 中間那條縫拿掉
+  R = G.regionInfo(m);
+  const r3 = G.applyGroup(m, new Set([top, front]));
+  ok('★★★ 上＋前切成一片 ⇒ 中間那條縫拿掉、外圈補標', r3.uncut === 1 && r3.cut >= 3, JSON.stringify(r3));
+  R = G.regionInfo(m);
+  eq('★★ 　 選起整片（點前面）⇒ 上＋前 2 塊', G.pieceRegions(R, front).size, 2);
+
+  // 不准切：外圈有一條標了不准切 ⇒ ⛔ 碰、講幾條
+  const box2 = mkObj(edit.mergeCoplanarFaces(buildPrim('box', { w: 20, h: 10, d: 6 })).mesh);
+  const m2 = box2.mesh();
+  const R2 = G.regionInfo(m2);
+  const t2 = [...R2.values()].find(r => r.n.y > 0.99).id;
+  const ke = [...m2.edges()].find(h => h.face && h.twin && h.twin.face && (h.face.region === t2) !== (h.twin.face.region === t2));
+  seam.setKeep(m2, ke, true);
+  const r4 = G.applyGroup(m2, new Set([t2]));
+  ok('★★★ 外圈 1 條不准切 ⇒ 那條⛔ 碰、講 1 條、其餘 3 條照標', r4.blocked === 1 && r4.cut === 3 && seam.isKeep(ke) && !seam.isSeam(ke), JSON.stringify(r4));
+
+  // 檢查講得出「會疊」：球冠整片選起來 ⇒ 疊、疊的面列得出來
+  const capObj = mkObj(Mesh.fromGeometry(new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3)));
+  const RC = G.regionInfo(capObj.mesh());
+  const cAll = G.checkGroup(capObj, new Set(RC.keys()), { material: 'paper' });
+  ok('★★★ 球冠整個選起來 ⇒ 檢查說會疊、講得出疊的面', cAll.ok && cAll.overlap > 0 && cAll.overlapPieces.length >= 1 && cAll.overlapPieces.every(p => p.overlapFaces.length),
+     JSON.stringify([cAll.ok, cAll.overlap, cAll.overlapPieces.length]));
+
+  // 分片地圖：預覽照片上色（只有即時預覽傳 pieceFill）；存檔那一份⛔ 帶
+  const pcs = unfoldObject(box, { material: 'paper' }).pieces;
+  const withMap = dp(pcs[0], { pieceFill: () => '#4fc3f7' }).items.filter(i => i.style === 'map');
+  eq('★★ 分片地圖：預覽每個面都塗那一片的顏色', withMap.length, pcs[0].faces.length);
+  eq('★★ 　 沒傳（存 SVG／DXF、列印）⇒ ⛔ 塗', dp(pcs[0], {}).items.filter(i => i.style === 'map').length, 0);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

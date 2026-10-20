@@ -140,6 +140,13 @@ export function drawProgram(piece, opt = {}) {
    * ⚠ **只在 `opt.strainFill` 時畫**：畫面與列印要；存 SVG／DXF ⛔ 要（送去切的檔⛔ 帶色塊 ——
    * kang 2026-10-12「依照你的建議處理」）。放在最前面 ⇒ 線畫在色塊上面。
    */
+  /**
+   * 分片地圖（2026-10-21，`分片成群-設計方向.md` 第二件）：每一片一個顏色、跟 3D 上同一個顏色 ——
+   * 只有即時預覽傳 `opt.pieceFill`（片 → 顏色）；存 SVG／DXF、列印⛔ 傳 ⇒ 送去切的檔⛔ 帶色塊。
+   * 放在拉伸色塊前面 ⇒ 省道打版的拉／壓顏色蓋在上面（那個比較要緊）。
+   */
+  const mapFill = opt.pieceFill ? opt.pieceFill(piece) : null;
+  if (mapFill) piece.faces.forEach(poly => items.push({ t: 'poly', style: 'map', pts: poly, fill: mapFill }));
   if (opt.strainFill && piece.strain) {
     piece.faces.forEach((poly, i) => items.push({ t: 'poly', style: 'strain', pts: poly, fill: strainColor(piece.strain.faces[i]) }));
   }

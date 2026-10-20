@@ -24,6 +24,15 @@ import { previewProgram, pieceAt } from '../out/nest.js';
 
 /** 分片的即時預覽開關（2026-10-12）—— 記在瀏覽器裡；讀不到就當開（預設開）*/
 const SEAM_PREVIEW_KEY = 'modeler_seam_preview';
+/**
+ * 分片地圖（2026-10-21，`分片成群-設計方向.md` 第二件）：每一片一個顏色，3D 與即時預覽同一個顏色。
+ * 顏色照 `樣板-分片地圖.html`（kang 點過）；片比顏色多 ⇒ 從頭再輪一次。⚠ ⛔ 用黃（選面）、紅（會疊）、紫（點到的那一片）。
+ */
+const SEAM_MAP_KEY = 'modeler_seam_map';
+const PIECE_PAL = ['#4fc3f7', '#81c784', '#ffb74d', '#4db6ac', '#f06292', '#aed581', '#7986cb', '#ffd180', '#90a4ae', '#64b5f6', '#dce775', '#a1887f', '#80cbc4', '#ce93d8'];
+function seamMapOn() {
+  try { return localStorage.getItem(SEAM_MAP_KEY) !== 'off'; } catch (e) { return true; }
+}
 function seamPreviewOn() {
   try { return localStorage.getItem(SEAM_PREVIEW_KEY) !== 'off'; } catch (e) { return true; }
 }
@@ -253,6 +262,7 @@ export class Panel {
     if (this.app.view && this.app.view.setFaceMarks) {
       this.app.view.setFaceMarks('overlap', null);
       this.app.view.setFaceMarks('piece', null);
+      this.app.view.setFaceMarks('map', null);
     }
     const obj = this.app.sel.active;
     const many = this.app.sel.count > 1;
@@ -1411,40 +1421,58 @@ export class Panel {
       + (keeps ? `<br>不准切 <b>${keeps}</b> 條（藍色）` : '');
     this.form.appendChild(box);
 
-    this.form.appendChild(note(
-      '點稜線＝從那裡切開／取消；點面的中央＝把那個面整圈切開。'
-      + '標了片數沒變是正常的 —— 要切到能把面分開才會多一片。'
-    ));
-
     /**
-     * 🔴 **點一條稜線時標多少**（2026-10-09，kang 拍板「兩種都要」）。
-     * 打版（圓環、球切成一瓣一瓣）原本要點幾百下；「連同方向的全部」點 1 下。
-     * ⭐ 預設「只標那一條」＝ 原本的用法。⚠ 走的是四邊形的格子 —— 三角形的地方會停。
+     * 🔴 **點下去是：標縫／選面**（2026-10-21，分片成群第二件，kang「同意你的建議與安排」）。
+     * ⭐ 預設「標縫」＝ 原本的用法一格都沒變；「選面」＝ 選一群面、切成一片（`_groupBox()`）。
      */
-    if (this.app.getSeamLineMode) {
-      /** ⭐ 「標一段」（2026-10-12，kang 拍板）：省道打版的開口 —— 從縫切進去、停在片中間 */
-      this._rowSelect('點一條稜線時', this.app.getSeamLineMode(), [
-        ['edge', '只標那一條'],
-        ['loop', '標一整圈'],
-        ['all', '連同方向的全部一起標'],
-        ['span', '標一段（先點起點、再點終點）']
-      ], v => { this.app.setSeamLineMode(v); this.refresh(); },
-      '一整圈：沿著那條線走到底（繞一圈或走到頭）。'
-      + '同方向的全部：跟它平行的每一圈都一起標 —— 圓環、球切成一瓣一瓣用這個。'
-      + '標一段：先點起點那條邊（黃色），再點同一條線上要停的那條邊，中間整段一次標 —— 省道打版的開口用這個');
+    const g = this.app.getGroupState ? this.app.getGroupState(obj) : null;
+    if (g) {
+      this._rowSelect('點下去是', g.kind, [
+        ['seam', '標縫（點稜線／點面的中央）'],
+        ['group', '選面（選一群面、切成一片）']
+      ], v => { this.app.setSeamPickKind(v); this.refresh(); },
+      '標縫：一條一條標、或點面的中央整圈切開（原本的用法）。'
+      + '選面：在 3D 上點面選一群（黃色），右邊馬上講這一群攤開會不會疊，滿意了按「切成一片」—— 外圈自動標縫');
     }
 
-    /**
-     * 🔴 **「標成：切開／不准切」**（2026-10-13，智慧分切第一步；kang 選「面板上切換」）。
-     * 上面「點一條稜線時」四種點法都跟著它走。⭐ 預設「切開」＝ 原本的用法一格都沒變。
-     */
-    if (this.app.getSeamMarkKind) {
-      this._rowSelect('標成', this.app.getSeamMarkKind(), [
-        ['cut', '切開（橘色）'],
-        ['keep', '不准切（藍色）']
-      ], v => { this.app.setSeamMarkKind(v); this.refresh(); },
-      '不准切：這條邊要保持連著 —— 程式自己補剪、智慧分切提案都會繞開它。'
-      + '⚠ 真的非切不可時（折不起來的材料、繞一圈的筒子一定要剪一刀）照樣切開，展開圖上會講幾條');
+    if (g && g.kind === 'group') {
+      this._groupBox(obj, g);
+    } else {
+      this.form.appendChild(note(
+        '點稜線＝從那裡切開／取消；點面的中央＝把那個面整圈切開。'
+        + '標了片數沒變是正常的 —— 要切到能把面分開才會多一片。'
+      ));
+
+      /**
+       * 🔴 **點一條稜線時標多少**（2026-10-09，kang 拍板「兩種都要」）。
+       * 打版（圓環、球切成一瓣一瓣）原本要點幾百下；「連同方向的全部」點 1 下。
+       * ⭐ 預設「只標那一條」＝ 原本的用法。⚠ 走的是四邊形的格子 —— 三角形的地方會停。
+       */
+      if (this.app.getSeamLineMode) {
+        /** ⭐ 「標一段」（2026-10-12，kang 拍板）：省道打版的開口 —— 從縫切進去、停在片中間 */
+        this._rowSelect('點一條稜線時', this.app.getSeamLineMode(), [
+          ['edge', '只標那一條'],
+          ['loop', '標一整圈'],
+          ['all', '連同方向的全部一起標'],
+          ['span', '標一段（先點起點、再點終點）']
+        ], v => { this.app.setSeamLineMode(v); this.refresh(); },
+        '一整圈：沿著那條線走到底（繞一圈或走到頭）。'
+        + '同方向的全部：跟它平行的每一圈都一起標 —— 圓環、球切成一瓣一瓣用這個。'
+        + '標一段：先點起點那條邊（黃色），再點同一條線上要停的那條邊，中間整段一次標 —— 省道打版的開口用這個');
+      }
+
+      /**
+       * 🔴 **「標成：切開／不准切」**（2026-10-13，智慧分切第一步；kang 選「面板上切換」）。
+       * 上面「點一條稜線時」四種點法都跟著它走。⭐ 預設「切開」＝ 原本的用法一格都沒變。
+       */
+      if (this.app.getSeamMarkKind) {
+        this._rowSelect('標成', this.app.getSeamMarkKind(), [
+          ['cut', '切開（橘色）'],
+          ['keep', '不准切（藍色）']
+        ], v => { this.app.setSeamMarkKind(v); this.refresh(); },
+        '不准切：這條邊要保持連著 —— 程式自己補剪、智慧分切提案都會繞開它。'
+        + '⚠ 真的非切不可時（折不起來的材料、繞一圈的筒子一定要剪一刀）照樣切開，展開圖上會講幾條');
+      }
     }
 
     if (n > 0 || keeps > 0) {
@@ -1462,6 +1490,52 @@ export class Panel {
 
     this._seamProposalBox(obj);
     this._seamPreview(obj);
+  }
+
+  /**
+   * 🔴 **選一群面、切成一片**（2026-10-21，分片成群第二件；操作照 `樣板-分片地圖.html`）。
+   * 狀態與動作在 `main.js`（`getGroupState()`…），計算在 `unfold/group.js`；這裡只講現況、給選法與兩個數字。
+   * ⭐ 兩個數字都有預設（往外長 30°、碎面 1 mm²），可以改、記在瀏覽器裡（kang「穩定、有預設、也能彈性調整」）。
+   */
+  _groupBox(obj, g) {
+    this.form.appendChild(head('分一片（選一群面）'));
+    this._rowSelect('選法', g.method, [
+      ['face', '點面：加進來／再點拿掉'],
+      ['piece', '選起整片（被縫圍起來的那一片）'],
+      ['grow', '往外長（相連、朝向差不多的一起選）']
+    ], v => { this.app.setGroupOpt({ method: v }); this.refresh(); },
+    '點面：一塊一塊加，點到選過的就拿掉。'
+    + '選起整片：點一下 ⇒ 換成那一整片（要改已經分好的片：先選起來、再加減面、再切一次）。'
+    + '往外長：從點的那塊面開始，相連、朝向跟它差不多的一起加進來（碰到縫、或轉折比下面的角度大就停）');
+    if (g.method === 'grow') {
+      this._rowNum('往外長：朝向差（度）', g.deg, { min: 1, max: 179, step: 5 },
+        v => { this.app.setGroupOpt({ deg: v }); this.refresh(); },
+        `預設 30°。小一點 ⇒ 只長到很平的那一片；大一點 ⇒ 連轉折大的也長過去（容易攤開會疊）`);
+    }
+    this._rowNum('碎面：小於（mm²）', g.tiny, { min: 0, max: 1000, step: 0.5 },
+      v => { this.app.setGroupOpt({ tiny: v }); this.refresh(); },
+      '預設 1 mm²。比這個小的面（錐體尖端、布林留下的細縫）不用自己選，會跟著旁邊共用邊最長的那一片走。填 0 ⇒ 不處理');
+
+    const box = document.createElement('div');
+    box.className = 'note';
+    if (!g.count) {
+      box.innerHTML = '還沒有選 —— 在 3D 上點面（黃色＝選到的）';
+    } else {
+      let t = `選了 <b>${g.count}</b> 塊面（${g.faces} 個網格面）`;
+      if (g.tinyAdd) t += `，另有 <b>${g.tinyAdd}</b> 塊碎面跟著走`;
+      if (g.comps > 1) t += `<br>⚠ 選的面沒有連在一起（分成 ${g.comps} 塊）—— 切下去會變 ${g.comps} 片`;
+      if (g.check) {
+        t += g.check.overlap
+          ? `<br>✗ 這一群攤開<b>會疊</b>：${g.check.overlap} 個面（3D 上紅色）—— 拿掉紅色附近的面再試`
+          : '<br>✓ 這一群攤得平、不會疊';
+      }
+      box.innerHTML = t;
+    }
+    this.form.appendChild(box);
+    if (g.count) {
+      this._rowBtn('切成一片', '外圈標縫、裡面原本的縫拿掉；標了「不准切」的邊不動（會講幾條）。要反悔按 Ctrl+Z', () => this.app.groupCut());
+      this._rowBtn('取消選取', '黃色收起來，什麼都不改', () => this.app.groupClear());
+    }
   }
 
   /**
@@ -1560,6 +1634,11 @@ export class Panel {
       this.refresh();
     }, '標一條線，下面馬上畫出展開的樣子（跟著展開圖視窗目前選的展開方式）。模型大、覺得頓就關掉');
     if (!on) return;
+    const mapOn = seamMapOn();
+    this._rowCheck('分片地圖（每一片一個顏色）', mapOn, v => {
+      try { localStorage.setItem(SEAM_MAP_KEY, v ? 'on' : 'off'); } catch (e) { /* 無所謂 */ }
+      this.refresh();
+    }, '3D 上每一片塗一個顏色、預覽裡同一片同一個顏色 —— 看得出哪裡已經分好、哪一片很大。跟著即時預覽一起算');
 
     const st = this.app.getUnfoldSettings();
     const wrap = document.createElement('div');
@@ -1579,7 +1658,11 @@ export class Panel {
     const modeLabel = st.mode === 'dart' ? '省道打版' : '精確分片';
     const draw = pv => {
       const r = pv.r;
-      const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true, dartStyle: st.dartStyle, dartFolds: st.dartFolds });
+      const colOf = p => PIECE_PAL[r.pieces.indexOf(p) % PIECE_PAL.length];
+      const prog = previewProgram(r.pieces, {
+        rule: r.rule, strainFill: true, dartStyle: st.dartStyle, dartFolds: st.dartFolds,
+        pieceFill: mapOn ? colOf : null
+      });
       let txt = `預覽（${modeLabel}）：<b>${r.stats.total}</b> 片`;
       if (st.mode === 'dart' && r.pieces.length) {
         const mx = Math.max(...r.pieces.map(p => p.strain ? p.strain.max : 0));
@@ -1604,6 +1687,12 @@ export class Panel {
         view.setFaceMarks('overlap', ovP.flatMap(p => pieceWorldPolys(p, p.overlapFaces)));
         if (this._pvPick && !r.pieces.includes(this._pvPick)) this._pvPick = null;
         view.setFaceMarks('piece', this._pvPick ? pieceWorldPolys(this._pvPick) : null);
+        /** 分片地圖：每一片的面塗那一片的顏色（看深度 —— 跟紅、紫、黃那幾層不一樣，見 `setFaceMarks()`）*/
+        if (mapOn) {
+          const polys = [], cols = [];
+          for (const p of r.pieces) for (const poly of pieceWorldPolys(p)) { polys.push(poly); cols.push(colOf(p)); }
+          view.setFaceMarks('map', polys, cols);
+        } else view.setFaceMarks('map', null);
       }
       if (!prog) { cv.hidden = true; return; }
       const W = Math.max(200, cv.clientWidth || 270), H = Math.min(260, Math.max(120, W * prog.box.h / prog.box.w));

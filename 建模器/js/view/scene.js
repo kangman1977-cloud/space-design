@@ -2089,13 +2089,17 @@ export class SceneView {
 
   /**
    * 🔴 **分片：在 3D 上塗一組面**（2026-10-21，`分片成群-設計方向.md` 第一件，kang「同意你的建議」）。
-   * 兩層各自獨立：`'overlap'` ＝ 攤平後疊在一起的面（紅）、`'piece'` ＝ 即時預覽點到的那一片（紫 —— 模型預設是淺藍、「不准切」是藍、開口是黃綠，⛔ 撞色）。
+   * 幾層各自獨立：`'overlap'` ＝ 攤平後疊在一起的面（紅）、`'piece'` ＝ 即時預覽點到的那一片（紫 —— 模型預設是淺藍、「不准切」是藍、開口是黃綠，⛔ 撞色）；
+   * 第二件（2026-10-21）多兩層：`'select'` ＝ 選面選到的（黃）、`'selOverlap'` ＝ 選到的這一群攤開會疊的面（紅）。
    * ⭐ 跟干涉檢查同一種畫法（`setClash()`）：⛔ 看深度（包在嘴巴裡的面也看得到）、半透明、⛔ 擋點選。
    * ⚠ 面可以是凹的（凍結後併成的多邊形）⇒ 投影到自己的平面再三角化（`ShapeUtils`），⛔ 用扇形（凹的會塗出界）。
-   * @param {'overlap'|'piece'} layer
+   * 再多一層 `'map'` ＝ 分片地圖（每一片一個顏色，`colors[i]` 給第 i 個面的顏色）——
+   * ⚠ 這一層**看深度**（整個模型都塗，⛔ 看深度的話背面的片全疊在正面上、一片糊）、往前推一點（⛔ 跟模型的面搶著畫、閃爍）、⛔ 畫外框。
+   * @param {'overlap'|'piece'|'select'|'selOverlap'|'map'} layer
    * @param {Array<Array<THREE.Vector3>>|null} polys 世界座標；null／空 ⇒ 收掉這一層
+   * @param {Array<string|number>} [colors] 每個面一個顏色（只有 'map' 用）
    */
-  setFaceMarks(layer, polys) {
+  setFaceMarks(layer, polys, colors = null) {
     this._faceMarks = this._faceMarks || {};
     const old = this._faceMarks[layer];
     if (old) {
@@ -2104,34 +2108,48 @@ export class SceneView {
       delete this._faceMarks[layer];
     }
     if (!polys || !polys.length) return;
-    const color = layer === 'overlap' ? 0xff3b30 : 0xb84dff;
-    const pos = [], line = [];
-    for (const P of polys) {
-      if (!P || P.length < 3) continue;
+    const color = { overlap: 0xff3b30, selOverlap: 0xff3b30, piece: 0xb84dff, select: 0xffd54a }[layer] ?? 0xb84dff;
+    const isMap = layer === 'map';
+    const pos = [], line = [], col = [];
+    const c3 = new THREE.Color();
+    polys.forEach((P, pi) => {
+      if (!P || P.length < 3) return;
       const n = new THREE.Vector3();                      // Newell 法向（凹的也對）
       for (let i = 0; i < P.length; i++) {
         const a = P[i], b = P[(i + 1) % P.length];
         n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
       }
-      if (n.lengthSq() < 1e-20) continue;                 // 面積幾乎是 0 的碎面：塗不出東西
+      if (n.lengthSq() < 1e-20) return;                   // 面積幾乎是 0 的碎面：塗不出東西
       n.normalize();
       const e1 = P.findIndex((p, i) => i > 0 && p.distanceToSquared(P[0]) > 1e-20);
-      if (e1 < 0) continue;
+      if (e1 < 0) return;
       const u = new THREE.Vector3().subVectors(P[e1], P[0]).normalize(), v = new THREE.Vector3().crossVectors(n, u);
       const flat = P.map(p => new THREE.Vector2(p.clone().sub(P[0]).dot(u), p.clone().sub(P[0]).dot(v)));
-      for (const t of THREE.ShapeUtils.triangulateShape(flat, [])) for (const k of t) pos.push(P[k].x, P[k].y, P[k].z);
+      if (isMap) c3.set(colors && colors[pi] != null ? colors[pi] : color);
+      for (const t of THREE.ShapeUtils.triangulateShape(flat, [])) for (const k of t) {
+        pos.push(P[k].x, P[k].y, P[k].z);
+        if (isMap) col.push(c3.r, c3.g, c3.b);
+      }
       for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; line.push(a.x, a.y, a.z, b.x, b.y, b.z); }
-    }
+    });
     if (!pos.length) return;
     const g = new THREE.Group();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      color, transparent: true, opacity: 0.45, depthTest: false, depthWrite: false, side: THREE.DoubleSide
-    }));
-    fill.renderOrder = 8;
+    if (isMap) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    const fill = new THREE.Mesh(geo, isMap
+      ? new THREE.MeshBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4
+      })
+      : new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: layer === 'select' ? 0.6 : 0.45, depthTest: false, depthWrite: false, side: THREE.DoubleSide
+      }));
+    /** 疊在一起時：黃（選到的）蓋在預覽的紅上面、這一群會疊的紅再蓋在黃上面 ⇒ 顏色⛔ 混成一團橘 */
+    fill.renderOrder = { map: 6, select: 9, selOverlap: 10 }[layer] ?? 8;
     fill.raycast = () => {};
     g.add(fill);
+    if (isMap) { this._faceMarks[layer] = g; this.scene.add(g); return; }
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(line, 3));
     const edges = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color, depthTest: false }));

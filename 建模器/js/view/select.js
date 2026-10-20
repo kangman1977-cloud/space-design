@@ -174,6 +174,8 @@ export class Selection {
      * 兩種入口共用同一組動作 —— 又是「事件入口分開，動作邏輯共用」。
      */
     this.seamMode = false;
+    /** 分片模式裡「點下去是：選面」（`main.js` `seamPickKind`）⇒ `pickSeam()` 只回面 */
+    this.seamFaceOnly = false;
 
     /**
      * 貼合模式。點第一個元素＝來源，點第二個＝目標，選完立刻貼上去。
@@ -2191,7 +2193,8 @@ export class Selection {
   pickSeam(clientX, clientY) {
     const hook = this.hooks.onSeamPick;
     if (!hook) return;
-    const el = this.pickElement(clientX, clientY, { vertex: false });
+    /** 分片成群第二件（2026-10-21）：「點下去是：選面」⇒ 只要面（⛔ 讓稜線搶走 —— 小面旁邊都是稜線）*/
+    const el = this.pickElement(clientX, clientY, this.seamFaceOnly ? { vertex: false, only: 'face' } : { vertex: false });
     if (!el) return;
     if (el.kind === 'blocked') { hook(el); return; }
     hook(el);

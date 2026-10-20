@@ -30,7 +30,9 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkab
          setKeep, isKeep, markSignature, nearestFace }
   from './unfold/seam.js';
 import { proposeSeams } from './unfold/propose.js';
-import { unfoldObject } from './unfold/part.js';
+import { unfoldObject, pieceWorldPolys } from './unfold/part.js';
+import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, components, applyGroup, checkGroup, GROW_DEG, TINY_MM2 }
+  from './unfold/group.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial, holeDistance } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
@@ -467,6 +469,12 @@ const app = {
    */
   getUnfoldSettings: () => ({ material: unfoldWin.opt.material, mode: unfoldWin.mode, dartStyle: unfoldWin.opt.dartStyle || 'cut', dartFolds: !!unfoldWin.opt.dartFolds }),
   openUnfold: () => unfoldWin.open(),
+  /** 分片成群第二件（2026-10-21）：分片模式的「選面」—— 狀態與動作在 `seamPickKind`／`groupSel` 那一段 */
+  getGroupState: obj => groupState(obj),
+  setSeamPickKind: v => setSeamPickKind(v),
+  setGroupOpt: o => setGroupOpt(o),
+  groupCut: () => groupCut(),
+  groupClear: () => groupClear(true),
   onUnfoldClosed: () => panel.refresh(),
   /** 🔴 干涉檢查（④-20）：面板按「檢查」／點清單的一列（`runClash()`、`clashPick()` 在下面才定義，⛔ 在建構時呼叫） */
   runClash: () => runClash(),
@@ -1906,6 +1914,7 @@ function jumpHistory(redo) {
   }
   updateBar();
   updateEditNum();            // ⑥-4：復原掉擠出之後，數值欄⛔ 再寫「擠出」
+  validateGroup();            // 分片成群第二件：網格換了 ⇒ 選面的選取清掉
 }
 
 /** ⑤-11：退到底時講什麼 —— 丟過最舊的幾步就講只記得幾步 */
@@ -6192,6 +6201,143 @@ function toggleSeamMode() {
 function dropFaceMarks() {
   view.setFaceMarks('overlap', null);
   view.setFaceMarks('piece', null);
+  view.setFaceMarks('map', null);
+  groupClear(false);
+}
+
+/**
+ * 🔴 **分片成群第二件：選一群面切成一片**（2026-10-21，`分片成群-設計方向.md` 第 5 節，kang「同意你的建議與安排」；
+ * 操作照 `樣板-分片地圖.html`，kang 點過「似乎很不錯」）。計算全在 `unfold/group.js`（測得到），這裡只管狀態與畫面。
+ *
+ * ⭐ 分片模式多一個「點下去是：標縫／選面」—— 預設「標縫」＝ 原本的用法一格都沒變。
+ * ⭐ 選面三種選法（點面加入／移除、選起整片、往外長）；**選的當下**在副本上攤一次，講這一群會不會疊（黃 ＝ 選到的、紅 ＝ 會疊的）。
+ * ⭐ 切成一片 ＝ 外圈標縫、裡面的縫拿掉；碎面（小於門檻）跟著旁邊走；「不准切」的邊不碰、講幾條；選的面沒有連在一起 ⇒ 先問一句。
+ * ⚠ 選取存的是區域編號、綁著「當時的網格」—— 網格換了（Undo、改點、切了）就清掉（⛔ 拿舊編號去切新網格）。
+ * 預設值：往外長 30°（`GROW_DEG`）、碎面 1 mm²（`TINY_MM2`）—— 面板上可以改，記在瀏覽器裡。
+ */
+let seamPickKind = 'seam';
+let groupMethod = 'face';
+let groupSel = null;                  // { obj, mesh, regions: Set<區域編號> }
+let groupCheck = null;                // 上一次 checkGroup() 的結果
+const readNum = (k, d) => { try { const v = parseFloat(localStorage.getItem(k)); return Number.isFinite(v) ? v : d; } catch (e) { return d; } };
+let groupDeg = readNum('modeler.groupDeg', GROW_DEG);
+let groupTiny = readNum('modeler.groupTinyMm2', TINY_MM2);
+
+function setSeamPickKind(v) {
+  seamPickKind = v === 'group' ? 'group' : 'seam';
+  sel.seamFaceOnly = seamPickKind === 'group';
+  if (seamPickKind === 'seam') groupClear(false); else dropSeamSpan();   // 標一段點到一半 ⇒ 換成選面時收掉
+  toast(seamPickKind === 'group'
+    ? '選面：點一塊面加進來（黃色），右邊馬上講這一群攤開會不會疊；滿意了按「切成一片」'
+    : '標縫：點稜線＝切開／取消，點面的中央＝整圈切開（原本的用法）');
+}
+
+function setGroupOpt(o) {
+  if (o.method) groupMethod = o.method;
+  if (o.deg !== undefined) { groupDeg = o.deg; try { localStorage.setItem('modeler.groupDeg', String(o.deg)); } catch (e) { /* 存不了就算了 */ } }
+  if (o.tiny !== undefined) {
+    groupTiny = o.tiny;
+    try { localStorage.setItem('modeler.groupTinyMm2', String(o.tiny)); } catch (e) { /* 存不了就算了 */ }
+    if (groupSel) groupRecheck();      // 門檻改了 ⇒ 跟著走的碎面跟著變 ⇒ 重新檢查
+  }
+}
+
+/** 選取還有效嗎（同一個物件、同一份網格）；⛔ 有效 ⇒ 清掉 */
+function validateGroup() {
+  if (groupSel && (doc.byId(groupSel.obj.id) !== groupSel.obj || groupSel.obj.mesh() !== groupSel.mesh)) groupClear(false);
+}
+
+function groupClear(say) {
+  const had = groupSel && groupSel.regions.size;
+  groupSel = null; groupCheck = null;
+  view.setFaceMarks('select', null);
+  view.setFaceMarks('selOverlap', null);
+  if (say) { toast(had ? '取消選取' : '沒有選任何面'); panel.refresh(); }
+}
+
+/** 選的面（含跟著走的碎面）＋ 這一群攤開會疊的面 ⇒ 畫到 3D 上 */
+function groupRecheck() {
+  const { obj, mesh, regions } = groupSel;
+  const R = regionInfo(mesh);
+  const eff = withTiny(R, regions, tinyRegions(R, groupTiny));
+  const st = app.getUnfoldSettings();
+  groupCheck = regions.size ? checkGroup(obj, eff, { material: st.material, mode: st.mode }) : null;
+  const M = obj.matrix();
+  const polys = [];
+  for (const rid of eff) for (const f of R.get(rid).faces) polys.push(mesh.faceVerts(f).map(v => v.p.clone().applyMatrix4(M)));
+  view.setFaceMarks('select', polys);
+  view.setFaceMarks('selOverlap', groupCheck ? groupCheck.overlapPieces.flatMap(p => pieceWorldPolys(p, p.overlapFaces)) : null);
+}
+
+function groupPick(hit) {
+  if (hit.kind !== 'face') { toast('選面：要點在面上', true); return; }
+  const obj = hit.obj, mesh = obj.mesh();
+  if (!groupSel || groupSel.obj !== obj || groupSel.mesh !== mesh) groupSel = { obj, mesh, regions: new Set() };
+  const R = regionInfo(mesh);
+  const rid = hit.face.region;
+  const tiny = tinyRegions(R, groupTiny);
+  const S = groupSel.regions;
+  let msg;
+  if (groupMethod === 'piece') {
+    S.clear();
+    pieceRegions(R, rid).forEach(t => S.add(t));
+    msg = `選起整片：${S.size} 塊面（被縫圍起來的那一整片）—— 可以接著加面、減面，再切成一片`;
+  } else if (groupMethod === 'grow') {
+    const add = growRegions(R, rid, groupDeg, tiny);
+    const before = S.size;
+    add.forEach(t => S.add(t));
+    msg = `往外長：加進 ${S.size - before} 塊面（相連、朝向差 ${groupDeg}° 以內；碰到縫或轉折大的地方就停）`;
+  } else if (S.has(rid)) {
+    S.delete(rid);
+    msg = '拿掉一塊面';
+  } else {
+    S.add(rid);
+    msg = `加進一塊面（${R.get(rid).faces.length} 個網格面）`;
+  }
+  groupRecheck();
+  panel.refresh();
+  const c = groupCheck;
+  toast(msg + (c && S.size ? (c.overlap ? `　✗ 這一群攤開會疊（${c.overlap} 個面，紅色）` : '　✓ 這一群攤得平、不會疊') : ''), !!(c && c.overlap));
+}
+
+function groupCut() {
+  validateGroup();
+  if (!groupSel || !groupSel.regions.size) { toast('先在 3D 上點面，選好要切成一片的那一群', true); return; }
+  const { obj, mesh, regions } = groupSel;
+  const R = regionInfo(mesh);
+  const eff = withTiny(R, regions, tinyRegions(R, groupTiny));
+  const n = components(R, eff);
+  if (n > 1 && !confirm(`選的面沒有連在一起：切下去會變成 ${n} 片（不是一片）。照樣切嗎？`)) return;
+  const res = applyGroup(mesh, eff);
+  const tinyN = eff.size - regions.size;
+  groupClear(false);
+  if (!res.cut && !res.uncut) {
+    toast(res.blocked ? `外圈的 ${res.blocked} 條邊都標了不准切，沒有切` : '這一群本來就是一片了（外圈早就切開、裡面也沒有縫）', !!res.blocked);
+    panel.refresh();
+    return;
+  }
+  commitSeam(obj, `切成一片（${eff.size} 塊面：外圈標 ${res.cut} 條縫${res.uncut ? `、裡面拿掉 ${res.uncut} 條` : ''}）`,
+    (tinyN ? `　${tinyN} 塊碎面跟著這一片` : '')
+    + (res.blocked ? `　⚠ ${res.blocked} 條邊標了不准切、沒有切 —— 這一片在那裡還跟旁邊連著` : ''));
+}
+
+/** 面板要的狀態（每次重畫都問一次；選取失效就順便清掉）*/
+function groupState(obj) {
+  validateGroup();
+  const S = groupSel && groupSel.obj === obj ? groupSel.regions : null;
+  let faces = 0, tinyAdd = 0, comps = 0;
+  if (S && S.size) {
+    const R = regionInfo(obj.mesh());
+    const eff = withTiny(R, S, tinyRegions(R, groupTiny));
+    for (const rid of eff) faces += R.get(rid).faces.length;
+    tinyAdd = eff.size - S.size;
+    comps = components(R, eff);
+  }
+  return {
+    kind: seamPickKind, method: groupMethod, deg: groupDeg, tiny: groupTiny,
+    count: S ? S.size : 0, faces, tinyAdd, comps,
+    check: S && S.size && groupCheck ? { pieces: groupCheck.pieces.length, overlap: groupCheck.overlap, ok: groupCheck.ok } : null
+  };
 }
 
 /**
@@ -6321,6 +6467,7 @@ function seamPick(hit) {
     toast(seamBlockReason(hit.obj), true);
     return;
   }
+  if (seamPickKind === 'group') { groupPick(hit); return; }   // 分片成群第二件：點下去是「選面」
 
   const mesh = hit.obj.mesh();
 
