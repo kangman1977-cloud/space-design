@@ -41,7 +41,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          sampleCurve, sampleCurveInfo, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
-         extrudeBoundaryEdges,
+         extrudeBoundaryEdges, regionOf,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
@@ -861,6 +861,8 @@ $('selRing').onclick = () => selectRingFromEdge();
 $('selLoop').onclick = () => selectLoopFromEdge();
 $('selRingFaces').onclick = () => selectFaceRingFromEdge();
 $('selAllEdges').onclick = () => selectAllEdges();
+$('selAllFaces').onclick = () => selectAllFacesOrVerts('face');    // ④-18
+$('selAllVerts').onclick = () => selectAllFacesOrVerts('vertex');  // ④-18
 $('selSharp').onclick = () => selectSharpEdges();
 $('selSimilar').onclick = () => selectSimilar();
 $('selChecker').onclick = () => selectChecker();
@@ -885,6 +887,7 @@ $('pen').onclick = () => togglePenMode();
  * 　⛔ 不再能靠它的文字告訴使用者「現在按下去是切下去／完成」〕
  */
 $('curveThrough').onclick = () => curveThroughApply();
+$('curveHole').onclick = () => curveThroughApply(true);    // ④-6：只留帶洞的那塊
 $('toolDone').onclick = () => {
   if (sel.knifeMode) toggleKnifeMode();
   else if (sel.penMode) togglePenMode();
@@ -1156,6 +1159,19 @@ $('penCancel').onclick = () => cancelPenMode();
 $('knifeCancel').onclick = () => cancelKnifeMode();
 $('knifeUndoDel').onclick = () => undoKnifeDelete();
 $('knifeSnapMid').onclick = () => toggleKnifeSnapMid();
+/**
+ * ④-17（2026-10-19，kang「同意你的安排與建議」）：**刀具那一排也有「含外緣」**。
+ * 進刀具會離開拉點線面 ⇒ 那顆「含外緣」就看不到了；②-3 只在「一條內部的邊都沒有」時才自動吸外緣 ——
+ * 平板挖過洞、有內部邊之後外緣就吸不到。⭐ 跟拉點線面那顆**同一個開關**（`sel.includeBoundary`），⛔ 另記一份。
+ * ⚠ 關掉時已經點在外緣上的切點照舊留著（要的話自己點一下刪掉）—— ⛔ 偷偷刪人家點好的位置。
+ */
+$('knifeBoundary').onclick = () => {
+  sel.includeBoundary = !sel.includeBoundary;
+  updateBar();
+  toast(sel.includeBoundary
+    ? '含外緣：開。切點現在也吸得到物件最外圈的邊（板子的外緣、開口的邊）'
+    : '含外緣：關。切點只吸內部的邊 —— 已經點在外緣上的切點還留著，不要的話點一下就刪掉');
+};
 $('knifeCurve').onclick = () => toggleKnifeCurve();
 $('curveUndo').onclick = () => curveUndo();
 $('curveStep').oninput = () => drawCurve();
@@ -2900,8 +2916,14 @@ function curveNotReady() {
  * 線 ⇒ 刀柱（`edit.js` `curveCutterPrism()`，沿面的法向蓋過整個物件）⇒ 布林（`bool.js` `splitByCutter()`）。
  * 建物件照 `切成實心`／`分離`（名字「－1／－2」、原點置中、原物件換掉、記一步）—— 理由見 `separateSelected()` 那一段。
  */
-function curveThroughApply() {
+/**
+ * 🔴 **`holeOnly` ⇒「挖洞」：只留帶洞的那塊**（綜合評估 ④-6 一半，2026-10-19，kang「同意你的安排與建議」）。
+ * 以前切穿一律兩塊都留 ⇒ 圈裡那塊（「塞子」）要自己找出來刪（T3、T6）。只有圓／封閉的圈才有洞可挖。
+ * ⭐ 留下的那塊照用原本的名字（它就是原來那個物件，只是多了一個洞），⛔ 加「－2」。
+ */
+function curveThroughApply(holeOnly = false) {
   if (curveNotReady()) return false;
+  if (holeOnly && !curve.closed) { toast('挖洞要畫圓或封閉的圈 —— 一條線分出兩邊，沒有「洞」可挖；要分成兩塊請按「切穿」', true); return false; }
   if (!csgReady()) {
     toast(csgError() ? '布林運算函式庫沒有載入成功 —— 切穿用不了（「切下去」照樣可以）'
       : '布林運算函式庫還在載入中，等一下再按「切穿」', true);
@@ -2931,10 +2953,10 @@ function curveThroughApply() {
   sel.setKnifeMode(false);
   $('knife').classList.remove('on');
 
-  const meshes = [r.inside, r.outside];
+  const meshes = holeOnly ? [r.outside] : [r.inside, r.outside];
   for (const m of meshes) refreshAfterEdit(m);
   const made = meshes.map((m, i) => new ModelObject({
-    name: `${obj.name}－${i + 1}`,
+    name: holeOnly ? obj.name : `${obj.name}－${i + 1}`,
     kind: obj.kind,
     src: { type: 'mesh' },
     mesh: m,
@@ -2949,10 +2971,15 @@ function curveThroughApply() {
   view.sync(doc);
   sel.set(made.map(o => o.id));
   panel.analysisCache.clear();
-  commit('切穿');
+  commit(holeOnly ? '挖洞' : '切穿');
   syncModeButtons();
   panel.refresh();
   updateBar();
+  if (holeOnly) {
+    toast(`已挖出一個洞：「${made[0].name}」留下、圈裡那塊丟掉了（按 Ctrl+Z 收得回來）`
+      + curveSegWords(info) + '　⚠ 平滑與分片線的標記會消失');
+    return true;
+  }
   toast(`已切穿成 2 個實心物件：` + (wasClosed
       ? `「${made[0].name}」是圈裡面那塊、「${made[1].name}」是帶一個洞的那塊`
       : `「${made[0].name}」「${made[1].name}」是線的兩邊`)
@@ -3384,7 +3411,7 @@ function updateEditNum() {
   box.disabled = false;
   // 拖曳中不要覆蓋使用者正在打的字；只有沒聚焦時才跟著拖曳跑
   if (document.activeElement !== box) box.value = (+info.value.toFixed(4)).toString();
-  unit.textContent = `${info.axis}　${info.unit}`;
+  unit.textContent = `${info.axis === 'XYZ' ? '整體' : info.axis}　${info.unit}`;   // ④-12：整體縮放寫「整體」
   if (lbl) lbl.textContent = NAME[info.mode] || '數值';
 }
 
@@ -4147,6 +4174,42 @@ function selectAllEdges() {
    * 只講「選好了」等於沒講，而他正是因為數不出來才踩到坑的。
    */
   toast(`已選起 ${got} 條邊　接著可以按「導角」做整個物件的圓角`);
+}
+
+/**
+ * 🔴 **全選面／全選點**（綜合評估 ④-18，2026-10-19，kang「同意你的安排與建議」）——「全選邊」的兩個兄弟。
+ * ⭐ 面照**共面區域**一塊算一個（`regionOf()`）：畫面上看到的面就是那一塊，三角化的對角線看不到 ⇒
+ *   方塊 6 個、⛔ 12 個（跟「全選邊」用 `isMarkable()` 只選看得見的邊同一個道理）。
+ * ⚠ Ctrl+A 照舊是「全選物件」（⛔ 偷偷換意思）。
+ */
+function selectAllFacesOrVerts(kind) {
+  const obj = sel.active;
+  const label = kind === 'face' ? '全選面' : '全選點';
+  if (!sel.editMode || !obj) {
+    toast(`先按「拉點線面」進入編輯模式，選到物件再按「${label}」`, true);
+    return;
+  }
+  /** 過濾器跟著切（跟「選一圈面」一樣）—— ⛔ 切的話畫面上的過濾器跟選到的東西對不上 */
+  setEditFilter(kind, true);              // quiet：⛔ 它的提示會蓋掉下面那句
+  const mesh = obj.mesh();
+  let got;
+  if (kind === 'face') {
+    const seen = new Set(), pick = [];
+    for (const f of mesh.faces) {
+      if (seen.has(f)) continue;
+      const r = regionOf(mesh, f);
+      for (const g of r.faces) seen.add(g);
+      pick.push(f);
+    }
+    got = pick.length ? sel.selectFaces(obj, pick) : 0;
+  } else {
+    got = mesh.verts.length ? sel.selectVerts(obj, mesh.verts) : 0;
+  }
+  if (!got) { toast(`這個物件沒有${kind === 'face' ? '面' : '點'}可以選`, true); return; }
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  toast(kind === 'face' ? `已選起 ${got} 個面（一塊共面的區域算一個）` : `已選起 ${got} 個點`);
 }
 
 /**
@@ -6387,6 +6450,12 @@ $('edges').onclick = function () {
   view.setShowEdges(this.classList.contains('on'));
 };
 $('frame').onclick = () => view.frameAll(doc);
+/** ④-3：只把選到的拉近（沒選 ⇒ 跟全部入鏡一樣，並且講出來）*/
+function frameSelected() {
+  if (!sel.count) { view.frameAll(doc); toast('沒有選到東西 —— 先把全部拉進來了'); return; }
+  view.frameAll(doc, sel.ids);
+}
+$('frameSel').onclick = frameSelected;
 
 $('save').onclick = () => { download(doc); toast('已存檔'); };
 $('load').onclick = loadFile;
@@ -6434,7 +6503,7 @@ window.addEventListener('keydown', e => {
   if (k === 'w') setMode('translate');
   else if (k === 'e') setMode('rotate');
   else if (k === 'r') setMode('scale');
-  else if (k === 'f') view.frameAll(doc);
+  else if (k === 'f') { if (e.shiftKey) frameSelected(); else view.frameAll(doc); }   // ④-3：Shift＋F ＝ 選到的入鏡
   else if (k === 'delete' || k === 'backspace') deleteSelected();
   else if (k === 'escape') sel.clear();
 });
@@ -6773,6 +6842,9 @@ function updateBar() {
    */
   const canAll = sel.editMode && !!sel.active;
   $('selAllEdges').hidden = !canAll;
+  /** ④-18：全選面、全選點跟全選邊同一個條件出現 */
+  $('selAllFaces').hidden = !canAll;
+  $('selAllVerts').hidden = !canAll;
   $('selAllEdges').title = canAll
     ? '把這個物件所有看得見的邊一次選起來（方塊 12 條）。要做整個物件的導角／圓角就先按它'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
@@ -6879,6 +6951,8 @@ function updateBar() {
   if (收工) $('toolDone').textContent = 收工;
   /** 第四步：畫好了 ⇒ 「切下去」旁邊多一顆「切穿」（kang 2026-10-13：一顆獨立的按鈕，需要時再選）*/
   $('curveThrough').hidden = !(sel.knifeMode && sel.knifeCurve && curve && curve.done);
+  /** ④-6：圓或封閉的圈才有「洞」可挖 ⇒ 那時才多一顆「挖洞」（只留帶洞的那塊）*/
+  $('curveHole').hidden = !(sel.knifeMode && sel.knifeCurve && curve && curve.done && curve.closed);
   /**
    * 狀態字：**⛔ 只講「做到哪」，⛔ 不講「該按誰」** —— 該按誰是上面那顆的事。
    * ⚠ 刀具點不到兩個時 `#toolDone` 不出現，所以那句話要由這裡講。
@@ -7079,6 +7153,9 @@ function updateBar() {
    */
   $('knifeSnapMid').hidden = !sel.knifeMode || sel.knifeCurve;
   $('knifeSnapMid').classList.toggle('on', !!sel.knifeSnapMid);
+  /** ④-17：含外緣跟吸中點同一個規則出現（直線刀具才有：曲線刀具畫在面上，⛔ 吸邊）*/
+  $('knifeBoundary').hidden = !sel.knifeMode || sel.knifeCurve;
+  $('knifeBoundary').classList.toggle('on', !!sel.includeBoundary);
   $('knife').title = sel.knifeMode
     ? (knifePicks.length >= 2
         ? '照剛才點的位置切下去'

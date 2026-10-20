@@ -677,6 +677,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
         內縮／擠出一次只吃一個面，點的全選 ＝ 整體移動（物件模式就能做）。
       -->
       <button id="selAllEdges" hidden title="全選邊：把這個物件所有看得見的邊一次選起來。要做整個物件的導角／圓角就先按它 —— 方塊 12 條邊不必再一條一條點">全選邊</button>
+      <button id="selAllFaces" hidden title="全選面：把這個物件所有的面一次選起來（一塊共面的區域算一個面，方塊是 6 個）。要整個一起擠出、內縮、細分時用">全選面</button>
+      <button id="selAllVerts" hidden title="全選點：把這個物件所有的點一次選起來。要整個一起平滑、縮放時用">全選點</button>
       <!--
         選轉角：依夾角一次選出模型上所有折起來的邊（Blender 的 Select Sharp Edges）。
 
@@ -898,6 +900,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="toolDone" hidden title="把這個工具現在做的事收工">完成</button>
       <!-- 曲線刀具第四步（kang 2026-10-14）：畫好之後跟「切下去」並排；切穿 ⇒ 兩個獨立的實心物件、封閉圈兩塊都留 -->
       <button id="curveThrough" hidden title="切穿：沿著畫好的線（曲線、圓、半圓、折線都可以）垂直往下切穿整個物件，直接變成兩個獨立的實心物件（圓或封閉的圈：中間那塊和帶洞的那塊都留下）。⚠ 走布林運算 ⇒ 平滑與分片線的標記會消失。只想在面上切出線、形狀不變，請按旁邊的「切下去」">切穿</button>
+      <button id="curveHole" hidden title="挖洞：沿著畫好的圓或封閉的圈垂直往下切穿，【只留帶洞的那塊】—— 圈裡面那塊直接丟掉（不必再自己找出來刪）。⚠ 走布林運算 ⇒ 平滑與分片線的標記會消失。要兩塊都留請按旁邊的「切穿」">挖洞</button>
       <span class="lbl" id="toolState" hidden>—</span>
       <!--
         刀具裡的「直線／曲線」（kang 2026-10-13 → 規格\建模器-曲線刀具.md）：⛔ 左側直條不加按鈕。
@@ -937,6 +940,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="curveUnitCm" hidden title="用公分打數字（會記住）">cm</button>
       <button id="curveUnitMm" hidden title="用公釐打數字（會記住）">mm</button>
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）。⚠ 開著的時候【不會吸到角】—— 你既然按了這顆，要的就是中點">吸中點</button>
+      <button id="knifeBoundary" hidden title="含外緣：切點也吸得到物件【最外圈】那些邊（板子的外緣、開口的邊）。預設是關的 —— 平常刀具只吸內部的邊；只有外緣的平板會自己退回去吸外緣。跟拉點線面裡那顆「含外緣」是同一個開關">含外緣</button>
       <button id="knifeUndoDel" hidden title="把剛才刪掉的那個切點放回【原來的位置】（不是接到最後面）。可以連按，一路退回去。⚠ 這顆只管切點，跟工具列的「復原」是兩件事">退一步</button>
       <button id="knifeCancel" hidden title="離開刀具，剛才點的位置全部不算">取消</button>
       <!--
@@ -1275,6 +1279,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="edges" class="on">稜線</button>
       <button id="wire">線框</button>
       <button id="frame">全部入鏡</button>
+      <button id="frameSel" title="選到的入鏡：只把選到的東西拉近、擺在畫面正中間（視角方向不變）。沒選東西時跟「全部入鏡」一樣。快速鍵 Shift＋F">選到的入鏡</button>
     </div>
   </div>
 

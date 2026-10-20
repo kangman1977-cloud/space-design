@@ -1154,10 +1154,16 @@ export class SceneView {
     return h / worldH;
   }
 
-  /** 把鏡頭拉到看得見全部東西的位置 */
-  frameAll(doc) {
+  /**
+   * 把鏡頭拉到看得見全部東西的位置。
+   * ④-3（2026-10-19，kang「同意你的安排與建議」）：給 `ids` ⇒ **只把這幾個拉進來**（「選到的入鏡」）；
+   * 一個都找不到 ⇒ 照舊看全部。方向、正交的算法跟原本一樣。
+   * @param {number[]} [ids]
+   */
+  frameAll(doc, ids = null) {
     const box = new THREE.Box3();
-    for (const n of this.byId.values()) box.expandByObject(n);
+    const only = (ids || []).map(id => this.byId.get(id)).filter(Boolean);
+    for (const n of only.length ? only : this.byId.values()) box.expandByObject(n);
     if (box.isEmpty()) {
       this.camera.position.set(320, 260, 340);
       this.orbit.target.set(0, 40, 0);

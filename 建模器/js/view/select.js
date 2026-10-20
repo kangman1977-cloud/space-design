@@ -4072,8 +4072,17 @@ export class Selection {
      * ⛔ 不要拿位移的快照去算旋轉的數字（那會是一個沒有人驗得出來的數）。
      */
     const axis = d && d.start ? d.start.axis : null;
+    if (d && d.start && d.start.mode && d.start.mode !== this.tc.getMode()) return null;
+    /**
+     * ④-12（2026-10-19，kang「同意你的安排與建議」）：**整體縮放（中間那一格，軸 'XYZ'）也給數字** ——
+     * 三個方向是同一個倍數，讀 X 那一個就好；打數字 ⇒ 三個一起設（`applyEditNumber()`）。
+     * ⚠ 只有縮放：移動、旋轉的 'XYZ'（自由拖、繞視線轉）沒有「一個數字」說得清楚，照舊回 `null`。
+     */
+    if (d && axis === 'XYZ' && (d.start.mode || this.tc.getMode()) === 'scale') {
+      const end = (d.end && !this.tc.dragging) ? d.end : null;
+      return { axis, mode: 'scale', value: (end ? end.scale : this._proxy.scale).x, unit: '倍' };
+    }
     if (!d || !axis || !['X', 'Y', 'Z'].includes(axis)) return null;
-    if (d.start.mode && d.start.mode !== this.tc.getMode()) return null;
     const mode = d.start.mode || this.tc.getMode();
 
     if (mode === 'translate') {
@@ -4126,7 +4135,8 @@ export class Selection {
        * 　**程式沒資格替人決定做不做得出來**（跟 `nonPlanarFaces()` 只提醒不擋同一條）。〕
        */
       this._proxy.scale.set(1, 1, 1);
-      this._proxy.scale[k] = num;
+      if (info.axis === 'XYZ') this._proxy.scale.set(num, num, num);   // ④-12：整體縮放 ⇒ 三個一起
+      else this._proxy.scale[k] = num;
       /** ③-5：放手後替身已經重新對準到新的中心 ⇒ 縮放要繞「拖之前」的中心，⛔ 用新的（不然會多出一段位移）*/
       this._proxy.position.copy(d.start.pos);
     } else {

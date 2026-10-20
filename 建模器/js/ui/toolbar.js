@@ -205,9 +205,9 @@ export class Panel {
     if (!obj && !editing) {
       this.empty.hidden = false;
       this.empty.innerHTML = '還沒有選取物件<br><span>點一下畫面中的物件</span>';
-      this.form.hidden = true;
       this.anaBody.className = 'empty';
       this.anaBody.textContent = '選一個物件後按「重新計算」';
+      this._caseBox();
       return;
     }
 
@@ -641,6 +641,18 @@ export class Panel {
     this.form.appendChild(head('縮放 倍'));
     this._rowVec3(obj.scale, ['X', 'Y', 'Z'], () => this._edit('改縮放'), false,
       obj.lockScale || pathEditing);
+    /**
+     * ④-12（2026-10-19，kang「同意你的安排與建議」）：**整體縮放打一個數字** —— 打 2 ⇒ 三個方向都**乘** 2
+     * （比例照舊：原本 1 × 1.5 × 1 會變 2 × 3 × 2）。打完欄位回到 1（它是「再乘多少」，⛔ 是目前的大小）。
+     * 鎖定縮放、編輯路徑中照舊不給改。
+     */
+    if (!obj.lockScale && !pathEditing) {
+      this._rowNum('整體 ×', 1, { step: 0.1, min: 0.001 }, v => {
+        if (!(v > 0) || Math.abs(v - 1) < 1e-12) { this.refresh(); return; }
+        obj.scale.multiplyScalar(v);
+        this._edit(`整體縮放 ×${+v.toFixed(4)}`);
+      }, '三個方向一起乘這個倍數（比例不變）。打 2 ＝ 放大兩倍、打 0.5 ＝ 縮成一半；打完欄位回到 1');
+    }
 
     this._rowCheck('鎖定縮放', obj.lockScale, v => {
       obj.lockScale = v;
@@ -842,6 +854,31 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  /**
+   * 🔴 **案件名稱可以填**（綜合評估 ④-19，2026-10-19，kang「同意你的安排與建議」）。
+   * 展開圖、剖面分切、DXF 的標題都印「案件：○○ 日期」，存檔、匯出的檔名也用它 ——
+   * 但以前**沒有任何地方可以改**，每張圖都印「案件：未命名」（T3）。
+   * ⭐ 放在「沒選東西」時的右側面板（⛔ 加到工具列：工具列換行會讓按鈕跑位）；
+   * 改了記一步復原（`commit()` 的快照就是整份文件，含案件資料）。日期是新建那天（③-6），只顯示、⛔ 給改。
+   */
+  _caseBox() {
+    const doc = this.app.doc;
+    const h = doc && doc.head;
+    if (!h) { this.form.hidden = true; return; }
+    this.form.hidden = false;
+    this.form.innerHTML = '';
+    this._target = this.form;
+    this.form.appendChild(head('案件'));
+    this._rowText('名稱', h.name || '', v => {
+      const name = String(v || '').trim() || '未命名';
+      if (name === h.name) return;
+      h.name = name;
+      this._edit('改案件名稱');
+      if (this.app.toast) this.app.toast(`案件名稱：${name}　展開圖、剖面分切、DXF 的標題和存檔的檔名都會用它`);
+    });
+    this.form.appendChild(note(`日期 ${h.date || '—'}（按「新建」時自動填今天）。展開圖、剖面分切、DXF 的標題印「案件：名稱　日期」`));
   }
 
   // ═══════════════════════════════════════════════════
