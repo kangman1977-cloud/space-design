@@ -37,6 +37,17 @@ export const PROPOSAL_COLOR = 0x2ad4d4;
  */
 export const EDGE_DARK = 0x11151a;
 export const EDGE_LIGHT = 0xe8edf3;
+/**
+ * 🔴 **分片的顏色層在畫面上時，模型的線挪到最後畫**（2026-10-21，kang 回報「分片時模型的稜線不明顯」、「同意你的建議」）。
+ * ⚠ 線（稜線、縫、開口、不准切、提案）本來是不透明 ⇒ 先畫；分片地圖、紅（會疊）、黃（選到的）是半透明 ⇒ 後畫、蓋在線上 ⇒ 被蓋淡。
+ * 挪法：線改成「半透明、濃度 1」＋ 排在顏色層（地圖 6、紅黃 8～10）後面 ⇒ 顏色跟以前一樣、只是最後畫；
+ * 照樣看深度 ⇒ 背面被模型擋住的線照樣不畫（顏色層⛔ 寫深度，擋不到線）。
+ * ⚠ **只在有顏色層時挪**（`_linesOnTop()`）：編輯模式選到的邊、刀具與鋼筆的預覽是「先畫、⛔ 看深度」的標示 ——
+ * 線一律最後畫的話會壓在它們上面（選到的邊中間多一條深色線）。
+ */
+export const LINE_ORDER = 20;
+const LINE_NAMES = { edges: [0, 0], seams: [2, 1], darts: [2, 1], keeps: [2, 1], proposal: [3, 2] };   // 名字 → [平常的順序, 挪到最後時加幾]
+
 export function edgeLineColor(hex) {
   const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
   return 0.2126 * r + 0.7152 * g + 0.0722 * b >= 0.5 ? EDGE_DARK : EDGE_LIGHT;
@@ -300,6 +311,7 @@ export class SceneView {
         node = this._createNode(obj);
         this.byId.set(obj.id, node);
         this.scene.add(node);
+        if (this._linesTop) this._lineOrder(node, true);
       }
       this._updateNode(node, obj);
     }
@@ -2107,7 +2119,7 @@ export class SceneView {
       old.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
       delete this._faceMarks[layer];
     }
-    if (!polys || !polys.length) return;
+    if (!polys || !polys.length) { this._linesOnTop(); return; }
     const color = { overlap: 0xff3b30, selOverlap: 0xff3b30, piece: 0xb84dff, select: 0xffd54a }[layer] ?? 0xb84dff;
     const isMap = layer === 'map';
     const pos = [], line = [], col = [];
@@ -2139,7 +2151,7 @@ export class SceneView {
     if (isMap) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     const fill = new THREE.Mesh(geo, isMap
       ? new THREE.MeshBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide,
+        vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4
       })
       : new THREE.MeshBasicMaterial({
@@ -2149,7 +2161,7 @@ export class SceneView {
     fill.renderOrder = { map: 6, select: 9, selOverlap: 10 }[layer] ?? 8;
     fill.raycast = () => {};
     g.add(fill);
-    if (isMap) { this._faceMarks[layer] = g; this.scene.add(g); return; }
+    if (isMap) { this._faceMarks[layer] = g; this.scene.add(g); this._linesOnTop(); return; }
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(line, 3));
     const edges = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color, depthTest: false }));
@@ -2158,6 +2170,24 @@ export class SceneView {
     g.add(edges);
     this._faceMarks[layer] = g;
     this.scene.add(g);
+    this._linesOnTop();
+  }
+
+  /** 有沒有任何一層分片顏色 ⇒ 模型的線要不要挪到最後畫（見 `LINE_ORDER`）*/
+  _linesOnTop() {
+    const on = Object.keys(this._faceMarks || {}).length > 0;
+    if (on === !!this._linesTop) return;
+    this._linesTop = on;
+    for (const node of this.byId.values()) this._lineOrder(node, on);
+  }
+
+  _lineOrder(node, on) {
+    for (const [name, [base, add]] of Object.entries(LINE_NAMES)) {
+      const o = node.getObjectByName(name);
+      if (!o) continue;
+      o.renderOrder = on ? LINE_ORDER + add : base;
+      if (o.material.transparent !== on) { o.material.transparent = on; o.material.needsUpdate = true; }
+    }
   }
 
   clearPenPreview() {
