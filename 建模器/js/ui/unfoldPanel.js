@@ -15,7 +15,7 @@
 
 import { MATERIALS, PICKABLE_MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
-import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs } from '../out/sheet.js';
+import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs, qtyWords } from '../out/sheet.js';
 import { packBoards, boardProgram, boardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { seamCount } from '../unfold/seam.js';
 import { toDXF, boardDXF, UNITS } from '../out/dxf.js';
@@ -432,7 +432,7 @@ export class UnfoldPanel {
     tb.className = 'uwBom';
     tb.innerHTML = '<tr><th>名稱</th><th>數量</th><th>展開長 cm</th><th>展開寬 cm</th>'
       + '<th>單片面積 cm²</th><th>折彎</th></tr>'
-      + r.pieces.map(p => `<tr><td>${esc(p.name)}</td><td>${p.qty}</td>`
+      + r.pieces.map(p => `<tr><td>${esc(p.name)}</td><td>${p.qty}${esc(qtyWords(p))}</td>`
         + `<td>${fmt(p.width)}</td><td>${fmt(p.height)}</td>`
         + `<td>${fmt(p.area)}</td><td>${p.bends.length}</td></tr>`).join('');
     const wrap = document.createElement('div');

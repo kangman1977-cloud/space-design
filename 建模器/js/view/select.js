@@ -25,6 +25,7 @@ import { flattenPenPath, penIsSmooth, penSetHandle,
          penNearestOnPath, penAddAnchor, penRemoveAnchor,
          penFilletAt, penFilletAll } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
+import { xfReadout } from '../core/measure.js';
 import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleStep,
   penPlaneFrame } from '../core/penSnap.js';
 import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
@@ -652,6 +653,11 @@ export class Selection {
 
     tc.addEventListener('dragging-changed', e => {
       v.orbit.enabled = !e.value;
+      /** ⑥-3：按下去那一刻的位姿與軸（`dragReadout()` 用；編輯模式另有自己的 `_drag`）*/
+      this._xfStart = e.value && tc.object ? {
+        node: tc.object, axis: tc.axis, mode: tc.getMode(), space: tc.space,
+        pos: tc.object.position.clone(), quat: tc.object.quaternion.clone(), scale: tc.object.scale.clone()
+      } : null;
       if (e.value) {                             // 按下去 → 拍一份初始狀態
         if (this.editSel) this._beginEditDrag();
         else if (this._onObjProxy) this._beginObjDrag();
@@ -4100,6 +4106,22 @@ export class Selection {
     this.view.markGeomDirty();
     this._drawEditMark();
     return true;
+  }
+
+  /**
+   * 🔴 **拖箭頭的時候「到目前為止做了多少」—— 給滑鼠旁邊那個小標籤**（2026-10-21，實驗 T8：
+   * `實驗-綜合評估.md`「⑥ 的分批」⑥-3，kang「同意你的建議」）。以前縮放、旋轉只能看外框猜。
+   * 編輯模式 ⇒ 跟數值欄同一支 `editDragValue()`；物件（單選、多選的替身）⇒ 跟按下去那一刻（`_xfStart`）比。
+   * ⚠ 只在拖曳中給；放手就 `null`（標籤收起來，放手後的量看數值欄）。
+   * ⚠ 拉平面把手、自由移動 ⇒ 沒有「一個數字」⇒ `null`（坑第 20 條：⛔ 顯示沒有意義的數字）；繞視線轉只給角度大小。
+   * @returns {{axis:string, mode:string, value:number, unit:string}|null}
+   */
+  dragReadout() {
+    if (!this.tc.dragging) return null;
+    if (this.editSel) return this.editDragValue();
+    const s = this._xfStart, node = this.tc.object;
+    if (!s || !node || node !== s.node) return null;
+    return xfReadout(s, node);
   }
 
   /**

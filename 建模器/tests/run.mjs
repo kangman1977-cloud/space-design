@@ -18669,6 +18669,81 @@ section('綜合評估 ⑤-3：畫面上的字⛔ 用文件寫法（2026-10-21）
   ok('★ 　 index.html 的滑鼠提示都在 150 字以內（⑤-3：以前最長 397 字）', longT.length === 0, longT.map(t => t.slice(0, 12)).join('、'));
 }
 
+section('綜合評估 ⑥ 第一批：片數來源、切幾段先講、拖曳標數字、擠完打長度、齒輪套軸（2026-10-21）');
+{
+  /** 圓的「切下去幾段」標籤、拖曳的小標籤位置、擠出打長度的整條操作在本機版用畫面驗；這裡守算的那幾支 */
+  const { qtyWords } = await import('../js/out/sheet.js');
+  const { PRIM_SPECS, PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const bend = { type: 'bend', w: 11, first: 1, arcSeg: 4, bends: [{ angle: 90, ri: 0.2, len: 7.5 }] };
+  const item = src => ({ src, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], name: '原件' });
+  const arr = (name, count) => new io.ModelObject({ name, kind: io.KIND.SHEET, thickness: 0.5,
+    src: { type: 'array', mode: 'linear', count, step: [6.67, 0, 0], count2: 1, child: item(bend) } });
+  const prod = p => (p.qtyFrom.objs || 1) * (p.qtyFrom.per !== undefined ? p.qtyFrom.copies * p.qtyFrom.per : p.qtyFrom.each);
+
+  const r2 = unfoldMany([arr('隔板', 2)]);
+  ok('★★★ ⑥-1 陣列 2 份 ⇒ 每一片都寫「陣列 2 份 × 每份 k 片」、乘起來 ＝ 片數',
+     r2.pieces.length > 0 && r2.pieces.every(p => qtyWords(p).includes('陣列 2 份 × 每份 ') && prod(p) === p.qty),
+     r2.pieces.map(p => `×${p.qty}${qtyWords(p)}`).join('｜'));
+  ok('★★ 　 卡片第一行就寫（titleLines）', titleLines(r2.pieces[0], {})[0].includes(`×${r2.pieces[0].qty} 片（陣列 2 份 × 每份`), titleLines(r2.pieces[0], {})[0]);
+  const rr = unfoldMany([arr('隔板', 2), arr('隔板 複本', 2)]);
+  ok('★★★ 　 兩個一樣的陣列 ⇒「2 個一樣的物件 × 陣列 2 份 × 每份 k 片」、乘起來 ＝ 片數',
+     rr.pieces.length > 0 && rr.pieces.every(p => qtyWords(p).startsWith('（2 個一樣的物件 × 陣列 2 份 × 每份 ') && prod(p) === p.qty),
+     rr.pieces.map(p => `×${p.qty}${qtyWords(p)}`).join('｜'));
+  const plain = unfoldMany([new io.ModelObject({ name: '隔板', kind: io.KIND.SHEET, thickness: 0.5, src: bend })]);
+  ok('★★ 　 一般物件 ⇒ ⛔ 多寫（卡片照舊）', plain.pieces.length > 0 && plain.pieces.every(p => qtyWords(p) === ''));
+  eq('★★ 　 除不盡（連成一塊／鏡射沒併）⇒ 只講是陣列、⛔ 硬算每份幾片', qtyWords({ qtyFrom: { copies: 3 } }), '（物件是陣列 3 份）');
+  eq('★ 　 一樣的物件 ＋ 除不盡的陣列', qtyWords({ qtyFrom: { copies: 3, objs: 2, each: 1 } }), '（2 個一樣的物件 × 每個 1 片；物件是陣列 3 份）');
+  eq('★ 　 只有一樣的物件', qtyWords({ qtyFrom: { objs: 2, each: 3 } }), '（2 個一樣的物件 × 每個 3 片）');
+
+  /** ⑥-2：「切下去幾段」跟切下去同一支、同一組參數（字串比對：三處一模一樣）*/
+  const { readFileSync } = await import('node:fs');
+  const mainSrc = readFileSync(join(ROOT, 'js', 'main.js'), 'utf8');
+  const callStr = 'sampleCurveInfo(curve.anchors, curveStepCm(), curve.closed)';
+  eq('★★ ⑥-2 圓的「切下去幾段」跟兩條切下去的路用同一句算（3 處）', mainSrc.split(callStr).length - 1, 3);
+  const ed = await import('../js/core/edit.js');
+  const ring = ed.circleAnchors({ toWorld: (s, t) => new THREE.Vector3(s, 0, t) }, 0, 0, 1);
+  const info = ed.sampleCurveInfo(ring, 1, true);
+  ok('★ 　 半徑 1 的圓 ⇒ 段數 > 8、每段離圓 ≤ 0.2 mm（跟 ①-8 一樣）', info.curveSegs > 8 && info.maxDev <= 0.02 + 1e-9, `${info.curveSegs} 段、${info.maxDev}`);
+
+  /** ⑥-3：拖箭頭的小標籤 */
+  const { xfReadout, fmtDragReadout } = await import('../js/core/measure.js');
+  const st = (axis, mode, space = 'world', quat = new THREE.Quaternion()) => ({ axis, mode, space,
+    pos: new THREE.Vector3(1, 2, 3), quat, scale: new THREE.Vector3(2, 2, 2) });
+  const now = (pos, quat, scale) => ({ position: pos || new THREE.Vector3(1, 2, 3), quaternion: quat || new THREE.Quaternion(), scale: scale || new THREE.Vector3(2, 2, 2) });
+  const qy = deg => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(deg));
+  eq('★★★ ⑥-3 縮放 X 從 2 倍拉到 1 倍 ⇒「X × 0.50」', fmtDragReadout(xfReadout(st('X', 'scale'), now(null, null, new THREE.Vector3(1, 2, 2)))), 'X × 0.50');
+  eq('★★★ 　 繞 Y 轉 22.5° ⇒「Y 22.5°」', fmtDragReadout(xfReadout(st('Y', 'rotate'), now(null, qy(22.5)))), 'Y 22.5°');
+  eq('★★ 　 反方向轉 ⇒ 負的', fmtDragReadout(xfReadout(st('Y', 'rotate'), now(null, qy(-30)))), 'Y -30.0°');
+  eq('★★ 　 已經轉過 40° 的物件再轉 15° ⇒ 只算這一次的 15°', fmtDragReadout(xfReadout(st('Y', 'rotate', 'world', qy(40)), now(null, qy(55)))), 'Y 15.0°');
+  eq('★★ 　 移動 Z 3.2 cm', fmtDragReadout(xfReadout(st('Z', 'translate'), now(new THREE.Vector3(1, 2, 6.2)))), 'Z 3.20 cm');
+  eq('★★ 　 方向「物件」：轉了 90° 的物件沿自己的 X 走 ⇒ 照自己的軸算', fmtDragReadout(xfReadout(st('X', 'translate', 'local', qy(90)), now(new THREE.Vector3(1, 2, -2)))), 'X 5.00 cm');
+  eq('★★ 　 整體縮放 ⇒「整體 × 1.50」', fmtDragReadout(xfReadout(st('XYZ', 'scale'), now(null, null, new THREE.Vector3(3, 3, 3)))), '整體 × 1.50');
+  eq('★★ 　 拉平面把手 ⇒ ⛔ 標（沒有一個數字）', xfReadout(st('XY', 'translate'), now(new THREE.Vector3(5, 5, 3))), null);
+  eq('★ 　 null ⇒ 空字串（標籤收起來）', fmtDragReadout(null), '');
+
+  /** ⑥-4：擠完打長度靠「最上面那一步還是擠出」—— History.topTag() */
+  const { History } = await import('../js/core/history.js');
+  let state = 'a';
+  const h = new History({ get: () => state, set: v => { state = v; } });
+  h.reset();
+  const tag = { extrude: true };
+  state = 'b'; h.commit('擠出面 1 cm', { tag });
+  eq('★★★ ⑥-4 剛擠完 ⇒ topTag 是那一次', h.topTag(), tag);
+  state = 'c'; h.commit('擠出面 3 cm', { tag, replace: true });
+  h.undo();
+  eq('★★★ 　 打長度 ⇒ 取代那一步（復原一次就回到擠之前）', state, 'a');
+  eq('★★ 　 退過 ⇒ topTag 沒了（⛔ 再取代）', h.topTag(), null);
+  h.redo();
+  state = 'd'; h.commit('拉面');
+  ok('★★ 　 中間做過別的 ⇒ 對不上', h.topTag() !== tag);
+
+  /** ⑥-7：齒輪套軸一句 */
+  const gn = PRIM_SPECS.gear.noteOf({ ...PRIM_DEFAULTS.gear, hole: 0.6 });
+  ok('★★ ⑥-7 有中心孔 ⇒ 講「軸要比孔小一點」', gn.some(s => s.startsWith('套軸：中心孔直徑 0.6 cm') && s.includes('軸要比孔小一點')), gn.join('｜'));
+  ok('★★ 　 ⛔ 寫建議的間隙數字（kang 還沒給自己機器的）', !gn.some(s => s.startsWith('套軸') && /\d\s*mm/.test(s)));
+  ok('★ 　 沒有孔 ⇒ ⛔ 講', !PRIM_SPECS.gear.noteOf({ ...PRIM_DEFAULTS.gear, hole: 0 }).some(s => s.startsWith('套軸')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

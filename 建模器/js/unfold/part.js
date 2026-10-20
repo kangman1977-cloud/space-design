@@ -182,6 +182,16 @@ export function unfoldObject(obj, opt = {}) {
   for (const p of r.pieces) { p.owner = obj.name; p.rule = rule; }
 
   /**
+   * 片數從哪來（2026-10-21，綜合評估 ⑥-1，kang「同意你的建議」）：陣列物件的片寫「陣列 N 份 × 每份 k 片」。
+   * ⚠ 片數照舊只看攤的那份網格（上面那段）；這裡只是**把來源寫出來**，片數錯的時候一眼看得出來。
+   * 除不盡（實體陣列連成一塊、鏡射的片沒併成一種）⇒ 只寫「陣列 N 份」，⛔ 硬算每份幾片。
+   */
+  if (obj.isArray && obj.copies > 1) {
+    const n = obj.copies;
+    for (const p of r.pieces) p.qtyFrom = p.qty % n === 0 ? { copies: n, per: p.qty / n } : { copies: n };
+  }
+
+  /**
    * 🔴 **實體⛔ 寫板厚**（2026-10-19，實驗 T7、T8、補測：`實驗-綜合評估.md` ①-9，kang「先做 ①-9（照這個建議）」）。
    * ⚠ 實體的面板上看不到板厚，物件身上卻帶著預設的 0.2 —— 以前照樣寫進卡片、CSV、DXF 標題：
    * T7 托架寫 0.2、其他板 0.5，同一張料單兩種厚度。⭐ 實體（`kind` ≠ 板件）的片標 `solidBody` ⇒ 板厚寫「—」；
@@ -443,7 +453,11 @@ export function unfoldMany(objs, opt = {}) {
     if (!r.ok) { skipped.push(`${namesOf(g.objs)}：${r.reason}`); continue; }
     for (const p of r.pieces) {
       p.name = objs.length > 1 ? `${namesOf(g.objs)}－${p.name}` : `${o.name}`;
-      if (n > 1) { p.qty *= n; p.sameAs = g.objs.map(q => q.name); }
+      if (n > 1) {
+        /** ⑥-1：一模一樣的複本合成一種 ⇒ 來源多寫「N 個一樣的物件 × 每個 k 片」（k ＝ 乘之前的片數）*/
+        p.qtyFrom = { ...(p.qtyFrom || {}), objs: n, each: p.qty };
+        p.qty *= n; p.sameAs = g.objs.map(q => q.name);
+      }
       pieces.push(p);
     }
     for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);

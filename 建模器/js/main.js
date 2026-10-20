@@ -43,7 +43,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
          extrudeBoundaryEdges, regionOf,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
-import { fmtCm } from './core/measure.js';
+import { fmtCm, fmtDragReadout } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges,
          boundaryRingFrom } from './core/selectops.js';
@@ -256,6 +256,7 @@ const sel = new Selection(view, {
     view.sync(doc);
     if (committing) commit('變換物件');
     else updateBar();
+    updateDragReadout();
   },
   /**
    * 🔴 **拖曳中「現在正吸著哪幾條參考線」→ 把它們亮起來**（2026-09-01）。
@@ -1297,7 +1298,7 @@ $('knifeBoundary').onclick = () => {
 };
 $('knifeCurve').onclick = () => toggleKnifeCurve();
 $('curveUndo').onclick = () => curveUndo();
-$('curveStep').oninput = () => drawCurve();
+$('curveStep').oninput = () => { drawCurve(); curveSegNote(); };
 /** 3a 選點／3b 圓心共用同兩格：有圓就改圓心，⛔ 改錨點 */
 $('curveDimL').oninput = () => (curve && curve.circle ? curveTypeCircle : curveTypeDim)('L', $('curveDimL').value);
 $('curveDimB').oninput = () => (curve && curve.circle ? curveTypeCircle : curveTypeDim)('B', $('curveDimB').value);
@@ -1904,6 +1905,7 @@ function jumpHistory(redo) {
     toast(redo ? '沒有可以重做的了（重做只接得回剛剛復原掉的那幾步）' : histFloorText());
   }
   updateBar();
+  updateEditNum();            // ⑥-4：復原掉擠出之後，數值欄⛔ 再寫「擠出」
 }
 
 /** ⑤-11：退到底時講什麼 —— 丟過最舊的幾步就講只記得幾步 */
@@ -2658,6 +2660,20 @@ function curveSegWords(info) {
 function curveStepCm() {
   const v = Number($('curveStep').value);
   return v > 0 ? v : CURVE_STEP_CM;
+}
+
+/**
+ * ⑥-2（2026-10-21，實驗 T3：`實驗-綜合評估.md`「⑥ 的分批」，kang「同意你的建議」）：**圓／半圓放好就講切下去是幾段** ——
+ * 以前切完的提示才講（`curveSegWords()`）。⭐ 跟切下去同一支 `sampleCurveInfo()`、同一個「每隔」⇒ 這裡講的就是切出來的段數。
+ */
+function curveSegNote() {
+  const el = $('curveSegNote');
+  const on = !!(sel.knifeMode && sel.knifeCurve && curve && curve.circle && curve.anchors.length >= 2);
+  el.hidden = !on;
+  if (!on) return;
+  const info = sampleCurveInfo(curve.anchors, curveStepCm(), curve.closed);
+  const mm = Math.round(info.maxDev * 10 * 100) / 100;
+  el.textContent = `切下去：${info.curveSegs} 段直線（每段離圓最多 ${mm} mm）`;
 }
 
 /** 刀具裡切換「直線／曲線」（kang 2026-10-13 選的進入方式：⛔ 左側直條不加按鈕）*/
@@ -3758,12 +3774,39 @@ function setEditSpace(want) {
 function commitEditNumber() {
   const v = parseFloat($('editNum').value);
   if (!Number.isFinite(v)) { updateEditNum(); return; }
+  if (extrudeTypeInfo()) { retypeExtrude(v); return; }   // ⑥-4：擠完直接打長度
   if (!sel.applyEditNumber(v)) {
     toast('先拉一下箭頭，程式才知道你要改哪一根軸', true);
     updateEditNum();
     return;
   }
   updateEditNum();
+}
+
+/**
+ * ⑥-3（2026-10-21，實驗 T8：`實驗-綜合評估.md`「⑥ 的分批」，kang「同意你的建議」）：
+ * **拖箭頭時滑鼠旁邊標「× 0.50」「22.5°」「3.20 cm」**，放手就收 —— 以前縮放、旋轉只能看外框猜（物件模式連數值欄都沒有）。
+ * 數字是 `sel.dragReadout()`（編輯模式跟數值欄同一支），字是 `fmtDragReadout()`；位置跟著最後一次的滑鼠／手指。
+ */
+let lastPointer = null;
+window.addEventListener('pointermove', e => { lastPointer = { x: e.clientX, y: e.clientY }; }, { passive: true, capture: true });
+window.addEventListener('pointerdown', e => { lastPointer = { x: e.clientX, y: e.clientY }; }, { passive: true, capture: true });
+/** 放手（或拖到一半按 Esc 取消、那一下⛔ 記一步）也要收起來 ⇒ 放手後下一輪再看一次 */
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, () => setTimeout(updateDragReadout, 0), { passive: true });
+function updateDragReadout() {
+  const el = $('dragReadout');
+  const text = fmtDragReadout(sel.dragReadout());
+  if (!text || !lastPointer) { el.hidden = true; return; }
+  const r = $('stage').getBoundingClientRect();
+  el.textContent = text;
+  el.hidden = false;
+  /** 右下 16px；靠右邊或下面時翻到另一邊，⛔ 跑出畫面 */
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let x = lastPointer.x - r.left + 16, y = lastPointer.y - r.top + 16;
+  if (x + w > r.width - 4) x = lastPointer.x - r.left - 16 - w;
+  if (y + h > r.height - 4) y = lastPointer.y - r.top - 16 - h;
+  el.style.left = `${Math.max(4, x)}px`;
+  el.style.top = `${Math.max(4, y)}px`;
 }
 
 /**
@@ -3787,6 +3830,15 @@ function updateEditNum() {
   const NAME = { translate: '移動', rotate: '旋轉', scale: '縮放' };
 
   const info = sel.editMode ? sel.editDragValue() : null;
+  /** ⑥-4：剛擠完、還沒拖 ⇒ 數值欄是擠出的長度（打數字重擠，`retypeExtrude()`）*/
+  const ext = info ? null : extrudeTypeInfo();
+  if (ext) {
+    box.disabled = false;
+    if (document.activeElement !== box) box.value = String(ext.ex.len);
+    unit.textContent = 'cm';
+    if (lbl) lbl.textContent = ext.ex.dir < 0 ? '往內擠出' : '擠出';
+    return;
+  }
   if (!info) {
     box.disabled = true;
     box.value = '';
@@ -3973,6 +4025,7 @@ function editDrag(committing, el, opt) {
    * 而這支拖曳時每一幀都會跑 —— 那是坑第 22 條（熱路徑上的 O(全部)）的
    * DOM 版本。代價是拖曳中面板的座標是舊的，放手就會更新。
    */
+  updateDragReadout();
   if (!committing) { view.sync(doc); updateBar(); updateEditNum(); return; }
 
   const r = refreshAfterEdit(el.obj.mesh());
@@ -4067,14 +4120,18 @@ function extrudeSelected(dir = 1) {
   const step = sel.snapStep > 0 ? sel.snapStep : 1;
   const obj = el.obj;
 
-  const r = extrudeFace(obj.mesh(), el.face, dir * step);
+  const src = obj.mesh(), face = el.face;
+  const r = extrudeFace(src, face, dir * step);
   if (!r.ok) { toast(r.reason, true); return; }
 
   obj.setMesh(r.mesh);
   refreshAfterEdit(r.mesh);
   view.markGeomDirty();
   view.markSeamsDirty();      // 折線變了（多了四圈側牆的邊）
-  commit(dir < 0 ? `往內擠出 ${step} cm` : `擠出面 ${step} cm`);
+  const tag = { extrude: true };
+  commit(dir < 0 ? `往內擠出 ${step} cm` : `擠出面 ${step} cm`, { tag });
+  /** ⑥-4：記住「從哪一份網格、哪個面、往哪邊擠了多少」⇒ 接著在數值欄打長度就從同一份重擠（`retypeExtrude()`）*/
+  extrudeLast = { objId: obj.id, src, face, dir, len: step, tag, out: r.mesh };
 
   /**
    * ⚠ 一定要在 commit() 之後才重選。commit() 會走 revalidate()，
@@ -4089,7 +4146,45 @@ function extrudeSelected(dir = 1) {
 
   const what = dir < 0 ? `已往內擠出 ${step} cm（新增 ${r.walls} 面牆）`
                        : `已擠出 ${step} cm（新增 ${r.walls} 面側牆）`;
-  toast(got ? `${what}　用箭頭拉到想要的${dir < 0 ? '深度' : '長度'}` : what);
+  toast(got ? `${what}　在上方「${dir < 0 ? '往內擠出' : '擠出'}」欄打${dir < 0 ? '深度' : '長度'}，或用箭頭拉` : what);
+  updateEditNum();
+}
+
+/**
+ * 🔴 **擠出完直接打長度**（2026-10-21，實驗 T8：`實驗-綜合評估.md`「⑥ 的分批」⑥-4，kang「同意你的建議」）。
+ * ⚠ 上面「先長一段、再用拉面調整」（kang 2026-08-23 方案 C）⛔ 變：擠出照舊先長一個格距；
+ * 只是擠完數值欄直接寫「擠出 1 cm」，打數字 ＝ 從擠之前那一份網格**重擠成那個長度**、**取代剛才那一步**（復原一次就回到擠之前）。
+ * ⭐ 以前要先去改吸附格距才擠得出想要的長度（T8 每次擠出前都要切模式改格距）。
+ * 什麼時候算數：最上面那一步還是這一次擠出（中間沒做別的、沒退過）、選的還是那一個蓋子、沒有在拖 ——
+ * 拖過蓋子之後數值欄就照舊是拖的量（拖那一步記成新的一步，tag 對不上）。
+ */
+let extrudeLast = null;
+function extrudeTypeInfo() {
+  const ex = extrudeLast;
+  if (!ex || !sel.editMode || hist.topTag() !== ex.tag) return null;
+  const obj = doc.byId(ex.objId), es = sel.editSel;
+  if (!obj || obj.mesh() !== ex.out || sel.editCount !== 1 || !es || es.kind !== 'face' || es.obj !== obj) return null;
+  if (sel.editDragValue()) return null;
+  return { ex, obj };
+}
+
+function retypeExtrude(v) {
+  const { ex, obj } = extrudeTypeInfo();
+  const name = ex.dir < 0 ? '往內擠出' : '擠出';
+  if (!(v > 0)) { toast(`${name}的${ex.dir < 0 ? '深度' : '長度'}要大於 0（要往另一邊請按另一顆）`, true); updateEditNum(); return; }
+  const r = extrudeFace(ex.src, ex.face, ex.dir * v);
+  if (!r.ok) { toast(r.reason, true); updateEditNum(); return; }
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(ex.dir < 0 ? `往內擠出 ${v} cm` : `擠出面 ${v} cm`, { tag: ex.tag, replace: true });
+  ex.out = r.mesh;
+  ex.len = v;
+  sel.selectFace(obj, r.capFace);
+  panel.refresh();
+  toast(`已改成${name} ${v} cm（取代剛才那一次；復原一次就回到擠之前）`);
+  updateEditNum();
 }
 
 /**
@@ -7682,6 +7777,7 @@ function updateBar() {
   $('curveNotch').classList.toggle('on', curveNotchArm);
   for (const id of ['curveDimLLbl', 'curveDimL', 'curveDimBLbl', 'curveDimB']) $(id).hidden = !dimInfo;
   for (const id of ['curveRLbl', 'curveR', 'curveDLbl', 'curveD']) $(id).hidden = !circF;
+  curveSegNote();
   /** 3d 折線：起點放好、還沒畫好 ⇒ 長度、角度、加一段；從邊上開始的給「延伸到邊」、從中間開始的給「接回起點」*/
   $('curvePoly').hidden = !curveOn;
   $('curvePoly').classList.toggle('on', curvePolyOn);

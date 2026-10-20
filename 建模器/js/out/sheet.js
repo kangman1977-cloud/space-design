@@ -785,6 +785,23 @@ export function sameFolds(piece) {
   return { dir: a0 > 0 ? '↑ 上折' : '↓ 下折', angle: Math.abs(a0), n: bs.length };
 }
 
+/**
+ * 片數從哪來（2026-10-21，綜合評估 ⑥-1）：「×8 片（2 個一樣的物件 × 陣列 2 份 × 每份 2 片）」。
+ * 資料是 `unfold/part.js` 掛的 `qtyFrom`；沒有來源可講（一般物件）⇒ 空字串。
+ * ⚠ 寫成乘式的每一項乘起來一定等於片數；乘不出來的（陣列除不盡）只另外講「是陣列 N 份」。
+ */
+export function qtyWords(piece) {
+  const f = piece.qtyFrom;
+  if (!f) return '';
+  const mult = [];
+  if (f.objs) mult.push(`${f.objs} 個一樣的物件`);
+  if (f.copies && f.per !== undefined) mult.push(`陣列 ${f.copies} 份`, `每份 ${f.per} 片`);
+  else if (f.objs) mult.push(`每個 ${f.each} 片`);
+  let s = mult.length >= 2 ? mult.join(' × ') : '';
+  if (f.copies && f.per === undefined) s += `${s ? '；' : ''}物件是陣列 ${f.copies} 份`;
+  return s ? `（${s}）` : '';
+}
+
 export function titleLines(piece, opt = {}) {
   /** ⚠ 這一片自己的規則優先 —— 多個物件一起展開時板厚可能不一樣（2026-10-08）*/
   const rule = piece.rule || opt.rule || {};
@@ -792,7 +809,7 @@ export function titleLines(piece, opt = {}) {
   const out = [];
 
   /** ⚠ 片號放最前面 —— 跟 DXF 標題、CSV 第一欄是同一個號碼（2026-10-08 E9）*/
-  out.push(`${piece.no ? piece.no + '　' : ''}${piece.name}　×${piece.qty} 片`);
+  out.push(`${piece.no ? piece.no + '　' : ''}${piece.name}　×${piece.qty} 片${qtyWords(piece)}`);
   const spec = [];
   /**
    * ⚠ 〔2026-08-23 拿掉 `K ${rule.k}`〕

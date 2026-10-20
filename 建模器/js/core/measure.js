@@ -64,6 +64,54 @@ export function fmtCm(v) {
 }
 
 /**
+ * 物件拖箭頭「到目前為止做了多少」（2026-10-21，⑥-3；`view/select.js` `dragReadout()` 的物件那一半，拆出來好測）。
+ * `s` ＝ 按下去那一刻 `{axis, mode, space, pos, quat, scale}`；`now` ＝ 現在的 `{position, quaternion, scale}`。
+ * 移動 ⇒ 沿那根軸走了幾 cm；縮放 ⇒ 那根軸（整體縮放看 X）變成幾倍；旋轉 ⇒ 繞那根軸轉了幾度（正負照右手定則）。
+ * ⚠ 拉平面把手、自由移動 ⇒ `null`（沒有「一個數字」）；繞視線轉、自由轉 ⇒ 只給角度大小、⛔ 給軸。
+ * ⚠ 方向「物件」（`space: 'local'`）⇒ 軸是按下去那一刻物件自己的軸。
+ */
+export function xfReadout(s, now) {
+  if (!s || !now) return null;
+  const one = ['X', 'Y', 'Z'].includes(s.axis);
+  const dirOf = ax => {
+    const d = new THREE.Vector3(ax === 'X' ? 1 : 0, ax === 'Y' ? 1 : 0, ax === 'Z' ? 1 : 0);
+    return s.space === 'local' ? d.applyQuaternion(s.quat) : d;
+  };
+  if (s.mode === 'translate') {
+    if (!one) return null;
+    return { axis: s.axis, mode: s.mode, unit: 'cm',
+             value: new THREE.Vector3().subVectors(now.position, s.pos).dot(dirOf(s.axis)) };
+  }
+  if (s.mode === 'scale') {
+    const k = s.axis === 'XYZ' ? 'x' : one ? s.axis.toLowerCase() : null;
+    if (!k || !(Math.abs(s.scale[k]) > 1e-12)) return null;
+    return { axis: s.axis, mode: s.mode, unit: '倍', value: now.scale[k] / s.scale[k] };
+  }
+  if (s.mode !== 'rotate') return null;
+  // 世界裡的變化量 dq ＝ 現在 × 起點的逆；角度 ＝ 2·atan2(|v|, w)，正負看 v 跟那根軸同不同向
+  const dq = now.quaternion.clone().multiply(s.quat.clone().invert());
+  if (dq.w < 0) { dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w; }
+  const v = new THREE.Vector3(dq.x, dq.y, dq.z);
+  let deg = THREE.MathUtils.radToDeg(2 * Math.atan2(v.length(), dq.w));
+  if (one && v.dot(dirOf(s.axis)) < 0) deg = -deg;
+  return { axis: one ? s.axis : '', mode: 'rotate', unit: '°', value: deg };
+}
+
+/**
+ * 拖箭頭時滑鼠旁邊那個標籤的字（2026-10-21，⑥-3）：「X × 0.50」「Y 22.5°」「Z 3.20 cm」；整體縮放寫「整體」。
+ * 資料是 `view/select.js` `dragReadout()`；`null` ⇒ 空字串（標籤收起來）。
+ * 位移用 `fmtCm()`（跟量測同樣兩位）；倍數兩位、角度一位（旋轉吸附 15°、縮放吸附 0.05，這樣剛好讀得出來）。
+ */
+export function fmtDragReadout(info) {
+  if (!info || !Number.isFinite(info.value)) return '';
+  const ax = info.axis === 'XYZ' ? '整體 ' : info.axis ? `${info.axis} ` : '';
+  const zero = v => (Object.is(v, -0) || v === 0 ? 0 : v);
+  if (info.unit === '倍') return `${ax}× ${zero(Math.round(info.value * 100) / 100).toFixed(2)}`;
+  if (info.unit === '°') return `${ax}${zero(Math.round(info.value * 10) / 10).toFixed(1)}°`;
+  return `${ax}${fmtCm(zero(info.value))} cm`;
+}
+
+/**
  * 🔴 **從矩陣裡把「縮放」挖出來，並回答「它均不均勻」。**
  *
  * ── 為什麼要分均勻／不均勻 ────────────────────────────

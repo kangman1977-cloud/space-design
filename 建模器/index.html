@@ -359,6 +359,12 @@ table.ana tr:not(:first-child) th.grp { padding-top: 16px; }
 }
 #toast.show { opacity: 1; }
 #toast.bad { background: rgba(178,70,70,.95); }
+/* ⑥-3（2026-10-21）：拖箭頭時跟著滑鼠的數字（left／top 由 main.js 填）；⛔ 擋滑鼠 */
+#dragReadout {
+  position: absolute; padding: 2px 7px; border-radius: 6px;
+  background: rgba(20,24,32,.82); color: #fff; font-size: 13px; white-space: nowrap;
+  pointer-events: none; z-index: 6; font-variant-numeric: tabular-nums;
+}
 
 /* ══ 大視窗（展開圖、3D 匯出共用）══════════════════
    展開圖是要拿去下料的圖，一定要看得夠大才看得清楚尺寸，
@@ -688,7 +694,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl" id="editNumLbl"
             title="拖曳中會即時顯示這一次移動／旋轉／縮放了多少，放開之後可以直接打精確數字按 Enter">數值</span>
       <input id="editNum" type="number" step="0.1" hidden
-             title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）。只在拉單一一根箭頭時給得出數字">
+             title="拖過一次之後，可以直接打一個精確的數字取代拖出來的量（移動＝cm、旋轉＝度、縮放＝倍）；剛擠出完打的是擠出的長度。只在拉單一一根箭頭時給得出數字">
       <span id="editNumUnit" class="unit">—</span>
       <!--
         🔴 **比例編輯的影響半徑**（kang 2026-09-02 拍板要做，三顆裡的第一顆）。
@@ -1121,6 +1127,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="curveR" type="number" step="0.1" min="0" hidden title="圓的半徑（改了直徑會跟著變）">
       <span class="lbl" id="curveDLbl" hidden>直徑</span>
       <input id="curveD" type="number" step="0.1" min="0" hidden title="圓的直徑（改了半徑會跟著變）">
+      <!-- ⑥-2（2026-10-21）：圓／半圓切之前就講會切成幾段（以前切完才講）—— 跟切下去用同一支 sampleCurveInfo() 算 -->
+      <span class="lbl" id="curveSegNote" hidden title="切下去之後，這個圓（半圓）實際是幾段直線、每段離真的圓最多多遠。要更圓就把「每隔」改小"></span>
       <button id="curveUnitCm" hidden title="用公分打數字（會記住）">cm</button>
       <button id="curveUnitMm" hidden title="用公釐打數字（會記住）">mm</button>
       <button id="knifeSnapMid" hidden title="吸中點：切點自動落在邊的正中間。桌機也可以按著 Shift 得到同樣的效果（平板沒有 Shift，所以這顆是平板唯一的路）。⚠ 開著的時候不會吸到角—— 你既然按了這顆，要的就是中點">吸中點</button>
@@ -1390,6 +1398,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <canvas id="cv"></canvas>
       <div id="marqueeBox" hidden></div>
       <div id="toast"></div>
+      <!-- ⑥-3（2026-10-21）：拖箭頭時滑鼠旁邊的小標籤「X × 0.50」「Y 22.5°」「Z 3.20 cm」；放手就收（main.js updateDragReadout()） -->
+      <div id="dragReadout" hidden></div>
       <div id="hud">
         <div id="status">
           <!-- ⛔ 這裡不要加 title 說明：#hud 是 pointer-events:none（見上面的 CSS），
