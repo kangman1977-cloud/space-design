@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣板：分片地圖（選一群面切成一片）</title>
+<!--
+  🔴 這是【確認操作用的樣板】，⛔ 不是上線的程式（`分片成群-設計方向.md` 第 5 節第二件，kang 2026-10-21「同意你的安排」）。
+  ⭐ 展開、重疊檢查、片的切法都是借建模器自己的程式（`建模器/js/`），所以「會不會疊」是真的算出來的，⛔ 是畫的示意。
+  ⭐ 模型是 T10 考試的獅子頭（`輸出/實驗T10/獅子頭.json`，嵌在下面；那個資料夾不上傳）。
+  ⚠ 要從網址開（線上版或本機伺服器），直接點開檔案載不到建模器的程式。
+-->
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #1b1e23; color: #e8eaed; font-family: "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; font-size: 13px; padding: 12px; }
+h1 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: #a9b0bc; font-size: 12.5px; margin: 0 0 10px; line-height: 1.7; max-width: 1180px; }
+.sub b { color: #e8eaed; }
+.wrap { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+#view { width: 640px; max-width: 100%; height: 520px; border: 1px solid #3a3f48; border-radius: 8px; background: #111; position: relative; }
+#view canvas { display: block; }
+#tip { position: absolute; left: 8px; top: 8px; right: 8px; background: rgba(47,111,208,.92); border-radius: 10px; padding: 5px 10px; font-size: 12.5px; pointer-events: none; }
+.panel { width: 360px; max-width: 100%; background: #20232a; border: 1px solid #3a3f48; border-radius: 8px; padding: 10px 12px; }
+.panel h2 { font-size: 13.5px; margin: 10px 0 6px; color: #cfd5de; }
+.panel h2:first-child { margin-top: 0; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+button { background: #2c3038; color: #e8eaed; border: 1px solid #454b55; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+button.on { background: #2f6fd0; border-color: #2f6fd0; }
+button:disabled { opacity: .4; cursor: default; }
+input[type=number] { width: 58px; background: #15171b; color: #e8eaed; border: 1px solid #454b55; border-radius: 5px; padding: 3px 5px; font: inherit; }
+.note { background: #262a31; border-radius: 6px; padding: 6px 8px; line-height: 1.6; font-size: 12.5px; }
+.ok { color: #7bd88f; } .bad { color: #ff8a7a; } .dim { color: #8b93a1; }
+#list { max-height: 210px; overflow: auto; }
+.pc { display: flex; gap: 6px; align-items: center; padding: 2px 0; font-size: 12.5px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid #0006; }
+#pv { display: block; width: 100%; background: #fff; border-radius: 4px; margin-top: 4px; }
+.q { background: #20232a; border: 1px solid #3a3f48; border-radius: 8px; padding: 8px 12px; line-height: 1.8; max-width: 1012px; margin-top: 12px; font-size: 12.5px; }
+.q h2 { font-size: 14px; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<h1>樣板：分片地圖 ＋ 選一群面切成一片</h1>
+<p class="sub">
+  這是 T10 考試的獅子頭。<b>每一片一個顏色</b>（灰色 ＝ 還沒分的）。右邊挑「選法」，在 3D 上點面，選到的面變<b>黃色</b>，右邊<b>馬上講這一群攤開會不會疊</b>（會疊的面在 3D 與下面的預覽都是<b>紅色</b>）；滿意了按「<b>切成一片</b>」。<br>
+  拖曳轉視角、滾輪拉近。展開與重疊檢查都是<b>建模器自己的程式</b>算的（紙模打樣）。
+</p>
+<div class="wrap">
+  <div id="view"><div id="tip">載入中…</div></div>
+  <div class="panel">
+    <h2>選法</h2>
+    <div class="row">
+      <button data-m="face" class="on" title="點一塊面：沒選的加進來、選了的拿掉">點面（加入／移除）</button>
+      <button data-m="piece" title="點一下：選起它所在的那一整片（要改那一片時用）">選起整片</button>
+      <button data-m="grow" title="點一塊面：相連、朝向差不多的面一起加進來（轉折大的地方就停）">往外長</button>
+    </div>
+    <div class="row dim">往外長：朝向差 <input id="ang" type="number" min="1" max="179" step="5" value="30"> 度以內一起加進來</div>
+
+    <h2>目前選的</h2>
+    <div id="cur" class="note">還沒選</div>
+    <div class="row">
+      <button id="cut" disabled>切成一片</button>
+      <button id="clr" disabled>取消選取</button>
+      <button id="del" disabled title="這一片拆掉，面回到「還沒分」">拆掉這一片</button>
+    </div>
+
+    <h2>碎面</h2>
+    <div class="row dim">面積小於 <input id="thr" type="number" min="0" step="0.5" value="1"> mm² 的面 ⇒ 跟著旁邊那一片走</div>
+    <div id="tiny" class="dim" style="font-size:12px"></div>
+
+    <h2>分片地圖 <span id="sum" class="dim" style="font-weight:400"></span></h2>
+    <div id="list"></div>
+    <div class="row" style="margin-top:6px"><button id="reset">全部重來</button></div>
+    <canvas id="pv"></canvas>
+  </div>
+</div>
+<div class="q">
+  <h2>請你試試看、告訴我</h2>
+  ① 「往外長」點獅子頭的臉、鼻子、鬃毛，<b>一次圈出來的範圍對不對</b>？角度 30° 夠不夠、要不要改預設？<br>
+  ② 選的當下就講「會不會疊」，<b>夠不夠讓你決定要不要切成一片</b>？<br>
+  ③ 分片地圖（每一片一個顏色 ＋ 右邊清單）<b>看得出整顆分成幾片、哪一片有問題</b>嗎？<br>
+  ④ 碎面跟著旁邊走（預設 1 mm²），你覺得門檻要放在畫面上讓人調，還是收在設定裡？<br>
+  ⚠ 這個樣板<b>沒有復原</b>、也不存檔；正式版每一步都會記復原、縫存在模型裡。
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./建模器/lib/three/three.module.min.js", "three/addons/": "./建模器/lib/three/addons/" } }
+</script>
+<script type="module">
+const tip = document.getElementById('tip');
+try {
+const THREE = await import('three');
+const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+const io = await import('./建模器/js/core/io.js');
+const { planarRegions } = await import('./建模器/js/core/region.js');
+const seam = await import('./建模器/js/unfold/seam.js');
+const { unfoldObject } = await import('./建模器/js/unfold/part.js');
+const { previewProgram } = await import('./建模器/js/out/nest.js');
+const { renderCanvas } = await import('./建模器/js/out/sheet.js');
+
+const LION = {"type":"model-doc","v":4,"unit":"cm","head":{"name":"T10 獅子頭","date":"2026-10-21","note":""},"objects":[{"id":17,"name":"鋼筆 1 ∩ 鋼筆 2 ∩ 鋼筆 3 ∪ …（4 個） − …（2 個） ∪ …（5 個）","kind":"solid","src":{"type":"mesh"},"pos":[-15,17.5,15.5],"rot":[1.570796,0,-1.570796],"scale":[1,1,1],"color":7317724,"lockScale":false,"thickness":0.2,"mesh":{"points":[-12,7,-6.5,-12,7.304347991943359,-6.5,-11.5,7.217391490936279,-7.199999809265137,-10.249999046325684,7,-7.550000190734863,-10.249999046325684,7,-6.5,-13.5,7.5652174949646,-4.5,-4.5,6,-14.321739196777344,-0.5,3,-13.5,-3.8224997520446777,5.491874694824219,-15.161250114440918,-2.5,4.5,-15,-2.5,5.25,-15,-1.4090911149978638,5.25,-15,-1.9285715818405151,6.5357136726379395,-15.857142448425293,-7.099999904632568,6.452173709869385,-11.100000381469727,-2.5,7.94999885559082,-16.799999237060547,-1.2192312479019165,8.131730079650879,-16.921154022216797,-1.2192312479019165,9.5,-16.921154022216797,-10.45348834991455,7.035388946533203,6.355813980102539,-9.5,6.869565010070801,7.5,-15.5,7.91304349899292,-1.5,-14.293103218078613,7.703148365020752,1.748275876045227,-14.5,7.73913049697876,1.5,-13.800000190734863,9.5,1.9500000476837158,-13.428570747375488,9.128570556640625,1.9500000476837158,-13,8.731995582580566,2.049999952316284,-13.428570747375488,9.871429443359375,1.9500000476837158,-13,10.268004417419434,2.049999952316284,-12.28534984588623,9.5,2.21675181388855,-13.000100135803223,9.5,4.449999809265137,-13,9.499899864196777,4.449999809265137,-12.999899864196777,9.5,4.449999809265137,-13,9.500100135803223,4.449999809265137,-11.699999809265137,10,6.599999904632568,-11,9.300000190734863,6.599999904632568,-11.000100135803223,10,4.599999904632568,-11,9.999899864196777,4.599999904632568,-11,10.000100135803223,4.599999904632568,-10.999899864196777,10,4.599999904632568,-11,10.699999809265137,6.599999904632568,-10.45348834991455,9.931964874267578,6.355813980102539,-10.45348834991455,10.068035125732422,6.355813980102539,-10.390588760375977,10,6.341137409210205,-10.336197853088379,10,6.4965620040893555,-10.300000190734863,10,6.599999904632568,-6.581838607788086,6.362059116363525,3.5475709438323975,-4.5,6,4.0333333015441895,-4.5,6,4.9666666984558105,-3.1666667461395264,5,4.344444274902344,-3.1666667461395264,5,4.655555725097656,-2.5,5,4.5,-6.5,6.34782600402832,10.5,-4.5,6,9.25,-0.9093023538589478,3.306976795196533,9.767441749572754,-2.5,4.5,8,-13.5,22.434782028198242,-4.5,-12,22.69565200805664,-6.5,-12,23,-6.5,-11.5,22.782608032226562,-7.199999809265137,-10.249998092651367,23,-7.55000114440918,-10.249998092651367,23,-6.5,-2.5,22.05000114440918,-16.799999237060547,-1.2192312479019165,20.5,-16.921154022216797,-1.2192312479019165,21.868270874023438,-16.921154022216797,-4.5,24,-14.321739196777344,-3.8224997520446777,24.50812530517578,-15.161250114440918,-2.5,24.75,-15,-2.5,25.5,-15,-1.9285715818405151,23.46428680419922,-15.857142448425293,-1.4090911149978638,24.75,-15,-0.5,27,-13.5,-7.099999904632568,23.547826766967773,-11.100000381469727,-13.800000190734863,20.5,1.9500000476837158,-15.5,22.086956024169922,-1.5,-14.5,22.2608699798584,1.5,-14.293103218078613,22.296852111816406,1.748275876045227,-13.428570747375488,20.128570556640625,1.9500000476837158,-13.09399127960205,19.818971633911133,2.0280685424804688,-13.428570747375488,20.510356903076172,1.9500000476837158,-13,19.731996536254883,2.049999952316284,-12.84920883178711,19.894044876098633,2.0851845741271973,-12.789051055908203,19.958694458007812,2.0992212295532227,-12.737040519714355,20.01458740234375,2.1113572120666504,-12.28534984588623,20.5,2.21675181388855,-13.428570747375488,20.858171463012695,1.9500000476837158,-13.428570747375488,20.871429443359375,1.9500000476837158,-13.395729064941406,20.901819229125977,1.9576631784439087,-13.362760543823242,20.93232536315918,1.9653558731079102,-13,21.268003463745117,2.049999952316284,-13.000100135803223,20.5,4.449999809265137,-13,20.499900817871094,4.449999809265137,-12.999899864196777,20.5,4.449999809265137,-13,20.500099182128906,4.449999809265137,-11.699999809265137,20,6.599999904632568,-11.000100135803223,20,4.599999904632568,-11,19.999900817871094,4.599999904632568,-11,20.000099182128906,4.599999904632568,-10.999899864196777,20,4.599999904632568,-11,19.299999237060547,6.599999904632568,-10.45348834991455,19.931964874267578,6.355813980102539,-10.45348834991455,20.068035125732422,6.355813980102539,-10.390588760375977,20,6.341137409210205,-10.39060115814209,19.99998664855957,6.341140270233154,-10.336197853088379,20,6.4965620040893555,-10.336207389831543,19.9999942779541,6.496551513671875,-10.300000190734863,20,6.599999904632568,-11,20.700000762939453,6.599999904632568,-10.45348834991455,22.964611053466797,6.355813980102539,-9.5,23.130434036254883,7.5,-4.5,24,4.0333333015441895,-4.5,24,4.9666666984558105,-3.1666667461395264,25,4.344444274902344,-3.1666667461395264,25,4.655555725097656,-2.5,25,4.5,-6.5,23.65217399597168,10.5,-4.5,24,9.25,-2.5,25.5,8,-0.9093023538589478,26.693023681640625,9.767441749572754,1.5,4.5,-21,1.5,4.5,-15,1.5,5.25,-15,3.5,4.872293178317293e-15,-6.5,1.5,8.517566680908203,-17.178377151489258,1.5,9.5,-21,1.5,9.5,-17.178377151489258,4.900000095367432,9,-17.5,15.5,3,-13.5,12.5,6.75,-16,15.5,1.3195793936376736e-15,-6.5,3.5,3.2481953816254497e-15,1.5,0.6499999761581421,4,11.5,2,5.75,13,15.5,0,3.752553823233029e-14,14.471428871154785,0,1.5,15.5,0,1.5,15.5,4,11.5,10.5,11,17.5,15.5,9.833333015441895,16.5,1.5,20.5,-21,1.5,20.5,-17.178377151489258,1.5,21.482433319091797,-17.178377151489258,4.900000095367432,21,-17.5,1.5,25.5,-21,1.5,24.75,-15,1.5,25.5,-15,3.5,30,-6.5,12.5,23.25,-16,15.5,27,-13.5,15.5,30,-6.5,3.5,30,1.5,0.6499999761581421,26,11.5,2,24.25,13,10.5,19,17.5,15.5,20.16666603088379,16.5,15.5,30,1.5,15.5,26,11.5],"faces":[[1,5,2],[1,4,5],[4,21,5],[1,2,3],[2,13,3],[3,13,44],[3,44,4],[6,45,13],[4,20,21],[4,44,20],[5,21,19],[13,45,44],[0,1,3],[0,3,4],[0,4,1],[5,19,72,54],[2,5,54,57],[2,57,70,13],[9,10,12,15,16,122,117],[7,8,14,15,12,10,11,119,121,124,126,125],[11,10,9,118,119],[14,8,6,13,70,63,64,60],[47,45,6,8,7,120,128,52,53,51,46,48],[16,15,14,60,62,61,138,139,140,124,121,123],[17,46,51,50,18],[20,24,23],[20,23,25],[20,25,76],[25,26,76],[26,27,76],[20,44,24],[24,44,27],[44,45,79],[27,44,76],[47,81,80],[45,47,80],[47,49,81],[20,76,75],[20,77,74],[20,75,77],[74,77,83],[74,83,84],[74,84,85],[74,85,86],[74,86,87],[44,78,76],[44,79,78],[45,80,79],[49,82,81],[82,108,87],[74,87,108],[49,108,82],[49,110,108],[49,112,110],[19,21,73,72],[20,74,73,21],[17,39,41,40,98,101,100,99,106,109,111,112,49,48,46],[42,39,17,18,107,106,99,102,40],[47,48,49],[52,129,130,150,149,116,115,53],[18,50,113,107],[50,51,53,115,114,113],[54,55,57],[55,58,57],[57,58,70],[54,108,55],[55,108,59],[58,59,108],[63,70,108],[58,108,70],[54,72,73],[54,73,74],[54,74,108],[55,56,58],[56,59,58],[55,59,56],[67,62,60,64,69,146,145,140,139,142,68,65],[61,62,67,65,66,141,137],[69,64,63,108,110,111,109,114,115,116,148,144],[143,66,65,68,142],[98,40,103],[102,103,40],[106,107,113,114,109],[110,112,111],[9,117,118],[117,122,123,121,119,118],[7,125,127,120],[120,127,131,133,132,128],[16,123,122],[145,126,124,140],[125,126,145,146],[125,146,147,153,154,152,136,134,133,131,127],[52,128,132,133,134,129],[129,134,136,135,130],[130,135,151,150],[135,136,152,151],[61,137,138],[137,141,143,142,139,138],[66,143,141],[69,144,147,146],[153,147,144,148],[148,116,149,154,153],[149,150,151,152,154],[75,76,78,89,88,71],[77,75,71,84,83],[71,88,91,87,86,85,84],[78,79,80,81,82,90,89],[82,87,91,90],[88,89,90,91],[22,23,24,29,28],[24,27,30,29],[22,25,23],[22,28,31,26,25],[30,27,26,31],[28,29,30,31],[95,93,92,105],[94,93,95,96],[93,94,97,92],[94,96,100,101,98,103,104,97],[95,105,104,102,99,100,96],[92,97,104,105],[102,104,103],[34,32,38,36],[34,35,33,32],[35,34,36,37],[36,38,43,42,40,41,37],[35,37,41,39,42,43,33],[32,33,43,38]],"roles":[[5,2,"fold"],[1,4,"fold"],[3,1,"fold"],[2,13,"fold"],[4,3,"fold"],[6,45,"fold"],[13,6,"fold"],[20,21,"fold"],[44,20,"fold"],[21,19,"fold"],[19,5,"fold"],[45,44,"fold"],[0,1,"fold"],[3,0,"fold"],[4,0,"fold"],[19,72,"fold"],[72,54,"fold"],[54,5,"fold"],[54,57,"fold"],[57,2,"fold"],[57,70,"fold"],[70,13,"fold"],[9,10,"fold"],[10,12,"fold"],[12,15,"fold"],[15,16,"fold"],[16,122,"fold"],[122,117,"fold"],[117,9,"fold"],[7,8,"fold"],[8,14,"fold"],[14,15,"fold"],[10,11,"fold"],[11,119,"fold"],[119,121,"fold"],[121,124,"fold"],[124,126,"fold"],[126,125,"fold"],[125,7,"fold"],[9,118,"fold"],[118,119,"fold"],[8,6,"fold"],[70,63,"fold"],[63,64,"fold"],[64,60,"fold"],[60,14,"fold"],[47,45,"fold"],[7,120,"fold"],[120,128,"fold"],[128,52,"fold"],[52,53,"fold"],[53,51,"fold"],[51,46,"fold"],[46,48,"fold"],[48,47,"fold"],[60,62,"fold"],[62,61,"fold"],[61,138,"fold"],[138,139,"fold"],[139,140,"fold"],[140,124,"fold"],[121,123,"fold"],[123,16,"fold"],[17,46,"fold"],[51,50,"fold"],[50,18,"fold"],[18,17,"fold"],[24,23,"fold"],[23,25,"fold"],[25,26,"fold"],[26,27,"fold"],[27,24,"fold"],[81,80,"fold"],[47,49,"fold"],[76,75,"fold"],[74,20,"fold"],[75,77,"fold"],[77,83,"fold"],[83,84,"fold"],[84,85,"fold"],[85,86,"fold"],[86,87,"fold"],[78,76,"fold"],[79,78,"fold"],[80,79,"fold"],[82,81,"fold"],[87,82,"fold"],[108,74,"fold"],[110,108,"fold"],[49,112,"fold"],[112,110,"fold"],[21,73,"fold"],[73,72,"fold"],[74,73,"fold"],[17,39,"fold"],[39,41,"fold"],[41,40,"fold"],[40,98,"fold"],[98,101,"fold"],[101,100,"fold"],[100,99,"fold"],[99,106,"fold"],[106,109,"fold"],[109,111,"fold"],[111,112,"fold"],[49,48,"fold"],[42,39,"fold"],[18,107,"fold"],[107,106,"fold"],[99,102,"fold"],[102,40,"fold"],[40,42,"fold"],[52,129,"fold"],[129,130,"fold"],[130,150,"fold"],[150,149,"fold"],[149,116,"cut"],[116,115,"fold"],[115,53,"fold"],[50,113,"fold"],[113,107,"fold"],[115,114,"fold"],[114,113,"fold"],[55,58,"fold"],[59,55,"fold"],[58,59,"fold"],[108,63,"fold"],[55,56,"fold"],[56,58,"fold"],[56,59,"fold"],[67,62,"fold"],[64,69,"fold"],[69,146,"cut"],[146,145,"fold"],[145,140,"fold"],[139,142,"fold"],[142,68,"fold"],[68,65,"fold"],[65,67,"fold"],[65,66,"fold"],[66,141,"fold"],[141,137,"fold"],[137,61,"fold"],[110,111,"fold"],[109,114,"fold"],[116,148,"cut"],[148,144,"cut"],[144,69,"cut"],[143,66,"fold"],[142,143,"fold"],[40,103,"fold"],[103,98,"fold"],[102,103,"fold"],[117,118,"fold"],[122,123,"fold"],[125,127,"fold"],[127,120,"fold"],[127,131,"fold"],[131,133,"fold"],[133,132,"fold"],[132,128,"fold"],[145,126,"fold"],[146,125,"fold"],[146,147,"cut"],[147,153,"cut"],[153,154,"cut"],[154,152,"fold"],[152,136,"fold"],[136,134,"fold"],[134,133,"fold"],[134,129,"fold"],[136,135,"fold"],[135,130,"fold"],[135,151,"fold"],[151,150,"fold"],[152,151,"fold"],[137,138,"fold"],[141,143,"fold"],[144,147,"cut"],[148,153,"cut"],[149,154,"cut"],[78,89,"fold"],[89,88,"fold"],[88,71,"fold"],[71,75,"fold"],[71,84,"fold"],[88,91,"fold"],[91,87,"fold"],[82,90,"fold"],[90,89,"fold"],[91,90,"fold"],[22,23,"fold"],[24,29,"fold"],[29,28,"fold"],[28,22,"fold"],[27,30,"fold"],[30,29,"fold"],[22,25,"fold"],[28,31,"fold"],[31,26,"fold"],[31,30,"fold"],[95,93,"fold"],[93,92,"fold"],[92,105,"fold"],[105,95,"fold"],[94,93,"fold"],[95,96,"fold"],[96,94,"fold"],[94,97,"fold"],[97,92,"fold"],[96,100,"fold"],[103,104,"fold"],[104,97,"fold"],[105,104,"fold"],[104,102,"fold"],[34,32,"fold"],[32,38,"fold"],[38,36,"fold"],[36,34,"fold"],[34,35,"fold"],[35,33,"fold"],[33,32,"fold"],[36,37,"fold"],[37,35,"fold"],[38,43,"fold"],[43,42,"fold"],[41,37,"fold"],[43,33,"fold"]],"smooth":[],"hard":[],"keep":[]}}],"guides":{"x":[-15,-5],"y":[],"z":[0]}};
+const doc = io.Doc.fromJSON(LION);
+const obj = doc.objects[0];
+const mesh = obj.mesh();
+planarRegions(mesh);
+
+// ── 平面區域：面、面積、朝向、鄰居（共用邊長）──
+const R = new Map();
+const triArea = (a, b, c) => b.clone().sub(a).cross(c.clone().sub(a)).length() / 2;
+for (const f of mesh.faces) {
+  if (!R.has(f.region)) R.set(f.region, { id: f.region, faces: [], area: 0, n: new THREE.Vector3(), nb: new Map() });
+  const r = R.get(f.region);
+  r.faces.push(f);
+  for (const [x, y, z] of mesh.faceTriangles(f)) {
+    const a = triArea(x.p, y.p, z.p);
+    r.area += a;
+    r.n.add(y.p.clone().sub(x.p).cross(z.p.clone().sub(x.p)));
+  }
+}
+for (const r of R.values()) r.n.normalize();
+for (const he of mesh.edges()) {
+  const a = he.face, b = he.twin && he.twin.face;
+  if (!a || !b || a.region === b.region) continue;
+  const L = he.v.p.distanceTo(he.to.p);
+  const A = R.get(a.region), B = R.get(b.region);
+  A.nb.set(b.region, (A.nb.get(b.region) || 0) + L);
+  B.nb.set(a.region, (B.nb.get(a.region) || 0) + L);
+}
+
+// ── 狀態 ──
+const group = new Map();            // 區域 → 片號（沒有 ＝ 還沒分）
+const sel = new Set();              // 目前選的區域
+let editing = null;                 // 選起整片時 ⇒ 那一片的號碼
+let nextG = 1, mode = 'face', last = null;
+const PAL = ['#4fc3f7', '#81c784', '#ffb74d', '#ba68c8', '#4db6ac', '#f06292', '#aed581', '#7986cb', '#ffd180', '#90a4ae', '#e57373', '#64b5f6', '#dce775', '#a1887f'];
+const colorOf = g => g ? PAL[(g - 1) % PAL.length] : '#5a6270';
+
+// 碎面：面積小於門檻 ⇒ 跟著共用邊最長的鄰居（鄰居也是碎面就再往下找）
+function tinySet() {
+  const thr = Math.max(0, +document.getElementById('thr').value || 0) / 100;   // mm² → cm²
+  return new Set([...R.values()].filter(r => r.area < thr).map(r => r.id));
+}
+function effGroupFn(tiny) {
+  const base = rid => sel.has(rid) ? -1 : (group.get(rid) || 0);
+  const memo = new Map();
+  const eff = (rid, seen = new Set()) => {
+    if (memo.has(rid)) return memo.get(rid);
+    if (!tiny.has(rid) || seen.has(rid)) { memo.set(rid, base(rid)); return memo.get(rid); }
+    seen.add(rid);
+    const nbs = [...R.get(rid).nb.entries()].sort((x, y) => y[1] - x[1]);
+    const host = nbs.find(([id]) => !tiny.has(id)) || nbs[0];
+    const g = host ? eff(host[0], seen) : base(rid);
+    memo.set(rid, g);
+    return g;
+  };
+  return eff;
+}
+
+// ── 算一次：照分組標縫 → 用建模器的展開攤 → 每一片對回是哪些區域 ──
+const key = p => `${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}`;
+const faceAt = new Map();
+for (const f of mesh.faces) {
+  const vs = mesh.faceVerts(f).map(v => v.p);
+  const c = vs.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(vs.length);
+  faceAt.set(key([c.x, c.y, c.z]), f);
+}
+function evaluate() {
+  const tiny = tinySet(), eff = effGroupFn(tiny);
+  seam.clearSeams(mesh);
+  for (const he of mesh.edges()) {
+    const a = he.face, b = he.twin && he.twin.face;
+    if (a && b && eff(a.region) !== eff(b.region)) seam.setSeam(mesh, he, true);
+  }
+  const r = unfoldObject(obj, { material: 'paper' });
+  const pieces = (r.pieces || []).map(p => {
+    const regs = new Set(), ov = new Set();
+    p.faces3.forEach((poly, i) => {
+      const c = poly.reduce((a, q) => [a[0] + q[0], a[1] + q[1], a[2] + q[2]], [0, 0, 0]).map(v => v / poly.length);
+      const f = faceAt.get(key(c));
+      if (!f) return;
+      regs.add(f.region);
+      if (p.overlapFaces.includes(i)) ov.add(f.region);
+    });
+    const gs = [...regs].map(eff);
+    const g = gs.sort((x, y) => gs.filter(v => v === y).length - gs.filter(v => v === x).length)[0];
+    return { p, regs, ov, g };
+  });
+  last = { r, pieces, tiny, eff };
+  return last;
+}
+
+// ── 3D ──
+const view = document.getElementById('view');
+const W = view.clientWidth, H = view.clientHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.setSize(W, H);
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15171b);
+const cam = new THREE.PerspectiveCamera(40, W / H, 0.1, 1000);
+const ctr = new OrbitControls(cam, renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(40, 60, 80); scene.add(sun);
+const sun2 = new THREE.DirectionalLight(0xffffff, 0.6); sun2.position.set(-60, 20, -40); scene.add(sun2);
+const root = new THREE.Group();
+root.applyMatrix4(obj.matrix());
+scene.add(root);
+
+const triFace = [], pos = [];
+for (const f of mesh.faces) for (const [x, y, z] of mesh.faceTriangles(f)) { pos.push(x.p.x, x.p.y, x.p.z, y.p.x, y.p.y, y.p.z, z.p.x, z.p.y, z.p.z); triFace.push(f); }
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+geo.computeVertexNormals();
+const solid = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+root.add(solid);
+const lineGeo = new THREE.BufferGeometry();
+const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: 0x111111 }));
+root.add(lines);
+const seamGeo = new THREE.BufferGeometry();
+const seams = new THREE.LineSegments(seamGeo, new THREE.LineBasicMaterial({ color: 0xff7a1a }));
+root.add(seams);
+
+const bb = new THREE.Box3().setFromObject(root);
+const c0 = bb.getCenter(new THREE.Vector3());
+ctr.target.copy(c0);
+cam.position.copy(c0).add(new THREE.Vector3(38, 22, 52));
+ctr.update();
+
+function paint() {
+  const { pieces, tiny, eff } = last;
+  const ovRegs = new Set(pieces.flatMap(x => [...x.ov]));
+  const col = geo.getAttribute('color');
+  const tmp = new THREE.Color();
+  triFace.forEach((f, t) => {
+    const rid = f.region, g = eff(rid);
+    if (ovRegs.has(rid)) tmp.set('#ff3b30');
+    else if (g === -1) tmp.set('#ffd54a');
+    else tmp.set(colorOf(g));
+    for (let k = 0; k < 3; k++) col.setXYZ(t * 3 + k, tmp.r, tmp.g, tmp.b);
+  });
+  col.needsUpdate = true;
+  const lp = [], sp = [];
+  for (const he of mesh.edges()) {
+    const a = he.face, b = he.twin && he.twin.face;
+    const arr = he.role === 'cut' || seam.isSeam(he) ? sp : (a && b && a.region !== b.region ? lp : null);
+    if (arr) arr.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
+  }
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+  seamGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+}
+(function loop() { renderer.render(scene, cam); requestAnimationFrame(loop); })();
+
+// ── 面板 ──
+const $ = id => document.getElementById(id);
+function refresh() {
+  const { r, pieces, tiny } = evaluate();
+  paint();
+  // 目前選的
+  const cur = pieces.filter(x => x.g === -1);
+  if (!sel.size) {
+    $('cur').innerHTML = editing ? `正在改「片 ${editing}」` : '還沒選 —— 在 3D 上點面';
+  } else {
+    const nf = [...sel].reduce((n, rid) => n + R.get(rid).faces.length, 0);
+    const ovN = cur.reduce((n, x) => n + x.p.overlapFaces.length, 0);
+    $('cur').innerHTML = `${editing ? `正在改「片 ${editing}」：` : ''}選了 <b>${sel.size}</b> 塊面（${nf} 個網格面）<br>`
+      + (cur.length > 1 ? `<span class="bad">⚠ 選的面沒有連在一起：會變成 ${cur.length} 片</span><br>` : '')
+      + (ovN ? `<span class="bad">✗ 這一群攤開會疊：${ovN} 個面疊在一起（3D 與預覽的紅色）</span> —— 拿掉一些面再看`
+             : `<span class="ok">✓ 這一群攤得平、不會疊</span> —— 可以切成一片`);
+  }
+  $('cut').disabled = !sel.size;
+  $('clr').disabled = !sel.size && !editing;
+  $('del').disabled = !editing;
+  // 碎面
+  const tn = [...tiny].length;
+  $('tiny').textContent = tn ? `這顆有 ${tn} 塊碎面（錐體尖端、布林接縫）跟著旁邊的片走，不會自己變成一片` : '沒有比門檻小的碎面';
+  // 清單
+  const ovPieces = pieces.filter(x => x.p.overlapFaces.length).length;
+  $('sum').textContent = `共 ${pieces.length} 片${ovPieces ? `、${ovPieces} 片會疊` : '、都不疊'}`;
+  $('list').innerHTML = pieces.map((x, i) => {
+    const name = x.g === -1 ? '目前選的' : x.g ? `片 ${x.g}` : '還沒分';
+    const col = x.g === -1 ? '#ffd54a' : colorOf(x.g);
+    const st = x.p.overlapFaces.length ? `<span class="bad">✗ 疊 ${x.p.overlapFaces.length} 面</span>` : '<span class="ok">✓</span>';
+    return `<div class="pc"><span class="sw" style="background:${col}"></span>P${String(i + 1).padStart(2, '0')}　${name}　${x.p.faces.length} 面　${st}</div>`;
+  }).join('');
+  // 預覽
+  const prog = previewProgram(r.pieces, { rule: r.rule, strainFill: true });
+  const cv = $('pv');
+  if (!prog) { cv.hidden = true; return; }
+  cv.hidden = false;
+  const PW = cv.clientWidth || 330, PH = Math.min(240, Math.max(110, PW * prog.box.h / prog.box.w));
+  cv.width = PW * 2; cv.height = PH * 2; cv.style.height = PH + 'px';
+  const ctx = cv.getContext('2d'); ctx.scale(2, 2); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, PW, PH);
+  const px = Math.min(PW / prog.box.w, PH / prog.box.h);
+  ctx.translate((PW - prog.box.w * px) / 2, (PH - prog.box.h * px) / 2);
+  renderCanvas(ctx, prog, px);
+}
+function say(t) { tip.textContent = t; }
+
+document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+  mode = b.dataset.m;
+  document.querySelectorAll('[data-m]').forEach(x => x.classList.toggle('on', x === b));
+  say({ face: '點面：點一塊面加進來，再點一次拿掉', piece: '選起整片：點一下，選起它所在的那一整片（可以接著加面、減面再切）', grow: '往外長：點一塊面，相連、朝向差不多的面一起加進來' }[mode]);
+});
+
+function grow(seed) {
+  const lim = Math.max(1, Math.min(179, +$('ang').value || 30)) * Math.PI / 180;
+  const n0 = R.get(seed).n, out = new Set([seed]), q = [seed];
+  const g0 = group.get(seed) || 0;
+  while (q.length) {
+    const r = q.pop();
+    for (const t of R.get(r).nb.keys()) {
+      if (out.has(t)) continue;
+      if ((group.get(t) || 0) !== g0 && !sel.has(t)) continue;      // ⛔ 長進別的片
+      if (R.get(t).n.angleTo(n0) <= lim) { out.add(t); q.push(t); }
+    }
+  }
+  return out;
+}
+
+const ray = new THREE.Raycaster(), mp = new THREE.Vector2();
+let down = null;
+renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;   // 拖的是轉視角
+  const rc = renderer.domElement.getBoundingClientRect();
+  mp.set((e.clientX - rc.left) / rc.width * 2 - 1, -(e.clientY - rc.top) / rc.height * 2 + 1);
+  ray.setFromCamera(mp, cam);
+  const hit = ray.intersectObject(solid)[0];
+  if (!hit) return;
+  const rid = triFace[hit.faceIndex].region;
+  if (mode === 'face') {
+    if (sel.has(rid)) sel.delete(rid); else sel.add(rid);
+    say(sel.has(rid) ? `加進一塊面（${R.get(rid).faces.length} 個網格面）` : '拿掉一塊面');
+  } else if (mode === 'grow') {
+    const add = grow(rid);
+    add.forEach(t => sel.add(t));
+    say(`往外長：一次加進 ${add.size} 塊面（朝向差 ${$('ang').value}° 以內、相連）`);
+  } else {
+    const pc = last.pieces.find(x => x.regs.has(rid));
+    sel.clear(); editing = null;
+    if (pc) pc.regs.forEach(t => sel.add(t));
+    const gs = new Set([...sel].map(t => group.get(t) || 0));
+    editing = gs.size === 1 && !gs.has(0) ? [...gs][0] : null;
+    say(editing ? `選起「片 ${editing}」：可以加面、減面，再按「切成一片」；或「拆掉這一片」` : '選起整片（這一片還沒分）：可以加面、減面，再按「切成一片」');
+  }
+  refresh();
+});
+
+$('cut').onclick = () => {
+  const g = editing || nextG++;
+  for (const [rid, gg] of [...group]) if (gg === g && !sel.has(rid)) group.delete(rid);
+  sel.forEach(rid => group.set(rid, g));
+  say(`切成「片 ${g}」：${sel.size} 塊面`);
+  sel.clear(); editing = null; refresh();
+};
+$('clr').onclick = () => { sel.clear(); editing = null; say('取消選取'); refresh(); };
+$('del').onclick = () => { const g = editing; for (const [rid, gg] of [...group]) if (gg === g) group.delete(rid); sel.clear(); editing = null; say(`拆掉「片 ${g}」：那些面回到「還沒分」`); refresh(); };
+$('reset').onclick = () => { group.clear(); sel.clear(); editing = null; nextG = 1; say('全部重來'); refresh(); };
+$('thr').onchange = () => refresh();
+
+refresh();
+say('點面：點一塊面加進來，再點一次拿掉（右邊可以換選法）');
+} catch (e) {
+  tip.textContent = '載入失敗：' + e.message + '（要從網址開，直接點開檔案載不到建模器的程式）';
+  console.error(e);
+}
+</script>
+</body>
+</html>
