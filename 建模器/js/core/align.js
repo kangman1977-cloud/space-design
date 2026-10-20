@@ -346,11 +346,16 @@ export function placeGap(size) {
   return Math.min(10, Math.max(1, size * 0.2));
 }
 
-/** 兩個外框是不是疊到（X、Z 先各撐開 gap；剛好碰到不算）*/
+/**
+ * 兩個外框是不是疊到（X、Z 先各撐開 gap；剛好碰到不算）。
+ * ⚠ **高度方向「碰到也算」**（線上先驗撞到的）：平板的網格是一片、外框高度 0（板厚只是畫出來的）——
+ * 以前高度也用「剛好碰到不算」⇒ 高度 0 的東西永遠不算疊到，平板被放進方塊底下。
+ * 都貼地的東西高度一定碰在一起；只有整個懸在上面（下緣比對方的上緣還高）才不算。
+ */
 function crowds(a, b, gap) {
   const e = 1e-6;
   return a.min.x - gap < b.max.x - e && a.max.x + gap > b.min.x + e
-      && a.min.y < b.max.y - e && a.max.y > b.min.y + e
+      && a.min.y <= b.max.y + e && a.max.y >= b.min.y - e
       && a.min.z - gap < b.max.z - e && a.max.z + gap > b.min.z + e;
 }
 
