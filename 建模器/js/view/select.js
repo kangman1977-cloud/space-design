@@ -2513,6 +2513,39 @@ export class Selection {
    * ⇒ 鎖角度、對齊都已經算進方向裡了。
    * @returns {{ok:boolean, reason?:string}}
    */
+  /**
+   * 🔴 **鋼筆打座標放點**（綜合評估 ④-13，2026-10-20，kang「同意你的安排與建議」）。
+   * 以前只能打「離上一點多長」，**第一點一定要用滑鼠點**（T5、T7 要放在準確的座標得自己對格子）。
+   * ⭐ 打的是**世界座標**（跟右側面板的位置、參考線同一套）—— 畫在哪一片就打那一片上的兩根軸：
+   * 地板 ＝ X、Z；前後線 X 那片牆 ＝ Z、Y；左右線 Z 那片牆 ＝ X、Y（`penCoordAxes()`；第三根軸就是那片的位置）。
+   * 換成鋼筆自己的平面座標交給 `_penAddAnchor()` —— 跟滑鼠點下去的點完全一樣（尖角、沒有把手）。
+   */
+  penCoordAxes() {
+    const ax = this._pf && this._pf.ax;
+    return ax === 'x' ? ['Z', 'Y'] : ax === 'z' ? ['X', 'Y'] : ['X', 'Z'];
+  }
+
+  penPlaceWorld(a, b) {
+    if (!this.penMode || this.penEdit) return { ok: false, reason: '要在鋼筆畫線的時候才能用' };
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return { ok: false, reason: '兩個座標都要打數字' };
+    const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;
+    if (n >= 1 && this._penParked) return { ok: false, reason: '這一段已經「確定」了 —— 先在畫面上放下一個點' };
+    const f = this._pf, v = f.v || 0;
+    const w = f.ax === 'x' ? [v, b, a] : f.ax === 'z' ? [a, b, v] : f.ax === 'y' ? [a, v, b] : [a, 0, b];
+    const [p, q] = f.fromWorld(w[0], w[1], w[2]);
+    this._penTyped = '';
+    this._penAddAnchor(p, q, 0, 0);
+    if (this.hooks.onPenAdd) this.hooks.onPenAdd(this.penCount);
+    if (this._penCursor) {
+      const tip = this._penW(this._penCursor.x, this._penCursor.z);
+      this._drawPenPreview(tip);
+      this._penAssist(tip);
+    } else {
+      this._drawPenPreview();
+    }
+    return { ok: true, n: n + 1 };
+  }
+
   penPlaceLength(len, ang = null, near = false) {
     if (!this.penMode || this.penEdit) return { ok: false, reason: '要在鋼筆畫線的時候才能用' };
     const n = this._pen ? Math.floor(this._pen.a.length / 2) : 0;

@@ -712,6 +712,20 @@ export function arraySrcFrom(obj, mode = ARRAY_MODES.LINEAR, opt = {}) {
 }
 
 /**
+ * 🔴 **環形陣列的旋轉中心：給一個世界座標的點，換成陣列自己的座標**（綜合評估 ④-2 剩下的，2026-10-20，kang「同意你的安排與建議」）。
+ * 「旋轉中心」存的是陣列自己的座標（`src.center`）⇒ 要繞**世界原點**或**另一個物件的中心**，以前得自己算（T4 打了 (−3.182, 0, −3.182)）。
+ * ⭐ 用陣列物件矩陣的反矩陣換算 ⇒ 舊檔那種「陣列本身轉過」的也算得對。
+ * ⚠ 算一次就定下來（⛔ 記住是哪個物件）：那個物件之後搬走，中心⛔ 會跟著 —— 跟「咬上去」一樣是一次性的。
+ * @param {ModelObject} arrObj 陣列物件
+ * @param {{x:number,y:number,z:number}} worldPt 一般的 {x, y, z} 就好（`ui/toolbar.js` 刻意⛔ 載 three）
+ * @returns {number[]} [x, y, z]，捨到 0.001
+ */
+export function radialCenterAt(arrObj, worldPt) {
+  const p = new THREE.Vector3(worldPt.x, worldPt.y, worldPt.z).applyMatrix4(arrObj.matrix().clone().invert());
+  return [p.x, p.y, p.z].map(v => +v.toFixed(3) + 0);
+}
+
+/**
  * 把陣列打散成一個個獨立物件。
  *
  * 資訊只能往下走：修飾器可以打散成獨立物件，獨立物件收不回修飾器。

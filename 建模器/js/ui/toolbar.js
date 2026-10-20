@@ -8,9 +8,10 @@
  */
 
 import { PRIM_SPECS, defaultSrc, PRIM_TYPES, defaultBend, bendDevelopedLength,
-         bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve }
+         bendAllowance, neutralRadius, PEN_REV_DEFAULTS, penRevAutoAt, penRevolve, bendProfile, penRevAtForHeadR,
+         extrudeToPenSrc }
   from '../build/prim.js';
-import { KIND, canExplodeShapes, recenterOrigin, penKind, revMoveToGuide, penWallSide,
+import { KIND, canExplodeShapes, recenterOrigin, penKind, revMoveToGuide, penWallSide, radialCenterAt,
          revGuideAx, revWallAxisAt, revWallAtFor } from '../core/io.js';
 import { summarize, SURFACE } from '../core/region.js';
 import { BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, isBoolSrc } from '../build/bool.js';
@@ -350,6 +351,7 @@ export class Panel {
             + '之後不會再自動合回同一份稿（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
           this.app.onExplode(obj);
         });
+      this._toPenBtn(obj);    // ④-7
 
     } else if (obj.isParametric) {
       const spec = PRIM_SPECS[obj.src.type];
@@ -386,6 +388,20 @@ export class Panel {
           const lab = f.labelOf ? f.labelOf(obj.src, ctx) : f.label;
           this._rowNum(lab, obj.src[f.key], f, v => {
             const was = this._onFloor(obj);       // ③-14：改之前貼不貼地
+            /**
+             * ④-19：折板改「原點在第幾段」⇒ 整個斷面平移了 ⇒ 把位置補回去，**板子在畫面上一格都不動**，只換原點。
+             * 斷面在物件自己的 XY 平面 ⇒ 位移照物件的角度與縮放換到世界（矩陣的前兩欄）。
+             */
+            if (obj.src.type === 'bend' && f.key === 'anchorSeg') {
+              const before = bendProfile(obj.src, obj.thickness);
+              const after = bendProfile({ ...obj.src, anchorSeg: Math.round(v) }, obj.thickness);
+              const a = before.segStarts[before.anchor - 1], b = after.segStarts[after.anchor - 1];
+              const dx = b[0] - a[0], dy = b[1] - a[1];
+              const e = obj.matrix().elements;
+              obj.pos.x += e[0] * dx + e[4] * dy;
+              obj.pos.y += e[1] * dx + e[5] * dy;
+              obj.pos.z += e[2] * dx + e[6] * dy;
+            }
             obj.src[f.key] = f.int ? Math.round(v) : v;
             obj.invalidate();
             this.analysisCache.delete(obj.id);
@@ -401,6 +417,7 @@ export class Panel {
          */
         for (const s of spec.noteOf ? spec.noteOf(obj.src, obj) : []) this.form.appendChild(note(s));
         if (spec.hasBends) this._bendList(obj);
+        if (obj.src.type === 'extrude') this._toPenBtn(obj);    // ④-7
         /**
          * ⚠ **鋼筆物件要多講一句** —— 它比別的參數物件多失去一樣東西：
          * **那串錨點**。轉了之後 `編輯路徑` 那顆會消失，
@@ -810,6 +827,24 @@ export class Panel {
     }, '單位 cm，跟參考線同一套座標。⚠ 自己打數字就不跟參考線了（要跟就用上面那個下拉）。'
       + '⚠ 物件轉過角度時這一格不準');
 
+    /**
+     * ④-13（2026-10-20）：**直接打「起點離中心線多遠」**（燈罩上口的半徑）—— 線不動、只挪中心線（`prim.js` `penRevAtForHeadR()`）。
+     * 單位是畫面上的 cm（除以物件的縮放才是線自己的長度）；跟「中心線在」那格一樣，自己打就不跟參考線了。
+     */
+    const r0 = penRevolve(src);
+    if (r0.ok && r0.profileR && Math.abs(s) > 1e-9) {
+      this._rowNum('起點離中心線 cm', round(r0.profileR.head * Math.abs(s)), { min: 0, step: 0.5 }, v => {
+        const q = penRevAtForHeadR(src, v / Math.abs(s));
+        if (!q.ok) { this.app.toast(q.reason, true); return; }
+        const was = bound;
+        rev.bind = null;
+        rev.at = q.at;
+        after('改起點離中心線', `起點離中心線改成 ${round(v)} cm（線沒動、只挪了中心線，碗跟著變大變小）`
+          + (was ? '　自己打了數字：已經不跟參考線了' : ''));
+      }, '輪廓第一個點（起點）離中心線多遠，單位 cm —— 燈罩、碗的那一圈口的半徑。'
+        + '線一格都不動、只挪中心線（留在原本那一邊）。⚠ 自己打數字就不跟參考線了');
+    }
+
     this._rowNum('轉幾格', rev.seg, { min: 3, max: 360, step: 1, int: true }, v => {
       rev.seg = Math.round(v);
       after('改轉幾格');
@@ -857,6 +892,27 @@ export class Panel {
   }
 
   /**
+   * 🔴 **匯入的形狀「轉成鋼筆」**（綜合評估 ④-7，2026-10-20，kang「同意你的安排與建議」）——
+   * 轉了之後右側面板有「編輯路徑」：改點、拉把手、加洞（T6 招牌字）。換算在 `prim.js` `extrudeToPenSrc()`。
+   * ⭐ 位置、大小⛔ 動（同一套 2D 座標與厚度）；記一步復原。舊的匯入沒有記錨點 ⇒ 講一句「點會比較多」。
+   * ⚠ 好幾個形狀合在一起的 ⇒ 變成一支有好幾條線的鋼筆（裡面的線還是洞）；要各自改請先「打散」。
+   */
+  _toPenBtn(obj) {
+    this._rowBtn('轉成鋼筆（可以改點、加洞）',
+      '把這個匯入的形狀換成鋼筆物件：之後按「編輯路徑」就能改錨點、拉把手、多畫一圈當洞。'
+      + '位置與大小不變（Ctrl+Z 可以復原）。好幾個形狀合在一起的會變成一支有好幾條線的鋼筆 —— 要各自改請先「打散」', () => {
+        const r = extrudeToPenSrc(obj.src);
+        if (!r.ok) { this.app.toast(r.reason, true); return; }
+        obj.src = r.src;
+        obj.invalidate();
+        this.analysisCache.delete(obj.id);
+        this._edit('轉成鋼筆');
+        this.app.toast(`已轉成鋼筆：${r.src.paths.length} 條線、${r.anchors} 個錨點 —— 按右側「編輯路徑」就能改點、加洞`
+          + (r.approx ? `　⚠ 其中 ${r.approx} 條是舊的匯入、沒有記曲線的把手：每個轉折都變成一個點（形狀一樣、點比較多）` : ''));
+      });
+  }
+
+  /**
    * 🔴 **案件名稱可以填**（綜合評估 ④-19，2026-10-19，kang「同意你的安排與建議」）。
    * 展開圖、剖面分切、DXF 的標題都印「案件：○○ 日期」，存檔、匯出的檔名也用它 ——
    * 但以前**沒有任何地方可以改**，每張圖都印「案件：未命名」（T3）。
@@ -896,8 +952,8 @@ export class Panel {
    *
    * ── 基準是「整組選取的外框」──────────────────────────
    * 對應 Illustrator 的「對齊至：選取範圍」。靠左＝全部貼到最左那個的左緣。
-   * 沒有做「對齊至關鍵物件」，因為 3D 裡沒有「最後點的那個要當基準」
-   * 這個既有慣例，貿然做反而難猜。真的需要再加。
+   * ⚠ 這裡原本寫「沒有做『對齊至關鍵物件』」—— 2026-10-19（綜合評估 ③-3）已經做了：
+   * 「對齊到」下拉選「最後選的」⇒ 它不動、其他的對過去（預設照舊是整組）。
    */
   _alignBox() {
     const objs = this.app.sel.objects;
@@ -1692,6 +1748,33 @@ export class Panel {
         () => this._rebuild(obj, '改旋轉中心'),
         '相對於物件自己的原點，不是世界座標。法蘭螺栓孔通常留 0，讓孔繞著中心排；'
         + '要讓一個零件繞成一圈，就把中心移到零件外面（例如 X 打 50 ＝ 繞著右邊 50 cm 那一點轉）');
+      /**
+       * ④-2 剩下的（2026-10-20）：一鍵把中心放到**世界原點**、或**另一個選到的物件的中心**（外框中間）——
+       * 換算在 `io.js` `radialCenterAt()`。⚠ 算一次就定下來，那個物件之後搬走中心⛔ 跟。
+       */
+      const setCenter = (pt, what) => {
+        src.center = radialCenterAt(obj, pt);
+        this._rebuild(obj, `旋轉中心改成${what}`);
+        if (this.app.toast) {
+          this.app.toast(`旋轉中心改成${what}（換成相對物件 ＝ ${src.center.join(', ')}）`
+            + '　算一次就定下來：那邊之後搬走，中心不會跟著');
+        }
+      };
+      this._rowBtn('繞世界原點', '把旋轉中心放到世界的原點 (0, 0, 0)：零件繞著畫面正中間那一點排一圈',
+        () => setCenter({ x: 0, y: 0, z: 0 }, '世界原點'));
+      const others = this.app.sel.objects.filter(o => o !== obj);
+      if (others.length === 1) {
+        const other = others[0];
+        this._rowBtn(`繞「${other.name}」的中心`,
+          `把旋轉中心放到「${other.name}」的外框正中間（例如螺栓孔繞著法蘭排）`,
+          () => {
+            const b = worldBounds(other);
+            setCenter({ x: (b.min.x + b.max.x) / 2, y: (b.min.y + b.max.y) / 2, z: (b.min.z + b.max.z) / 2 },
+              `「${other.name}」的中心`);
+          });
+      } else {
+        (this._target || this.form).appendChild(note('要繞另一個物件的中心轉：先點那個物件，再按住 Shift 加選這個陣列（最後選陣列），這裡就會多一顆按鈕'));
+      }
 
     } else if (src.mode === ARRAY_MODES.MIRROR) {
       this._rowSelect('對稱面垂直於', src.axis || 'x',

@@ -18121,6 +18121,105 @@ section('綜合評估 ③ 第三批（二）：陣列／鏡射照世界的方向
   ok('★ 　 原件被非等比縮放過：展開照樣講「圓弧會變成橢圓」', ru.warnings.some(w => w.includes('非等比縮放')), ru.warnings.join('｜'));
 }
 
+section('綜合評估 ④ 第一批（二）：環形繞別人、兩條外緣選一圈、折板原點、鋼筆座標／起點半徑、轉成鋼筆（2026-10-20）');
+{
+  /** 面板按鈕、鋼筆打座標的工具列（select.js）在本機／線上版用畫面驗 */
+  const A = await import('../js/core/align.js');
+  const { boundaryRingFrom } = await import('../js/core/selectops.js');
+
+  // ④-2 環形繞世界原點／另一個物件的中心
+  const part = new io.ModelObject({ name: '螺栓', kind: io.KIND.SOLID, src: { type: 'box', w: 2, h: 2, d: 2 } });
+  part.pos.set(30, 5, 10);
+  const arr = new io.ModelObject({ name: '螺栓（環形）', kind: io.KIND.SOLID, src: io.arraySrcFrom(part, ARRAY_MODES.RADIAL),
+    pos: part.pos.clone(), rot: part.rot.clone().set(0, 0, 0), scale: part.scale.clone().set(1, 1, 1) });
+  arr.src.center = io.radialCenterAt(arr, { x: 0, y: 0, z: 0 });
+  eq('★★★ ④-2 繞世界原點：中心換成陣列自己的座標 (−30, −5, −10)', arr.src.center.join(','), '-30,-5,-10');
+  const flange = new io.ModelObject({ name: '法蘭', src: { type: 'cylinder', r: 40, h: 4, seg: 32 } });
+  flange.pos.set(-20, 2, 15);
+  const fb = A.worldBounds(flange);
+  const fc = { x: (fb.min.x + fb.max.x) / 2, y: (fb.min.y + fb.max.y) / 2, z: (fb.min.z + fb.max.z) / 2 };
+  arr.src.center = io.radialCenterAt(arr, fc); arr.invalidate();
+  if (csgOK) {
+    const ab = A.worldBounds(arr);
+    const ac = { x: (ab.min.x + ab.max.x) / 2, z: (ab.min.z + ab.max.z) / 2 };
+    ok('★★★ 　 繞「法蘭」的中心：8 份排成一圈，圈的中心就在法蘭中心（世界的 X、Z）', Math.abs(ac.x - fc.x) < 0.2 && Math.abs(ac.z - fc.z) < 0.2, `${ac.x},${ac.z} vs ${fc.x},${fc.z}`);
+  }
+  const turned = new io.ModelObject({ src: arr.src, pos: arr.pos.clone(), rot: arr.rot.clone().set(0, Math.PI / 2, 0) });
+  const back = io.radialCenterAt(turned, { x: 0, y: 0, z: 0 });
+  const w = new THREE.Vector3(...back).applyMatrix4(turned.matrix());
+  ok('★ 　 陣列本身轉過（舊檔那種）也換算得對：中心放回世界正好是原點', w.length() < 1e-3, w.toArray().join(','));
+
+  // ④-18 兩條相鄰的外緣 ⇒ 一整圈開口
+  const tube = buildPrim('cylinder', { r: 25, h: 70, seg: 32, openEnded: true });
+  const rimHes = [...tube.edges()].filter(he => !he.face || !he.twin || !he.twin.face);
+  const top = rimHes.filter(he => he.v.p.y > 30);
+  const a0 = top[0], a1 = top.find(he => he !== a0 && [he.v.id, he.to.id].some(id => [a0.v.id, a0.to.id].includes(id)));
+  const ring = boundaryRingFrom(tube, a0, a1);
+  ok('★★★ ④-18 開口筒子上緣選兩條相鄰的 ⇒ 一整圈 32 條（以前「選一條線」走一步就停）', ring.ok && ring.hes.length === 32 && ring.hes.every(he => he.v.p.y > 30), ring.reason || ring.hes.length);
+  ok('★★ 　 回傳的都是有面的那一側（畫面上點得到的）', ring.ok && ring.hes.every(he => !!he.face));
+  const far = top.find(he => ![he.v.id, he.to.id].some(id => [a0.v.id, a0.to.id].includes(id)));
+  ok('★ 　 兩條沒接在一起 ⇒ 講原因', !boundaryRingFrom(tube, a0, far).ok && boundaryRingFrom(tube, a0, far).reason.includes('接在一起'));
+  const box = buildPrim('box', { w: 10, h: 10, d: 10 });
+  const [e1, e2] = [...box.edges()].slice(0, 2);
+  ok('★ 　 不是開口的邊 ⇒ 講原因（指到「含外緣」）', !boundaryRingFrom(box, e1, e2).ok && boundaryRingFrom(box, e1, e2).reason.includes('含外緣'));
+
+  // ④-19 折板原點在第幾段
+  const bp = { w: 11, first: 1, arcSeg: 4, k: 0.4, bends: [{ angle: 90, ri: 0.2, len: 7.5 }] };
+  const p1 = prim.bendProfile(bp, 0.5), p2 = prim.bendProfile({ ...bp, anchorSeg: 2 }, 0.5);
+  ok('★★ ④-19 原點在第 1 段：跟以前一樣從 (0, 0) 開始', p1.line[0][0] === 0 && p1.line[0][1] === 0 && p1.anchor === 1);
+  const s2 = p1.segStarts[1];
+  ok('★★★ 　 原點在第 2 段（隔板的牆）：牆的起點在原點、整條只是平移', p2.anchor === 2
+    && p2.line.every((q, i) => Math.abs(q[0] - (p1.line[i][0] - s2[0])) < 1e-9 && Math.abs(q[1] - (p1.line[i][1] - s2[1])) < 1e-9)
+    && p2.line.some(q => Math.abs(q[0]) < 1e-9 && Math.abs(q[1]) < 1e-9), `第 2 段起點 ${s2}`);
+  /** ⚠ T3 當時算的 1.45 ＝ 1 ＋ 0.2 ＋ 0.25 是量到「板厚中間」；折板的網格是**中性面**（K 0.4 ⇒ 中性層半徑 0.2 ＋ 0.4 × 0.5 ＝ 0.4）⇒ 1.4 */
+  near('★★ 　 T3 的例子：牆（中性面）的起點離第一段起點 1.4（＝ 1 ＋ 中性層半徑 0.4）', s2[0], 1.4, 1e-9);
+  eq('　 打太大 ⇒ 夾到最後一段', prim.bendProfile({ ...bp, anchorSeg: 9 }, 0.5).anchor, 2);
+  const m1 = buildPrim('bend', bp, 0.5), m2 = buildPrim('bend', { ...bp, anchorSeg: 2 }, 0.5);
+  near('　 換原點不改形狀（面積一樣）', m2.area(), m1.area(), 1e-9);
+
+  // ④-13 旋轉成形打起點離中心線
+  const xy = [3, 0, 8, 6];
+  const pen = { type: 'pen', h: 3, open: true, paths: [{ closed: false, a: xy.slice(), hi: [0, 0, 0, 0], ho: [0, 0, 0, 0] }], rev: { dir: 'z', at: 0, seg: 32, stand: false } };
+  const q = prim.penRevAtForHeadR(pen, 5);
+  ok('★★★ ④-13 起點在 X 3、要離中心線 5 ⇒ 中心線挪到 −2（留在原本那一側）', q.ok && Math.abs(q.at - (-2)) < 1e-9, q.at);
+  const r2 = prim.penRevolve({ ...pen, rev: { ...pen.rev, at: q.at } });
+  near('★★ 　 轉出來的起點半徑真的是 5', r2.profileR.head, 5, 1e-9);
+  ok('　 打負數 ⇒ 講原因', !prim.penRevAtForHeadR(pen, -1).ok);
+
+  // ④-7 匯入的形狀轉成鋼筆
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100">
+    <path d="M10 10 L90 10 L90 90 L10 90 Z M40 40 L60 40 L60 60 L40 60 Z"/></svg>`;
+  const rs = prof.readSVG(svg, { tolMm: 0.05 });
+  const l = rs.loops[0];
+  ok('　 匯入的封閉形狀帶著錨點（外圈與洞都有 bez）', !!l.bez && l.bez.a.length >= 8 && l.holes.length === 1 && !!l.holes[0].bez);
+  const shape = { out: l.pts.flatMap(p => [p.x, p.y]), holes: [l.holes[0].pts.flatMap(p => [p.x, p.y])], ob: l.bez, hb: [l.holes[0].bez] };
+  const moved = prim.shiftShape(shape, -5, -5);
+  ok('★ 　 shiftShape 連錨點一起搬（把手不動）', Math.abs(moved.ob.a[0] - (l.bez.a[0] - 5)) < 1e-3 && moved.ob.hi.join() === l.bez.hi.join());
+  const ex = { type: 'extrude', h: 2, shapes: [moved] };
+  const conv = prim.extrudeToPenSrc(ex);
+  ok('★★★ ④-7 擠出件轉成鋼筆：2 條線（外圈＋洞）、用的是 Illustrator 的錨點', conv.ok && conv.src.type === 'pen' && conv.src.paths.length === 2 && conv.approx === 0, JSON.stringify({ n: conv.src && conv.src.paths.length, approx: conv.approx }));
+  const mE = buildPrim('extrude', ex), mP = buildPrim('pen', conv.src);
+  near('★★★ 　 轉之前、之後體積一樣（洞也還在）', mP.volume(), mE.volume(), 1e-6);
+  const bE = mE.bounds(), bP = mP.bounds();
+  ok('★★ 　 位置、大小一樣（外框對得上）', bE.min.distanceTo(bP.min) < 1e-6 && bE.max.distanceTo(bP.max) < 1e-6);
+  const old = prim.extrudeToPenSrc({ type: 'extrude', h: 2, shapes: [{ out: shape.out, holes: shape.holes }] });
+  ok('★ 　 舊的匯入（沒有記錨點）：照樣轉得出來、講「approx」', old.ok && old.approx === 2);
+  ok('　 不是擠出件 ⇒ 講原因', !prim.extrudeToPenSrc({ type: 'box' }).ok);
+  /**
+   * 🔴 本機畫面試出來的：帶一段弧的稿子，轉成鋼筆少了 0.7% 體積 —— 鋼筆預設 0.2 cm 才切一刀、匯入是 0.2 mm。
+   * 正確值用算的：80 × 80 − 20 × 20 ＋ 弧凸出去那塊 195（單位²，1 單位 ＝ 0.1 cm）＝ 6195 ⇒ 61.95 cm² × 厚 3 ＝ 185.85
+   */
+  const svgC = `<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="10cm" viewBox="0 0 100 100">
+    <path d="M10 10 L90 10 L90 90 C60 95 40 95 10 90 Z M40 40 L60 40 L60 60 L40 60 Z"/></svg>`;
+  const lc = prof.readSVG(svgC, { tolMm: 0.2 }).loops[0];
+  const exC = { type: 'extrude', h: 3, tol: 0.02, shapes: [{ out: lc.pts.flatMap(p => [p.x, p.y]), holes: [lc.holes[0].pts.flatMap(p => [p.x, p.y])], ob: lc.bez, hb: [lc.holes[0].bez] }] };
+  const cvC = prim.extrudeToPenSrc(exC);
+  const vE = buildPrim('extrude', exC).volume(), vP = buildPrim('pen', cvC.src).volume();
+  ok('★★★ 　 有弧的稿子：轉過去照匯入的容許值細分（0.02 cm），體積差不到 0.1%（以前少 0.7%）', cvC.src.tol === 0.02 && Math.abs(vP - vE) / vE < 1e-3, `${vE} → ${vP}`);
+  ok('★★ 　 　 兩邊都貼近算出來的 185.85（差不到 0.1%）', Math.abs(vE - 185.85) / 185.85 < 1e-3 && Math.abs(vP - 185.85) / 185.85 < 1e-3, `${vE}／${vP}`);
+  eq('★ 　 　 舊的匯入沒記容許值 ⇒ 用匯入的預設 0.02 cm', prim.extrudeToPenSrc({ ...exC, tol: undefined }).src.tol, 0.02);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

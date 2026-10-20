@@ -357,7 +357,10 @@ export class ImportPanel {
       out: flatPts(l.pts),
       oc: cornerIdx(l.pts),                       // 真轉角的索引，一定要一起存
       holes: l.holes.map(h => flatPts(h.pts)),
-      hc: l.holes.map(h => cornerIdx(h.pts))
+      hc: l.holes.map(h => cornerIdx(h.pts)),
+      /** ④-7（2026-10-20）：Illustrator 的錨點與把手也留著 ⇒ 之後「轉成鋼筆」點跟原稿一樣（`prim.js` `extrudeToPenSrc()`）*/
+      ob: l.bez,
+      hb: l.holes.map(h => h.bez)
     }));
     const sAll = shapesBounds(shapes);
     const all = { ...sAll };
@@ -449,7 +452,8 @@ export class ImportPanel {
     const obj = new ModelObject({
       name,
       kind: KIND.SOLID,
-      src: { type: 'extrude', h: this.opt.h, from: this.fileName || 'SVG', shapes }
+      /** `tol`（cm）＝ 拉直曲線用的容許值：④-7「轉成鋼筆」要照同一個值細分，弧才一樣細 */
+      src: { type: 'extrude', h: this.opt.h, from: this.fileName || 'SVG', tol: this.opt.tolMm / 10, shapes }
     });
     // SVG 的 (x, y) 對應世界的 (x, z)，跟擠出時同一套對應
     obj.pos.set(x, 0, z);

@@ -60,7 +60,8 @@ export const PRIM_DEFAULTS = {
     first: 40,       // 第一段長度
     arcSeg: 4,       // 每個折彎圓弧分幾段
     k: 0.4,          // K 因子（中性層位置比例，見 neutralRadius）
-    bends: [{ angle: 90, ri: 2, len: 30 }]   // 一道折彎 ＝ L 型
+    bends: [{ angle: 90, ri: 2, len: 30 }],  // 一道折彎 ＝ L 型
+    anchorSeg: 1     // ④-19：原點在第幾段的起點（1 ＝ 第一段，跟以前一樣）
   },
   // ── 2026-10-08 加的四種（kang 看過互動圖、拍板）──
   torus:    { rOuter: 30, rInner: 15, seg: 32, segT: 12 },
@@ -273,7 +274,11 @@ export const PRIM_SPECS = {
             + '長得完全一樣，展開時分不出是圓弧還是倒角，長度會少算' },
       { key: 'k',      label: 'K 因子',   min: 0, max: 0.5, step: 0.05,
         hint: '中性層落在板厚的幾成（從內側量起）。軟鋼 0.4、不鏽鋼 0.45、鋁 0.35。'
-            + '下料長度就是照這個算出來的' }
+            + '下料長度就是照這個算出來的' },
+      /** ④-19 剩下的（2026-10-20）：原點放在第幾段的起點（`bendProfile()`）；改它時面板會把位置補回來，板子⛔ 跳 */
+      { key: 'anchorSeg', label: '原點在第幾段', min: 1, step: 1, int: true,
+        hint: '原點（位置欄的那一點）放在第幾段直線的起點：1 ＝ 第一段（原本的），2 ＝ 第一道折彎之後那一段…。'
+            + '例如要讓牆（第 2 段）剛好在 X −3.33，就選 2、位置 X 打 −3.33。改這格時板子不會動，只換原點' }
     ],
     hasBends: true
   },
@@ -873,11 +878,49 @@ export function shiftShape(shape, dx, dy) {
     }
     return out;
   };
+  /** ④-7（2026-10-20）：匯入時留下來的錨點（`ob`／`hb`）也要跟著搬 —— 把手是相對錨點的位移，⛔ 用動 */
+  const moveBez = bz => (bz && Array.isArray(bz.a) ? { a: move(bz.a), hi: (bz.hi || []).slice(), ho: (bz.ho || []).slice() } : bz);
   return {
     ...shape,
     out: move(shape.out || []),
-    holes: (shape.holes || []).map(move)
+    holes: (shape.holes || []).map(move),
+    ...(shape.ob ? { ob: moveBez(shape.ob) } : {}),
+    ...(shape.hb ? { hb: shape.hb.map(moveBez) } : {})
   };
+}
+
+/**
+ * 🔴 **匯入的封閉形狀 → 鋼筆**（綜合評估 ④-7，2026-10-20，kang「同意你的安排與建議」）。
+ * 匯入的形狀是「擠出件」（只存折成直線的點）⇒ ⛔ 能改點、加洞（T6 招牌字）。鋼筆可以「編輯路徑」。
+ * ⭐ 匯入時多留了每一圈 Illustrator 的錨點與把手（`ob` 外圈、`hb` 每個洞）⇒ 轉過去點跟原稿一樣；
+ * 　 舊的匯入沒有 ⇒ 每個折點當一個尖角的錨點（形狀一樣、點比較多），回傳 `approx` 讓畫面講出來。
+ * ⚠ 兩邊都走 `extrudeMany()`、同一套 2D 座標與厚度 ⇒ 位置、大小⛔ 變（曲線重新細分，邊上的點可能差一點點）。
+ * 🔴 **細分的容許值要跟著帶過去**（本機畫面試出來的）：鋼筆預設 `DEFAULT_TOL` 0.2 cm，匯入預設 0.2 mm ——
+ * 　 沒帶過去的話一段平緩的弧只切兩刀，體積少 0.7%。匯入時記在 `src.tol`（cm）；舊的匯入沒記 ⇒ 用匯入的預設 0.02 cm。
+ * @returns {{ok:boolean, src?:object, approx?:number, anchors?:number, reason?:string}}
+ */
+export const IMPORT_TOL_CM = 0.02;
+export function extrudeToPenSrc(src) {
+  if (!src || src.type !== 'extrude' || !Array.isArray(src.shapes) || !src.shapes.length) {
+    return { ok: false, reason: '這個物件不是匯入的擠出件' };
+  }
+  let approx = 0, anchors = 0;
+  const path = (bz, flat) => {
+    if (bz && Array.isArray(bz.a) && bz.a.length >= 6) {
+      anchors += bz.a.length / 2;
+      return { closed: true, a: bz.a.slice(), hi: (bz.hi || bz.a.map(() => 0)).slice(), ho: (bz.ho || bz.a.map(() => 0)).slice() };
+    }
+    approx++;
+    anchors += (flat || []).length / 2;
+    return { closed: true, a: (flat || []).slice(), hi: (flat || []).map(() => 0), ho: (flat || []).map(() => 0) };
+  };
+  const paths = [];
+  for (const s of src.shapes) {
+    paths.push(path(s.ob, s.out));
+    (s.holes || []).forEach((h, i) => paths.push(path(s.hb && s.hb[i], h)));
+  }
+  const tol = +src.tol > 0 ? +src.tol : IMPORT_TOL_CM;
+  return { ok: true, src: { type: 'pen', h: num(src.h, 3), tol, paths }, approx, anchors };
 }
 
 const r4 = v => Math.round(v * 1e4) / 1e4;
@@ -1009,6 +1052,26 @@ export function penRevAutoAt(p, dir) {
  * @returns `revolve()` 的回傳（`ok:false` 時有 `reason`）——
  *          介面的「離中心線」與「實體還是板件」都讀這一份，⛔ 不各算一次
  */
+/**
+ * 🔴 **旋轉成形：打「起點離中心線多遠」⇒ 中心線該放哪**（綜合評估 ④-13，2026-10-20，kang「同意你的安排與建議」）。
+ * 以前只能打中心線的位置，要燈罩上口剛好半徑 8 得自己算（T5）。
+ * ⭐ 線**一格都不動**、只挪中心線：起點（輪廓的第一個點）離中心線剛好 `R`，而且**留在原本那一側**（⛔ 跨過去把碗翻面）。
+ * ⚠ R 是線自己座標的長度（面板會先除以物件的縮放）。
+ * @returns {{ok:boolean, at?:number, reason?:string}}
+ */
+export function penRevAtForHeadR(p, R) {
+  const rv = p && p.rev;
+  if (!rv) return { ok: false, reason: '這支鋼筆沒有開旋轉成形' };
+  if (!(R >= 0)) return { ok: false, reason: '起點離中心線要打 0 以上的數字' };
+  const pr = penRevProfile(p);
+  if (!pr.ok) return pr;
+  const q = pr.pts[0];
+  const c = rv.dir === 'x' ? q.y : q.x;
+  const at = num(rv.at, 0);
+  const side = Math.sign(c - at) || 1;
+  return { ok: true, at: c - side * R };
+}
+
 export function penRevolve(p) {
   const rv = p && p.rev;
   if (!rv) return { ok: false, reason: '這支鋼筆沒有開旋轉成形' };
@@ -1454,55 +1517,7 @@ const BUILDERS = {
   bend(p, t = 0) {
     const D = PRIM_DEFAULTS.bend;
     const w = num(p.w, D.w);
-    const first = num(p.first, D.first);
-    // 下限 2：切一段的圓弧在網格上跟倒角完全一樣，展開時認不出來。
-    // 這不是保守，是資訊真的不存在（見 unfold/flatten.js 檔頭）。
-    const arcSeg = int(p.arcSeg, D.arcSeg, 2);
-    const k = num(p.k, D.k);
-    const bends = Array.isArray(p.bends) && p.bends.length ? p.bends : D.bends;
-
-    // ── 先在 XY 平面走出斷面折線 ──
-    let x = 0, y = 0;          // 目前位置
-    let dx = 1, dy = 0;        // 目前方向
-    const line = [[x, y]];
-
-    const advance = len => {
-      x += dx * len; y += dy * len;
-      line.push([x, y]);
-    };
-
-    advance(first);
-
-    for (const b of bends) {
-      const deg = num(b && b.angle, 90);
-      const rad = THREE.MathUtils.degToRad(deg);
-      // 面上畫的是中性面，所以用中性層半徑；使用者填的是內側 R
-      const r = neutralRadius(b && b.ri, k, t);
-      const len = Math.max(0, num(b && b.len, 0));
-
-      if (r > 1e-9 && Math.abs(rad) > 1e-9) {
-        // 圓心在垂直於行進方向、朝轉彎那一側，距離 r
-        const s = Math.sign(rad);
-        const cx = x - dy * r * s;
-        const cy = y + dx * r * s;
-        const a0 = Math.atan2(y - cy, x - cx);
-
-        for (let k = 1; k <= arcSeg; k++) {
-          const a = a0 + (rad / arcSeg) * k;
-          x = cx + Math.cos(a) * r;
-          y = cy + Math.sin(a) * r;
-          line.push([x, y]);
-        }
-      }
-
-      // 轉向（半徑 0 就是尖角折）
-      const c = Math.cos(rad), sn = Math.sin(rad);
-      const ndx = dx * c - dy * sn;
-      const ndy = dx * sn + dy * c;
-      dx = ndx; dy = ndy;
-
-      if (len > 0) advance(len);
-    }
+    const { line } = bendProfile(p, t);
 
     // ── 沿 Z 擠成面（中性面，沒有厚度）──
     const pts = [];
@@ -1520,6 +1535,76 @@ const BUILDERS = {
     return m;
   }
 };
+
+/**
+ * 折板的斷面折線（XY 平面），從 `bend()` 拆出來（原本那一段一字未改，只多記「每一段直線從哪裡開始」）。
+ *
+ * 🔴 **原點放在第幾段的起點**（綜合評估 ④-19 剩下的，2026-10-20，kang「同意你的安排與建議」）——
+ * 以前原點一律在**第一段的起點**：T3 要讓隔板的牆（第 2 段）落在 X −3.33，得自己算 −3.33 −（1 ＋ 0.2 ＋ 0.25）＝ −4.78。
+ * ⇒ `p.anchorSeg`（1 ＝ 第一段，照舊）：整條斷面平移，讓**那一段的起點**落在原點 ⇒ 位置欄打的就是那一段在哪。
+ * ⚠ 只平移、⛔ 轉：每一段的方向照舊（要哪一段水平靠旋轉）。超出段數 ⇒ 夾到最後一段。
+ *
+ * @returns {{line:number[][], segStarts:number[][], anchor:number}} `segStarts[i]` ＝ 第 i＋1 段在「沒平移時」的起點
+ */
+export function bendProfile(p, t = 0) {
+  const D = PRIM_DEFAULTS.bend;
+  const first = num(p.first, D.first);
+  // 下限 2：切一段的圓弧在網格上跟倒角完全一樣，展開時認不出來。
+  // 這不是保守，是資訊真的不存在（見 unfold/flatten.js 檔頭）。
+  const arcSeg = int(p.arcSeg, D.arcSeg, 2);
+  const k = num(p.k, D.k);
+  const bends = Array.isArray(p.bends) && p.bends.length ? p.bends : D.bends;
+
+  // ── 先在 XY 平面走出斷面折線 ──
+  let x = 0, y = 0;          // 目前位置
+  let dx = 1, dy = 0;        // 目前方向
+  const line = [[x, y]];
+  const segStarts = [[0, 0]];
+
+  const advance = len => {
+    x += dx * len; y += dy * len;
+    line.push([x, y]);
+  };
+
+  advance(first);
+
+  for (const b of bends) {
+    const deg = num(b && b.angle, 90);
+    const rad = THREE.MathUtils.degToRad(deg);
+    // 面上畫的是中性面，所以用中性層半徑；使用者填的是內側 R
+    const r = neutralRadius(b && b.ri, k, t);
+    const len = Math.max(0, num(b && b.len, 0));
+
+    if (r > 1e-9 && Math.abs(rad) > 1e-9) {
+      // 圓心在垂直於行進方向、朝轉彎那一側，距離 r
+      const s = Math.sign(rad);
+      const cx = x - dy * r * s;
+      const cy = y + dx * r * s;
+      const a0 = Math.atan2(y - cy, x - cx);
+
+      for (let k = 1; k <= arcSeg; k++) {
+        const a = a0 + (rad / arcSeg) * k;
+        x = cx + Math.cos(a) * r;
+        y = cy + Math.sin(a) * r;
+        line.push([x, y]);
+      }
+    }
+
+    // 轉向（半徑 0 就是尖角折）
+    const c = Math.cos(rad), sn = Math.sin(rad);
+    const ndx = dx * c - dy * sn;
+    const ndy = dx * sn + dy * c;
+    dx = ndx; dy = ndy;
+
+    segStarts.push([x, y]);
+    if (len > 0) advance(len);
+  }
+
+  const anchor = Math.min(Math.max(int(p.anchorSeg, 1, 1), 1), segStarts.length);
+  const [ox, oy] = segStarts[anchor - 1];
+  if (ox || oy) for (const q of line) { q[0] -= ox; q[1] -= oy; }
+  return { line, segStarts, anchor };
+}
 
 // ═══════════════════════════════════════════════════════
 //  斷面工具

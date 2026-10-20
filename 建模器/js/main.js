@@ -45,7 +45,8 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
-import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges } from './core/selectops.js';
+import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges,
+         boundaryRingFrom } from './core/selectops.js';
 import { worldBounds } from './core/align.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
@@ -1088,6 +1089,24 @@ function penLenGo() {
   toast(`照長度放了一個點：${sel.penFixLen} cm、${sel.penFixAng}°`);
 }
 $('penLenGo').onclick = () => penLenGo();
+/** ④-13（2026-10-20）：打座標放點（`select.js` `penPlaceWorld()`；第一點也可以）*/
+function penXYGo() {
+  const a = parseFloat($('penCA').value), b = parseFloat($('penCB').value);
+  const [na, nb] = sel.penCoordAxes();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) { toast(`先在「${na}」「${nb}」兩格都打數字（單位 cm）`, true); return; }
+  const r = sel.penPlaceWorld(a, b);
+  if (!r.ok) { toast(r.reason, true); return; }
+  updateBar();
+  toast(`放了第 ${r.n} 個點：${na} ${a}、${nb} ${b} cm（世界座標）`);
+}
+$('penXYGo').onclick = () => penXYGo();
+for (const id of ['penCA', 'penCB']) {
+  $(id).addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    penXYGo();
+  });
+}
 $('penSnap').onclick = () => {
   sel.penSnapAngle = !sel.penSnapAngle;
   updateBar();
@@ -4945,8 +4964,32 @@ function selectLoopFromEdge() {
     toast('先在編輯模式下選一條邊，再按「選一條線」', true);
     return;
   }
+  /**
+   * ④-18 剩下的（2026-10-20）：**選了兩條相鄰的外緣 ⇒ 那一整圈開口**（`selectops.js` `boundaryRingFrom()`）。
+   * 開口邊緣的點只接三條邊，從一條邊出發走一步就停（T1 帽緣）⇒ 兩條相鄰的就指得出是哪一圈。
+   */
+  if (sel.editCount === 2 && sel.editSels.every(s => s.kind === 'edge' && s.obj === el.obj)) {
+    const r2 = boundaryRingFrom(el.obj.mesh(), sel.editSels[0].he, sel.editSels[1].he);
+    if (!r2.ok) {
+      /**
+       * 本機畫面試出來的：「含外緣」已經開著、卻點到不是開口的邊（上視圖穿過開口點到底部那一圈）——
+       * 再叫人「先打開含外緣」會誤導 ⇒ 開著時改講「換個角度」
+       */
+      const why = sel.includeBoundary && r2.reason.includes('含外緣')
+        ? '點到的不是開口的邊緣（例如從正上方看，點到的可能是穿過開口看到的底部那一圈）—— 轉成斜一點的角度（等角），點開口那一圈相鄰的兩條'
+        : r2.reason;
+      toast(`選一條線（兩條邊）：${why}`, true);
+      return;
+    }
+    const got2 = sel.selectEdges(el.obj, r2.hes);
+    panel.refresh();
+    updateBar();
+    updateEditNum();
+    toast(`已選起一整圈開口：${got2} 條邊（從你選的兩條外緣找出來的那一圈）`);
+    return;
+  }
   if (sel.editCount > 1) {
-    toast(`選一條線一次只能從一條邊出發（現在選了 ${sel.editCount} 個）`, true);
+    toast(`選一條線一次只能從一條邊出發（現在選了 ${sel.editCount} 個）—— 要選一整圈開口，選兩條相鄰的外緣`, true);
     return;
   }
   const r = edgeLoop(el.obj.mesh(), el.he);
@@ -6821,9 +6864,13 @@ function updateBar() {
    * 選一條線：條件跟「選一圈」一模一樣（正好選到一條邊）——
    * ⚠ 兩顆的差別在**走法**，不在**能不能按**。
    */
-  $('selLoop').hidden = !edge1;
-  $('selLoop').title = edge1
-    ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）'
+  /** ④-18：剛好兩條邊也給按（兩條相鄰的外緣 ⇒ 一整圈開口；不是的話按下去會講原因）*/
+  const edge2 = sel.editMode && sel.editCount === 2 && sel.editSels.every(s => s.kind === 'edge');
+  $('selLoop').hidden = !(edge1 || edge2);
+  $('selLoop').title = edge2
+    ? '選了兩條邊：兩條是相鄰的外緣（開口的邊）⇒ 把那一整圈開口選起來'
+    : edge1
+    ? '從這條邊【順著同一條線】走到底（球的一條經線＝從極走到極）。要選一整圈開口：選兩條相鄰的外緣再按'
     : (sel.editMode ? '先選一條邊' : '先按「拉點線面」進入編輯模式，再選一條邊');
 
   /**
@@ -7045,6 +7092,9 @@ function updateBar() {
   $('penSmart').hidden = !sel.penMode;
   $('penSmart').classList.toggle('on', !!sel.penSmart);
   for (const id of ['penLenLbl', 'penLen', 'penAngLbl', 'penAng', 'penLenGo']) $(id).hidden = !penDrawing;
+  /** ④-13：打座標放點跟打長度同一個時候出現；兩格的名字跟著畫圖那一片換（地板 X／Z、牆 Z／Y 或 X／Y）*/
+  for (const id of ['penCALbl', 'penCA', 'penCBLbl', 'penCB', 'penXYGo']) $(id).hidden = !penDrawing;
+  if (penDrawing) { const [na, nb] = sel.penCoordAxes(); $('penCALbl').textContent = na; $('penCBLbl').textContent = nb; }
   $('penPark').hidden = !penDrawing;
   $('penPark').disabled = sel.penCount === 0;
   $('penUndo').hidden = !penDrawing;

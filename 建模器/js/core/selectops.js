@@ -990,3 +990,32 @@ function notInLine(kind, why) {
     + `所以「隔一個」沒有唯一的答案。`
     + `先用「選一圈${kind === 'face' ? '面' : ''}」或「選一條線」選出連成一串的${n}，再按一次`;
 }
+
+/**
+ * 🔴 **兩條相鄰的外緣 ⇒ 那一整圈開口**（綜合評估 ④-18 剩下的，2026-10-20，kang「同意你的安排與建議」）。
+ *
+ * 「選一條線」（`edgeLoop()`）只穿過「四條邊交會」的點 ⇒ 開口的邊緣（一個點只接三條邊）走一步就停（T1 帽緣）。
+ * ⇒ 選**兩條相鄰的外緣**（共用一個點、都是開口的邊）當作「指這一圈」，回傳 `boundaryEdges()` 裡含著它們的那一整圈。
+ * ⚠ 那一圈在某個點捏成一點、或斷開（`orderLoop()` 回 null）⇒ 講原因，⛔ 回半圈。
+ * ⭐ 回傳的半邊一律換成「有面的那一側」（畫面上點得到、選取用的那一條）。
+ *
+ * @returns {{ok:true, hes:HalfEdge[]} | {ok:false, reason:string}}
+ */
+export function boundaryRingFrom(mesh, heA, heB) {
+  const isB = he => !!he && (!he.face || !he.twin || !he.twin.face);
+  if (!isB(heA) || !isB(heB)) return { ok: false, reason: '兩條都要是開口的邊緣（最外圈那種邊）—— 要點到它們，先打開「含外緣」' };
+  const ends = he => [he.v.id, he.to.id];
+  const shared = ends(heA).some(id => ends(heB).includes(id));
+  if (!shared) return { ok: false, reason: '兩條邊要接在一起（共用一個點），才知道你指的是哪一圈' };
+  const kA = edgeKeyOf(heA.v.id, heA.to.id), kB = edgeKeyOf(heB.v.id, heB.to.id);
+  const b = boundaryEdges(mesh);
+  for (let i = 0; i < b.loops.length; i++) {
+    const loop = b.loops[i];
+    if (!loop) continue;
+    const keys = new Set(loop.map(he => edgeKeyOf(he.v.id, he.to.id)));
+    if (keys.has(kA) && keys.has(kB)) {
+      return { ok: true, hes: loop.map(he => (he.face ? he : (he.twin && he.twin.face ? he.twin : he))) };
+    }
+  }
+  return { ok: false, reason: '這一圈開口在某個點捏在一起或斷開了，排不出完整的一圈' };
+}

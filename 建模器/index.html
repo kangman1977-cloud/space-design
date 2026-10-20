@@ -1020,6 +1020,13 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <input id="penAng" type="number" step="1" hidden style="width:56px" placeholder="度"
              title="角度（度）：一個數字兩種用法。在畫面上點 ＝ 每隔這麼多度一格、繞一整圈，停在最靠近滑鼠的那一格（打 30 ＝ 0、30、60…330 共 12 個方向；打 1 ＝ 幾乎自由）。按「照長度放點」＝ 照數字本身：0 ＝ 往右、90 ＝ 往上（上視圖的畫面上方）、逆時針為正。⚠ 0 或超過 180 的數字不當格子，點畫面也照數字本身。清空就回到照滑鼠的方向">
       <button id="penLenGo" hidden title="照左邊的長度與角度放下一個點 —— 滑鼠完全不必碰畫面，方向照角度的數字本身（30 ＝ 往右上斜 30 度、135 ＝ 左上、270 ＝ 往下）。⚠ 要兩格都有數字；只有長度的話，直接在畫面上點方向就好">照長度放點</button>
+      <span class="lbl" id="penCALbl" hidden>X</span>
+      <input id="penCA" type="number" step="any" hidden style="width:60px" placeholder="cm"
+             title="打座標放點（世界座標，跟右側面板的位置、參考線同一套）：這一格是畫圖那一片的第一根軸（地板 ＝ X）。打完兩格按「放在這裡」，第一點也可以">
+      <span class="lbl" id="penCBLbl" hidden>Z</span>
+      <input id="penCB" type="number" step="any" hidden style="width:60px" placeholder="cm"
+             title="打座標放點：這一格是畫圖那一片的第二根軸（地板 ＝ Z）。打完按 Enter 或「放在這裡」">
+      <button id="penXYGo" hidden title="照左邊的兩個座標放一個點（第一點也可以）—— 跟滑鼠點下去一樣是尖角，之後照樣能拖把手改圓滑">放在這裡</button>
       <button id="penPark" hidden title="確定曲線：把這一段固定下來，線就不會再跟著游標跑。⚠ 桌機也可以直接【按一下右鍵】—— 這顆是平板唯一的路（平板沒有右鍵）">確定曲線</button>
       <button id="penUndo" hidden title="退掉剛才放的最後一個點">退一點</button>
       <button id="penCancel" hidden title="離開鋼筆，剛才畫的全部不算">取消</button>
