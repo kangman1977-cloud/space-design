@@ -18351,6 +18351,63 @@ if (csgOK) {
   ok('★★ 　 只疊 0.005 cm（比 0.01 cm 薄）⇒ 當成貼在一起、⛔ 列', rs.ok && rs.list.length === 0 && rs.touching === 1);
 }
 
+section('綜合評估 ④ 第二批（三）：同軸貼合（2026-10-20）');
+{
+  /** 工具列「同軸」、點兩下、黃線（main.js）在本機／線上版用畫面驗 */
+  const M = await import('../js/core/mate.js');
+  const sideOf = obj => { const m = obj.mesh(); m.computeNormals(); return m.faces.find(f => Math.abs(f.normal.y) < 0.1); };
+  const shaft = new io.ModelObject({ name: '軸', src: { type: 'cylinder', r: 0.3, h: 6, seg: 32 } });
+  shaft.pos.set(5, 3, 2); shaft.rot.set(0.3, 0, 0.2);
+  const fs = M.cylinderFrame(shaft, sideOf(shaft));
+  const wantDir = new THREE.Vector3(0, 1, 0).applyEuler(shaft.rot);
+  ok('★★★ ④-9 點圓柱的側面 ⇒ 中心線穿過它的中心、方向 ＝ 它轉過之後的高度方向、半徑 0.3', fs.ok
+    && fs.point.distanceTo(new THREE.Vector3(5, 3, 2)) < 1e-6 && Math.abs(Math.abs(fs.dir.dot(wantDir)) - 1) < 1e-9 && Math.abs(fs.radius - 0.3) < 1e-6, fs.reason || fs.point.toArray().join());
+  ok('★★ 　 那一圈長到整個側面就停（蓋子 90° ⛔ 算進來）：64 個三角形', fs.ok && fs.count === 64, fs.count);
+  const m0 = shaft.mesh();
+  const cap = m0.faces.find(f => f.normal.y > 0.9);
+  ok('★★ 　 點到平的蓋子 ⇒ ⛔ 猜、講「要點圓的側面」', !M.cylinderFrame(shaft, cap).ok && M.cylinderFrame(shaft, cap).reason.includes('圓的側面'));
+  const ball = new io.ModelObject({ name: '球', src: { type: 'sphere', r: 5 } });
+  const bm = ball.mesh(); bm.computeNormals();
+  const rb = M.cylinderFrame(ball, bm.faces[Math.floor(bm.faces.length / 2)]);
+  ok('★ 　 球面 ⇒ ⛔ 猜（不是繞同一條中心線的圓）', !rb.ok, rb.reason || 'ok?');
+  const scaled = new io.ModelObject({ name: '扁', src: { type: 'cylinder', r: 1, h: 2, seg: 32 } });
+  scaled.scale.set(1, 3, 1); scaled.pos.set(-4, 0, 0);
+  const fsc = M.cylinderFrame(scaled, sideOf(scaled));
+  ok('★ 　 拉長過的圓柱（Y × 3）：中心線方向照樣是 Y、半徑照樣 1', fsc.ok && Math.abs(Math.abs(fsc.dir.y) - 1) < 1e-9 && Math.abs(fsc.radius - 1) < 1e-6);
+  if (csgOK) {
+    const B = await import('../js/build/bool.js');
+    const board = new io.ModelObject({ name: '板', src: { type: 'box', w: 20, h: 2, d: 20 } }); board.pos.set(10, 1, 0);
+    const cut = new io.ModelObject({ name: '孔', src: { type: 'cylinder', r: 1, h: 4, seg: 32 } }); cut.pos.set(13, 1, -4);
+    const plate = new io.ModelObject({ name: '有孔的板', src: io.boolSrcFrom([board, cut], B.BOOL_OPS.SUBTRACT), pos: board.pos.clone() });
+    const pm = plate.mesh(); pm.computeNormals();
+    const wall = pm.faces.find(f => {
+      if (Math.abs(f.normal.y) > 0.1) return false;
+      const vs = pm.faceVerts(f).map(v => v.p);
+      const cx = vs.reduce((s, p) => s + p.x, 0) / vs.length, cz = vs.reduce((s, p) => s + p.z, 0) / vs.length;
+      return Math.hypot(cx - 3, cz + 4) < 1.2;
+    });
+    const fh = M.cylinderFrame(plate, wall);
+    ok('★★★ 　 布林挖出來的孔：點孔的內壁 ⇒ 中心線在 (13, ?, −4)、垂直、半徑 1（法線朝內也算得對）', fh.ok
+      && Math.hypot(fh.point.x - 13, fh.point.z + 4) < 1e-6 && Math.abs(Math.abs(fh.dir.y) - 1) < 1e-9 && Math.abs(fh.radius - 1) < 1e-6, fh.reason || fh.point.toArray().join());
+    const pin = new io.ModelObject({ name: '軸', src: { type: 'cylinder', r: 0.9, h: 6, seg: 32 } });
+    pin.pos.set(-5, 8, 7); pin.rot.set(0.4, 0, 0);
+    const fp = M.cylinderFrame(pin, sideOf(pin));
+    const r = M.mateCoaxial(pin, fp, fh);
+    pin.pos.copy(r.pos); pin.rot.copy(r.rot); pin.invalidate();
+    const after = M.cylinderFrame(pin, sideOf(pin));
+    ok('★★★ ④-9 同軸：斜放的軸對到孔 ⇒ 中心線變成同一條（垂直、穿過孔心）', after.ok && Math.abs(Math.abs(after.dir.y) - 1) < 1e-9
+      && Math.hypot(after.point.x - 13, after.point.z + 4) < 1e-6, after.point.toArray().join());
+    near('★★★ 　 沿中心線的上下位置⛔ 動（軸的中心還在 Y 8）', after.point.y, 8, 1e-6);
+    near('★★ 　 只轉需要的那一點（原本斜 0.4 弧度 ＝ 22.92°）', r.angle, 0.4 * 180 / Math.PI, 1e-6);
+    ok('★ 　 再對一次 ⇒ 已經同軸、⛔ 動', !M.mateCoaxial(pin, after, fh).moved);
+  }
+  const p2 = new io.ModelObject({ name: '倒過來的軸', src: { type: 'cylinder', r: 0.5, h: 4, seg: 32 } });
+  p2.rot.set(Math.PI - 0.1, 0, 0); p2.pos.set(2, 5, 0);
+  const f2 = M.cylinderFrame(p2, sideOf(p2));
+  const r2 = M.mateCoaxial(p2, f2, fs);
+  ok('★★ 　 方向剛好反過來的 ⇒ 挑轉最少的那一邊（⛔ 無故翻 180°）', r2.angle < 30, r2.angle);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

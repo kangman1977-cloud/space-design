@@ -307,3 +307,133 @@ export function mateVertexToVertex(src, srcPoint, dstPoint) {
     moved: pos.distanceTo(src.pos) > 1e-9
   };
 }
+
+// ═══════════════════════════════════════════════════════
+//  同軸（綜合評估 ④-9，2026-10-20，kang「同意你的建議」）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴🔴 **從點到的那一個面，找出它所在那一圈曲面的中心線**（軸的外面、孔的內壁都行）。
+ *
+ * kang 照建議定的三件事：**點圓的側面**（⛔ 點邊緣 —— T9 小東西點下去常常抓到點）；
+ * **沿中心線的上下位置⛔ 動**（只往旁邊移、轉正 —— 跟 SolidWorks 的「同心」一樣）；
+ * **⛔ 記「這兩個同軸」**（對一次就好，跟齒輪「咬上去」同一個決定）。
+ *
+ * 做法：
+ * ① 從點到的面往旁邊長，相鄰兩個面的夾角小於 `COAX_GROW_DEG` 就算同一圈 ——
+ * 　 圓柱的側面一格只轉 11.25°（32 段），碰到蓋子（90°）就停。
+ * ② 中心線的方向 ＝ 這一圈每個面的法線兩兩外積（法線都垂直於中心線，外積就平行於它）。
+ * ③ 中心線的位置：每個面的法線那條線都穿過中心線（圓柱、圓錐都是）⇒ 在垂直於中心線的平面上
+ * 　 求離所有法線線「最近」的那一點（最小平方，2 × 2）。⭐ 孔的法線朝內、軸的朝外，一樣成立。
+ * ⚠ 平的面、球面這種⛔ 是一圈繞同一條線的 ⇒ 講原因、⛔ 猜。
+ *
+ * @returns {{ok:boolean, reason?:string, point?:THREE.Vector3, dir?:THREE.Vector3, radius?:number,
+ *           ends?:THREE.Vector3[], count?:number}} 世界座標；`point` 在這一圈的中段
+ */
+const COAX_GROW_DEG = 40;
+export function cylinderFrame(obj, face, mesh = null) {
+  const m = mesh || obj.mesh();
+  m.computeNormals();
+  if (!face || !face.normal) return { ok: false, reason: '沒點到面' };
+  const cosGrow = Math.cos(COAX_GROW_DEG * Math.PI / 180);
+  const seen = new Set([face]);
+  const list = [face];
+  for (let k = 0; k < list.length; k++) {
+    const f = list[k];
+    for (const he of m.faceLoop(f)) {
+      const g = he.twin && he.twin.face;
+      if (!g || seen.has(g)) continue;
+      if (f.normal.dot(g.normal) < cosGrow) continue;
+      seen.add(g);
+      list.push(g);
+    }
+    if (list.length > 20000) break;
+  }
+  /** 每個面：中心、法線、面積（面積當權重 —— 細長的三角形⛔ 該跟大面一樣重） */
+  const items = list.map(f => {
+    const vs = m.faceVerts(f).map(v => v.p);
+    const c = new THREE.Vector3();
+    for (const p of vs) c.add(p);
+    c.multiplyScalar(1 / vs.length);
+    let area = 0;
+    for (let i = 1; i + 1 < vs.length; i++) {
+      area += new THREE.Vector3().subVectors(vs[i], vs[0]).cross(new THREE.Vector3().subVectors(vs[i + 1], vs[0])).length() / 2;
+    }
+    return { c, n: f.normal.clone().normalize(), w: Math.max(area, 1e-12), vs };
+  });
+  const n0 = items[0].n;
+  const axis = new THREE.Vector3();
+  let spread = 0;
+  for (const it of items) {
+    const x = new THREE.Vector3().crossVectors(n0, it.n);
+    spread = Math.max(spread, x.length());
+    if (x.lengthSq() < 1e-8) continue;
+    if (axis.lengthSq() > 0 && x.dot(axis) < 0) x.negate();
+    axis.addScaledVector(x, it.w);
+  }
+  if (spread < Math.sin(15 * Math.PI / 180) || axis.lengthSq() < 1e-16) {
+    return { ok: false, reason: '點到的是平的面（或彎得太少）—— 同軸要點圓的側面：軸的外面、孔的內壁' };
+  }
+  axis.normalize();
+  /** 法線要大致垂直於中心線（圓柱 0°；圓錐容許到 30°）—— 球面、自由曲面這裡會被擋下來 */
+  for (const it of items) {
+    if (Math.abs(it.n.dot(axis)) > 0.5) {
+      return { ok: false, reason: '點到的那一圈不是繞同一條中心線的圓（可能是球面、或連到別的面）—— 同軸要點圓柱的側面' };
+    }
+  }
+  const u = new THREE.Vector3(1, 0, 0);
+  if (Math.abs(u.dot(axis)) > 0.9) u.set(0, 1, 0);
+  u.addScaledVector(axis, -u.dot(axis)).normalize();
+  const v = new THREE.Vector3().crossVectors(axis, u);
+  let a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0, tSum = 0, wSum = 0;
+  for (const it of items) {
+    const du = it.n.dot(u), dv = it.n.dot(v);
+    const L = Math.hypot(du, dv);
+    if (L < 1e-9) continue;
+    const ex = du / L, ey = dv / L;
+    const cu = it.c.dot(u), cv = it.c.dot(v);
+    /** (I − d dᵀ) p ＝ (I − d dᵀ) c */
+    const m11 = 1 - ex * ex, m12 = -ex * ey, m22 = 1 - ey * ey;
+    a11 += it.w * m11; a12 += it.w * m12; a22 += it.w * m22;
+    b1 += it.w * (m11 * cu + m12 * cv); b2 += it.w * (m12 * cu + m22 * cv);
+    tSum += it.w * it.c.dot(axis); wSum += it.w;
+  }
+  const det = a11 * a22 - a12 * a12;
+  if (Math.abs(det) < 1e-12 * Math.max(1, a11 * a22)) return { ok: false, reason: '算不出中心線（那一圈的面都朝同一個方向）' };
+  const pu = (b1 * a22 - b2 * a12) / det, pv = (a11 * b2 - a12 * b1) / det;
+  const local = new THREE.Vector3().addScaledVector(u, pu).addScaledVector(v, pv).addScaledVector(axis, tSum / wSum);
+  /** 換到世界座標：點照矩陣、方向是「沿著線」的向量（⛔ 法線矩陣） */
+  const M = obj.matrix();
+  const point = local.clone().applyMatrix4(M);
+  const dir = axis.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(M)).normalize();
+  let rs = 0, rn = 0, tMin = Infinity, tMax = -Infinity;
+  for (const it of items) {
+    for (const p of it.vs) {
+      const w = p.clone().applyMatrix4(M).sub(point);
+      const t = w.dot(dir);
+      tMin = Math.min(tMin, t); tMax = Math.max(tMax, t);
+      rs += w.addScaledVector(dir, -t).length(); rn++;
+    }
+  }
+  return {
+    ok: true, point, dir, radius: rn ? rs / rn : 0, count: list.length,
+    ends: [point.clone().addScaledVector(dir, tMin), point.clone().addScaledVector(dir, tMax)]
+  };
+}
+
+/**
+ * 同軸：把 `src` 轉正、往旁邊移，讓它的中心線跟 `dst` 的變成同一條。
+ * ⚠ **沿中心線的位置⛔ 動**（只去掉垂直於中心線的那段距離）；轉的時候挑轉最少的那個方向（⛔ 無故翻面）。
+ * @returns {{pos, rot, moved:boolean, angle:number, shift:number}} `angle` 轉了幾度、`shift` 旁移了幾 cm
+ */
+export function mateCoaxial(src, srcFrame, dstFrame) {
+  const want = dstFrame.dir.clone();
+  if (srcFrame.dir.dot(want) < 0) want.negate();
+  const { q } = rotationBetween(srcFrame.dir, want);
+  const r = rotateAbout(src.pos, src.rot, q, srcFrame.point);
+  const d = dstFrame.point.clone().sub(srcFrame.point);
+  d.addScaledVector(want, -d.dot(want));
+  r.pos.add(d);
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180 / Math.PI;
+  return { pos: r.pos, rot: r.rot, moved: didMove(q, src.pos, r.pos), angle, shift: d.length() };
+}

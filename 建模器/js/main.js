@@ -32,7 +32,7 @@ import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkab
 import { proposeSeams } from './unfold/propose.js';
 import { unfoldObject } from './unfold/part.js';
 import { faceFrame, edgeFrame, vertexPoint,
-         mateFaceToFace, mateEdgeToEdge, mateVertexToVertex } from './core/mate.js';
+         mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, extrudeFace,
          flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
@@ -1375,6 +1375,8 @@ $('mScale').onclick = () => setMode('scale');
  * 這個是吸到另一個物件的幾何。
  */
 let matePick1 = null;
+/** ④-9：貼合裡的「同軸」開關（只記在這次開著的頁面；離開貼合模式⛔ 關，下次進來還是上次的樣子） */
+let mateCoax = false;
 
 function toggleMateMode() {
   if (!sel.mateMode) exitOtherModes('mate');
@@ -1383,8 +1385,69 @@ function toggleMateMode() {
   matePick1 = null;
   view.clearPickMarks();
   panel.refresh();
-  toast(on ? '貼合：先點「要移動的」物件的點／邊／面，再點目標。再按一次離開'
+  updateBar();
+  toast(on ? (mateCoax
+    ? '貼合（同軸）：先點「要移動的」那個的圓側面（軸的外面或孔的內壁），再點目標的圓側面。再按一次離開'
+    : '貼合：先點「要移動的」物件的點／邊／面，再點目標（要中心線對中心線就開「同軸」）。再按一次離開')
            : '已離開貼合模式');
+}
+$('mateCoax').onclick = () => {
+  mateCoax = !mateCoax;
+  matePick1 = null;
+  view.clearPickMarks();
+  updateBar();
+  toast(mateCoax
+    ? '同軸：開。先點要移動的那個的圓側面（軸的外面或孔的內壁），再點目標的圓側面 —— 中心線對成同一條，上下位置不動'
+    : '同軸：關。回到點對點、邊對邊、面對面');
+};
+
+/**
+ * 🔴 **同軸的兩下**（綜合評估 ④-9，2026-10-20，kang「同意你的建議」）：計算在 `mate.js` `cylinderFrame()`／`mateCoaxial()`。
+ * ⭐ 點到邊或點也收：拿它旁邊那個面去找那一圈 —— 小軸的側面很窄，點下去常常落在邊上（T9）。
+ */
+function mateCoaxPick(el) {
+  /**
+   * 點到邊 ⇒ 兩邊的面都試；點到點 ⇒ 那個點周圍的面都試 —— 哪一個找得到中心線就用哪一個
+   * （本機畫面試出來的：孔的內壁只有板厚那麼高，點下去常常落在孔口那一圈邊上，邊的一側是平的頂面）
+   */
+  const m = el.obj.mesh();
+  const cands = el.kind === 'face' ? [el.face]
+    : el.kind === 'edge' ? [el.he.face, el.he.twin && el.he.twin.face]
+    : (el.vert ? m.vertOutgoing(el.vert).map(he => he.face) : []);
+  let fr = null;
+  for (const f of cands.filter(Boolean)) {
+    const r = cylinderFrame(el.obj, f, m);
+    if (r.ok) { fr = r; break; }
+    if (!fr) fr = r;
+  }
+  if (!fr) { toast('這裡點不到面 —— 同軸要點圓的側面（軸的外面或孔的內壁）', true); return; }
+  if (!fr.ok) { toast(fr.reason, true); return; }
+  const r2 = v => Math.round(v * 100) / 100;
+  if (!matePick1) {
+    matePick1 = { ...el, coax: fr };
+    sel.set([el.obj.id]);
+    view.setPickMarks([{ kind: 'edge', points: fr.ends, role: 'src' }]);
+    toast(`來源：「${el.obj.name}」的中心線（半徑 ${r2(fr.radius)} cm，黃線）　接著點目標的圓側面`);
+    return;
+  }
+  if (el.obj.id === matePick1.obj.id) {
+    toast('目標要選另一個物件。已重新開始，請重點來源', true);
+    matePick1 = null;
+    view.clearPickMarks();
+    return;
+  }
+  const src = matePick1.obj, a = matePick1.coax;
+  const r = mateCoaxial(src, a, fr);
+  matePick1 = null;
+  view.clearPickMarks();
+  if (!r.moved) { toast('已經同軸了，沒有東西需要移動'); return; }
+  src.pos.copy(r.pos);
+  src.rot.copy(r.rot);
+  commit('同軸貼合');
+  panel.refresh();
+  /** 粗細講出來：軸比孔粗就是插不進去（⛔ 擋 —— 有時候就是要量看看差多少） */
+  const fit = a.radius > fr.radius + 1e-3 ? `　⚠ 半徑 ${r2(a.radius)} 比 ${r2(fr.radius)} 大，插不進去` : '';
+  toast(`同軸完成：「${src.name}」的中心線對到「${el.obj.name}」的（轉了 ${r2(r.angle)}°、往旁邊移了 ${r2(r.shift)} cm；上下位置沒動）${fit}`);
 }
 
 const MATE_NAME = { vertex: '點', edge: '邊', face: '面' };
@@ -1411,6 +1474,7 @@ function mateMarkPoints(el) {
  */
 function matePick(el) {
   if (!el || el.kind === 'blocked') return;
+  if (mateCoax) { mateCoaxPick(el); return; }
 
   if (!matePick1) {
     matePick1 = el;
@@ -7138,6 +7202,12 @@ function updateBar() {
   $('penDel').disabled = sel.penSel < 0 || sel.penCount <= sel.penMinPts;
   /** ④-13 第三件：倒圓角也只在 `改點` 開著時出現；沒選到點時「倒圓角」變灰（「整條都倒」不必選點） */
   for (const id of ['penFilletLbl', 'penFilletR', 'penFillet', 'penFilletAll']) $(id).hidden = !(sel.penMode && sel.penEdit);
+  /**
+   * ④-9 同軸：只在貼合模式出現，開著時亮起來。
+   * ⚠ 管的是**按鈕**，⛔ 是那一組 —— 組要不要出現由 `hideEmptyGroups()` 問「裡面還有沒有按鈕看得見」（本機畫面試出來的）
+   */
+  $('mateCoax').hidden = !sel.mateMode;
+  $('mateCoax').classList.toggle('on', mateCoax);
   $('penFillet').disabled = sel.penSel < 0;
   /**
    * 🔴 **`加一條` 在鋼筆模式下一直看得到**（畫的時候、改的時候都要按得到）——
