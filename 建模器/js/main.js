@@ -896,6 +896,31 @@ $('toolDone').onclick = () => {
 $('penCorner').onclick = () => togglePenCorner();
 $('penEdit').onclick = () => togglePenEdit();
 $('penDel').onclick = () => deletePenAnchor();
+/**
+ * 🔴 **鋼筆轉角圓角**（綜合評估 ④-13 第三件，2026-10-20，kang「照建議」）。
+ * 計算在 `prim.js` `penFilletAt()`／`penFilletAll()`；倒錯了 Ctrl+Z 一次退一次（`sel.penUndoFillet()`）。
+ */
+function penFilletGo(whole) {
+  const r = parseFloat($('penFilletR').value);
+  const res = sel.penFillet(r, whole);
+  if (!res.ok) {
+    if (res.maxR > 0) $('penFilletR').value = res.maxR;
+    toast(res.reason + (res.maxR > 0 ? '（R 那一格已經改成最大值，要用就再按一次）' : ''), true);
+    return;
+  }
+  applyPenEdit();
+  updateBar();
+  toast(whole
+    ? `整條倒了 ${res.done} 個角（R ${r} cm）` + (res.skipped ? `；${res.skipped} 個角旁邊有曲線，沒倒` : '') + '　倒錯了按 Ctrl+Z 退回'
+    : `倒好了：R ${r} cm（那個角換成圓弧兩端的兩個點）　倒錯了按 Ctrl+Z 退回`);
+}
+$('penFillet').onclick = () => penFilletGo(false);
+$('penFilletAll').onclick = () => penFilletGo(true);
+$('penFilletR').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  penFilletGo(sel.penSel < 0);
+});
 $('penAddPath').onclick = () => addPenPath();
 $('penSnapDeg').oninput = () => {
   const d = +$('penSnapDeg').value;
@@ -6536,6 +6561,22 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === 'z') {
     e.preventDefault();
+    /** ④-13 第三件：改點時先退倒圓角（一次退一次）；沒有可退的才走原本的復原 */
+    if (!e.shiftKey && sel.penMode && sel.penEdit && sel.penUndoFillet()) {
+      applyPenEdit();
+      updateBar();
+      toast('退回上一次倒圓角');
+      return;
+    }
+    /**
+     * 🔴 編輯路徑中⛔ 走整份檔案的復原（本機畫面試出來的，原本就有）：倒圓角退完再按一次 ⇒
+     * 退掉的是「畫鋼筆」那一步，物件整個不見、畫面卻還停在編輯路徑。新提示叫人按 Ctrl+Z，多按一下就碰到
+     */
+    if (penEditing) {
+      toast((e.shiftKey ? '編輯路徑中不能重做' : '編輯路徑中沒有倒圓角可以退了')
+        + ' —— 要整個不改按「取消」；其他的復原、重做等按「完成」之後再按', true);
+      return;
+    }
     jumpHistory(e.shiftKey);
     return;
   }
@@ -7045,6 +7086,9 @@ function updateBar() {
    */
   $('penDel').hidden = !(sel.penMode && sel.penEdit);
   $('penDel').disabled = sel.penSel < 0 || sel.penCount <= sel.penMinPts;
+  /** ④-13 第三件：倒圓角也只在 `改點` 開著時出現；沒選到點時「倒圓角」變灰（「整條都倒」不必選點） */
+  for (const id of ['penFilletLbl', 'penFilletR', 'penFillet', 'penFilletAll']) $(id).hidden = !(sel.penMode && sel.penEdit);
+  $('penFillet').disabled = sel.penSel < 0;
   /**
    * 🔴 **`加一條` 在鋼筆模式下一直看得到**（畫的時候、改的時候都要按得到）——
    * ⭐ 那正是 kang 要的「兩邊都做」，而它們是同一支。

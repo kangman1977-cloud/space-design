@@ -18220,6 +18220,70 @@ section('綜合評估 ④ 第一批（二）：環形繞別人、兩條外緣選
   eq('★ 　 　 舊的匯入沒記容許值 ⇒ 用匯入的預設 0.02 cm', prim.extrudeToPenSrc({ ...exC, tol: undefined }).src.tol, 0.02);
 }
 
+section('綜合評估 ④ 第二批：鋼筆轉角圓角（2026-10-20）');
+{
+  /** 工具列的按鈕、Ctrl+Z 退回（main.js、select.js）在本機／線上版用畫面驗 */
+  const sq = () => ({ closed: true, a: [0, 0, 40, 0, 40, 20, 0, 20], hi: Array(8).fill(0), ho: Array(8).fill(0) });
+  const areaOf = path => {
+    const pts = prim.flattenPenPath(path, 0.001);
+    let s = 0;
+    for (let i = 0; i < pts.length; i++) { const u = pts[i], v = pts[(i + 1) % pts.length]; s += u.x * v.y - v.x * u.y; }
+    return Math.abs(s / 2);
+  };
+  let p = sq();
+  const r1 = prim.penFilletAt(p, 0, 5);
+  ok('★★★ ④-13 方框一個角倒 R 5：那個點換成兩個（4 → 5 個點）', r1.ok && p.a.length / 2 === 5, JSON.stringify(r1));
+  ok('★★ 　 圓弧兩端剛好離角 5（直角 ⇒ 離角的距離 ＝ R）', Math.abs(p.a[0] - 0) < 1e-9 && Math.abs(p.a[1] - 5) < 1e-9 && Math.abs(p.a[2] - 5) < 1e-9 && Math.abs(p.a[3]) < 1e-9, p.a.slice(0, 4).join(','));
+  const k = 4 / 3 * Math.tan(Math.PI / 8) * 5;
+  near('★★ 　 把手長 ＝ 4/3 × tan(22.5°) × 5（畫圓弧的標準值）', Math.hypot(p.ho[0], p.ho[1]), k, 1e-9);
+  near('★★★ 　 面積少了 (1 − π/4) × 25（切掉的那塊；貝茲畫的圓弧誤差很小）', areaOf(p), 800 - (4 - Math.PI) / 4 * 25, 0.01);
+
+  p = sq();
+  const all = prim.penFilletAll(p, 5);
+  ok('★★★ 整條都倒 R 5：4 個角都倒、8 個點', all.ok && all.done === 4 && p.a.length / 2 === 8, JSON.stringify(all));
+  near('★★ 　 面積 ＝ 圓角矩形 800 − (4 − π) × 25', areaOf(p), 800 - (4 - Math.PI) * 25, 0.02);
+  p = sq();
+  const big = prim.penFilletAll(p, 11);
+  ok('★★★ 　 R 11 太大（短邊 20 兩頭各吃 11）⇒ ⛔ 倒、講最大 R 10、形狀一格不動', !big.ok && big.maxR === 10 && big.reason.includes('最大只能 R 10') && p.a.length === 8);
+  p = sq();
+  const pill = prim.penFilletAll(p, 10);
+  ok('★★★ 　 R 10 剛好 ＝ 短邊的一半 ⇒ 膠囊形：短邊兩頭的點併成一個（6 個點、⛔ 留長度 0 的線）', pill.ok && p.a.length / 2 === 6, p.a.length / 2);
+  near('★★ 　 　 面積 ＝ 20 × 20 ＋ π × 10²', areaOf(p), 400 + Math.PI * 100, 0.1);
+
+  const one = sq();
+  const b1 = prim.penFilletAt(one, 2, 25);
+  ok('★★ 一個角倒太大 ⇒ ⛔ 倒、講最大值（兩邊較短的那一邊 ＝ 20）', !b1.ok && b1.maxR === 20 && one.a.length === 8, b1.reason);
+
+  const tri = { closed: true, a: [0, 0, 30, 0, 0, 30], hi: Array(6).fill(0), ho: Array(6).fill(0) };
+  prim.penFilletAt(tri, 1, 3);
+  near('★★ 45° 的角 R 3：圓弧端點離角 3 ÷ tan(22.5°)', 30 - tri.a[2], 3 / Math.tan(Math.PI / 8), 1e-9);
+
+  const open = { closed: false, a: [0, 0, 10, 0, 10, 10], hi: Array(6).fill(0), ho: Array(6).fill(0) };
+  ok('★ 不封口的線：頭尾不是角 ⇒ 講原因；中間那個角倒得了', !prim.penFilletAt(open, 0, 1).ok && prim.penFilletAt(open, 1, 2).ok);
+  /** 右下角 (40, 0) 的出把手朝上 ⇒ 往上那一段是曲線、這個角照樣有轉折 */
+  const curvy = sq(); curvy.ho[3] = 5;
+  ok('★★ 旁邊有曲線（有把手）⇒ ⛔ 倒、講「只倒兩邊都是直線的角」', !prim.penFilletAt(curvy, 1, 2).ok && prim.penFilletAt(curvy, 1, 2).reason.includes('直線'));
+  const cv2 = sq(); cv2.ho[3] = 5;
+  const sk = prim.penFilletAll(cv2, 2);
+  ok('★ 　 整條都倒：旁邊有曲線的角跳過、講跳過幾個', sk.ok && sk.done === 2 && sk.skipped === 2, JSON.stringify(sk));
+  const again = sq(); prim.penFilletAt(again, 2, 5);
+  const ag = prim.penFilletAll(again, 5);
+  ok('★★ 　 先倒一個角、再整條都倒：剛倒好的圓弧兩端是順的 ⇒ ⛔ 算成「沒倒到的角」（本機畫面試出來的）', ag.ok && ag.done === 3 && ag.skipped === 0, JSON.stringify(ag));
+  const line = { closed: true, a: [0, 0, 10, 0, 20, 0, 20, 10], hi: Array(8).fill(0), ho: Array(8).fill(0) };
+  ok('　 直直一條線上的點 ⇒ 沒有角可以倒', !prim.penFilletAt(line, 1, 1).ok);
+  ok('　 R 打 0 或負數 ⇒ 講原因', !prim.penFilletAt(sq(), 0, 0).ok && !prim.penFilletAll(sq(), -1).ok);
+
+  const qf = sq(); prim.penFilletAll(qf, 5);
+  const solid = buildPrim('pen', { type: 'pen', h: 3, paths: [qf] });
+  const fine = buildPrim('pen', { type: 'pen', h: 3, tol: 0.001, paths: [qf] });
+  near('★★★ 倒好的鋼筆照樣做得出實體：細分夠細時體積 ＝ 圓角矩形面積 × 厚 3', fine.volume(), (800 - (4 - Math.PI) * 25) * 3, 0.1);
+  /**
+   * ⚠ 鋼筆預設的細分（0.2 cm）切圓弧比較粗：R 5 的角少一點點（實測體積少 0.25%、圓弧最多差約 0.1 cm）——
+   * 這是鋼筆本來的行為，⛔ 這一輪改（會動到所有鋼筆物件）；改不改要問 kang。
+   */
+  ok('　 預設細分做出來的少一點點（< 0.5%）', solid.volume() < fine.volume() && (fine.volume() - solid.volume()) / fine.volume() < 0.005, `${solid.volume()} vs ${fine.volume()}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

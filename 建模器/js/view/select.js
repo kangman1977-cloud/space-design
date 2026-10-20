@@ -22,7 +22,8 @@ import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
  * ⚠ **單向相依**：`prim.js` ⛔ 沒有 import 這一支（它不認識畫面）。
  */
 import { flattenPenPath, penIsSmooth, penSetHandle,
-         penNearestOnPath, penAddAnchor, penRemoveAnchor } from '../build/prim.js';
+         penNearestOnPath, penAddAnchor, penRemoveAnchor,
+         penFilletAt, penFilletAll } from '../build/prim.js';
 import { worldBounds, groupPivot, groupTransform } from '../core/align.js';
 import { penSmartSnap, footprintPoints, pointAtLength, dirFromAngle, dirFromAngleStep,
   penPlaneFrame } from '../core/penSnap.js';
@@ -4976,6 +4977,50 @@ export class Selection {
     this._penDragH = null;
     this._drawPenPreview();
     return r;
+  }
+
+  /**
+   * 🔴 **倒圓角**（④-13 第三件，2026-10-20）：`whole` ＝ false 只倒選到的那個角、true 整條（目前這一條）的尖角一起倒。
+   * 規則的權威版在 `build/prim.js` 的 `penFilletAt()`／`penFilletAll()`。
+   * ⭐ 倒之前存一份 ⇒ 倒錯了按 Ctrl+Z 一次退一次（`penUndoFillet()`）—— kang 定「倒一次就定下來，要換就退回去重倒」。
+   */
+  penFillet(r, whole) {
+    if (!this._pen) return { ok: false, reason: '先畫一條線或按「編輯路徑」' };
+    const snap = { ref: this._pen, a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice(), sel: this._penSel };
+    const tmp = { closed: !this.penNoClose, a: this._pen.a.slice(), hi: this._pen.hi.slice(), ho: this._pen.ho.slice() };
+    const res = whole ? penFilletAll(tmp, r) : penFilletAt(tmp, this._penSel, r);
+    if (!res.ok) return res;
+    /** 留著的那幾份要是這次編輯裡的線（目前這一條或其他條）；換了一次編輯 ⇒ 清掉 */
+    const live = u => u.ref === this._pen || this._penDone.includes(u.ref);
+    if (!this._penFilletUndo || !this._penFilletUndo.every(live)) this._penFilletUndo = [];
+    this._penFilletUndo.push(snap);
+    this._pen.a = tmp.a; this._pen.hi = tmp.hi; this._pen.ho = tmp.ho;
+    this._penSel = -1;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._drawPenPreview();
+    return res;
+  }
+
+  /**
+   * 退回上一次倒圓角。倒的是別條線（例如窗那一條，之後又點了外框）⇒ 先切回那一條再退。
+   * ⚠ 那條線已經不在這次編輯裡（重新載入、收工）⇒ ⛔ 退、回 false
+   */
+  penUndoFillet() {
+    const st = this._penFilletUndo;
+    if (!this._pen || !st || !st.length) return false;
+    const u = st[st.length - 1];
+    if (u.ref !== this._pen) {
+      const k = this._penDone.indexOf(u.ref);
+      if (k < 0 || !this._penSwitchTo(k)) { this._penFilletUndo = []; return false; }
+    }
+    st.pop();
+    this._pen.a = u.a; this._pen.hi = u.hi; this._pen.ho = u.ho;
+    this._penSel = u.sel;
+    this._penDragA = null;
+    this._penDragH = null;
+    this._drawPenPreview();
+    return true;
   }
 
   /** `改點` 的移動：拖錨點／拖把手／只是指著看 —— 三件事 */

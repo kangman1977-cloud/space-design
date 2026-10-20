@@ -988,6 +988,11 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="penAddPath" hidden title="加一條：把目前這條收起來，開始畫新的一條。⭐ 包在裡面的那一條就會變成【洞】（畫一個外框、再畫一個小框 ＝ 開一個窗）。⚠ 目前這條要先畫到 3 個點以上">加一條</button>
       <button id="penDel" hidden title="刪點：把選到的那個錨點拿掉。⭐ 它兩側那兩段會【擬合】成一段，所以形狀盡量不變（⛔ 不是直接拉直）。⚠ 只剩 3 個點就不給刪 —— 再刪就圍不出一個形狀">刪點</button>
+      <span class="lbl" id="penFilletLbl" hidden>圓角 R</span>
+      <input id="penFilletR" type="number" step="any" min="0" value="2" hidden style="width:52px" placeholder="cm"
+             title="圓角半徑（cm）：給「倒圓角」「整條都倒」用。打太大（兩邊的直線不夠長）不會倒，會告訴你最大能打多少">
+      <button id="penFillet" hidden title="倒圓角：把選到的那個尖角換成一段跟兩邊相切的圓弧（半徑照左邊那一格）。倒一次就定下來 —— 要換半徑，按 Ctrl+Z 退回去再倒。這一版只倒兩邊都是直線的角">倒圓角</button>
+      <button id="penFilletAll" hidden title="整條都倒：目前這一條線上，兩邊都是直線的尖角一起倒成同一個半徑（例如圓角矩形的窗）。按 Ctrl+Z 一次退回">整條都倒</button>
       <!--
         🔴 開放與封閉（kang 2026-08-30 拍板的第 ③ 件）：
            不封口 ＝ 這支鋼筆畫的是「一條線」，⛔ 不是一個圍起來的形狀。

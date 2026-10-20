@@ -751,6 +751,166 @@ export function penRemoveAnchor(path, i, samples = 24, min = 3) {
 }
 
 /**
+ * 🔴🔴 **鋼筆轉角圓角**（綜合評估 ④-13 第三件，2026-10-20，kang「照建議」）。
+ * 一個尖角 ⇒ 換成一段**跟兩邊直線相切的圓弧**：原本的錨點拿掉，換成圓弧兩端的兩個錨點，
+ * 把手長 ＝ 4/3 × tan(轉的角度 ÷ 4) × R（三次貝茲畫圓弧的標準值，90° 時誤差約萬分之三）。
+ *
+ * kang 定的三件事：**倒一次就定下來**（⛔ 記住半徑；要換就退回去重倒）、
+ * **半徑太大就⛔ 倒、講最大值**（⛔ 悄悄縮小）、**只做圓角**（斜角先不做）。
+ * ⚠ 這一版**只倒兩邊都是直線的角**（兩側那兩段都沒有把手）；旁邊是曲線就講原因。
+ * ⭐ 圓弧的端點剛好落在旁邊的錨點上（例如圓角 ＝ 寬的一半 ⇒ 膠囊形）⇒ 兩個點併成一個，⛔ 留一段長度 0 的線。
+ */
+const PEN_FILLET_EPS = 1e-6;
+const penH = (arr, k) => Math.hypot(+(arr[k * 2] || 0), +(arr[k * 2 + 1] || 0));
+
+/**
+ * 這個錨點能不能倒、最大到多少（只看它自己兩邊；`penFilletAll()` 另外算兩個角共用一段的情形）。
+ * @returns {{ok:boolean, reason?:string, maxR?:number, t?:number}} `t` ＝ tan(夾角 ÷ 2)
+ */
+export function penFilletInfo(path, i) {
+  const a = (path && path.a) || [];
+  const n = Math.floor(a.length / 2);
+  if (!Number.isInteger(i) || i < 0 || i >= n) return { ok: false, reason: '先點一個尖角（錨點），再按「倒圓角」' };
+  const closed = path.closed !== false;
+  if (n < 3 || (!closed && (i === 0 || i === n - 1))) {
+    return { ok: false, reason: '這個點是線的頭或尾，不是轉角 —— 倒不了圓角' };
+  }
+  const p = (i + n - 1) % n, q = (i + 1) % n;
+  const hi = path.hi || [], ho = path.ho || [];
+  if (penH(ho, p) > PEN_FILLET_EPS || penH(hi, i) > PEN_FILLET_EPS
+      || penH(ho, i) > PEN_FILLET_EPS || penH(hi, q) > PEN_FILLET_EPS) {
+    return { ok: false, reason: '這個角旁邊有曲線（有把手）—— 這一版只倒兩邊都是直線的角' };
+  }
+  const px = +a[i * 2], py = +a[i * 2 + 1];
+  const ax = +a[p * 2] - px, ay = +a[p * 2 + 1] - py;
+  const bx = +a[q * 2] - px, by = +a[q * 2 + 1] - py;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (la < PEN_FILLET_EPS || lb < PEN_FILLET_EPS) return { ok: false, reason: '這個點跟旁邊的點疊在一起，量不出角度' };
+  const dot = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb)));
+  const theta = Math.acos(dot);                     // 兩條邊的夾角
+  if (theta > Math.PI - 1e-4) return { ok: false, reason: '這個點兩邊是直直的一條線，沒有角可以倒' };
+  if (theta < 1e-4) return { ok: false, reason: '這個點兩邊折回同一個方向，倒不了圓角' };
+  const t = Math.tan(theta / 2);
+  return { ok: true, maxR: Math.min(la, lb) * t, t, p, q, ux1: ax / la, uy1: ay / la, ux2: bx / lb, uy2: by / lb, theta };
+}
+
+/** 線在錨點 `i` 有沒有轉折（進來與出去的切線方向差超過 1°）；把手長 0 就往下一個控制點找方向 */
+function penTurnsAt(path, i) {
+  const a = path.a, hi = path.hi || [], ho = path.ho || [];
+  const n = Math.floor(a.length / 2);
+  const p = (i + n - 1) % n, q = (i + 1) % n;
+  const X = k => +a[k * 2], Y = k => +a[k * 2 + 1];
+  const g = (arr, k, c) => +(arr[k * 2 + c] || 0);
+  const firstNonZero = cands => cands.find(v => Math.hypot(v[0], v[1]) > PEN_FILLET_EPS);
+  const vin = firstNonZero([
+    [-g(hi, i, 0), -g(hi, i, 1)],
+    [X(i) - X(p) - g(ho, p, 0), Y(i) - Y(p) - g(ho, p, 1)],
+    [X(i) - X(p), Y(i) - Y(p)]]);
+  const vout = firstNonZero([
+    [g(ho, i, 0), g(ho, i, 1)],
+    [X(q) + g(hi, q, 0) - X(i), Y(q) + g(hi, q, 1) - Y(i)],
+    [X(q) - X(i), Y(q) - Y(i)]]);
+  if (!vin || !vout) return false;
+  const c = (vin[0] * vout[0] + vin[1] * vout[1]) / (Math.hypot(...vin) * Math.hypot(...vout));
+  return c < Math.cos(Math.PI / 180);
+}
+
+/** 最大值講給人看：無條件捨去到 0.01 cm（照著打一定倒得下去） */
+const floor2 = v => Math.floor(v * 100 + 1e-6) / 100;
+
+/** 照算好的幾何把一串角換成圓弧（`list` 是 `penFilletInfo()` 的結果、加上 `i`），再併掉疊在一起的點 */
+function penFilletApply(path, list, r) {
+  const n = Math.floor(path.a.length / 2);
+  const by = new Map(list.map(g => [g.i, g]));
+  const a = [], hi = [], ho = [];
+  for (let k = 0; k < n; k++) {
+    const g = by.get(k);
+    if (!g) {
+      a.push(+path.a[k * 2], +path.a[k * 2 + 1]);
+      hi.push(+(path.hi[k * 2] || 0), +(path.hi[k * 2 + 1] || 0));
+      ho.push(+(path.ho[k * 2] || 0), +(path.ho[k * 2 + 1] || 0));
+      continue;
+    }
+    const px = +path.a[k * 2], py = +path.a[k * 2 + 1];
+    const d = r / g.t;                                // 角到圓弧端點的距離
+    const h = (4 / 3) * Math.tan((Math.PI - g.theta) / 4) * r;
+    a.push(px + g.ux1 * d, py + g.uy1 * d, px + g.ux2 * d, py + g.uy2 * d);
+    hi.push(0, 0, -g.ux2 * h, -g.uy2 * h);            // 第二個端點：進把手朝角
+    ho.push(-g.ux1 * h, -g.uy1 * h, 0, 0);            // 第一個端點：出把手朝角
+  }
+  /** 疊在一起的相鄰兩點併成一個：留前一個的進把手、後一個的出把手 */
+  const closed = path.closed !== false;
+  for (let j = 0; ; ) {
+    const m = a.length / 2;
+    if (m < 2 || j >= (closed ? m : m - 1)) break;
+    const k = (j + 1) % m;
+    if (k !== j && Math.hypot(a[j * 2] - a[k * 2], a[j * 2 + 1] - a[k * 2 + 1]) < PEN_FILLET_EPS) {
+      hi[k * 2] = hi[j * 2]; hi[k * 2 + 1] = hi[j * 2 + 1];
+      a.splice(j * 2, 2); hi.splice(j * 2, 2); ho.splice(j * 2, 2);
+      continue;
+    }
+    j++;
+  }
+  path.a = a; path.hi = hi; path.ho = ho;
+}
+
+/**
+ * 倒一個角。⚠ **會直接改 `path`**（跟 `penAddAnchor()`／`penRemoveAnchor()` 一樣）。
+ * @returns {{ok:boolean, reason?:string, maxR?:number, added?:number}}
+ */
+export function penFilletAt(path, i, r) {
+  r = +r;
+  if (!(r > 0)) return { ok: false, reason: '圓角 R 要打一個大於 0 的數字（cm）' };
+  const g = penFilletInfo(path, i);
+  if (!g.ok) return g;
+  if (r > g.maxR * (1 + 1e-9)) {
+    return { ok: false, maxR: floor2(g.maxR), reason: `R ${r} 太大了：這個角兩邊的直線不夠長，最大只能 R ${floor2(g.maxR)}` };
+  }
+  const before = path.a.length / 2;
+  penFilletApply(path, [{ ...g, i }], r);
+  return { ok: true, added: path.a.length / 2 - before };
+}
+
+/**
+ * 整條的尖角一起倒（兩邊都是直線的那些）。兩個角共用一段時，兩邊各吃掉的長度加起來⛔ 超過那一段。
+ * @returns {{ok:boolean, reason?:string, maxR?:number, done?:number, skipped?:number}}
+ */
+export function penFilletAll(path, r) {
+  r = +r;
+  if (!(r > 0)) return { ok: false, reason: '圓角 R 要打一個大於 0 的數字（cm）' };
+  const n = Math.floor(((path && path.a) || []).length / 2);
+  const list = [];
+  let skipped = 0;
+  for (let i = 0; i < n; i++) {
+    const g = penFilletInfo(path, i);
+    if (g.ok) list.push({ ...g, i });
+    /**
+     * 兩邊直直一條線、線的頭尾 ⛔ 算「沒倒到」—— 那些本來就不是角；
+     * 旁邊有曲線、但線在這裡是順的（例如已經倒好的圓弧兩端）也⛔ 算（本機畫面試出來的：以前講「2 個角沒倒」嚇人）
+     */
+    else if (/曲線/.test(g.reason) ? penTurnsAt(path, i) : !/直直的一條線|頭或尾/.test(g.reason)) skipped++;
+  }
+  if (!list.length) {
+    return { ok: false, reason: skipped ? '這條線的角旁邊都有曲線 —— 這一版只倒兩邊都是直線的角' : '這條線沒有尖角可以倒' };
+  }
+  const isF = new Map(list.map(g => [g.i, g]));
+  const closed = path.closed !== false;
+  let maxR = Infinity;
+  for (let k = 0; k < (closed ? n : n - 1); k++) {
+    const j = (k + 1) % n;
+    const s = (isF.has(k) ? 1 / isF.get(k).t : 0) + (isF.has(j) ? 1 / isF.get(j).t : 0);
+    if (s <= 0) continue;
+    const len = Math.hypot(path.a[k * 2] - path.a[j * 2], path.a[k * 2 + 1] - path.a[j * 2 + 1]);
+    maxR = Math.min(maxR, len / s);
+  }
+  if (r > maxR * (1 + 1e-9)) {
+    return { ok: false, maxR: floor2(maxR), reason: `R ${r} 太大了：相鄰兩個角的圓弧會疊在一起，整條一起倒最大只能 R ${floor2(maxR)}` };
+  }
+  penFilletApply(path, list, r);
+  return { ok: true, done: list.length, skipped };
+}
+
+/**
  * 🔴 **一條鋼筆路徑 → 拉直之後的點串**（給 `BUILDERS.pen` 用）。
  *
  * 每一段是一條三次貝茲：
