@@ -2241,7 +2241,8 @@ function measure(piece, mesh, faces) {
  *
  * @returns {{hit: boolean, checked: boolean, pairs: number[][], more: boolean}}
  */
-const OVERLAP_MAX_POLYS = 3000;
+/** 一片超過這麼多個面 ⇒ ⛔ 查重疊（太慢）；智慧分切的「每一片最多幾個面」預設也用它（`propose.js`，2026-10-21）*/
+export const OVERLAP_MAX_POLYS = 3000;
 const OVERLAP_MAX_PAIRS = 500;
 
 function detectOverlap(polys, opt = {}) {

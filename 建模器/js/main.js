@@ -29,7 +29,7 @@ import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
          setKeep, isKeep, markSignature, nearestFace }
   from './unfold/seam.js';
-import { proposeSeamsAsync, NOTCH_DEG } from './unfold/propose.js';
+import { proposeSeamsAsync, NOTCH_DEG, MAX_PIECE_FACES } from './unfold/propose.js';
 import { unfoldObject, pieceWorldPolys } from './unfold/part.js';
 import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, components, applyGroup, checkGroup, GROW_DEG, TINY_MM2 }
   from './unfold/group.js';
@@ -6384,13 +6384,16 @@ let seamProposalStale = false;
  * ⭐ 預設：片裡不要細切口、張開小於 30° 算細、凹處尖角先切 —— 面板上可以改，記在瀏覽器裡。
  * 改了而且正在看提案 ⇒ 照新的設定馬上重新提案（⛔ 留著照舊設定算的那一份）。
  */
+/** 每一片最多幾個面（2026-10-21，kang「刻意分成N組分片」）：預設 ＝ 重疊偵測的上限（`propose.js` `MAX_PIECE_FACES`）*/
+const clampMaxFaces = v => Math.max(10, Math.min(100000, Math.round(+v)));
 const proposeOpt = (() => {
-  const d = { slits: 'none', notchDeg: NOTCH_DEG, cutOrder: 'feature' };
+  const d = { slits: 'none', notchDeg: NOTCH_DEG, cutOrder: 'feature', maxFaces: MAX_PIECE_FACES };
   try {
     const v = JSON.parse(localStorage.getItem('modeler.proposeOpt') || '{}');
     if (v.slits === 'allow') d.slits = 'allow';
     if (Number.isFinite(+v.notchDeg)) d.notchDeg = Math.max(0, Math.min(180, +v.notchDeg));
     if (v.cutOrder === 'fewest') d.cutOrder = 'fewest';
+    if (v.maxFaces !== undefined && v.maxFaces !== null && Number.isFinite(+v.maxFaces)) d.maxFaces = clampMaxFaces(v.maxFaces);
   } catch (e) { /* 讀不到就用預設 */ }
   return d;
 })();
@@ -6399,6 +6402,7 @@ function setProposeOpt(o) {
   if (o.slits) proposeOpt.slits = o.slits === 'allow' ? 'allow' : 'none';
   if (o.notchDeg !== undefined) proposeOpt.notchDeg = o.notchDeg;
   if (o.cutOrder) proposeOpt.cutOrder = o.cutOrder === 'fewest' ? 'fewest' : 'feature';
+  if (o.maxFaces !== undefined && Number.isFinite(+o.maxFaces)) proposeOpt.maxFaces = clampMaxFaces(o.maxFaces);
   try { localStorage.setItem('modeler.proposeOpt', JSON.stringify(proposeOpt)); } catch (e) { /* 存不了就算了 */ }
   view.setNotchDeg(proposeOpt.notchDeg);          // 3D 的開口顏色跟著同一個角度（2026-10-21）
   view.sync(doc);

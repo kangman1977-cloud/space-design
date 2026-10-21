@@ -19090,6 +19090,35 @@ section('智慧分切 幾種切法之間：片少的先呈現（2026-10-21）');
   ok('★★ 預設的球照舊：花瓣 2 片、沒有多剪', d.kind === 'petal' && d.total === 2 && d.jagPieces === 0, `${d.label} ${d.total} 片、多剪 ${d.jagPieces}`);
 }
 
+section('智慧分切 每一片最多幾個面 ＋ 講沒檢查重疊的片（2026-10-21）');
+{
+  /**
+   * kang「刻意分成N組分片...這樣在計算上..是不是會有所解決?」：接起來超過上限就⛔ 接（預設 ＝ 重疊偵測的上限 3000），
+   * 每一片都查得到重疊；一整塊平面本身就超過的（切不開）⇒ 提案講幾片沒檢查（以前提案框照樣寫沒問題）。
+   */
+  const { proposeSeams, MAX_PIECE_FACES } = await import('../js/unfold/propose.js');
+  const { OVERLAP_MAX_POLYS } = await import('../js/unfold/flatten.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  ok('★★ 預設 ＝ 重疊偵測的上限（同一個數字）', MAX_PIECE_FACES === OVERLAP_MAX_POLYS, String(MAX_PIECE_FACES));
+  const gear = () => {
+    const o = new io.ModelObject({ name: '齒輪', kind: io.KIND.SOLID, src: { type: 'gear', ...PRIM_DEFAULTS.gear, teeth: 8 } });
+    o.bake();
+    return o;
+  };
+  const a = proposeSeams(gear(), { material: 'paper' });
+  const b = proposeSeams(gear(), { material: 'paper', maxFaces: 100 });
+  ok('★★★ 改小（100）⇒ 接得比較少、片比較多、照樣沒有細切口', b.total > a.total && b.notch === 0 && b.maxFaces === 100, `${a.total} → ${b.total} 片`);
+  ok('★★ 　 預設沒有沒檢查的片', a.unchecked === 0 && a.maxFaces === MAX_PIECE_FACES);
+  // 一整塊 3200 個三角形的平面：切不開 ⇒ 一片、沒檢查重疊 ⇒ 提案要講
+  const N = 40, points = [], faces = [];
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) points.push(i, 0, j);
+  const id = (i, j) => j * (N + 1) + i;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { faces.push([id(i, j), id(i, j + 1), id(i + 1, j + 1)]); faces.push([id(i, j), id(i + 1, j + 1), id(i + 1, j)]); }
+  const d = io.Doc.fromJSON({ type: 'model-doc', v: 4, unit: 'cm', head: { name: 't' }, objects: [{ id: 1, name: '密的平板', kind: 'sheet', src: { type: 'mesh' }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], color: 1, thickness: 0.2, mesh: { points, faces, roles: [], smooth: [], hard: [], keep: [] } }], guides: { x: [], y: [], z: [] } });
+  const c = proposeSeams(d.objects[0], { material: 'paper' });
+  ok('★★★ 一片超過 3000 面（切不開的平面）⇒ 提案講「沒檢查重疊」幾片', c.unchecked === 1, `${c.total} 片、沒檢查 ${c.unchecked}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

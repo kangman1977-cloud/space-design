@@ -46,7 +46,7 @@
  */
 
 import * as THREE from 'three';
-import { unfoldMesh } from './flatten.js';
+import { unfoldMesh, OVERLAP_MAX_POLYS } from './flatten.js';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { isMarkable, isSeam, markSignature, vertexAngles, NOTCH_DEG } from './seam.js';
 import { EDGE_ROLE } from '../core/mesh.js';
@@ -69,6 +69,12 @@ export const KIND_LABEL = { corner: '只沿轉角', petal: '花瓣', strip: '長
 /** 細切口的角度 —— 家在 `seam.js`（3D 的開口顏色也用它）；這裡轉出去給面板與測試 */
 export { NOTCH_DEG };
 export const MIN_PIECE_CM = 2;
+/**
+ * 🔴 **每一片最多幾個面**（2026-10-21，kang「刻意分成N組分片...這樣在計算上..是不是會有所解決?」、「同意你的建議」）：
+ * 接起來會超過就⛔ 接 ⇒ 每一片都在重疊偵測的上限以內（超過的片展開程式⛔ 查重疊 —— 齒輪 80 齒以前最大一片 3,237 面沒檢查過、提案框照樣寫沒問題）。
+ * ⭐ 預設 ＝ 重疊偵測的上限（同一個數字，⛔ 各寫一份）；面板可以改。整塊曲面一刀都沒得切的（花瓣一整朵）管不到 ⇒ 提案講幾片沒檢查（`unchecked`）。
+ */
+export const MAX_PIECE_FACES = OVERLAP_MAX_POLYS;
 /** 轉折小於這個角度的一整塊先整塊試（曲面的分格：齒輪的齒弧、圓柱 32 段約 11°）；低多邊形的臉、眼窩那種轉折⛔ 碰 */
 const PREMERGE_DEG = 15;
 export const SLIT_LABEL = { none: '不要細切口', allow: '片少一點（允許細切口）' };
@@ -178,6 +184,7 @@ function* proposeGen(obj, opt = {}) {
     ? Math.max(0, Math.min(180, +opt.notchDeg)) : NOTCH_DEG;
   const cutOrder = opt.cutOrder === 'fewest' ? 'fewest' : 'feature';
   const minPiece = Number.isFinite(+opt.minPieceCm) && opt.minPieceCm !== null ? +opt.minPieceCm : MIN_PIECE_CM;
+  const maxFaces = Number.isFinite(+opt.maxFaces) && +opt.maxFaces > 0 ? Math.round(+opt.maxFaces) : MAX_PIECE_FACES;
 
   /** 每個頂點攤開張開幾度（360° − 一圈面角的和）、在不在網格邊緣 —— 用頂點編號（`vi`）記，複製品、子網格都對得回來 */
   const VA = vertexAngles(base);                   // ⚠ 凹的角也算對（`seam.js`）
@@ -345,6 +352,7 @@ function* proposeGen(obj, opt = {}) {
           const ga = G.find(pr.a), gb = G.find(pr.b);
           if (ga === gb) continue;                                   // 已經同一片（再接會繞成一圈）
           const A = grp.get(ga), B = grp.get(gb);
+          if (A.faces.length + B.faces.length > maxFaces) continue;  // 每一片最多幾個面（2026-10-21）
           // 別的組有重疊 ⇒ 以前整個攤一定「有重疊」⇒ ⛔ 接（照舊）
           if (overlapping - (A.sc.overlap ? 1 : 0) - (B.sc.overlap ? 1 : 0) > 0) continue;
           const faces = A.faces.concat(B.faces);
@@ -481,6 +489,7 @@ function* proposeGen(obj, opt = {}) {
         if (bs.length < 2 || late()) continue;
         yield prog;
         const faces = bs.flatMap(b => G.get(b).faces);
+        if (faces.length > maxFaces) continue;               // 每一片最多幾個面 ⇒ 照舊一塊一塊試
         const inside = new Set(bs);
         const open = new Set(list.filter(pr => inside.has(pr.a) && inside.has(pr.b) && pr.ang < PREMERGE_DEG).map(pr => pk(pr.a, pr.b)));
         const sc = local(faces, open);
@@ -496,6 +505,7 @@ function* proposeGen(obj, opt = {}) {
       const ga = P.find(pr.a), gb = P.find(pr.b);
       if (ga === gb) return false;                 // 已經同一片（再接會繞成一圈）
       const A = G.get(ga), B = G.get(gb);
+      if (A.faces.length + B.faces.length > maxFaces) return false;   // 每一片最多幾個面（2026-10-21）
       const faces = A.faces.concat(B.faces);
       const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
       const sc = local(faces, open, !A.sc.auto && !B.sc.auto ? new Set(A.faces.map(f => f.id)) : null);
@@ -600,6 +610,9 @@ function* proposeGen(obj, opt = {}) {
       minPiece,
       /** 程式另外多剪的片幾片：一片補剪 2 條以上（1 條是一刀直線、本來就順，⛔ 算 —— 跟排名的 `jag` 同一個判準）*/
       jagPieces: pick.r.pieces.reduce((n, p) => n + (((p.autoCut && p.autoCut.lines) || 0) > 1 ? p.qty : 0), 0),
+      /** 太大、⛔ 查過重疊的片幾片（「沒有重疊」不等於「查過沒有」—— 面板要講）*/
+      unchecked: pick.r.pieces.reduce((n, p) => n + (p.overlapChecked === false ? p.qty : 0), 0),
+      maxFaces,
       keepCut: pick.r.keepCut || 0,
       cutLen: pick.cutLen,
       usedBaseline,

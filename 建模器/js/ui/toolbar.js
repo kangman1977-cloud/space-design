@@ -56,6 +56,7 @@ import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { clashLine } from '../core/interfere.js';
 import { unfoldObject, pieceWorldPolys } from '../unfold/part.js';
+import { OVERLAP_MAX_POLYS } from '../unfold/flatten.js';
 import { landPositions, lowestY } from '../core/align.js';
 import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
@@ -1580,6 +1581,11 @@ export class Panel {
       ], v => this.app.setProposeOpt({ cutOrder: v }),
       '凹處、尖角先切：平的、長的邊先接起來，凹進去的地方（眼窩、嘴巴）跟尖的轉角最後才接 ⇒ 縫多半落在凹處與轉角（Blender 紙模外掛預設也是這樣）。'
       + '片數最少：共用邊長的先接，片會少一兩片，但縫可能斜斜地跨過臉');
+      /** 每一片最多幾個面（2026-10-21，kang「刻意分成N組分片」）：預設 3000 ＝ 展開程式查重疊的上限 */
+      this._rowNum('每一片最多幾個面', po.maxFaces, { min: 10, max: 100000, step: 100 },
+        v => this.app.setProposeOpt({ maxFaces: v }),
+        `預設 ${OVERLAP_MAX_POLYS}：一片超過 ${OVERLAP_MAX_POLYS} 個面，展開程式就不查重疊了（太慢）—— 接起來會超過就不接，每一片都查得到。`
+        + `改小 ⇒ 大模型分成比較多組、算得比較快；改大 ⇒ 片可能少一點，但超過 ${OVERLAP_MAX_POLYS} 的那幾片沒有檢查重疊`);
     }
     /**
      * 🔴 **計算中**（2026-10-21，大模型 丙）：進度、算了多久、「先停下來，用目前最好的」；
@@ -1623,6 +1629,11 @@ export class Panel {
       if (rest > 0) fitLines.push(red(`有 <b>${rest}</b> 片放不進 ${boardTxt} 板子`) + `（${cond}）`);
     }
     if (p.overlap) fitLines.push(red('提案的片還有重疊') + (p.nonGrid ? '' : ' —— 自己標縫切開'));
+    /** 「沒有重疊」不等於「查過沒有」（2026-10-21）：太大的片展開程式⛔ 查 ⇒ 照實講 */
+    if (p.unchecked) {
+      fitLines.push(red(`有 <b>${p.unchecked}</b> 片超過 ${OVERLAP_MAX_POLYS} 個面，沒有檢查重疊`)
+        + ' —— 自己標縫切小一點' + (p.maxFaces > OVERLAP_MAX_POLYS ? `，或把「每一片最多幾個面」改回 ${OVERLAP_MAX_POLYS} 以下` : ''));
+    }
     /** 細切口（第三件）：花瓣的 V 形切口是設計（沿經線切到極點附近），⛔ 講成問題 */
     if (p.edges.length && p.kind !== 'petal') {
       fitLines.push(p.notch
