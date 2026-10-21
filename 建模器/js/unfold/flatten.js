@@ -71,6 +71,10 @@ export const FLAT_TOL_DEG = 0.5;
  * 理由見 `flattenPatch()` 裡「兩側攤平後完全貼在一起的」那一段。
  */
 const SEAM_SHUT_TOL_CM = 0.001;
+/** 比這短的邊最後才拿來當攤平的軸（見 `flattenPatch()` 的 `pushFrontier`，2026-10-21）*/
+const SHORT_HINGE_CM = 0.01;
+/** 轉折角（弧度，最多 π）加上這個 ⇒ 排在所有一般的邊後面 */
+const SHORT_HINGE_PENALTY = 10;
 
 // ═══════════════════════════════════════════════════════
 //  對外入口
@@ -402,8 +406,14 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false, p
       /**
        * 🔴 **「不准切」排最前面**（2026-10-13，智慧分切第一步）：先連起來 ⇒ 程式自己補剪時繞開它。
        * ⭐ 沒標不准切的物件，排序跟以前逐字一樣（只有標了的才拿 −1）—— 測試守著「展開結果一個字都不變」。
+       *
+       * 🔴 **很短的邊最後才當軸**（2026-10-21，`分片成群-設計方向.md` 10.6，kang「同意你的建議」）：
+       * 拿一條很短的邊當軸，它方向上一點點誤差會被放大到整片 ⇒ 遠處的縫兩側對不上（> 0.001 cm）⇒ 多剪一刀。
+       * 【實證】獅子頭有一條 0.0001 cm 的邊，轉折比旁邊 2.6 cm 那條小 ⇒ 被先挑來當軸 ⇒ 多剪 5 刀、智慧分切 11 片（改後 9 片）。
+       * ⭐ 有別的邊可以接就先用別的；沒有很短的邊的物件排序一個字都不變（對照：70 組展開、87 項提案只有獅子頭變）。
        */
-      frontier.push(he, he.keep ? -1 : d === null ? Infinity : Math.abs(d));
+      const shortE = he.v.p.distanceTo(he.next.v.p) < SHORT_HINGE_CM;
+      frontier.push(he, he.keep ? -1 : d === null ? Infinity : Math.abs(d) + (shortE ? SHORT_HINGE_PENALTY : 0));
     }
   };
 

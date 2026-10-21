@@ -19119,6 +19119,24 @@ section('智慧分切 每一片最多幾個面 ＋ 講沒檢查重疊的片（20
   ok('★★★ 一片超過 3000 面（切不開的平面）⇒ 提案講「沒檢查重疊」幾片', c.unchecked === 1, `${c.total} 片、沒檢查 ${c.unchecked}`);
 }
 
+section('展開：很短的邊最後才當軸（2026-10-21）');
+{
+  /**
+   * 拿很短的邊當軸 ⇒ 它方向上一點點誤差被放大到整片 ⇒ 遠處的縫兩側對不上 ⇒ 多剪一刀（獅子頭：0.0001 cm 的邊、多剪 5 刀、智慧分切 11 片 → 改後 9 片）。
+   * 小模型重現：100 × 100 的地板、一面牆、一片斜斜的細三角；細三角跟牆只共用一條 0.0001 cm 的邊（轉折比牆跟地板那條小 ⇒ 舊的排法先挑它當軸），
+   * 那一點離開牆的平面 0.00000001 cm（凍結、匯入的網格常有這種誤差）。改前：補剪 1 條；改後：0 條。
+   */
+  const build = eps => {
+    const pts = [[0, 0, 0], [100, 0, 0], [100, 0, 100], [0, 0, 100], [100.00005, 1e-4, eps], [100, 50, 0], [0, 50, 0]]
+      .map(q => new THREE.Vector3(q[0], q[1], q[2]));
+    return Mesh.fromFaceList(pts, [[3, 2, 1, 0], [2, 4, 1], [1, 4, 5, 6, 0]]);
+  };
+  const r = unfoldMesh(build(1e-8), makeRule('paper', 0.2));
+  ok('★★★ 很短的邊⛔ 先當軸 ⇒ 程式⛔ 多剪（改前 1 條）', r.stats.total === 1 && (r.autoEdges || []).length === 0, `${r.stats.total} 片、補剪 ${(r.autoEdges || []).length}`);
+  const r0 = unfoldMesh(build(0), makeRule('paper', 0.2));
+  ok('★★ 　 沒有誤差的那一份照舊：一片、不補剪', r0.stats.total === 1 && (r0.autoEdges || []).length === 0);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
