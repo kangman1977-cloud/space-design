@@ -45,7 +45,7 @@
 import * as THREE from 'three';
 import { unfoldMesh } from './flatten.js';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
-import { isMarkable, isSeam, markSignature } from './seam.js';
+import { isMarkable, isSeam, markSignature, vertexAngles, NOTCH_DEG } from './seam.js';
 import { EDGE_ROLE } from '../core/mesh.js';
 import { fitsBoard, NEST_DEFAULTS } from '../out/nest.js';
 import { gridOf, candidatesOf } from './curved.js';
@@ -63,7 +63,8 @@ const CURVE_DEG = 1;
 /** 每一種切法的名稱（面板用）；`corner` ＝ 只沿轉角切（第二步那種）*/
 export const KIND_LABEL = { corner: '只沿轉角', petal: '花瓣', strip: '長條', band: '環帶' };
 /** 第四步（2026-10-21）的三個設定 ⭐ 預設：不要細切口、30°、凹處尖角先切 */
-export const NOTCH_DEG = 30;
+/** 細切口的角度 —— 家在 `seam.js`（3D 的開口顏色也用它）；這裡轉出去給面板與測試 */
+export { NOTCH_DEG };
 export const MIN_PIECE_CM = 2;
 /** 轉折小於這個角度的一整塊先整塊試（曲面的分格：齒輪的齒弧、圓柱 32 段約 11°）；低多邊形的臉、眼窩那種轉折⛔ 碰 */
 const PREMERGE_DEG = 15;
@@ -144,16 +145,10 @@ export function proposeSeams(obj, opt = {}) {
   const minPiece = Number.isFinite(+opt.minPieceCm) && opt.minPieceCm !== null ? +opt.minPieceCm : MIN_PIECE_CM;
 
   /** 每個頂點攤開張開幾度（360° − 一圈面角的和）、在不在網格邊緣 —— 用頂點編號（`vi`）記，複製品、子網格都對得回來 */
-  const gapOf = new Map(), border = new Set();
-  for (const f of base.faces) {
-    const vs = base.faceVerts(f);
-    for (let i = 0; i < vs.length; i++) {
-      const p = vs[i].p, a = vs[(i + vs.length - 1) % vs.length].p, c = vs[(i + 1) % vs.length].p;
-      const k = vi.get(vs[i].id);
-      gapOf.set(k, (gapOf.get(k) || 0) + new THREE.Vector3().subVectors(a, p).angleTo(new THREE.Vector3().subVectors(c, p)));
-    }
-  }
-  for (const h of base.edges()) if (!h.face || !h.twin || !h.twin.face) { border.add(vi.get(h.v.id)); border.add(vi.get(h.to.id)); }
+  const VA = vertexAngles(base);                   // ⚠ 凹的角也算對（`seam.js`）
+  const gapOf = new Map(base.verts.map((v, i) => [i, VA.angle.get(v.id) || 0]));
+  const border = new Set();
+  base.verts.forEach((v, i) => { if (VA.border.has(v.id)) border.add(i); });
   /**
    * 細切口幾個：`m` 上的切線（CUT 或程式補剪 `autoSet`）只有一條接到的頂點、⛔ 在網格邊緣、攤開張開 < notchDeg°。
    * `idxOf(v)` ＝ 這個頂點在 `base` 的編號；`edgeOf(v)` ＝ 這個頂點在 `m` 上是不是邊緣（子網格的外框 ＝ 片的外框，⛔ 算）。

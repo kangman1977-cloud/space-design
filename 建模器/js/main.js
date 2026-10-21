@@ -6391,11 +6391,14 @@ const proposeOpt = (() => {
   } catch (e) { /* 讀不到就用預設 */ }
   return d;
 })();
+view.setNotchDeg(proposeOpt.notchDeg);            // 開網頁時就照記住的角度分 3D 的開口顏色
 function setProposeOpt(o) {
   if (o.slits) proposeOpt.slits = o.slits === 'allow' ? 'allow' : 'none';
   if (o.notchDeg !== undefined) proposeOpt.notchDeg = o.notchDeg;
   if (o.cutOrder) proposeOpt.cutOrder = o.cutOrder === 'fewest' ? 'fewest' : 'feature';
   try { localStorage.setItem('modeler.proposeOpt', JSON.stringify(proposeOpt)); } catch (e) { /* 存不了就算了 */ }
+  view.setNotchDeg(proposeOpt.notchDeg);          // 3D 的開口顏色跟著同一個角度（2026-10-21）
+  view.sync(doc);
   if (seamProposal) makeSeamProposal(seamProposal.obj);
   else panel.refresh();
 }

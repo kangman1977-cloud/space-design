@@ -18944,6 +18944,52 @@ section('分片成群 第三件：智慧分切 片裡不要細切口（2026-10-2
   ok('★★★ 不准切的邊 ⇒ 提案⛔ 碰', !pk.edges.some(h => seam.isKeep(h)) && pk.big === 0);
 }
 
+section('分片成群 追加：3D 的開口只標細切口（2026-10-21）');
+{
+  /** kang「同意你的建議」（看過舊版 vs 改後的對照圖）：開口 ＝ 切線停在片中間、攤開張開小於 30°；其他切線都是縫 */
+  const { seamKinds, vertexAngles, NOTCH_DEG } = await import('../js/unfold/seam.js');
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const DEG = 180 / Math.PI;
+  eq('★ 開口與細切口共用同一個角度（30°）', NOTCH_DEG, 30);
+
+  // ① 角度：方塊的角一圈 270°；凹的面（L 形）凹進去那個角照樣算對
+  const bx = mk('box');
+  const va = vertexAngles(bx.mesh());
+  near('★★ 方塊的角：一圈面角 270°', va.angle.get(bx.mesh().verts[0].id) * DEG, 270, 1e-6);
+  const P2 = [[0, 0], [4, 0], [4, 1], [1, 1], [1, 4], [0, 4]];
+  const L = Mesh.fromFaceList(P2.map(([x, z]) => new THREE.Vector3(x, 0, z)), [[0, 1, 2, 3, 4, 5].reverse()]);
+  const vL = vertexAngles(L);
+  near('★★★ 凹的面（L 形）凹進去那個角 ＝ 270°（以前只算得出 0～180°，會算成 90°）', vL.angle.get(L.verts[3].id) * DEG, 270, 1e-6);
+  near('★★ 　 L 形六個角加起來 ＝ 720°（(6 − 2) × 180°）', [...vL.angle.values()].reduce((a, b) => a + b, 0) * DEG, 720, 1e-6);
+
+  // ② 三角塊攤成一片（5 條外框切線）：以前全算開口，現在全是縫
+  const w = mk('wedge');
+  const pw = proposeSeams(w, { material: 'foamboard', board: { w: 240, h: 120, gap: 1, rotate: false } });
+  for (const h of pw.edges) seam.setSeam(w.mesh(), h, true);
+  const kw = seamKinds(w.mesh());
+  ok('★★★ 楔形攤成一片：外框切線全是縫、開口 0（以前 5 條全算開口）', pw.total === 1 && kw.darts.length === 0 && kw.seams.length === pw.edges.length, `縫 ${kw.seams.length} 開口 ${kw.darts.length}`);
+  ok('★★ 　 角度改成 180° ⇒ 張開 90° 的角也算細 ⇒ 變回開口', seamKinds(w.mesh(), 180).darts.length > 0);
+
+  // ③ 方塊只切一條邊（停在兩個角）：張開 90°、⛔ 細 ⇒ 縫；角度改大才算開口
+  const b1 = mk('box');
+  const e1 = [...b1.mesh().edges()].find(h => h.face && h.twin && h.twin.face);
+  seam.setSeam(b1.mesh(), e1, true);
+  eq('★★ 方塊只切一條邊 ⇒ 縫（角張開 90°）', seamKinds(b1.mesh()).darts.length, 0);
+  eq('★★ 　 角度 100° ⇒ 開口', seamKinds(b1.mesh(), 100).darts.length, 1);
+
+  // ④ 花瓣的 V 照樣是開口（半球提案花瓣、接受之後）
+  const dm = mk('dome', { r: 15 });
+  const pd = proposeSeams(dm, { material: 'paper' });
+  for (const h of pd.edges) seam.setSeam(dm.mesh(), h, true);
+  ok('★★★ 半球花瓣：V 形照樣是開口', pd.kind === 'petal' && seamKinds(dm.mesh()).darts.length > 0, `${pd.label} 開口 ${seamKinds(dm.mesh()).darts.length}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

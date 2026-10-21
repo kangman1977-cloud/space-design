@@ -497,8 +497,8 @@ export class SceneView {
 
     const darts = node.getObjectByName('darts');
     if (stale) {
-      /** 縫與開口分兩條線畫（`seamKinds()`：切開後還是同一片的 ＝ 開口）*/
-      const kinds = seamKinds(mesh);
+      /** 縫與開口分兩條線畫（`seamKinds()`：切線停在片中間、攤開張開小於設定的角度 ＝ 開口；2026-10-21 改判準）*/
+      const kinds = seamKinds(mesh, this._notchDeg);
       const build = (line, list) => {
         const pos = [];
         for (const he of list) pos.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
@@ -586,6 +586,16 @@ export class SceneView {
    * 而使用者只會看到「我標了但沒反應」。
    */
   markSeamsDirty() { this._seamsDirty = true; }
+
+  /**
+   * 開口顏色的角度（2026-10-21）：跟智慧分切的「細切口：張開小於」同一個設定（`main.js` `proposeOpt`）——
+   * 改了就重畫縫（⛔ 留著照舊角度分的顏色）。
+   */
+  setNotchDeg(deg) {
+    if (this._notchDeg === deg) return;
+    this._notchDeg = deg;
+    this._seamsDirty = true;
+  }
 
   /**
    * 告訴畫面「網格的**座標**改過了，下次 sync() 要重建 geometry」。

@@ -139,31 +139,81 @@ export function toggleSeam(mesh, he, tolDeg = FLAT_TOL_DEG) {
 }
 
 /**
- * 🔴 **使用者標的切割線，哪些是「縫」、哪些是「開口」**（2026-10-12，kang 拍板「程式自己認」）。
+ * 細切口的角度：切線停在片中間的那個點，攤開張開小於這個角度 ⇒ 細（2026-10-21，分片成群第三件，kang 定案預設 30°）。
+ * 智慧分切（`propose.js`）與 3D 的開口顏色共用。
+ */
+export const NOTCH_DEG = 30;
+
+/**
+ * 每個頂點「一圈面角的和」（弧度）、在不在網格邊緣。⚠ 面可以是凹的（凍結後併成的多邊形）——
+ * 角要照面的朝向算出 0～360°（`angleTo()` 只給 0～180°，凹進去的那個角會算錯）。
+ * @returns {{angle: Map<頂點id, number>, border: Set<頂點id>}}
+ */
+export function vertexAngles(mesh) {
+  const angle = new Map(), border = new Set();
+  const u = new THREE.Vector3(), w = new THREE.Vector3(), c = new THREE.Vector3();
+  for (const f of mesh.faces) {
+    const vs = mesh.faceVerts(f);
+    const n = new THREE.Vector3();                     // Newell 法向（凹的也對）
+    for (let i = 0; i < vs.length; i++) {
+      const a = vs[i].p, b = vs[(i + 1) % vs.length].p;
+      n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+    }
+    if (n.lengthSq() > 0) n.normalize();
+    for (let i = 0; i < vs.length; i++) {
+      const p = vs[i].p;
+      u.subVectors(vs[(i + 1) % vs.length].p, p);       // 往下一個點
+      w.subVectors(vs[(i + vs.length - 1) % vs.length].p, p); // 往上一個點
+      let t = Math.atan2(c.crossVectors(u, w).dot(n), u.dot(w));
+      if (t < 0) t += 2 * Math.PI;
+      angle.set(vs[i].id, (angle.get(vs[i].id) || 0) + t);
+    }
+  }
+  for (const he of mesh.edges()) if (!he.face || !he.twin || !he.twin.face) { border.add(he.v.id); border.add(he.to.id); }
+  return { angle, border };
+}
+
+/**
+ * 🔴 **使用者標的切割線，哪些是「縫」、哪些是「開口」**（2026-10-12，kang 拍板「程式自己認」；2026-10-21 改判準）。
  *
  * 兩者是**同一種**標記（`EDGE_ROLE.CUT`），⛔ 沒有「標開口」的另一顆按鈕：
- * - **縫** ＝ 切開之後兩側落在**不同片**（這一刀把片分開了）
- * - **開口** ＝ 切開之後兩側**還是同一片**（切進去、停在片中間）—— 省道打版的「省道」
+ * - **開口** ＝ 切線走到片中間一個點就停（那個點只接這一條切線）、而且那個點**攤開只張開不到 `notchDeg`°**
+ *   ⇒ 從那個點沿著切線往回、到分岔或網格邊緣為止，那一段都是開口 —— 省道打版的「省道」、紙模的「細切口」
+ * - **縫** ＝ 其他的切線
  *
- * 判準只看**使用者標的**：沿著「沒標 CUT 的邊」把面連起來，連得到就是同一片。
- * ⚠ ⛔ 不管材料（壓克力會把每條折線都切開）—— 這裡回答的是「你標的這一刀是什麼」，
- * ⛔ 不是「展開圖最後幾片」（那個要問 `unfoldObject()`）。
+ * ⚠ 2026-10-21 以前的判準是「切開之後兩側還是同一片 ⇒ 開口」—— 方塊攤成十字形那 7 條外框切線也算開口，
+ * 3D 上看起來到處都是開口（kang 驗第三件時同意改）。業界紙模軟體 3D 上只分「切／山折／谷折」、⛔ 再把切線分兩種
+ * （`外部參考-自動分切.md` 第 7 節）；兩種顏色是我們自己的設計 ⇒ 照「費工的那種」分。
+ * 張開幾度：360° − 那個點一圈面角的和（`vertexAngles()`）。方塊的角張開 90°（⛔ 細）；球、低多邊形的頭大多是個位數度。
+ * ⚠ ⛔ 不管材料 —— 這裡回答的是「你標的這一刀是什麼」，⛔ 是「展開圖最後幾片」（那個要問 `unfoldObject()`）。
  *
  * @returns {{seams: HalfEdge[], darts: HalfEdge[]}} 每條邊只出現一次（`mesh.edges()` 那一條）
  */
-export function seamKinds(mesh) {
-  const par = new Map();
-  const find = x => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
-  for (const f of mesh.faces) par.set(f.id, f.id);
+export function seamKinds(mesh, notchDeg = NOTCH_DEG) {
   const cuts = [];
-  for (const he of mesh.edges()) {
-    if (!he.face || !he.twin || !he.twin.face) continue;
-    if (isSeam(he)) { cuts.push(he); continue; }
-    const a = find(he.face.id), b = find(he.twin.face.id);
-    if (a !== b) par.set(a, b);
+  for (const he of mesh.edges()) if (he.face && he.twin && he.twin.face && isSeam(he)) cuts.push(he);
+  if (!cuts.length) return { seams: [], darts: [] };
+  const { angle, border } = vertexAngles(mesh);
+  const adj = new Map();
+  const add = (v, he) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(he); };
+  for (const he of cuts) { add(he.v.id, he); add(he.to.id, he); }
+  const dart = new Set();
+  for (const [v, list] of adj) {
+    if (list.length !== 1 || border.has(v)) continue;
+    if ((2 * Math.PI - (angle.get(v) || 0)) * 180 / Math.PI >= notchDeg) continue;
+    // 從這個點沿著切線往回走，到分岔（≥ 3 條）或網格邊緣為止
+    let cur = v, e = list[0];
+    while (e && !dart.has(e)) {
+      dart.add(e);
+      const nxt = e.v.id === cur ? e.to.id : e.v.id;
+      const l2 = adj.get(nxt);
+      if (border.has(nxt) || l2.length !== 2) break;
+      e = l2[0] === e ? l2[1] : l2[0];
+      cur = nxt;
+    }
   }
   const out = { seams: [], darts: [] };
-  for (const he of cuts) (find(he.face.id) === find(he.twin.face.id) ? out.darts : out.seams).push(he);
+  for (const he of cuts) (dart.has(he) ? out.darts : out.seams).push(he);
   return out;
 }
 

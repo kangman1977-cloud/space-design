@@ -1409,7 +1409,8 @@ export class Panel {
      * 🔴 縫與開口分開數（2026-10-12）：3D 上兩種顏色，這裡也要對得起來
      * （鐵律三：讓兩個數字互相對得起來）。⚠ 只在有開口時才多講 —— 原本的用法一個字都不變。
      */
-    const darts = n ? seamKinds(mesh).darts.length : 0;
+    const notchDeg = this.app.getProposeOpt ? this.app.getProposeOpt().notchDeg : undefined;
+    const darts = n ? seamKinds(mesh, notchDeg).darts.length : 0;
     const keeps = keepCount(mesh);
 
     const box = document.createElement('div');
@@ -1417,7 +1418,7 @@ export class Panel {
     box.innerHTML = (pieces === null
       ? `已標記 <b>${n}</b> / ${total} 條邊　（片數算不出來）`
       : `展開後 <b>${pieces}</b> 片　已標記 <b>${n}</b> / ${total} 條邊`)
-      + (darts ? `<br>其中 <b>${darts}</b> 條是<b>開口</b>（切進去、沒有把片分開 —— 3D 上另一個顏色）` : '')
+      + (darts ? `<br>其中 <b>${darts}</b> 條是<b>開口</b>（切進去停在片中間、攤開張開小於 ${notchDeg ?? 30}° 的 V 形 —— 3D 上另一個顏色）` : '')
       + (keeps ? `<br>不准切 <b>${keeps}</b> 條（藍色）` : '');
     this.form.appendChild(box);
 
