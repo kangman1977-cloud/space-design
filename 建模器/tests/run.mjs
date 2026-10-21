@@ -19181,6 +19181,60 @@ section('智慧分切 快的接法（乙）：每一次接都跟整片重攤一�
   ok('★★★ 每一次走快的接：跟整片重攤一模一樣', fast > 300 && bad === 0, `走快的 ${fast} 次、不一樣 ${bad}`);
 }
 
+section('匯入 3D 模型（STL／OBJ／GLB）當骨架：讀、清理、檢查、單位、朝上（2026-10-21）');
+{
+  /** kang「我會尋找合適的模型匯入...主要是模型的整體架構...然後我會做修改」—— 規格 `規格\建模器-匯入3D模型.md`。測試用的檔在這裡現做（⛔ 靠下載的檔）*/
+  const I3 = await import('../js/build/import3d.js');
+  // 二進位 STL：一個四面體（4 個三角形、每個自己帶點）
+  const tet = [[0, 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 10]];
+  const tf = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+  const stl = new ArrayBuffer(84 + tf.length * 50), dv = new DataView(stl);
+  dv.setUint32(80, tf.length, true);
+  tf.forEach((f, t) => f.forEach((vi, k) => tet[vi].forEach((v, j) => dv.setFloat32(84 + t * 50 + 12 + k * 12 + j * 4, v, true))));
+  const a = I3.readModel('四面體.stl', stl);
+  const ca = I3.cleanModel(a);
+  ok('★★★ 二進位 STL：4 個三角形、12 個點合成 4 個', a.ok && a.faces.length === 4 && ca.points.length === 4 && ca.stats.merged === 8);
+  const ka = I3.edgeCheck(ca.faces);
+  ok('★★ 　 封閉：沒有破洞、沒有接不起來、方向一致', ka.open === 0 && ka.nonManifold === 0 && ka.flipped === 0 && ka.edges === 6);
+  ok('★★ 　 單位、朝上照格式猜：STL ⇒ mm、Z 朝上', I3.guessUnit('stl', ca.size) === 'mm' && I3.guessUp('stl') === 'z');
+  // 文字 STL
+  const txt = 'solid t\n' + tf.map(f => 'facet normal 0 0 0\nouter loop\n' + f.map(i => `vertex ${tet[i].join(' ')}`).join('\n') + '\nendloop\nendfacet').join('\n') + '\nendsolid t\n';
+  const b = I3.readModel('t.stl', new TextEncoder().encode(txt).buffer);
+  ok('★★ 文字 STL 也讀得到', b.ok && I3.cleanModel(b).faces.length === 4);
+  // OBJ：兩個同名的 g 把同一組面寫兩次（Kenney 那種）、負的索引、v/vt/vn、一個四邊形
+  const obj = ['# t', 'g 盒', 'v 0 0 0', 'v 1 0 0', 'v 1 1 0', 'v 0 1 0', 'vt 0 0', 'f 1/1/1 2/1/1 3/1/1 4/1/1', 'g 盒', 'f -4 -3 -2 -1', 'o 片', 'v 0 0 1', 'v 1 0 1', 'v 0 1 1', 'f -3 -2 -1'].join('\n');
+  const c = I3.readModel('t.obj', new TextEncoder().encode(obj).buffer);
+  const cc = I3.cleanModel(c);
+  ok('★★★ OBJ：同一個面寫兩次 ⇒ 只留一個；負的索引、四邊形照讀', c.ok && c.faces.length === 3 && cc.faces.length === 2 && cc.stats.dup === 1 && cc.faces[0].length === 4);
+  ok('★★ 　 o／g 分部分（同名的併成一個）', c.parts.length === 2 && cc.partOf.join() === '0,1');
+  // GLB：一片正方形（2 個三角形）、節點往 X 搬 10
+  const pos = new Float32Array([0, 0, 0, 2, 0, 0, 2, 0, 2, 0, 0, 2]), idx = new Uint16Array([0, 2, 1, 0, 3, 2]);
+  const binLen = 48 + 12, bin = new Uint8Array(binLen);
+  bin.set(new Uint8Array(pos.buffer), 0); bin.set(new Uint8Array(idx.buffer), 48);
+  const gj = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0, name: '板', translation: [10, 0, 0] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }], buffers: [{ byteLength: binLen }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 48 }, { buffer: 0, byteOffset: 48, byteLength: 12 }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 4, type: 'VEC3' }, { bufferView: 1, componentType: 5123, count: 6, type: 'SCALAR' }] };
+  let js = new TextEncoder().encode(JSON.stringify(gj));
+  const jl = Math.ceil(js.length / 4) * 4, jp = new Uint8Array(jl).fill(0x20); jp.set(js);
+  const glb = new ArrayBuffer(12 + 8 + jl + 8 + binLen), gv = new DataView(glb), gu = new Uint8Array(glb);
+  gv.setUint32(0, 0x46546c67, true); gv.setUint32(4, 2, true); gv.setUint32(8, glb.byteLength, true);
+  gv.setUint32(12, jl, true); gv.setUint32(16, 0x4E4F534A, true); gu.set(jp, 20);
+  gv.setUint32(20 + jl, binLen, true); gv.setUint32(24 + jl, 0x004E4942, true); gu.set(bin, 28 + jl);
+  const d = I3.readModel('板.glb', glb);
+  ok('★★★ GLB：2 個三角形、節點的位移照算（X 10～12）', d.ok && d.faces.length === 2 && Math.min(...d.points.map(p => p[0])) === 10 && Math.max(...d.points.map(p => p[0])) === 12, d.reason || '');
+  ok('★★ 　 GLB ⇒ m、Y 朝上；平的一片 ⇒ 4 條邊是外框（破洞照實講）', I3.guessUnit('glb', [2, 0, 2]) === 'm' && I3.guessUp('glb') === 'y' && I3.edgeCheck(I3.cleanModel(d).faces).open === 4);
+  // 換成公分、Z 朝上轉成 Y 朝上
+  const parts = I3.toParts(ca, { cmPerUnit: 0.1, up: 'z', split: true });
+  const zmax = Math.max(...parts[0].points.map(p => p[1]));
+  ok('★★★ Z 朝上 ⇒ 轉成 Y 朝上、mm ⇒ cm（四面體的 Z 10 mm 變成高 1 cm）', parts.length === 1 && Math.abs(zmax - 1) < 1e-9);
+  ok('★★ 不認得的格式、.gltf 講原因', !I3.readModel('a.fbx', new ArrayBuffer(4)).ok && /glb/.test(I3.readModel('a.gltf', new ArrayBuffer(4)).reason));
+  // 建成網格物件、照樣展開得了
+  const pp = I3.toParts(ca, { cmPerUnit: 1, up: 'y', split: false })[0];
+  const m = Mesh.fromFaceList(pp.points.map(q => new THREE.Vector3(...q)), pp.faces);
+  ok('★★★ 建成建模器的網格：封閉、展開得了', m.isClosed() && unfoldMesh(m, makeRule('paper', 0.2)).stats.total >= 1);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

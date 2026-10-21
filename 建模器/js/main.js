@@ -54,6 +54,7 @@ import { findClashes, clashLine } from './core/interfere.js';
 import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
+import { Import3DPanel } from './ui/import3dPanel.js';
 
 /**
  * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
@@ -495,6 +496,8 @@ const unfoldWin = new UnfoldPanel(app);
 const exportWin = new ExportPanel(app);
 const sliceWin = new SlicePanel(app);
 const importWin = new ImportPanel(app);
+/** 匯入 3D 模型（STL／OBJ／GLB）當骨架（2026-10-21 → `規格\建模器-匯入3D模型.md`）*/
+const import3dWin = new Import3DPanel(app);
 
 // ═══════════════════════════════════════════════════════
 //  動作
@@ -1441,6 +1444,7 @@ $('propR').addEventListener('change', () => {
 $('unfold').onclick = () => unfoldWin.open();
 $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
+$('import3d').onclick = () => import3dWin.open();
 $('export3d').onclick = () => exportWin.open();
 
 $('undo').onclick = () => jumpHistory(false);
@@ -7312,7 +7316,7 @@ window.addEventListener('keydown', e => {
    * 以前展開圖開著按 Delete，後面的物件被刪掉、展開圖跟著變空；
    * Ctrl+Z、W／E／R 也一樣穿透過去。視窗是「看結果」的地方，⛔ 不是編輯的地方。
    */
-  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen) {
+  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen) {
     /** ⚠ Ctrl+S／Ctrl+D ⛔ 不可以掉回瀏覽器（另存網頁、加入書籤）*/
     if ((e.ctrlKey || e.metaKey) && 'sd'.includes(e.key.toLowerCase())) e.preventDefault();
     return;
