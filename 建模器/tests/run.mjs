@@ -19313,6 +19313,65 @@ section('T11 修的這一批：確認框畫在頁面裡、凍結的名字對齊�
   ok('★★ 排版有常用的板子大小：A4、A3（紙模）、照舊的 240 × 120', /'29\.7x21', 'A4/.test(up) && /'42x29\.7', 'A3/.test(up) && /'240x120'/.test(up) && /id="uwNPre"/.test(up));
 }
 
+section('第二輪第一批（一）：封閉的判斷、補洞、3D 列印先問（2026-10-22）');
+{
+  /** `實驗-綜合評估-第二輪.md` ①-1、②-1、②-3、④-1；kang「實體有洞時照你的建議：列印視窗先問『補洞』還是『加厚成殼』，預設照洞的大小建議一個」 */
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const cubePts = (ox, oy, oz) => { const p = []; for (let i = 0; i < 8; i++) p.push(V(ox + (i & 1), oy + ((i >> 1) & 1), oz + ((i >> 2) & 1))); return p; };
+  const CUBE = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  // ① 兩個方塊只碰一條邊（四個面共用那條邊）—— 以前只配得出一對 ⇒ 「不封閉」⇒ 3D 列印加厚成殼
+  const pts = [...cubePts(0, 0, 0), ...cubePts(1, 1, 0)];
+  const mapB = i => (i === 0 ? 3 : i === 4 ? 7 : 8 + i);   // 第二個方塊的 (1,1,0)、(1,1,1) 就是第一個的 3、7
+  const two = Mesh.fromFaceList(pts, [...CUBE, ...CUBE.map(f => f.map(mapB))]);
+  ok('★★★ 兩個方塊碰一條邊（四個面共用）：一對一對配上 ⇒ 封閉、沒有邊界半邊', two.isClosed() && !two.halfEdges.some(h => !h.face), `邊界半邊 ${two.halfEdges.filter(h => !h.face).length}`);
+  near('★★ 　 體積 ＝ 2（兩個 1 × 1 × 1）', two.volume(), 2, 1e-9);
+  const f2 = edit.fillHoles(two);
+  ok('★★ 　 補洞說沒有洞（以前會去補不存在的洞）', !f2.ok && /沒有洞/.test(f2.reason), f2.reason);
+
+  // ② 兩個洞碰在同一個點（蝴蝶結）—— 以前補洞「洞的邊界沒有繞回來」、3D 列印「半邊 … 沒有 next」
+  const box = buildPrim('box', { w: 2, h: 2, d: 2 });
+  box.computeNormals();
+  const sd = edit.subdivideFaces(box, [box.faces.find(f => f.normal.y > 0.99)], 2);
+  const m2 = sd.mesh; m2.computeNormals();
+  const tops = m2.faces.filter(f => f.normal.y > 0.99);
+  const c0 = f => { const vs = m2.faceVerts(f); return vs.reduce((a, v) => a.add(v.p), new THREE.Vector3()).multiplyScalar(1 / vs.length); };
+  const diag = tops.filter(f => { const c = c0(f); return c.x * c.z > 0; });   // 對角的兩格（共用中間那一點）
+  /** ⚠ 「刪除面」自己會擋下做出蝴蝶結的刪法（那是它的保護，⛔ 在這一批改）⇒ 直接從面的清單拿掉這兩格再建（匯入的檔就是這樣進來的）*/
+  const vi2 = m2._vertIndex();
+  const keep = m2.faces.filter(f => !diag.includes(f)).map(f => m2.faceVerts(f).map(v => vi2.get(v.id)));
+  ok('　　（前置）頂面切 2 × 2、拿掉對角兩格（方塊的頂面是兩個三角形 ⇒ 每格 2 個面，對角兩格 4 個面）', sd.ok && diag.length === 4 && keep.length === m2.faces.length - 4, `${diag.length} 個面`);
+  const bw = Mesh.fromFaceList(m2.verts.map(v => v.p.clone()), keep);
+  const naked = bw.halfEdges.filter(h => !h.face);
+  ok('★★★ 蝴蝶結：每條邊界半邊都接得上下一條（以前有一條沒有 next）', naked.length === 8 && naked.every(h => h.next && h.prev), `${naked.length} 條`);
+  const loopSizes = []; const seen = new Set();
+  for (const s of naked) { if (seen.has(s)) continue; let x = s, n = 0; do { seen.add(x); n++; x = x.next; } while (x && x !== s && n < 100); loopSizes.push(n); }
+  eq('★★★ 　 繞成兩圈各 4 條（⛔ 繞成一個 8 字）', loopSizes.sort().join(','), '4,4');
+  const fb = edit.fillHoles(bw);
+  ok('★★★ 補洞：補 2 個、封閉', fb.ok && fb.holes === 2 && fb.nowClosed, fb.reason || JSON.stringify(fb.sizes));
+  near('★★ 　 補完的體積 ＝ 原本的方塊 8', fb.ok ? fb.mesh.volume() : 0, 8, 1e-6);
+  eq('★★ 　 holeLoops 照面數：兩圈', edit.holeLoops(bw.faces.map(f => bw.faceVerts(f).map(v => bw.verts.indexOf(v)))).length, 2);
+
+  // ③ 洞佔表面多少 ⇒ 預設建議（< 2% 補洞、其他加厚）
+  const X = await import('../js/ui/exportPanel.js');
+  eq('★★ 小洞的界線 2%', X.SMALL_HOLE_RATIO, 0.02);
+  const lid = buildPrim('box', { w: 20, h: 10, d: 15 }); lid.computeNormals();
+  const open = edit.deleteFaces(lid, [{ kind: 'face', face: lid.faces.find(f => f.normal.y > 0.99) }]).mesh;
+  const hiOpen = edit.holeInfo(open);
+  ok('★★★ 沒蓋的盒子：1 個洞、佔表面 30% ⇒ 建議加厚', hiOpen.holes === 1 && Math.abs(hiOpen.ratio - 0.3) < 1e-6 && hiOpen.ratio >= X.SMALL_HOLE_RATIO, hiOpen.ratio.toFixed(4));
+  const big = buildPrim('box', { w: 20, h: 10, d: 15 }); big.computeNormals();
+  const sb = edit.subdivideFaces(big, big.faces.slice(), 6).mesh; sb.computeNormals();
+  const one = edit.deleteFaces(sb, [{ kind: 'face', face: sb.faces.find(f => f.normal.y > 0.99) }]).mesh;
+  const hiOne = edit.holeInfo(one);
+  ok('★★★ 盒子刪一小格：佔表面 0.32% ⇒ 建議補洞', hiOne.holes === 1 && hiOne.ratio < X.SMALL_HOLE_RATIO && Math.abs(hiOne.ratio - 0.0032) < 0.0002, hiOne.ratio.toFixed(5));
+  eq('★★ 　 封閉的東西：0 個洞', edit.holeInfo(buildPrim('box', { w: 1, h: 1, d: 1 })).holes, 0);
+
+  // ④ 3D 列印面板讀程式守著：實體⛔ 一律先加厚；板件照舊加厚
+  const { readFileSync } = await import('node:fs');
+  const ep = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../js/ui/exportPanel.js'), 'utf8');
+  ok('★★★ 列印面板：板件照舊加厚；實體先看面翻過來、真的洞，再照比例建議', /if \(o\.kind === 'sheet'\) \{\s*try \{ mesh = mesh\.shell/.test(ep) && /reversedFaceEdges\(mesh\)\.edges > 0/.test(ep) && /info\.ratio < SMALL_HOLE_RATIO \? 'fill' : 'shell'/.test(ep));
+  ok('★★ 　 卡片上可以換（改成補洞／改成加厚成殼）', /'改成補洞' : '改成加厚成殼'/.test(ep));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

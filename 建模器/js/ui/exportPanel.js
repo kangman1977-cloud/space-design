@@ -17,8 +17,17 @@ import { triangles, bedLayout, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
-import { boundaryEdges, nonManifoldEdges } from '../core/selectops.js';
+import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/selectops.js';
+import { fillHoles, holeInfo } from '../core/edit.js';
 import { today } from '../core/io.js';
+
+/**
+ * 🔴 **洞小於表面的幾 % 算「小洞」⇒ 預設建議補洞；大於 ⇒ 預設建議加厚成殼**（2026-10-22，kang「實體有洞時照你的建議：
+ * 列印視窗先問『補洞』還是『加厚成殼』，預設照洞的大小建議一個」）。
+ * 量過的【已查證 · 沙箱】：頭盔前片、左片 0.00%、盒子誤刪一小格 0.32% ⇒ 該補；杯子、沒蓋的盒子 20～30%、碗、燈罩 50～66% ⇒ 該加厚；
+ * 帽殼刪底一小圈 8.4% 看用途。⚠ 頭盔右片缺了整個底面 40% 卻該補 —— 大小猜不準的那一種，所以兩顆都給、提示講明。
+ */
+export const SMALL_HOLE_RATIO = 0.02;
 
 const LS_KEY = 'modeler_export3d';
 
@@ -112,7 +121,7 @@ export class ExportPanel {
    * 舊的標記還留著只會分不清哪次是哪次。
    * 〔另一條清除路徑在 `scene.js` 的 `markGeomDirty()`：幾何一變就清〕
    */
-  open() { this.app.view.clearIssuePreview(); this.el.hidden = false; this.run(); }
+  open() { this.app.view.clearIssuePreview(); this.fix = new Map(); this.el.hidden = false; this.run(); }
   close() { this.el.hidden = true; }
   get isOpen() { return !this.el.hidden; }
 
@@ -141,12 +150,40 @@ export class ExportPanel {
     const objs = picked.length ? picked : this.app.doc.objects;
     const s = STL_UNITS[this.opt.unit].scale;
 
+    if (!this.fix) this.fix = new Map();
     this.items = objs.map(o => {
       let mesh = o.mesh();
       let shelled = false;
+      let holes = null;                       // 實體有真的洞 ⇒ { holes, ratio, choice, suggest, filled, fillErr }
       if (!mesh.isClosed() && o.thickness > 0) {
-        try { mesh = mesh.shell(o.thickness); shelled = true; }
-        catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
+        if (o.kind === 'sheet') {
+          try { mesh = mesh.shell(o.thickness); shelled = true; }
+          catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
+        } else {
+          /**
+           * 🔴 **實體：先看是哪一種「沒封口」，再決定**（2026-10-22，`實驗-綜合評估-第二輪.md` ①-1、②-1）。
+           * ⚠ 以前一律先加厚再檢查 ⇒ 沒有破洞的汽車（三面共用的邊）、只有幾個小洞的頭盔都被做成兩層殼；
+           * 面翻過來的頭盔左片被加厚之後，檢查表講成「357 條三面共用」「半邊沒有 next」，⛔ 叫人按「修法向」。
+           * 現在：面翻過來 ⇒ 不動，檢查表照實講、叫人按「修法向」；沒有真的洞（只是三面共用）⇒ 不動；
+           * 有真的洞 ⇒ 照洞的大小預設「補洞」或「加厚成殼」，卡片上兩顆都給，按一下換（只影響這次匯出，模型本身不改）。
+           * ⛔ 改板件：板件本來就是一張面，照舊依板厚加厚。
+           */
+          const flipped = reversedFaceEdges(mesh).edges > 0;
+          const info = flipped ? null : holeInfo(mesh);
+          if (info && info.holes) {
+            const suggest = info.ratio < SMALL_HOLE_RATIO ? 'fill' : 'shell';
+            const choice = this.fix.get(o.id) || suggest;
+            holes = { holes: info.holes, ratio: info.ratio, suggest, choice, filled: 0, fillErr: '' };
+            if (choice === 'fill') {
+              const r = fillHoles(mesh);
+              if (r.ok) { mesh = r.mesh; holes.filled = r.holes; }
+              else holes.fillErr = r.reason;
+            } else {
+              try { mesh = mesh.shell(o.thickness); shelled = true; }
+              catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
+            }
+          }
+        }
       }
       /**
        * ⚠ **這裡⛔ 不落平台** —— 存檔時才由 `bedLayout()` 決定怎麼落
@@ -154,7 +191,7 @@ export class ExportPanel {
        * 列印前檢查只看形狀與體積，跟高度無關。
        */
       const tris = triangles(mesh, { matrix: o.matrix(), scale: s });
-      return { obj: o, mesh, tris, shelled, check: printCheck(mesh, tris) };
+      return { obj: o, mesh, tris, shelled, holes, check: printCheck(mesh, tris) };
     });
 
     this._render();
@@ -191,7 +228,8 @@ export class ExportPanel {
       '匯出時會自動做三件事：公分換算成所選單位、'
       + '把 Y 軸向上轉成列印用的 Z 軸向上、整組落到平台 Z=0。'
       + '開放的面（平板、折板）會依板厚自動加厚，否則印出來是空的；'
-      + '封閉的實體本來就有體積，不會也不該加厚。'));
+      + '封閉的實體本來就有體積，不會也不該加厚；'
+      + '實體有洞時照洞的大小先建議「補洞」或「加厚成殼」，卡片上可以換（只影響這次匯出）。'));
   }
 
   _card(it) {
@@ -215,11 +253,9 @@ export class ExportPanel {
          <div class="nm">${esc(it.obj.name)}
            <span class="exTag ${c.ok ? 'good' : 'bad'}">${c.ok ? '可以列印' : '印不出來'}</span>
          </div>
-         ${it.shelled ? (it.obj.kind === 'sheet'
-            ? '<div class="dim">開放的面，已依板厚 ' + f(it.obj.thickness) + ' cm 自動加厚</div>'
-            /** ⚠ 實體沒封口（2026-10-19 ①-9）：講清楚是照哪個厚度、去哪裡改 —— 以前那個厚度在面板上看不到 */
-            : '<div class="bad uwOpenSolid">⚠ 這個實體沒有封口（例如刪過面），已照板厚 ' + f(it.obj.thickness)
-              + ' cm 加厚成一層殼 —— 板厚在右邊物件面板改；要實心的話請把洞補起來</div>') : ''}
+         ${it.shelled && it.obj.kind === 'sheet'
+            ? '<div class="dim">開放的面，已依板厚 ' + f(it.obj.thickness) + ' cm 自動加厚</div>' : ''}
+         ${it.holes ? this._holeNote(it, f) : ''}
        </div>
        <table class="exTab">${rows.map(r =>
          `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table>`;
@@ -232,6 +268,17 @@ export class ExportPanel {
      */
     const openNote = card.querySelector('.uwOpenSolid');
     if (openNote) {
+      /** 補洞 ⇄ 加厚成殼：按一下換、重算這張卡（2026-10-22，kang「列印視窗先問」）*/
+      const other = it.holes.choice === 'fill' ? 'shell' : 'fill';
+      const sw = document.createElement('button');
+      sw.className = 'mini';
+      sw.textContent = other === 'fill' ? '改成補洞' : '改成加厚成殼';
+      sw.title = other === 'fill'
+        ? '這次匯出先把洞補起來再印（模型本身不改；要永久補起來按工具列「補洞」）'
+        : '這次匯出照板厚加厚成一層殼（像碗、燈罩那種故意開口的）';
+      sw.onclick = () => { this.fix.set(it.obj.id, other); this.run(); };
+      openNote.appendChild(document.createTextNode(' '));
+      openNote.appendChild(sw);
       openNote.appendChild(document.createTextNode(' '));
       openNote.appendChild(this._pointBtn(
         '把沒封口的地方在畫面上標成紅線，並關掉這個視窗',
@@ -275,6 +322,27 @@ export class ExportPanel {
       card.appendChild(b);
     }
     return card;
+  }
+
+  /**
+   * 實體有真的洞時那一句（2026-10-22）：有幾個洞、佔表面多少、這次怎麼處理、哪一個是建議的。
+   * ⚠ 大小猜不準的那一種（缺了整個底面的實心零件，洞很大卻該補）要講出來，讓人知道可以換。
+   */
+  _holeNote(it, f) {
+    const h = it.holes;
+    const pct = h.ratio * 100 < 0.01 ? '不到 0.01' : (Math.round(h.ratio * 1000) / 10).toLocaleString();
+    const head = `⚠ 這個實體有 ${h.holes} 個洞（佔表面 ${pct}%）—— `;
+    const tag = c => (h.suggest === c ? '（照洞的大小建議的）' : '（你選的）');
+    let body;
+    if (h.choice === 'fill') {
+      body = h.fillErr
+        ? `補洞沒有成功：${esc(h.fillErr)}；這次照原樣、沒有加厚`
+        : `這次匯出先把 ${h.filled} 個洞補起來再印${tag('fill')}。模型本身沒有改，要永久補起來按工具列「補洞」`;
+    } else {
+      body = `這次匯出照板厚 ${f(it.obj.thickness)} cm 加厚成一層殼${tag('shell')}，像碗、燈罩那種故意開口的；`
+        + '板厚在右邊物件面板改。如果它是缺了一面的實心零件，請改成補洞';
+    }
+    return `<div class="bad uwOpenSolid">${head}${body}</div>`;
   }
 
   /** 三顆「指出來」共用的按鈕。⚠ `mini` 是這組面板既有的樣式，⛔ 不要發明新的 */

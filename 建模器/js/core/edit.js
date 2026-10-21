@@ -5460,26 +5460,102 @@ export function deleteFaces(mesh, els, tolDeg = 0.5) {
  * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map,
  *            holes?:number, sizes?:number[], nowClosed?:boolean, fakeSeams?:number}}
  */
+/**
+ * 🔴 **真的洞有哪幾圈**（2026-10-22，實驗 T14、T15：`實驗-綜合評估-第二輪.md` ①-1、④-1）。
+ *
+ * ⚠ 以前補洞是沿「沒有面的半邊」的 next 繞 —— 兩個毛病：
+ * ① 三個面以上共用的邊、面翻過來的邊，也會留下沒有面的半邊 ⇒ 汽車（一個洞都沒有）被「補 78 個洞」；
+ * ② 兩個洞碰在同一個點（蝴蝶結）時繞不回來 ⇒ 頭盔前片、右片「洞的邊界沒有繞回來」，一個都不補。
+ * 現在照**面**重新數：一條邊只被**一個面**用到才是洞的邊（三個面共用、翻過來的都⛔ 算）；
+ * 沿著洞邊走，**走到走過的點就把那一圈切下來** ⇒ 碰在一起的兩個洞變成兩圈。
+ * 洞邊的方向跟旁邊那個面相反（面 a→b ⇒ 洞邊 b→a），補上的面才會朝外。
+ *
+ * @param {number[][]} faces 每個面的點的編號
+ * @returns {number[][]} 每一圈的點的編號（⛔ 含走不回來的斷頭）
+ */
+export function holeLoops(faces) {
+  const key = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  const cnt = new Map();
+  for (const f of faces) for (let k = 0; k < f.length; k++) {
+    const kk = key(f[k], f[(k + 1) % f.length]);
+    cnt.set(kk, (cnt.get(kk) || 0) + 1);
+  }
+  const out = new Map();                       // 起點 → 洞邊的終點（可以好幾條）
+  let left = 0;
+  for (const f of faces) for (let k = 0; k < f.length; k++) {
+    const a = f[k], b = f[(k + 1) % f.length];
+    if (cnt.get(key(a, b)) !== 1) continue;
+    (out.get(b) || out.set(b, []).get(b)).push(a);
+    left++;
+  }
+  const loops = [];
+  while (left) {
+    let start = null;
+    for (const [v, l] of out) if (l.length) { start = v; break; }
+    const path = [start], at = new Map([[start, 0]]);
+    let v = start;
+    for (;;) {
+      const l = out.get(v);
+      if (!l || !l.length) break;               // 走不回來的斷頭：丟掉
+      const w = l.shift(); left--;
+      if (at.has(w)) {                           // 走回走過的點 ⇒ 那一圈 ＝ w 到現在
+        const i = at.get(w);
+        const rest = path.splice(i + 1);
+        rest.forEach(x => at.delete(x));
+        loops.push([w, ...rest]);
+        v = w;
+        if (path.length === 1 && !(out.get(w) || []).length) break;
+        continue;
+      }
+      at.set(w, path.length); path.push(w); v = w;
+    }
+  }
+  return loops;
+}
+
+/**
+ * 洞有幾個、佔表面多少（3D 列印「補洞還是加厚」的預設建議用 —— kang 2026-10-22「預設照洞的大小建議一個」）。
+ * 洞的面積 ＝ 洞口那一圈從中心扇形算；表面 ＝ 所有面的面積。單位跟網格一樣（cm²）。
+ * @returns {{holes:number, area:number, surface:number, ratio:number}}
+ */
+export function holeInfo(mesh) {
+  const vi = mesh._vertIndex();
+  const P = mesh.verts.map(v => v.p);
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+  const loops = holeLoops(faces).filter(l => l.length >= 3);
+  const fan = loop => {
+    const c = new THREE.Vector3();
+    for (const i of loop) c.add(P[i]);
+    c.multiplyScalar(1 / loop.length);
+    const s = new THREE.Vector3(), u = new THREE.Vector3(), w = new THREE.Vector3();
+    for (let k = 0; k < loop.length; k++) {
+      u.subVectors(P[loop[k]], c); w.subVectors(P[loop[(k + 1) % loop.length]], c);
+      s.add(u.clone().cross(w));
+    }
+    return s.length() / 2;
+  };
+  let area = 0, surface = 0;
+  for (const l of loops) area += fan(l);
+  for (const f of faces) surface += fan(f);
+  return { holes: loops.length, area, surface, ratio: surface > 0 ? area / surface : 0 };
+}
+
 export function fillHoles(mesh) {
   if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
-  const naked = mesh.halfEdges.filter(he => !he.face);
-  if (!naked.length) {
-    return { ok: false, reason: '這個物件沒有洞（表面已經是封閉的）' };
-  }
 
   const vi = mesh._vertIndex();
   const points = mesh.verts.map(v => v.p.clone());
   const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
 
-  const seen = new Set();
+  const loops = holeLoops(faces);
+  if (!loops.length) {
+    /** 沒有面的半邊還是有 ⇒ 是三個面共用或面翻過來，⛔ 是洞 —— 講對的出路（坑第 34 條：不要指一條不存在的退路）*/
+    return mesh.halfEdges.some(he => !he.face)
+      ? { ok: false, reason: '這個物件沒有真的洞 —— 沒接起來的地方是面翻過來（按「修法向」）或三個以上的面共用一條邊（零件貼在一起），補洞補不了' }
+      : { ok: false, reason: '這個物件沒有洞（表面已經是封閉的）' };
+  }
   const sizes = [];
-  for (const b of naked) {
-    if (seen.has(b)) continue;
-    const loop = [];
-    let c = b, guard = 0;
-    do { seen.add(c); loop.push(vi.get(c.v.id)); c = c.next; }
-    while (c && c !== b && guard++ < 1e5);
-    if (c !== b) return { ok: false, reason: '洞的邊界沒有繞回來（迴圈斷了）' };
+  for (const loop of loops) {
     if (loop.length < 3) continue;      // 兩條邊繞不成面
     faces.push(loop);
     sizes.push(loop.length);

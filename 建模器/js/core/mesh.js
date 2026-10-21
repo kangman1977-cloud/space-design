@@ -947,7 +947,14 @@ export class Mesh {
     const m = new Mesh();
     m.verts = points.map(p => new Vertex(p));
 
-    // key「起點id-終點id」→ 半邊。用來配對 twin。
+    /**
+     * key「起點id-終點id」→ 這個方向的半邊（可以好幾條）。用來配對 twin。
+     *
+     * 🔴 **三個面以上共用的邊要一對一對配，⛔ 只配第一對**（2026-10-22，實驗 T15：`實驗-綜合評估-第二輪.md` ①-1）。
+     * ⚠ 以前一個方向只記一條：兩個零件貼在一起的邊（四個面）只配得出一對，另外兩條半邊沒有對面 ⇒
+     * 被補成邊界 ⇒ 整個物件「不封閉」⇒ 3D 列印把一台**沒有破洞**的汽車加厚成兩層殼（54 萬 → 110 萬三角形）。
+     * 現在 a→b 跟 b→a 照順序一條配一條；只有真的落單的（例如三個面共用、面翻過來）才變成邊界。
+     */
     const dirMap = new Map();
 
     for (const idx of faceIndices) {
@@ -978,13 +985,15 @@ export class Mesh {
         const a = idx[i], b = idx[(i + 1) % idx.length];
         const key = `${a}-${b}`, rev = `${b}-${a}`;
 
-        if (dirMap.has(key)) {
+        const same = dirMap.get(key);
+        if (same) {
           m.issues.push(`邊 ${a}→${b} 出現兩次（非流形，這條邊被兩個以上的面共用）`);
+          same.push(loop[i]);
         } else {
-          dirMap.set(key, loop[i]);
+          dirMap.set(key, [loop[i]]);
         }
-        const twin = dirMap.get(rev);
-        if (twin && !twin.twin) {
+        const twin = (dirMap.get(rev) || []).find(h => !h.twin);
+        if (twin) {
           twin.twin = loop[i];
           loop[i].twin = twin;
         }
@@ -1005,7 +1014,14 @@ export class Mesh {
     const naked = this.halfEdges.filter(he => !he.twin);
     if (!naked.length) return;
 
-    const made = new Map();   // 起點id → 邊界半邊
+    /**
+     * 起點id → 從這個點出發的邊界半邊（**可以好幾條**）。
+     * 🔴 兩個洞碰在同一個點（蝴蝶結）時，那個點有兩條邊界半邊出發（2026-10-22，實驗 T14）。
+     * ⚠ 以前一個點只記一條，後一條蓋掉前一條 ⇒ 有一條邊界半邊沒有 next ⇒
+     * 「補洞」說「洞的邊界沒有繞回來」、3D 列印說「半邊 … 沒有 next」—— 頭盔前片、右片因此送不出去。
+     */
+    const made = new Map();
+    const all = [];
     for (const he of naked) {
       const b = new HalfEdge();
       b.v = he.to;            // 方向相反
@@ -1016,15 +1032,36 @@ export class Mesh {
       // edges() 走訪時可能剛好讀到另一條，看起來就像沒設。
       b.role = he.role = EDGE_ROLE.CUT;
       this.halfEdges.push(b);
-      made.set(b.v.id, b);
+      all.push(b);
+      (made.get(b.v.id) || made.set(b.v.id, []).get(b.v.id)).push(b);
     }
 
-    // 串成迴圈：每條邊界半邊的 next，是「從它終點出發」的那條邊界半邊
-    for (const b of made.values()) {
+    /**
+     * 串成迴圈：每條邊界半邊的 next，是「從它終點出發」的那條邊界半邊。
+     * 終點有兩條可以選（蝴蝶結）⇒ 從自己旁邊那個面繞著那個點轉過去，轉到的是**另一個洞**的邊
+     * （那一把扇子夾在兩個洞中間）⇒ **選轉不到的那一條** —— 這樣兩個洞各自繞成一圈，⛔ 繞成一個 8 字
+     * （【已查證 · 沙箱】頭盔前片、右片：先寫成「選轉到的」，兩次都繞成 8 字）。
+     * 三條以上、或轉不到（網格在那裡本來就亂）⇒ 拿第一條還沒接的；補洞另外會在重複的點把圈切開（`edit.js` `holeLoops()`）。
+     */
+    const taken = new Set();
+    for (const b of all) {
       const endV = b.twin.v;
-      const nxt = made.get(endV.id);
-      if (nxt) { b.next = nxt; nxt.prev = b; }
-      else this.issues.push(`邊界迴圈在頂點 ${endV.id} 斷開`);
+      const cands = (made.get(endV.id) || []).filter(x => !taken.has(x));
+      if (!cands.length) { this.issues.push(`邊界迴圈在頂點 ${endV.id} 斷開`); continue; }
+      let nxt = null;
+      if (cands.length === 2) {
+        let h = b.twin, hit = null;
+        for (let guard = 0; h && guard < this.halfEdges.length; guard++) {
+          const p = h.prev && h.prev.twin;
+          if (!p) break;
+          if (!p.face) { hit = p; break; }
+          h = p;
+        }
+        if (hit && cands.includes(hit)) nxt = cands.find(x => x !== hit);
+      }
+      nxt = nxt || cands[0];
+      taken.add(nxt);
+      b.next = nxt; nxt.prev = b;
     }
   }
 
