@@ -19137,6 +19137,26 @@ section('展開：很短的邊最後才當軸（2026-10-21）');
   ok('★★ 　 沒有誤差的那一份照舊：一片、不補剪', r0.stats.total === 1 && (r0.autoEdges || []).length === 0);
 }
 
+section('智慧分切 試候選只攤那一塊曲面（2026-10-21）');
+{
+  /** 以前每個候選都把整個物件重攤；曲面以外的片每個候選都一樣 ⇒ 只攤一次。分數要跟整個重攤一模一樣（`verifyPart` 兩種都算來比）*/
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  let n = 0, bad = 0;
+  for (const [t, over, mat] of [['cylinder', {}, 'foamboard'], ['tube', {}, 'foamboard'], ['roundBox', {}, 'foamboard'], ['dome', {}, 'foamboard'], ['sphere', {}, 'paper'], ['gear', { teeth: 8 }, 'paper']]) {
+    const p = proposeSeams(mk(t, over), { material: mat, verifyPart: true });
+    n += p._partCheck.n; bad += p._partCheck.bad;
+    const q = proposeSeams(mk(t, over), { material: mat });
+    ok(`★★ 　 ${t}：比對不改結果`, p.kind === q.kind && p.total === q.total && p.edges.length === q.edges.length, `${p.label} ${p.total} 片`);
+  }
+  ok('★★★ 每個候選：只攤那一塊 ＝ 整個重攤（放不進、重疊、片數、程式補剪）', n > 50 && bad === 0, `${n} 個候選、不一樣 ${bad}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

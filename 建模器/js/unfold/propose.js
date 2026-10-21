@@ -374,7 +374,56 @@ function* proposeGen(obj, opt = {}) {
       }
       return { start, cur: evaluate(accepted, fixed) };
     };
-    return { evaluate, merge };
+    /**
+     * 🔴 **只攤一部分面**（2026-10-21，`分片成群-設計方向.md` 10.8，kang「同意你的建議」）：標法跟 `evaluate([], fixed)` 一字不差，
+     * 只是只攤 `faceSet` 裡的面。⭐ 給「試候選」用：accepted 一律 ＝ []（塊與塊之間除了不准切都切開）⇒ 片不會跨過 faceSet 的邊界
+     * （用不准切連在一起的塊要一起放進來 —— `partOf()`）。縫長只算這一部分裡面的邊（邊界那一圈每個候選都一樣，比大小不受影響）。
+     */
+    const evalPart = (faceSet, fixed) => {
+      if (!faceSet.size) return { misfit: 0, overlap: false, total: 0, jag: 0, cutLen: 0 };
+      const open = new Set(forced.map(([a, b]) => pk(a, b)));
+      const faces = base.faces.filter(f => faceSet.has(f.id));    // 照 base 的順序（片怎麼擺看第一個面）
+      const used = new Map(), pts = [];
+      const at = v => { if (!used.has(v.id)) { used.set(v.id, pts.length); pts.push(v.p.clone()); } return used.get(v.id); };
+      const sub = Mesh.fromFaceList(pts, faces.map(f => base.faceVerts(f).map(at)));
+      sub.computeNormals();
+      const toBase = new Array(pts.length);
+      for (const [id, i] of used) toBase[i] = vi.get(id);
+      const sIdx = new Map(sub.verts.map((v, i) => [v.id, toBase[i]]));
+      for (const h of innerEdges(sub)) {
+        const k = pairKey(sub, sIdx, h);
+        const o = baseEdge.get(k);
+        if (!o) continue;
+        if (isUserCut(o)) { sub.setRole(h, EDGE_ROLE.CUT); continue; }
+        if (o.keep) sub.setKeep(h, true);
+        const a = sid(o.face), b = sid(o.twin.face);
+        if ((a !== b && !open.has(pk(a, b))) || (fixed && fixed.has(k))) sub.setRole(h, EDGE_ROLE.CUT);
+      }
+      const r = unfoldMesh(sub, rule);
+      const auto = new Set((r.autoEdges || []).map(h => Math.min(h.id, h.twin.id)));
+      let cutLen = 0;
+      for (const h of innerEdges(sub)) {
+        if (!(isUserCut(h) || auto.has(Math.min(h.id, h.twin.id)))) continue;
+        const o = ownByPair.get(pairKey(sub, sIdx, h));
+        if (!o || isSeam(o)) continue;
+        cutLen += h.v.p.distanceTo(h.to.p);
+      }
+      return {
+        misfit: r.pieces.reduce((n, p) => n + (fits(p) ? 0 : p.qty), 0),
+        overlap: r.pieces.some(p => p.overlap),
+        total: r.stats.total,
+        jag: r.pieces.reduce((n, p) => n + Math.max(0, ((p.autoCut && p.autoCut.lines) || 0) - 1) * p.qty, 0),
+        cutLen
+      };
+    };
+    /** 這塊曲面 ＋ 用不准切跟它連在一起的塊（同一片一定一起攤）*/
+    const partOf = faceIds => {
+      const F = unionFind();
+      for (const [a, b] of forced) F.union(a, b);
+      const root = F.find(sid(base.faces.find(f => faceIds.has(f.id))));
+      return new Set(base.faces.filter(f => F.find(sid(f)) === root).map(f => f.id));
+    };
+    return { evaluate, merge, evalPart, partOf };
   };
 
   const better = (x, y) => // x 比 y 好？放不進的少 → 沒重疊 → 片少 → 縫短（第二步）
@@ -655,17 +704,36 @@ function* proposeGen(obj, opt = {}) {
   }
 
   const options = [corner];
+  const partCheck = opt.verifyPart ? { n: 0, bad: 0 } : null;   // 試候選只攤那一塊：兩種都算來比（10.8）
   if (regions.length) {
     const E1 = engine(regions.map(r => r.faces));
     const union = sets => new Set(sets.flatMap(x => (x ? [...x] : [])));
     // 每塊曲面：每一種各留最好的一份（其他曲面先不加刀）
+    /**
+     * 🔴 **試候選只攤那一塊曲面**（2026-10-21，10.8）：以前每個候選都把整個物件重攤；塊與塊之間都切開時，
+     * 曲面以外的片每個候選都一樣 ⇒ 只攤一次（`rest`），每個候選只攤那塊曲面（＋用不准切連著的塊）。
+     * ⭐ 放不進、重疊、片數、程式補剪跟整個重攤**一模一樣**（沙箱 246 個候選逐個比過）；縫長差一個每塊曲面固定的數 ⇒ 挑出來的一樣。
+     * `opt.verifyPart` ＝ 兩種都算、記下不一樣的個數（`_partCheck`，給回歸測試守著）。
+     */
     for (const rg of regions) {
       rg.best = { corner: null };                                  // corner ＝ 不加刀
-      rg.score = { corner: E1.evaluate([], null) };
+      const part = E1.partOf(rg.faces);
+      const rest = E1.evalPart(new Set(base.faces.filter(f => !part.has(f.id)).map(f => f.id)), null);
+      const scoreOf = keys => {
+        const x = E1.evalPart(part, keys);
+        const sc = { misfit: rest.misfit + x.misfit, overlap: rest.overlap || x.overlap, total: rest.total + x.total, jag: rest.jag + x.jag, cutLen: rest.cutLen + x.cutLen };
+        if (partCheck) {
+          const full = E1.evaluate([], keys);
+          partCheck.n++;
+          if (full.misfit !== sc.misfit || full.overlap !== sc.overlap || full.total !== sc.total || full.jag !== sc.jag) partCheck.bad++;
+        }
+        return sc;
+      };
+      rg.score = { corner: scoreOf(null) };
       for (const c of rg.cands) {
         if (late()) break;
         prog.phase = '曲面切法：試候選'; yield prog;
-        const sc = E1.evaluate([], c.keys);
+        const sc = scoreOf(c.keys);
         if (!rg.score[c.kind] || better3(sc, rg.score[c.kind])) { rg.score[c.kind] = sc; rg.best[c.kind] = c.keys; }
       }
       rg.top = Object.keys(rg.score).reduce((a, k) => (better3(rg.score[k], rg.score[a]) ? k : a), 'corner');
@@ -711,6 +779,7 @@ function* proposeGen(obj, opt = {}) {
     options,
     nonGrid,
     timedOut,
+    _partCheck: partCheck,
     board,
     slits, notchDeg, cutOrder,
     sig: markSignature(own),
