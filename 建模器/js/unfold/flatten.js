@@ -99,6 +99,13 @@ export function unfoldMesh(mesh, rule, opts = {}) {
    */
   const dart = opts.mode === 'dart';
   const geo = dart ? Object.assign(Object.create(rule), { foldable: true, canFold: () => true }) : rule;
+  /**
+   * 🔴 **試算模式**（2026-10-21，智慧分切大模型加快；kang「算得對第一、算得快第二」）：`opts.probe` ＝ 只要
+   * 「幾片、有沒有重疊、外框多大、程式補剪幾條」—— ⛔ 算接合編號、接縫連段、3D 位置、放射折線、圓弧面（出圖才用）；
+   * 重疊找到第一對就停（只問有沒有）；`probe.side`（面 id → 0／1）有給 ⇒ 只查兩邊之間（兩邊各自早就查過、形狀不會變 —— 見 `buildPiece()`）。
+   * ⚠ 這幾個數字跟一般模式**一模一樣**（`propose.js` 用它；對照組逐條比過）。
+   */
+  const probe = opts.probe || null;
 
   mesh.computeNormals();
 
@@ -134,7 +141,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const jointNo = wantJoints ? { map: new Map(), next: 1 } : null;
 
   for (const patch of patches) {
-    const r = flattenPatch(mesh, patch, geo, tolDeg, jointNo, dart);
+    const r = flattenPatch(mesh, patch, geo, tolDeg, jointNo, dart, probe);
     if (r.piece) pieces.push(r.piece);
     else if (r.error && !warnings.includes(r.error)) warnings.push(r.error);
   }
@@ -322,7 +329,7 @@ function splitPatches(mesh, rule, tolDeg) {
  * 所以兩者的「左」剛好指向相反側，不必額外判斷。
  * 這是半邊結構本身就帶著的資訊，換成面清單就要自己算繞向。
  */
-function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false) {
+function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false, probe = null) {
   if (!faces.length) return null;
 
   const inPatch = new Set(faces.map(f => f.id));
@@ -490,7 +497,7 @@ function flattenPatch(mesh, faces, rule, tolDeg, jointNo = null, dart = false) {
 
   const piece = buildPiece(mesh, used, pt2, isCut, rule,
     used.length < faces.length ? ['有部分面攤不開，可能是網格結構有問題'] : [],
-    jointNo, he => implicit.has(he.id), strain);
+    jointNo, he => implicit.has(he.id), strain, probe);
 
   /**
    * 🔴 **程式自己補剪的邊（每條一次）＋ 不准切卻非切不可的**（2026-10-13，智慧分切第一步）。
@@ -838,7 +845,7 @@ function placeFace(mesh, th, O2, T2, pt2) {
  * 全部就地改同一份 pt2，所以折線、輪廓、折彎帶三者永遠對得起來，
  * 不會出現「輪廓修正了、折線沒修正」這種畫面騙人的情況。
  */
-function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto = () => false, strain = null) {
+function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto = () => false, strain = null, probe = null) {
   const inPatch = new Set(faces.map(f => f.id));
 
   /**
@@ -950,7 +957,15 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
 
   computeFlanges(bands, px0, px1);
 
-  const ov = detectOverlap(polys);
+  /**
+   * 試算模式的重疊：找到第一對就停。`probe.side` 有給、而且這一片**程式一條都沒補剪** ⇒ 只查兩邊之間 ——
+   * 沒補剪 ＝ 攤法只有一種（每一邊各自攤出來的形狀不會因為接起來而變），兩邊各自早就查過沒疊。
+   * ⚠ 有補剪 ⇒ 補在哪裡會影響形狀 ⇒ 照舊全部查。
+   */
+  const autoLines = autoCutLines(mesh, faces, isAuto);
+  const ov = probe
+    ? detectOverlap(polys, { first: true, side: probe.side && !autoLines ? faces.map(f => probe.side.get(f.id)) : null })
+    : detectOverlap(polys);
 
   const piece = {
     name: '展開片',
@@ -978,7 +993,7 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
       userSeams: !!jointNo,
       outline: jointNo ? ((traced[0] && traced[0].auto) || []) : [],
       holes: jointNo ? traced.slice(1).map(l => l.auto) : traced.slice(1).map(() => []),
-      lines: autoCutLines(mesh, faces, isAuto)
+      lines: autoLines
     },
     /**
      * 🔴 **省道打版的開口**（2026-10-12）：`outline[i]` ＝ 第 i 段是開口的一邊；
@@ -1009,13 +1024,13 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      * 接合處：這條邊在 2D 上是邊界，但在 3D 上有鄰居，要接回去。
      * 兩側的片會拿到同一個號碼。沒有分片標記的物件是空陣列。
      */
-    joints: collectJoints(mesh, faces, pt2, isCut, jointNo),
+    joints: probe ? [] : collectJoints(mesh, faces, pt2, isCut, jointNo),
     /**
      * 🔴 **對位記號要的「一整條縫」**（2026-10-12）：記的是整條的每一條邊
      * （`segs[i]` ＝ `{a, b, len, va, vb}`：2D 起訖點、**3D 長度**、起訖頂點 id），而且**兩側同一個起點、同一個方向**。
      * 只在三條以上切割邊交會處斷開（⛔ 跟接合編號一樣在折線斷開）。沒有接合編號的物件是空陣列。理由見 `collectSeamRuns()`。
      */
-    seamRuns: collectSeamRuns(mesh, faces, pt2, isCut, jointNo),
+    seamRuns: probe ? [] : collectSeamRuns(mesh, faces, pt2, isCut, jointNo),
     bends: bands,
     faces: polys,
     warnings: warn.slice(),
@@ -1038,20 +1053,20 @@ function buildPiece(mesh, faces, pt2, isCut, rule, warn, jointNo = null, isAuto 
      * 每個面在 3D 的位置（攤之前那份網格的座標，跟 `faces` 同一個順序）—— 3D 上標「這一片是哪些面」「哪些面疊在一起」用。
      * ⚠ 是**攤的那份網格**的座標（縮放已經吃進去、還沒套位置與旋轉）；換成世界座標是 `part.js` 的事。
      */
-    faces3: faces.map(f => mesh.faceLoop(f).map(he => [he.v.p.x, he.v.p.y, he.v.p.z])),
+    faces3: probe ? [] : faces.map(f => mesh.faceLoop(f).map(he => [he.v.p.x, he.v.p.y, he.v.p.z])),
     /** 永遠 false —— 還沒有可靠的判定方式，理由見上面那一大段說明 */
     nonDevelopable: false,
     /**
      * 折線呈放射狀匯聚到同一點 ＝ 這是**錐面**，一維拉伸修正不適用。
      * 這是**事實**，不是結論；要不要據以下料由警告訊息去講。
      */
-    radialFolds: radialFan(folds),
+    radialFolds: probe ? [] : radialFan(folds),
     /**
      * 🔴 **圓弧帶裡面的面**（face id，2026-10-19，實驗 T3：`實驗-綜合評估.md` ①-13）：兩條以上的邊落在同一條圓弧帶上的面 ＝ 折板圓弧切出來的小格。
      * 折不了的材料（壓克力／木板）要先把這幾格拿掉 —— 不然每一格都變成一條 0.16 cm 寬的細條當成一片（`part.js` `arcStripFaces()`）。
      * ⭐ 只認 `isArc` 的帶（尖角的折線⛔ 算）；平的那段只碰到帶的一條邊 ⇒ ⛔ 算進來。
      */
-    arcFaces: arcFacesOf(mesh, faces, bands, found),
+    arcFaces: probe ? [] : arcFacesOf(mesh, faces, bands, found),
     area: 0, width: 0, height: 0
   };
 
@@ -2229,13 +2244,36 @@ function measure(piece, mesh, faces) {
 const OVERLAP_MAX_POLYS = 3000;
 const OVERLAP_MAX_PAIRS = 500;
 
-function detectOverlap(polys) {
+function detectOverlap(polys, opt = {}) {
   if (polys.length < 2) return { hit: false, checked: true, pairs: [], more: false };
+  const side = opt.side || null;               // 試算模式：只查兩邊之間（`buildPiece()`）
   if (polys.length > OVERLAP_MAX_POLYS) return { hit: false, checked: false, pairs: [], more: false };
 
   const boxes = polys.map(bbox);
   const cvx = polys.map(isConvex);
   const pairs = [];
+  /**
+   * 只查兩邊之間時：直接拿 0 邊的面配 1 邊的面（⛔ 每兩個都繞一遍再跳過），
+   * 0 邊的面先跟 1 邊整組的範圍框比，碰不到的整個跳過 —— 少的只是「一定碰不到」的組合，結果一樣。
+   */
+  if (side) {
+    const L = [], R = [];
+    polys.forEach((_, i) => (side[i] ? R : L).push(i));
+    const all = R.reduce((b, j) => ({ minX: Math.min(b.minX, boxes[j].minX), minY: Math.min(b.minY, boxes[j].minY), maxX: Math.max(b.maxX, boxes[j].maxX), maxY: Math.max(b.maxY, boxes[j].maxY) }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    for (const i of L) {
+      if (!boxHit(boxes[i], all)) continue;
+      for (const j of R) {
+        if (!boxHit(boxes[i], boxes[j])) continue;
+        if (sharesEdge(polys[i], polys[j])) continue;
+        const hit = cvx[i] && cvx[j] ? polyHit(polys[i], polys[j]) : exactHit(polys[i], polys[j]);
+        if (!hit) continue;
+        pairs.push(i < j ? [i, j] : [j, i]);
+        return { hit: true, checked: true, pairs, more: true };
+      }
+    }
+    return { hit: false, checked: true, pairs, more: false };
+  }
   for (let i = 0; i < polys.length; i++) {
     for (let j = i + 1; j < polys.length; j++) {
       if (!boxHit(boxes[i], boxes[j])) continue;
@@ -2244,6 +2282,7 @@ function detectOverlap(polys) {
       if (!hit) continue;
       if (pairs.length >= OVERLAP_MAX_PAIRS) return { hit: true, checked: true, pairs, more: true };
       pairs.push([i, j]);
+      if (opt.first) return { hit: true, checked: true, pairs, more: true };
     }
   }
   return { hit: pairs.length > 0, checked: true, pairs, more: false };

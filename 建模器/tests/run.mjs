@@ -18990,6 +18990,38 @@ section('分片成群 追加：3D 的開口只標細切口（2026-10-21）');
   ok('★★★ 半球花瓣：V 形照樣是開口', pd.kind === 'petal' && seamKinds(dm.mesh()).darts.length > 0, `${pd.label} 開口 ${seamKinds(dm.mesh()).darts.length}`);
 }
 
+section('智慧分切 大模型加快 甲：結果不變（2026-10-21）');
+{
+  /**
+   * kang「算得對第一、算得快第二」：加快的部分**結果一模一樣**才算數。
+   * 全部模型的逐條對照在沙箱做（齒輪不設上限，改前 128 秒 → 改後 58 秒，87 項提案逐條一樣）；這裡守機制。
+   */
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  // ① 試算模式：片數、重疊、外框、補剪條數跟一般模式一樣
+  const same = (m, rule) => {
+    const a = unfoldMesh(m, rule), b = unfoldMesh(m, rule, { probe: {} });
+    const f = r => JSON.stringify(r.pieces.map(p => [p.qty, p.overlap, Math.round(p.width * 1e6), Math.round(p.height * 1e6), p.autoCut.lines]));
+    return f(a) === f(b) && a.stats.total === b.stats.total;
+  };
+  const cap = Mesh.fromGeometry(new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3));
+  ok('★★★ 試算模式 vs 一般模式：球冠（會疊）片數、重疊、外框、補剪一樣', same(cap, makeRule('paper', 0.03)));
+  ok('★★★ 　 方塊、圓柱、齒輪（紙）也一樣', ['box', 'cylinder', 'gear'].every(t => same(mk(t).mesh(), makeRule('paper', 0.03))));
+  const pr = unfoldMesh(mk('box').mesh(), makeRule('paper', 0.03), { probe: {} });
+  ok('★★ 　 試算模式⛔ 算出圖用的（接合編號、3D 位置）', pr.pieces.every(p => p.joints.length === 0 && p.faces3.length === 0));
+  // ② 智慧分切照舊：上面幾節的數字都沒變（那幾節全過 ＝ 結果不變）；這裡多守一個大的：齒輪不設上限 ⇒ 5 片、沒有細切口
+  const t0 = performance.now();
+  const pg = proposeSeams(mk('gear'), { material: 'paper', timeLimitMs: 1e9 });
+  const ms = performance.now() - t0;
+  ok('★★★ 齒輪（1,656 面）不設時間上限 ⇒ 算完、5 片、沒有細切口（改前 32 秒算出同一份）', !pg.timedOut && pg.total === 5 && pg.notch === 0, `${pg.total} 片 ${Math.round(ms)} ms`);
+  ok('★ 　 時間（參考）：沙箱約 14 秒；超過 40 秒就是變慢了', ms < 40000, `${Math.round(ms)} ms`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

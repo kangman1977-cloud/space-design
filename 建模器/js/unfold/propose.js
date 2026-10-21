@@ -243,29 +243,91 @@ export function proposeSeams(obj, opt = {}) {
     };
 
     /** ── 2、3. 每塊一片 → 一對一對試著接 ── 回傳 `{start, cur}` */
+    /**
+     * 🔴 **接塊：只攤接起來的那一組**（2026-10-21，大模型加快；kang「算得對第一、算得快第二」）。
+     * 以前每試一對就把整個物件重攤一次（齒輪 1,656 面這一段要 7.5 秒）。判斷條件**照舊、一個字都不變**：
+     *   接了之後「全部的片數變少、哪一片都沒重疊、放不進的沒變多」才接 ——
+     *   其他組⛔ 受影響 ⇒ 等於「接起來那一組的片數 < 兩組加起來、它⛔ 疊、它的放不進 ≤ 兩組加起來」，
+     *   ⭐ 而且「**別的組都沒有重疊**」（以前整個攤時，別的片有疊就一律不接 —— 這一條照樣守）。
+     * ⚠ 結果跟以前整個攤**一模一樣**（對照組逐條比過）；最後照舊整個攤一次交出提案。
+     */
+    const facesOfSid = new Map();
+    for (const f of base.faces) { const b = sid(f); if (!facesOfSid.has(b)) facesOfSid.set(b, []); facesOfSid.get(b).push(f); }
+    const forder = new Map(base.faces.map((f, i) => [f.id, i]));
+    const baseEdge = new Map(inner.map(h => [pairKey(base, vi, h), h]));
+    const local = (faces0, open, fixed, sideA) => {
+      const faces = [...faces0].sort((x, y) => forder.get(x.id) - forder.get(y.id));
+      const used = new Map(), pts = [];
+      const at = v => { if (!used.has(v.id)) { used.set(v.id, pts.length); pts.push(v.p.clone()); } return used.get(v.id); };
+      const sub = Mesh.fromFaceList(pts, faces.map(f => base.faceVerts(f).map(at)));
+      sub.computeNormals();
+      const toBase = new Array(pts.length);
+      for (const [id, i] of used) toBase[i] = vi.get(id);
+      const sIdx = new Map(sub.verts.map((v, i) => [v.id, toBase[i]]));
+      for (const h of innerEdges(sub)) {
+        const k = pairKey(sub, sIdx, h);
+        const o = baseEdge.get(k);
+        if (!o) continue;
+        if (isUserCut(o)) { sub.setRole(h, EDGE_ROLE.CUT); continue; }
+        if (o.keep) sub.setKeep(h, true);
+        const a = sid(o.face), b = sid(o.twin.face);
+        if ((a !== b && !open.has(pk(a, b))) || (fixed && fixed.has(k))) sub.setRole(h, EDGE_ROLE.CUT);
+      }
+      let side = null;
+      if (sideA) { side = new Map(); sub.faces.forEach((f, i) => side.set(f.id, sideA.has(faces[i].id) ? 0 : 1)); }
+      const r = unfoldMesh(sub, rule, { probe: { side } });
+      return {
+        n: r.stats.total,
+        overlap: r.pieces.some(p => p.overlap),
+        misfit: r.pieces.reduce((n, p) => n + (fits(p) ? 0 : p.qty), 0),
+        auto: r.pieces.reduce((n, p) => n + ((p.autoCut && p.autoCut.lines) || 0), 0)
+      };
+    };
+
     const merge = (fixed = null) => {
       const accepted = [];
       const start = evaluate(accepted, fixed);
-      let cur = start;
+      // 一開始的組：每塊一組，不准切的先接起來
+      const G = unionFind();
+      for (const b of facesOfSid.keys()) G.find(b);
+      for (const [a, b] of forced) G.union(a, b);
+      const grp = new Map();
+      for (const [b, fs] of facesOfSid) {
+        const g = G.find(b);
+        if (!grp.has(g)) grp.set(g, { faces: [], open: new Set() });
+        grp.get(g).faces.push(...fs);
+      }
+      for (const [a, b] of forced) grp.get(G.find(a)).open.add(pk(a, b));
+      let overlapping = 0;
+      for (const g of grp.values()) { g.sc = local(g.faces, g.open, fixed, null); if (g.sc.overlap) overlapping++; }
       outer:
       for (let pass = 0; pass < 2; pass++) {
         let changed = false;
-        const G = unionFind();
-        for (const [a, b] of [...forced, ...accepted]) G.union(a, b);
         for (const pr of order) {
           if (late()) break outer;
-          if (G.find(pr.a) === G.find(pr.b)) continue;              // 已經同一片（再接會繞成一圈）
-          const nx = evaluate([...accepted, [pr.a, pr.b]], fixed);
-          if (nx.misfit <= cur.misfit && !nx.overlap && nx.total < cur.total) {
-            cur = nx;
+          const ga = G.find(pr.a), gb = G.find(pr.b);
+          if (ga === gb) continue;                                   // 已經同一片（再接會繞成一圈）
+          const A = grp.get(ga), B = grp.get(gb);
+          // 別的組有重疊 ⇒ 以前整個攤一定「有重疊」⇒ ⛔ 接（照舊）
+          if (overlapping - (A.sc.overlap ? 1 : 0) - (B.sc.overlap ? 1 : 0) > 0) continue;
+          const faces = A.faces.concat(B.faces);
+          const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
+          const clean = !A.sc.overlap && !B.sc.overlap && !A.sc.auto && !B.sc.auto;
+          const sc = local(faces, open, fixed, clean ? new Set(A.faces.map(f => f.id)) : null);
+          if (sc.misfit <= A.sc.misfit + B.sc.misfit && !sc.overlap && sc.n < A.sc.n + B.sc.n) {
             accepted.push([pr.a, pr.b]);
+            if (A.sc.overlap) overlapping--;
+            if (B.sc.overlap) overlapping--;
             G.union(pr.a, pr.b);
+            const g = G.find(pr.a);
+            grp.delete(ga); grp.delete(gb);
+            grp.set(g, { faces, open, sc });
             changed = true;
           }
         }
         if (!changed) break;
       }
-      return { start, cur };
+      return { start, cur: evaluate(accepted, fixed) };
     };
     return { evaluate, merge };
   };
@@ -332,7 +394,8 @@ export function proposeSeams(obj, opt = {}) {
      * 順序不同 ⇒ 同一片擺的方向不同 ⇒ 放不放得進的判斷跟最後整個攤的對不上。【實證 2026-10-21】150×60×50 方塊 2 片變 4 片。
      */
     const order = new Map(base.faces.map((f, i) => [f.id, i]));
-    const local = (faces0, open) => {
+    /** `sideA` 有給 ⇒ 試算時重疊只查 A、B 兩邊之間（兩邊都沒有程式補剪的才給 —— 見 `tryJoin()`）*/
+    const local = (faces0, open, sideA = null) => {
       const faces = [...faces0].sort((x, y) => order.get(x.id) - order.get(y.id));
       const used = new Map(), pts = [];
       const at = v => { if (!used.has(v.id)) { used.set(v.id, pts.length); pts.push(v.p.clone()); } return used.get(v.id); };
@@ -349,7 +412,9 @@ export function proposeSeams(obj, opt = {}) {
         const a = blk(o.face), b = blk(o.twin.face);
         if (a !== b && !open.has(pk(a, b))) sub.setRole(h, EDGE_ROLE.CUT);
       }
-      const r = unfoldMesh(sub, rule);
+      let side = null;
+      if (sideA) { side = new Map(); sub.faces.forEach((f, i) => side.set(f.id, sideA.has(faces[i].id) ? 0 : 1)); }
+      const r = unfoldMesh(sub, rule, { probe: { side } });
       const auto = new Set((r.autoEdges || []).map(h => Math.min(h.id, h.twin.id)));
       return {
         n: r.stats.total,
@@ -394,7 +459,7 @@ export function proposeSeams(obj, opt = {}) {
       const A = G.get(ga), B = G.get(gb);
       const faces = A.faces.concat(B.faces);
       const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
-      const sc = local(faces, open);
+      const sc = local(faces, open, !A.sc.auto && !B.sc.auto ? new Set(A.faces.map(f => f.id)) : null);
       if (!(sc.n < A.sc.n + B.sc.n && !sc.overlap && sc.misfit <= A.sc.misfit + B.sc.misfit)) return false;
       if (strict && (sc.auto > A.sc.auto + B.sc.auto || sc.notch > A.sc.notch + B.sc.notch)) return false;
       P.union(ga, gb);
