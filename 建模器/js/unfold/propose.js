@@ -31,6 +31,8 @@
  *      片變少、沒重疊、放不進的沒變多，⭐ **而且沒有多出細切口、程式沒有多補剪** ⇒ 接
  *      （「片少一點」：先照上面接完，再放寬「細切口」「補剪」那兩條再接一輪）
  *   4. 小於 2 cm 的片：放寬條件再試著併給旁邊；併了會疊就留著
+ *      ⚠ 「不要細切口」時**只放寬「補剪」、⛔ 放寬細切口**（2026-10-21，kang「同意你的建議」）—— 以前兩條都放寬，
+ *      齒輪 80 齒嚴格接完 13 片 0 個，這一步併成 9 片卻多出 7 個細切口（設定被越過去）。留下來的小片面板講幾片（`small`）
  *   5. 最後整個攤一次、跟「程式本來剪的」比（放不進的少 → 沒重疊 →（不要細切口時）細切口少 → 片少 → 縫短）
  *   **細切口** ＝ 切線走到片中間一個點就停（那個點只接一條切線）、那個點攤開只張開不到 `NOTCH_DEG`°（張開 ＝ 360° − 一圈面角的和）。
  *   ⚠ 「同一片裡的切線」⛔ 一律算壞事：方塊攤成十字形那 7 條也在同一片裡（`seam.js` `seamKinds()` 算成開口）—— 業界也⛔ 這樣算
@@ -488,6 +490,7 @@ function* proposeGen(obj, opt = {}) {
         G.set(g, { faces, open, sc });
       }
     }
+    /** `strict`：true ＝ 補剪、細切口都不准多；'notch' ＝ 只有細切口不准多（小片那一步、不要細切口時）；false ＝ 都放寬 */
     const tryJoin = (pr, strict) => {
       const ga = P.find(pr.a), gb = P.find(pr.b);
       if (ga === gb) return false;                 // 已經同一片（再接會繞成一圈）
@@ -496,7 +499,8 @@ function* proposeGen(obj, opt = {}) {
       const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
       const sc = local(faces, open, !A.sc.auto && !B.sc.auto ? new Set(A.faces.map(f => f.id)) : null);
       if (!(sc.n < A.sc.n + B.sc.n && !sc.overlap && sc.misfit <= A.sc.misfit + B.sc.misfit)) return false;
-      if (strict && (sc.auto > A.sc.auto + B.sc.auto || sc.notch > A.sc.notch + B.sc.notch)) return false;
+      if (strict === true && sc.auto > A.sc.auto + B.sc.auto) return false;
+      if (strict && sc.notch > A.sc.notch + B.sc.notch) return false;
       P.union(ga, gb);
       const g = P.find(ga);
       G.delete(ga); G.delete(gb);
@@ -525,7 +529,7 @@ function* proposeGen(obj, opt = {}) {
         const ga = P.find(pr.a), gb = P.find(pr.b);
         if (ga === gb) continue;
         if (Math.min(G.get(ga).sc.size, G.get(gb).sc.size) >= minPiece) continue;
-        tryJoin(pr, false);
+        tryJoin(pr, slits === 'none' ? 'notch' : false);
       }
     }
 
@@ -590,6 +594,9 @@ function* proposeGen(obj, opt = {}) {
       bigCurved, bigFlat,
       overlap: pick.overlap,
       notch: pick.notch || 0,
+      /** 長邊小於 `minPiece` cm 的片幾片（面板講；「不要細切口」時小片併不掉就留著）*/
+      small: pick.r.pieces.reduce((n, p) => n + (Math.max(p.width, p.height) < minPiece ? p.qty : 0), 0),
+      minPiece,
       keepCut: pick.r.keepCut || 0,
       cutLen: pick.cutLen,
       usedBaseline,

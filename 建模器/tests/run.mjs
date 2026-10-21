@@ -19046,6 +19046,28 @@ section('智慧分切 大模型 丙：一邊算一邊讓畫面喘口氣、可以
   ok('★★★ 齒輪按「先停下來」⇒ 很快收手、交出目前最好的、標還沒算完', g.timedOut && g.edges.length > 0 && g.total > 0, `${g.total} 片`);
 }
 
+section('智慧分切 小片那一步⛔ 越過「不要細切口」（2026-10-21）');
+{
+  /**
+   * 齒輪 80 齒：嚴格接完 13 片 0 個細切口，「小於 2 cm 的片放寬再併」併成 9 片卻多 7 個（設定被越過去）⇒ 不要細切口時小片那一步只放寬補剪。
+   * 80 齒要 5 分鐘 ⇒ 用最少的 8 齒（齒數最少 8）、小片門檻 5 cm 重現同一件事（改前 3 片、細切口 2 個）。
+   */
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const gear = () => {
+    const o = new io.ModelObject({ name: '齒輪', kind: io.KIND.SOLID, src: { type: 'gear', ...PRIM_DEFAULTS.gear, teeth: 8 } });
+    o.bake();
+    return o;
+  };
+  const a = proposeSeams(gear(), { material: 'paper', minPieceCm: 5 });
+  ok('★★★ 不要細切口：小片那一步⛔ 多出細切口（改前 3 片、2 個）', a.notch === 0, `${a.total} 片、細切口 ${a.notch}`);
+  ok('★★ 　 併不掉的小片留著、提案講幾片（small）', a.small > 0 && a.minPiece === 5, `小片 ${a.small}`);
+  const b = proposeSeams(gear(), { material: 'paper', minPieceCm: 5, slits: 'allow' });
+  ok('★★ 片少一點：小片那一步照舊放寬（片比不要細切口少、可以有細切口）', b.total < a.total && b.notch > 0, `${b.total} 片、細切口 ${b.notch}`);
+  const c = proposeSeams(gear(), { material: 'paper' });
+  ok('★ 預設 2 cm：8 齒也沒有細切口', c.notch === 0, `${c.total} 片、小片 ${c.small}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
