@@ -108,9 +108,41 @@ const isUserCut = h => h.role === EDGE_ROLE.CUT;
  *   board, sig, mesh
  * }}
  */
+/**
+ * 🔴 **一口氣算完**（測試、程式裡要馬上拿到結果的地方用）。⭐ 預設**⛔ 設時間上限**（kang「算得對第一、算得快第二」，2026-10-21）——
+ * 以前預設 2 秒就截斷、交出沒算完的（齒輪 74 片；算完是 5 片）。要上限照樣可以傳 `timeLimitMs`。
+ */
 export function proposeSeams(obj, opt = {}) {
+  const g = proposeGen(obj, opt);
+  for (;;) { const r = g.next(); if (r.done) return r.value; }
+}
+
+/**
+ * 🔴 **一邊算、一邊讓畫面喘口氣**（面板用，2026-10-21 大模型 丙）：每算 `sliceMs` 毫秒就讓出去一次 ——
+ * 畫面不卡、`onProgress(進度)` 更新面板、`opt.shouldStop()` 回 true ⇒ 收手、交出**目前最好的**（`timedOut` ＝ true，面板講「還沒算完」）。
+ * ⚠ ⛔ 開背景執行緒：這樣最簡單、跟一口氣算完是**同一份程式**（結果一模一樣）。
+ */
+export async function proposeSeamsAsync(obj, opt = {}, { onProgress = null, sliceMs = 40 } = {}) {
+  const g = proposeGen(obj, opt);
+  let last = now();
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+    if (now() - last >= sliceMs) {
+      if (onProgress) onProgress({ ...r.value, ms: now() - r.value.t0 });
+      await new Promise(res => setTimeout(res, 0));
+      last = now();
+    }
+  }
+}
+
+function* proposeGen(obj, opt = {}) {
   const t0 = now();
-  const limit = opt.timeLimitMs ?? 2000;
+  const limit = opt.timeLimitMs ?? Infinity;
+  const stopAsked = typeof opt.shouldStop === 'function' ? opt.shouldStop : () => false;
+  /** 進度（`proposeSeamsAsync()` 交給面板）：在算哪一段、這一段試了幾對／共幾對 */
+  const prog = { t0, phase: '', done: 0, total: 0 };
+  const step = (phase, total) => { prog.phase = phase; prog.done = 0; prog.total = total; };
   const board = { ...NEST_DEFAULTS, ...(opt.board || {}) };
   const rule = makeRule(opt.material || DEFAULT_MATERIAL, obj.thickness);
   const own = obj.mesh();
@@ -137,7 +169,7 @@ export function proposeSeams(obj, opt = {}) {
   const fits = p => fitsBoard(p.width, p.height, board);
   const deg = h => { const d = base.dihedral(h); return d === null ? 0 : Math.abs(d * DEG); };
   let timedOut = false;
-  const late = () => (now() - t0 > limit ? (timedOut = true) : false);
+  const late = () => (now() - t0 > limit || stopAsked() ? (timedOut = true) : false);
   const slits = opt.slits === 'allow' ? 'allow' : 'none';
   const notchDeg = Number.isFinite(+opt.notchDeg) && opt.notchDeg !== null && opt.notchDeg !== ''
     ? Math.max(0, Math.min(180, +opt.notchDeg)) : NOTCH_DEG;
@@ -284,9 +316,10 @@ export function proposeSeams(obj, opt = {}) {
       };
     };
 
-    const merge = (fixed = null) => {
+    const merge = function* (fixed = null) {
       const accepted = [];
       const start = evaluate(accepted, fixed);
+      step('曲面切法：接塊', order.length * 2);
       // 一開始的組：每塊一組，不准切的先接起來
       const G = unionFind();
       for (const b of facesOfSid.keys()) G.find(b);
@@ -305,6 +338,7 @@ export function proposeSeams(obj, opt = {}) {
         let changed = false;
         for (const pr of order) {
           if (late()) break outer;
+          prog.done++; yield prog;
           const ga = G.find(pr.a), gb = G.find(pr.b);
           if (ga === gb) continue;                                   // 已經同一片（再接會繞成一圈）
           const A = grp.get(ga), B = grp.get(gb);
@@ -355,7 +389,7 @@ export function proposeSeams(obj, opt = {}) {
   /**
    * ── 第四步：「只沿轉角」的新接法（見檔頭）── 回傳 `{start, cur}`，格式跟 `engine().merge()` 一樣。
    */
-  const cornerPlan = () => {
+  const cornerPlan = function* () {
     // 1. 塊 ＝ 平面；碎面跟主人、不准切先接
     const R = regionInfo(base);
     const tiny = tinyRegions(R);
@@ -442,6 +476,7 @@ export function proposeSeams(obj, opt = {}) {
       for (const b of G.keys()) { const r = S.find(b); if (!big.has(r)) big.set(r, []); big.get(r).push(b); }
       for (const bs of big.values()) {
         if (bs.length < 2 || late()) continue;
+        yield prog;
         const faces = bs.flatMap(b => G.get(b).faces);
         const inside = new Set(bs);
         const open = new Set(list.filter(pr => inside.has(pr.a) && inside.has(pr.b) && pr.ang < PREMERGE_DEG).map(pr => pk(pr.a, pr.b)));
@@ -468,12 +503,14 @@ export function proposeSeams(obj, opt = {}) {
       G.set(g, { faces, open, sc });
       return true;
     };
+    step('只沿轉角：接塊', list.length * 2 * (slits === 'none' ? 1 : 2));
     outer:
     for (const strict of slits === 'none' ? [true] : [true, false]) {
       for (let pass = 0; pass < 2; pass++) {
         let changed = false;
         for (const pr of list) {
           if (late()) break outer;
+          prog.done++; yield prog;
           if (tryJoin(pr, strict)) changed = true;
         }
         if (!changed) break;
@@ -484,6 +521,7 @@ export function proposeSeams(obj, opt = {}) {
       const byLen = [...list].sort((x, y) => y.len - x.len);
       for (const pr of byLen) {
         if (late()) break;
+        yield prog;
         const ga = P.find(pr.a), gb = P.find(pr.b);
         if (ga === gb) continue;
         if (Math.min(G.get(ga).sc.size, G.get(gb).sc.size) >= minPiece) continue;
@@ -561,7 +599,7 @@ export function proposeSeams(obj, opt = {}) {
 
   // ── 只沿轉角：第四步的接法（2026-10-21；只有平面的物件就只有這一份）──
   const E0 = engine([]);
-  const m0 = cornerPlan();
+  const m0 = yield* cornerPlan();
   const baseline = E0.evaluate(null);
   const usedBaseline = better4(baseline, m0.cur) || (!better4(m0.cur, baseline) && baseline.misfit === 0 && !baseline.overlap
     && (slits === 'allow' || baseline.notch <= m0.cur.notch));
@@ -585,6 +623,7 @@ export function proposeSeams(obj, opt = {}) {
     // 太小的（例如齒輪每一齒的小圓弧，⇒ 齒輪有 80 幾塊）⛔ 找：沒什麼可以排整齊的，每塊都走一次線會拖到好幾秒
     if (own3.length < 8 || !own3.some(h => deg(h) > CURVE_DEG)) continue;
     if (late()) break;
+    prog.phase = '找曲面的格子'; yield prog;
     const g = gridOf(base, faces);
     if (!g) { nonGrid++; continue; }
     // 不准切：碰到不准切的那一種就不列
@@ -602,25 +641,26 @@ export function proposeSeams(obj, opt = {}) {
       rg.score = { corner: E1.evaluate([], null) };
       for (const c of rg.cands) {
         if (late()) break;
+        prog.phase = '曲面切法：試候選'; yield prog;
         const sc = E1.evaluate([], c.keys);
         if (!rg.score[c.kind] || better3(sc, rg.score[c.kind])) { rg.score[c.kind] = sc; rg.best[c.kind] = c.keys; }
       }
       rg.top = Object.keys(rg.score).reduce((a, k) => (better3(rg.score[k], rg.score[a]) ? k : a), 'corner');
     }
-    const plan = (kind, label, pickOf) => {
-      const m = E1.merge(union(regions.map(pickOf)));
+    const plan = function* (kind, label, pickOf) {
+      const m = yield* E1.merge(union(regions.map(pickOf)));
       return finish(kind, label, m.start, m.cur, false);
     };
     // 每塊各挑最好的 ⇒ 提案；只有一塊（最常見）時就是那一種
     const tops = [...new Set(regions.map(r => r.top))];
     if (!(tops.length === 1 && tops[0] === 'corner')) {
-      options.push(plan(tops.length === 1 ? tops[0] : 'mix', tops.map(k => KIND_LABEL[k]).join('＋'), r => r.best[r.top]));
+      options.push(yield* plan(tops.length === 1 ? tops[0] : 'mix', tops.map(k => KIND_LABEL[k]).join('＋'), r => r.best[r.top]));
     }
     for (const k of ['petal', 'strip', 'band']) {
       if (tops.length === 1 && tops[0] === k) continue;            // 跟提案同一份
       if (!regions.some(r => r.best[k])) continue;
       if (late()) break;
-      options.push(plan(k, KIND_LABEL[k], r => r.best[k] || null));
+      options.push(yield* plan(k, KIND_LABEL[k], r => r.best[k] || null));
     }
     // 第 0 份 ＝ 最好的（照第三步的判準）；其餘照好壞排
     /**

@@ -19022,6 +19022,30 @@ section('智慧分切 大模型加快 甲：結果不變（2026-10-21）');
   ok('★ 　 時間（參考）：沙箱約 14 秒；超過 40 秒就是變慢了', ms < 40000, `${Math.round(ms)} ms`);
 }
 
+section('智慧分切 大模型 丙：一邊算一邊讓畫面喘口氣、可以先停（2026-10-21）');
+{
+  /** kang「算得對第一、算得快第二」：⛔ 預設截斷；面板用的那一支跟一口氣算完是同一份程式 ⇒ 結果一樣；停不停由使用者決定 */
+  const { proposeSeams, proposeSeamsAsync } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const sig = p => [p.kind, p.total, p.notch, p.edges.length].join('/');
+  for (const t of ['box', 'cylinder', 'sphere']) {
+    const a = proposeSeams(mk(t), { material: 'foamboard' });
+    const ticks = [];
+    const b = await proposeSeamsAsync(mk(t), { material: 'foamboard' }, { onProgress: pr => ticks.push(pr.phase), sliceMs: 5 });
+    ok(`★★★ ${t}：邊算邊停 ＝ 一口氣算完（同一份程式）`, sig(a) === sig(b) && !b.timedOut, `${sig(a)} vs ${sig(b)}`);
+    if (t === 'sphere') ok('★★ 　 球：中途有交出進度（在算哪一段）', ticks.length > 0 && ticks.every(x => typeof x === 'string'), ticks.slice(0, 3).join('、'));
+  }
+  ok('★★★ 預設⛔ 設時間上限（以前 2 秒就截斷）：圓環算到完', !proposeSeams(mk('torus'), { material: 'foamboard' }).timedOut);
+  let n = 0;
+  const g = await proposeSeamsAsync(mk('gear'), { material: 'paper', shouldStop: () => n > 3 }, { onProgress: () => { n++; }, sliceMs: 5 });
+  ok('★★★ 齒輪按「先停下來」⇒ 很快收手、交出目前最好的、標還沒算完', g.timedOut && g.edges.length > 0 && g.total > 0, `${g.total} 片`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

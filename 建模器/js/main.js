@@ -29,7 +29,7 @@ import { UnfoldPanel } from './ui/unfoldPanel.js';
 import { setSeam, isSeam, cutAroundFace, faceIsCutOut, seamBlockReason, isMarkable,
          setKeep, isKeep, markSignature, nearestFace }
   from './unfold/seam.js';
-import { proposeSeams, NOTCH_DEG } from './unfold/propose.js';
+import { proposeSeamsAsync, NOTCH_DEG } from './unfold/propose.js';
 import { unfoldObject, pieceWorldPolys } from './unfold/part.js';
 import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, components, applyGroup, checkGroup, GROW_DEG, TINY_MM2 }
   from './unfold/group.js';
@@ -463,6 +463,9 @@ const app = {
   getProposeOpt: () => ({ ...proposeOpt }),
   setProposeOpt: o => setProposeOpt(o),
   getSeamProposal: obj => currentSeamProposal(obj),
+  /** 大模型 丙（2026-10-21）：正在算的那一份（進度、算了多久）、先停下來用目前最好的 */
+  getSeamProposalRun: obj => (seamProposalRun && seamProposalRun.obj === obj ? seamProposalRun : null),
+  stopSeamProposal: () => { if (seamProposalRun) { seamProposalRun.stop = true; toast('收手中…（交出目前最好的）'); } },
   acceptSeamProposal: () => acceptSeamProposal(),
   useSeamAlternative: i => useSeamAlternative(i),
   cancelSeamProposal: () => { dropSeamProposal(); panel.refresh(); toast('提案取消了，什麼都沒改'); },
@@ -6407,16 +6410,48 @@ const edgeKeyOf = he => Math.min(he.id, he.twin ? he.twin.id : he.id);
 function dropSeamProposal() {
   seamProposal = null;
   view.clearSeamProposal();
+  cancelSeamProposalRun();
 }
 
-function makeSeamProposal(obj) {
+/**
+ * 🔴 **智慧分切一邊算、一邊讓畫面喘口氣**（2026-10-21，大模型 丙；kang「算得對第一、算得快第二」、「等待計算也是需要付出的代價」）。
+ * ⭐ ⛔ 設時間上限、算到完（以前 2 秒就截斷、交出沒算完的）；算超過 0.3 秒面板才出現「計算中…」與進度、
+ * 「先停下來，用目前最好的」由使用者決定（提案標「還沒算完」）。
+ * ⚠ 算的時候模型改了 ⇒ 這份作廢、講一聲（⛔ 拿舊網格算的提案套到新網格上）；離開分片／按新的提案 ⇒ 舊的那份收手、結果丟掉。
+ */
+let seamProposalRun = null;
+function cancelSeamProposalRun() {
+  if (!seamProposalRun) return;
+  seamProposalRun.stop = true;
+  seamProposalRun.discard = true;
+  seamProposalRun = null;
+}
+
+async function makeSeamProposal(obj) {
   const st = app.getUnfoldSettings();
   const N = unfoldWin.opt.nest || {};
+  dropSeamProposal();                               // 舊的提案收起來、正在算的那份收手
+  const run = { obj, mesh: obj.mesh(), sig: markSignature(obj.mesh()), stop: false, discard: false, progress: null, t0: performance.now() };
+  seamProposalRun = run;
+  const shown = setTimeout(() => { if (seamProposalRun === run) panel.refresh(); }, 300);
   let p;
   try {
-    p = proposeSeams(obj, { material: st.material, board: { w: N.w, h: N.h, gap: N.gap, rotate: !!N.rotate }, ...proposeOpt });
+    p = await proposeSeamsAsync(obj,
+      { material: st.material, board: { w: N.w, h: N.h, gap: N.gap, rotate: !!N.rotate }, ...proposeOpt, shouldStop: () => run.stop },
+      { onProgress: pr => { run.progress = pr; if (performance.now() - run.t0 > 300) panel.updateProposalProgress(run); } });
   } catch (e) {
+    clearTimeout(shown);
+    if (seamProposalRun === run) seamProposalRun = null;
+    panel.refresh();
     toast('提案算不出來：' + e.message, true);
+    return null;
+  }
+  clearTimeout(shown);
+  if (run.discard) return null;                     // 已經換了一份、或離開分片
+  seamProposalRun = null;
+  if (!doc.byId(obj.id) || obj.mesh() !== run.mesh || markSignature(run.mesh) !== run.sig) {
+    panel.refresh();
+    toast('算的時候模型改了，這份提案作廢 —— 要再按一次「提案」', true);
     return null;
   }
   seamProposal = { obj, ...p, keys: new Set(p.edges.map(edgeKeyOf)), removed: 0, active: 0, dartMode: st.mode === 'dart' };
@@ -6424,6 +6459,7 @@ function makeSeamProposal(obj) {
   view.setSeamProposal(obj, seamProposal.edges);
   panel.refresh();
   const kind = p.options.length > 1 ? `（${p.label}）` : '';
+  if (p.timedOut) { toast(`你按了停：還沒算完，先用目前最好的 —— ${p.edges.length} 條縫、${p.total} 片（再按一次「提案」就算到完）`); return seamProposal; }
   toast(p.edges.length ? `智慧分切提案${kind} ${p.edges.length} 條縫（青色虛線）、${p.total} 片`
     + (p.kind !== 'petal' ? (p.notch ? `、細切口 ${p.notch} 個` : '、沒有細切口') : '') + ' —— 結果在右側面板'
     : '已經攤得開，沒有要補的縫');

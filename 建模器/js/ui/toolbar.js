@@ -253,6 +253,16 @@ export class Panel {
     }
   }
 
+  /** 智慧分切計算中的進度（`main.js` 每 0.04 秒左右叫一次；框不在畫面上就不管）*/
+  updateProposalProgress(run) {
+    const box = this._propProg;
+    if (!box || !box.isConnected) return;
+    const pr = run.progress;
+    const sec = ((performance.now() - run.t0) / 1000).toFixed(1);
+    const part = pr && pr.phase ? `${pr.phase}${pr.total ? `：${Math.min(pr.done, pr.total)}／${pr.total}` : ''}` : '準備中';
+    box.innerHTML = `智慧分切<b>計算中…</b>（${part}，已經 ${sec} 秒）<br>大模型要算比較久；畫面可以照常看、轉，算完會自己出來`;
+  }
+
   refresh() {
     this.renderClash();
     /**
@@ -1571,6 +1581,21 @@ export class Panel {
       '凹處、尖角先切：平的、長的邊先接起來，凹進去的地方（眼窩、嘴巴）跟尖的轉角最後才接 ⇒ 縫多半落在凹處與轉角（Blender 紙模外掛預設也是這樣）。'
       + '片數最少：共用邊長的先接，片會少一兩片，但縫可能斜斜地跨過臉');
     }
+    /**
+     * 🔴 **計算中**（2026-10-21，大模型 丙）：進度、算了多久、「先停下來，用目前最好的」；
+     * 進度每 0.04 秒左右更新一次（`updateProposalProgress()` 只改這個框的字、⛔ 重畫整個面板）。
+     */
+    const run = this.app.getSeamProposalRun && this.app.getSeamProposalRun(obj);
+    if (run) {
+      const box = document.createElement('div');
+      box.className = 'note';
+      this._propProg = box;
+      this.updateProposalProgress(run);
+      this.form.appendChild(box);
+      this._rowBtn('先停下來，用目前最好的', '大模型要算比較久：按了就收手、交出目前為止最好的那一份（會標「還沒算完」）。不按就算到完',
+        () => this.app.stopSeamProposal());
+      return;
+    }
     const cur = this.app.getSeamProposal(obj);
     if (cur && cur.stale) this.form.appendChild(note('標記改了，提案收起來了 —— 要再按一次「提案」'));
     const p = cur && cur.proposal;
@@ -1606,7 +1631,7 @@ export class Panel {
     }
     // 不是格子的曲面：只在結果還有問題時講（圓錐那種照沿轉角切就好好的，⛔ 多嘴）
     if (p.nonGrid && (p.big || p.overlap)) fitLines.push('這塊曲面不是一圈一圈的格子，還不會整齊地切 —— 照沿轉角的切法提案');
-    if (p.timedOut) fitLines.push('算到 2 秒先交出目前最好的');
+    if (p.timedOut) fitLines.push(red('還沒算完：你按了「先停下來」，這是目前最好的') + ' —— 再按一次「提案」就算到完');
     const box = document.createElement('div');
     box.className = 'note';
     const lines = [];
