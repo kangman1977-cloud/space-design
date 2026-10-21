@@ -258,3 +258,154 @@ export function toParts(c, opt) {
   }
   return out;
 }
+
+/**
+ * 🔴 **極小碎面的門檻預設 ＝ 整個模型最長的那一邊 ÷ 500**（2026-10-21，kang「同意你的建議」；
+ * 比較在 `規格\建模器-匯入3D模型.md`「② 沙箱比較」）。
+ * ⛔ 寫死幾 mm：模型放大，碎面跟著變大就清不到（狐狸放大成 30 cm，固定 0.2 mm 清不到）；
+ * 照大小走，狐狸 3～100 cm 每次都清掉同樣那 8 個面。÷ 1000 太小（狐狸清不到）；
+ * kang 的 6 個棋子最短的邊在 ÷ 112 以上，÷ 500 都不動。
+ */
+export const MICRO_DIV = 500;
+
+/**
+ * 🔴 **極小碎面合併掉**（第二步，kang 選甲：匯入時清、預設開、可以關）—— 跟 Blender 的
+ * 「Degenerate Dissolve」同一個做法：比門檻短的邊，兩端合到中點，小的面跟著不見。
+ * 從最短的開始；**縮了會壞就不縮那一條**：碰到的面翻過去、多出同一組點的面、
+ * 只接一個面或三個面以上的邊變多。（⛔ 改展開那邊的重疊判斷：疊到的是真的面，只是很小。）
+ * 只看碰到的那幾個面（一條邊縮掉，會變的只有接著兩端的面）。
+ * @param {{points:number[][], faces:number[][]}} p 一個部分（`toParts()` 的一個，cm）
+ * @param {number} tol 比這個短的邊縮掉（cm）
+ * @returns {{points, faces, stats:{collapsed, kept, removed, maxMove}}}（`kept` ＝ 會壞所以沒縮的邊；`maxMove` cm）
+ */
+export function collapseShort(p, tol) {
+  const P = p.points.map(q => q.slice());
+  const faces = p.faces.map(f => f.slice());     // 縮掉的面變 null
+  const alive = faces.map(() => true);
+  const vf = P.map(() => new Set());               // 點 → 用到它的面
+  faces.forEach((f, i) => f.forEach(v => vf[v].add(i)));
+  const ek = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  const cnt = new Map();                           // 邊 → 幾個面用它
+  const addF = (f, d) => { for (let k = 0; k < f.length; k++) { const key = ek(f[k], f[(k + 1) % f.length]); cnt.set(key, (cnt.get(key) || 0) + d); } };
+  faces.forEach(f => addF(f, 1));
+  const dist = (a, b) => Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1], P[a][2] - P[b][2]);
+  const rep = P.map((_, i) => i);
+  const find = i => { while (rep[i] !== i) i = rep[i] = rep[rep[i]]; return i; };
+  // 候選：比門檻短的邊，照長度排（縮了以後，接著 a 的邊照新的長度再排進來）。
+  // 拿出來時重算長度：變長了就照新的長度放回去 ⇒ 每次拿到的都是現在真的最短的那一條
+  // （只有接著 a 的邊會變短，那些都重新排過）。⛔ 每一步把所有候選掃一遍（16 萬面 6.6 秒）。
+  const heap = new MinHeap(), bad = new Set();
+  const addCand = f => { for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], l = dist(a, b); if (l < tol) heap.push(l, a < b ? a : b, a < b ? b : a); } };
+  faces.forEach(addCand);
+  let collapsed = 0, removed = 0;
+  for (;;) {
+    let best = null;
+    while (heap.size) {
+      const [l0, a, b] = heap.pop(), key = ek(a, b);
+      if (bad.has(key) || find(a) !== a || find(b) !== b || !cnt.get(key)) continue;
+      const l = dist(a, b);
+      if (l >= tol) continue;
+      if (l > l0) { heap.push(l, a, b); continue; }
+      best = [a, b, key]; break;
+    }
+    if (!best) break;
+    const [a, b, key] = best;
+    const F = [...new Set([...vf[a], ...vf[b]])];
+    const n0 = F.map(i => normal(P, faces[i]));
+    const keepA = P[a];
+    P[a] = keepA.map((v, k) => (v + P[b][k]) / 2);
+    const nf = F.map(i => tidy(faces[i].map(v => (v === b ? a : v))));
+    let ok = true;
+    // 1. 留下來的面不能翻過去
+    for (let t = 0; t < F.length && ok; t++) {
+      if (nf[t].length < 3) continue;
+      const n = normal(P, nf[t]);
+      if (len(n) > 0 && len(n0[t]) > 0 && dot(n, n0[t]) <= 0) ok = false;
+    }
+    // 2. 不能多出同一組點的面（會一樣的一定都接著 a ⇒ 只看 F）
+    if (ok) {
+      const seen = new Set();
+      for (const f of nf) { if (f.length < 3) continue; const s = [...f].sort((x, y) => x - y).join(','); if (seen.has(s)) { ok = false; break; } seen.add(s); }
+    }
+    // 3. 只接一個面、三個面以上的邊不能變多（只看這幾個面的邊）
+    if (ok) {
+      const d = new Map();
+      const tally = (f, s) => { for (let k = 0; k < f.length; k++) { const key2 = ek(f[k], f[(k + 1) % f.length]); d.set(key2, (d.get(key2) || 0) + s); } };
+      F.forEach(i => tally(faces[i], -1));
+      nf.forEach(f => { if (f.length >= 3) tally(f, 1); });
+      let open = 0, nm = 0;
+      for (const [key2, dd] of d) {
+        if (!dd) continue;
+        const was = cnt.get(key2) || 0, now = was + dd;
+        open += (now === 1) - (was === 1);
+        nm += (now > 2) - (was > 2);
+      }
+      if (open > 0 || nm > 0) ok = false;
+    }
+    if (!ok) { P[a] = keepA; bad.add(key); continue; }
+    // 縮：b 合到 a
+    F.forEach((i, t) => {
+      addF(faces[i], -1);
+      for (const v of faces[i]) vf[v].delete(i);
+      if (nf[t].length < 3) { alive[i] = false; faces[i] = null; removed++; return; }
+      faces[i] = nf[t];
+      addF(faces[i], 1);
+      for (const v of faces[i]) vf[v].add(i);
+    });
+    rep[b] = a;
+    collapsed++;
+    for (const i of vf[a]) addCand(faces[i]);
+  }
+  let maxMove = 0;
+  p.points.forEach((q, i) => { const r = P[find(i)]; maxMove = Math.max(maxMove, Math.hypot(r[0] - q[0], r[1] - q[1], r[2] - q[2])); });
+  const live = faces.filter((f, i) => alive[i]);
+  const used = new Map(), pts = [];
+  const out = live.map(f => f.map(v => { if (!used.has(v)) { used.set(v, pts.length); pts.push(P[v]); } return used.get(v); }));
+  return { ...p, points: pts, faces: out, stats: { collapsed, kept: bad.size, removed, maxMove } };
+}
+
+/** 最小的先出來（長度一樣 ⇒ 點的編號小的先，結果才不會因為放進去的順序而變）*/
+class MinHeap {
+  constructor() { this.h = []; }
+  get size() { return this.h.length; }
+  less(x, y) { return x[0] < y[0] || (x[0] === y[0] && (x[1] < y[1] || (x[1] === y[1] && x[2] < y[2]))); }
+  push(l, a, b) {
+    const h = this.h; h.push([l, a, b]);
+    let i = h.length - 1;
+    while (i > 0) { const j = (i - 1) >> 1; if (!this.less(h[i], h[j])) break; [h[i], h[j]] = [h[j], h[i]]; i = j; }
+  }
+  pop() {
+    const h = this.h, top = h[0], last = h.pop();
+    if (h.length) {
+      h[0] = last;
+      for (let i = 0; ;) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < h.length && this.less(h[l], h[m])) m = l;
+        if (r < h.length && this.less(h[r], h[m])) m = r;
+        if (m === i) break;
+        [h[i], h[m]] = [h[m], h[i]]; i = m;
+      }
+    }
+    return top;
+  }
+}
+
+const sub3 = (u, v) => [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
+const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+const len = u => Math.hypot(u[0], u[1], u[2]);
+/** 多邊形的法向（扇形加起來；長度 ＝ 面積 × 2）*/
+function normal(P, f) {
+  let x = 0, y = 0, z = 0;
+  for (let i = 1; i < f.length - 1; i++) {
+    const u = sub3(P[f[i]], P[f[0]]), v = sub3(P[f[i + 1]], P[f[0]]);
+    x += u[1] * v[2] - u[2] * v[1]; y += u[2] * v[0] - u[0] * v[2]; z += u[0] * v[1] - u[1] * v[0];
+  }
+  return [x, y, z];
+}
+/** 連續重複的點拿掉（縮了一條邊以後，面上會有兩個一樣的點）*/
+function tidy(f) {
+  const g = [];
+  for (const v of f) if (g[g.length - 1] !== v) g.push(v);
+  while (g.length > 1 && g[0] === g[g.length - 1]) g.pop();
+  return g;
+}

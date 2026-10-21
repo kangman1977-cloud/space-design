@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
+import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapseShort, MICRO_DIV, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
 import { Mesh } from '../core/mesh.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
 import { worldBounds, unionBounds, freeSpot } from '../core/align.js';
@@ -24,13 +24,15 @@ export class Import3DPanel {
   /** @param {object} app { doc, sel, onEdit, toast, view } */
   constructor(app) {
     this.app = app;
-    /** split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）*/
-    this.opt = { split: true, ...loadOpt() };
+    /** split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；micro ＝ 清掉極小的碎面（預設開，kang 選甲）*/
+    this.opt = { split: true, micro: true, ...loadOpt() };
     this.fileName = '';
     this.read = null;            // 讀出來、清理過的
     this.unit = '';              // '' ＝ 照猜的
     this.up = '';                // '' ＝ 照猜的
     this.cmFix = 0;              // 手動校正：1 個檔案單位 ＝ 幾 cm；0 ＝ 照單位
+    /** 碎面的門檻（mm）；0 ＝ 自動（最長邊 ÷ 500）。⛔ 記住：換一個模型大小就不一樣，換檔案清回自動 */
+    this.microMm = 0;
     this._build();
   }
 
@@ -107,7 +109,7 @@ export class Import3DPanel {
   load(name, buf) {
     this.fileName = name;
     this.fileLbl.textContent = name;
-    this.unit = ''; this.up = ''; this.cmFix = 0;
+    this.unit = ''; this.up = ''; this.cmFix = 0; this.microMm = 0;
     const r = readModel(name, buf);
     this.read = r.ok ? { ...cleanModel(r), ok: true } : r;
     if (this.read.ok) this.read.check = edgeCheck(this.read.faces);
@@ -127,6 +129,57 @@ export class Import3DPanel {
     const r = this.read, s = this._setting();
     const [a, b, c] = r.size.map(v => v * s.cmPerUnit);
     return s.up === 'z' ? { w: a, h: c, d: b } : { w: a, h: b, d: c };
+  }
+
+  /** 碎面的門檻（cm）：自己打的 mm，或自動 ＝ 換算後最長的那一邊 ÷ 500 */
+  _microTol() {
+    const z = this._sizeCm();
+    return { auto: Math.max(z.w, z.h, z.d) / MICRO_DIV, tol: this.microMm > 0 ? this.microMm / 10 : Math.max(z.w, z.h, z.d) / MICRO_DIV };
+  }
+
+  /**
+   * 會建立的部分（cm、Y 朝上）；碎面打開的話每個部分先清（`collapseShort()`）。
+   * 預覽與匯入用同一支 ⇒ 視窗寫的就是匯進去的。
+   */
+  _parts() {
+    const r = this.read, s = this._setting();
+    let parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split: this.opt.split !== false });
+    const micro = { on: this.opt.micro !== false, ...this._microTol(), collapsed: 0, kept: 0, removed: 0, maxMove: 0 };
+    if (micro.on) {
+      parts = parts.map(p => {
+        const c = collapseShort(p, micro.tol);
+        micro.collapsed += c.stats.collapsed; micro.kept += c.stats.kept; micro.removed += c.stats.removed;
+        micro.maxMove = Math.max(micro.maxMove, c.stats.maxMove);
+        return c;
+      });
+    }
+    return { parts, micro };
+  }
+
+  /** 碎面那一列：勾不勾、門檻、清了多少（照實講）*/
+  _microRow(m) {
+    const d = document.createElement('div');
+    d.className = 'uwSkip';
+    d.innerHTML = `
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="i3Micro"> 清掉極小的碎面：比</label>
+        <input type="number" id="i3MicroMm" step="0.01" min="0" style="width:70px" placeholder="${mm(m.auto)}" value="${this.microMm > 0 ? this.microMm : ''}">
+        <span>mm 短的邊縮掉（空白 ＝ 自動：最長的那一邊 ÷ ${MICRO_DIV} ＝ ${mm(m.auto)} mm）</span>
+      </div>
+      <div id="i3MicroRes" style="margin-top:4px"></div>`;
+    const ck = d.querySelector('#i3Micro'), inp = d.querySelector('#i3MicroMm'), res = d.querySelector('#i3MicroRes');
+    ck.checked = m.on;
+    ck.parentElement.title = '模型上很窄、很小的面（看不到，但展開時會報「重疊」）：比門檻短的邊兩端合到中點，小的面跟著不見。'
+      + '縮了會弄出破洞、讓面翻過去的那一條就不縮。不要清就取消勾選';
+    inp.title = '空白 ＝ 自動（照模型大小，放大縮小都清掉同樣的碎面）。自己打一個 mm 就照你的；打得太大會把真的細節也縮掉 —— 看下面寫的「形狀最多動」';
+    inp.disabled = !m.on;
+    ck.onchange = () => { this.opt.micro = ck.checked; save(this.opt); this._render(); };
+    inp.onchange = () => { this.microMm = Math.max(0, num(inp.value, 0)); this._render(); };
+    if (!m.on) res.textContent = '不清：照檔案原樣匯入';
+    else if (!m.collapsed) res.textContent = `沒有比 ${mm(m.tol)} mm 短、縮了不會壞的邊 —— 不用清`;
+    else res.textContent = `縮掉 ${m.collapsed} 條很短的邊、少 ${m.removed} 個面，形狀最多動 ${mm(m.maxMove)} mm`;
+    if (m.on && m.kept) res.textContent += `；另有 ${m.kept} 條比門檻短，但縮了會弄出破洞或讓面翻過去，留著`;
+    return d;
   }
 
   _fillSelects() {
@@ -168,10 +221,11 @@ export class Import3DPanel {
     }
     this._fillSelects();
     this.goBtn.disabled = false;
-    const s = this._setting();
-    const parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split: this.opt.split !== false });
-    this.sum.textContent = `${r.faces.length} 個面、${r.points.length} 個點、${parts.length} 個物件`;
+    const { parts, micro } = this._parts();
+    const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
+    this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件`;
     this.body.appendChild(this._sizeCard());
+    this.body.appendChild(this._microRow(micro));
 
     // 清理、檢查：照實講
     const st = r.stats, ck = r.check;
@@ -250,8 +304,7 @@ export class Import3DPanel {
   _import() {
     const r = this.read;
     if (!r || !r.ok) return;
-    const s = this._setting();
-    const parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split: this.opt.split !== false });
+    const { parts, micro } = this._parts();
     const objs = [];
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
@@ -275,9 +328,11 @@ export class Import3DPanel {
     this.app.onEdit(`匯入 3D 模型（${objs.length} 個物件）`);
     if (this.app.view) this.app.view.frameAll(this.app.doc, objs.map(o => o.id));
     const z = this._sizeCm();
+    const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
     if (this.app.toast) {
-      this.app.toast(`已匯入「${this.fileName}」：${objs.length} 個網格物件、${r.faces.length} 個面，${f(z.w)} × ${f(z.h)} × ${f(z.d)} cm（鏡頭已拉到它們）`
-        + '　之後用建模器改它（拉點線面、刀具、布林…）');
+      this.app.toast(`已匯入「${this.fileName}」：${objs.length} 個網格物件、${nFaces} 個面，${f(z.w)} × ${f(z.h)} × ${f(z.d)} cm`
+        + (micro.on && micro.removed ? `（清掉 ${micro.removed} 個極小的碎面）` : '')
+        + '（鏡頭已拉到它們）　之後用建模器改它（拉點線面、刀具、布林…）');
     }
     this.close();
   }
@@ -296,6 +351,8 @@ function bounds3(pts) {
 }
 const baseName = s => String(s || '').replace(/\.[^.]+$/, '');
 const f = v => String(Math.round(v * 100) / 100);
+/** cm → mm 的字（小的留到 0.001）*/
+const mm = cm => String(Math.round(cm * 10 * 1000) / 1000);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) ? x : d; };
 function loadOpt() {

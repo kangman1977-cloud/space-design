@@ -19235,6 +19235,58 @@ section('匯入 3D 模型（STL／OBJ／GLB）當骨架：讀、清理、檢查�
   ok('★★★ 建成建模器的網格：封閉、展開得了', m.isClosed() && unfoldMesh(m, makeRule('paper', 0.2)).stats.total >= 1);
 }
 
+section('匯入 3D 模型 第二步：極小碎面合併掉（短邊縮到中點、縮了會壞就不縮；門檻預設最長邊 ÷ 500）（2026-10-21）');
+{
+  /** kang 選甲（匯入時清、預設開、可以關）、門檻「同意你的建議」—— `規格\建模器-匯入3D模型.md`「② 沙箱比較」*/
+  const I3 = await import('../js/build/import3d.js');
+  ok('★★ 門檻預設 ÷ 500', I3.MICRO_DIV === 500);
+  // 10 cm 的方塊，上面那一圈的一條邊在離角 0.001 cm 的地方多一個點（上面、側面都接著它 ⇒ 沒有破洞）
+  const cube = { points: [[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10], [0, 10, 0], [10, 10, 0], [10, 10, 10], [0, 10, 10], [0.001, 10, 0]],
+    faces: [[0, 1, 2, 3], [4, 7, 6, 5, 8], [0, 4, 8, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]] };
+  const k0 = I3.edgeCheck(cube.faces);
+  const c1 = I3.collapseShort(cube, 10 / I3.MICRO_DIV);
+  const k1 = I3.edgeCheck(c1.faces);
+  ok('★★★ 0.001 cm 的短邊縮掉 ⇒ 變回 8 個點的方塊、還是 6 個面、沒有破洞', k0.open === 0 && c1.stats.collapsed === 1 && c1.points.length === 8 && c1.faces.length === 6 && k1.open === 0 && k1.nonManifold === 0 && k1.flipped === 0,
+    JSON.stringify(c1.stats));
+  ok('★★ 　 形狀最多動半條短邊（合到中點）', Math.abs(c1.stats.maxMove - 0.0005) < 1e-9);
+  const cm1 = Mesh.fromFaceList(c1.points.map(q => new THREE.Vector3(...q)), c1.faces);
+  ok('★★ 　 建得成網格、封閉', cm1.isClosed());
+  ok('★★ 沒有比門檻短的邊 ⇒ 一點都不動', (() => { const r = I3.collapseShort(cube, 0.0005); return r.stats.collapsed === 0 && r.points.length === 9 && r.faces.length === 6; })());
+  // 整個都比門檻小的四面體：縮哪一條都會變成兩個一樣的面 ⇒ 都不縮（⛔ 縮不見）
+  const tet = { points: [[0, 0, 0], [0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]], faces: [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] };
+  const t1 = I3.collapseShort(tet, 1);
+  ok('★★★ 整個都比門檻小的東西：縮了會壞 ⇒ 都不縮、原樣留著', t1.faces.length === 4 && t1.stats.collapsed === 0 && t1.stats.kept === 6);
+  // 經緯球：兩極附近的邊很短 ⇒ 縮掉一圈，還是封閉、方向一致；每個點搬的距離不超過門檻
+  const nu = 60, nv = 30, sp = [], sf = [];
+  for (let j = 0; j <= nv; j++) for (let i = 0; i < nu; i++) { const th = Math.PI * j / nv, ph = 2 * Math.PI * i / nu; sp.push([10 * Math.sin(th) * Math.cos(ph), 10 * Math.cos(th), 10 * Math.sin(th) * Math.sin(ph)]); }
+  const sid = (i, j) => j * nu + (i % nu);
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { sf.push([sid(i, j), sid(i, j + 1), sid(i + 1, j + 1)]); sf.push([sid(i, j), sid(i + 1, j + 1), sid(i + 1, j)]); }
+  const sc = I3.cleanModel({ format: 'obj', points: sp, faces: sf, partOf: sf.map(() => 0), parts: [''], notes: [] });
+  const [sph] = I3.toParts(sc, { cmPerUnit: 1, up: 'y', split: false });
+  const s1 = I3.collapseShort(sph, 0.2), ks = I3.edgeCheck(s1.faces);
+  ok('★★★ 經緯球兩極的短邊縮掉：面變少、還是封閉、方向一致', s1.stats.collapsed > 0 && s1.faces.length < sph.faces.length && ks.open === 0 && ks.nonManifold === 0 && ks.flipped === 0,
+    `${sph.faces.length} → ${s1.faces.length}，${JSON.stringify(s1.stats)}`);
+  ok('★★ 　 每個點搬的距離 ≤ 門檻', s1.stats.maxMove <= 0.2);
+  ok('★★ 　 同一個輸入算兩次一模一樣（長度一樣的邊照點的編號排）', JSON.stringify(I3.collapseShort(sph, 0.2).faces) === JSON.stringify(s1.faces));
+  // 「縮了會壞就不縮」的兩條規則，各一個真的會走到的形狀（沙箱故意拿掉規則找出來的）
+  // ① 不能翻面：點亂移過的平的網格（拿掉這條 ⇒ 有 1 個面翻過去朝下）
+  let seed = 18; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const gp = [], gf = [], gn = 4;
+  for (let j = 0; j <= gn; j++) for (let i = 0; i <= gn; i++) gp.push([i + (i && i < gn ? (rnd() - 0.5) * 0.9 : 0), 0, j + (j && j < gn ? (rnd() - 0.5) * 0.9 : 0)]);
+  const gid = (i, j) => j * (gn + 1) + i;
+  for (let j = 0; j < gn; j++) for (let i = 0; i < gn; i++) { gf.push([gid(i, j), gid(i, j + 1), gid(i + 1, j + 1)]); gf.push([gid(i, j), gid(i + 1, j + 1), gid(i + 1, j)]); }
+  const down = r => r.faces.filter(f => { const [A, B, C] = f.map(v => r.points[v]); return (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]) <= 0; }).length;
+  const g1 = I3.collapseShort({ points: gp, faces: gf }, 0.5);
+  ok('★★★ 縮了會讓面翻過去的那一條不縮（亂移過的平網格：縮了一些、沒有面朝下）', down({ points: gp, faces: gf }) === 0 && g1.stats.collapsed > 0 && down(g1) === 0, JSON.stringify(g1.stats));
+  // ② 接不起來的邊不能變多：四方截面的細圓環（拿掉這條 ⇒ 5 條邊被三個面以上共用）
+  const tp = [], tf = [], tu = 12, tv = 4;
+  for (let j = 0; j < tv; j++) for (let i = 0; i < tu; i++) { const u = 2 * Math.PI * i / tu, v = 2 * Math.PI * j / tv; tp.push([(4 + 0.5 * Math.cos(v)) * Math.cos(u), 0.5 * Math.sin(v), (4 + 0.5 * Math.cos(v)) * Math.sin(u)]); }
+  const tid = (i, j) => (j % tv) * tu + (i % tu);
+  for (let j = 0; j < tv; j++) for (let i = 0; i < tu; i++) { tf.push([tid(i, j), tid(i + 1, j), tid(i + 1, j + 1)]); tf.push([tid(i, j), tid(i + 1, j + 1), tid(i, j + 1)]); }
+  const r1 = I3.collapseShort({ points: tp, faces: tf }, 1), kr = I3.edgeCheck(r1.faces);
+  ok('★★★ 縮了會讓邊被三個面以上共用的那一條不縮（細圓環：還是封閉、沒有接不起來的邊）', kr.open === 0 && kr.nonManifold === 0 && kr.flipped === 0 && r1.stats.kept > 0, JSON.stringify(r1.stats));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
