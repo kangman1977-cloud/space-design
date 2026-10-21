@@ -19068,6 +19068,28 @@ section('智慧分切 小片那一步⛔ 越過「不要細切口」（2026-10-2
   ok('★ 預設 2 cm：8 齒也沒有細切口', c.notch === 0, `${c.total} 片、小片 ${c.small}`);
 }
 
+section('智慧分切 幾種切法之間：片少的先呈現（2026-10-21）');
+{
+  /**
+   * kang 看球的對照圖：「初始判斷時...都是以最少方案來做優先呈現...其餘都是可選擇的」⇒ 細切口之後先比片數、才比程式補剪。
+   * 以前球 1,058 面（48 × 24）寧可挑只沿轉角 37 條一格寬的細環，也不挑花心被剪開一圈的花瓣 2 片。
+   */
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const ball = over => {
+    const o = new io.ModelObject({ name: '球', kind: io.KIND.SOLID, src: { type: 'sphere', ...PRIM_DEFAULTS.sphere, ...over } });
+    o.bake();
+    return o;
+  };
+  const a = proposeSeams(ball({ segW: 48, segH: 24 }), { material: 'paper' });
+  ok('★★★ 球 48 × 24：先呈現花瓣 2 片（以前只沿轉角 37 片）', a.kind === 'petal' && a.total === 2, `${a.label} ${a.total} 片`);
+  ok('★★ 　 花心被程式另外多剪 ⇒ 提案講幾片（jagPieces）', a.jagPieces >= 1, `${a.jagPieces} 片`);
+  const c = a.options.find(o => o.kind === 'corner');
+  ok('★★ 　 只沿轉角那一份照樣在其他切法裡、沒有多剪', !!c && c.total > a.total && c.jagPieces === 0, c ? `${c.total} 片` : '沒有');
+  const d = proposeSeams(ball({}), { material: 'paper' });
+  ok('★★ 預設的球照舊：花瓣 2 片、沒有多剪', d.kind === 'petal' && d.total === 2 && d.jagPieces === 0, `${d.label} ${d.total} 片、多剪 ${d.jagPieces}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

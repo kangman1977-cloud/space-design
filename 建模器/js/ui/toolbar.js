@@ -1637,6 +1637,14 @@ export class Panel {
       fitLines.push(`有 <b>${p.small}</b> 片小於 ${fmt1(p.minPiece)} cm（併不進旁邊，留著）`
         + (p.slits === 'none' ? ' —— 想要片少一點，可以試「片裡的切口」改「片少一點」（允許細切口）' : ''));
     }
+    /**
+     * 程式另外多剪（2026-10-21，kang「最少方案優先呈現...其餘都是可選擇的」）：片少的排前面之後，可能挑到程式為了攤得平
+     * 又多剪了幾刀的那一份（例如細的球，花瓣的花心被剪開一圈）⇒ 講出來、指到下面的其他切法
+     */
+    if (p.jagPieces) {
+      fitLines.push(`有 <b>${p.jagPieces}</b> 片是程式為了攤得平另外多剪了幾刀（青色虛線裡已經包含）`
+        + (p.options && p.options.length > 1 ? ' —— 不想要的話，可以按下面「其他切法」換一種' : ''));
+    }
     // 不是格子的曲面：只在結果還有問題時講（圓錐那種照沿轉角切就好好的，⛔ 多嘴）
     if (p.nonGrid && (p.big || p.overlap)) fitLines.push('這塊曲面不是一圈一圈的格子，還不會整齊地切 —— 照沿轉角的切法提案');
     if (p.timedOut) fitLines.push(red('還沒算完：你按了「先停下來」，這是目前最好的') + ' —— 再按一次「提案」就算到完');
@@ -1671,7 +1679,7 @@ export class Panel {
       this.form.appendChild(note('其他切法（點一下就換成那一種）：'));
       opts.forEach((o, i) => {
         if (i === p.active) return;
-        const bad = [o.big ? `${o.big} 片放不進` : '', o.overlap ? '有重疊' : ''].filter(Boolean).join('、');
+        const bad = [o.big ? `${o.big} 片放不進` : '', o.overlap ? '有重疊' : '', o.jagPieces ? `${o.jagPieces} 片程式另外多剪` : ''].filter(Boolean).join('、');
         this._rowBtn(`${o.label}：${o.total} 片${bad ? `（${bad}）` : ''}`,
           `換成「${o.label}」：${o.edges.length} 條縫、縫總長 ${Math.round(o.cutLen)}${i === 0 ? '（這是程式最推薦的）' : ''}`,
           () => this.app.useSeamAlternative(i));

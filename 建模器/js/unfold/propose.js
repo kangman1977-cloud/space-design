@@ -19,6 +19,7 @@
  *   2. 每個候選都攤一次（整個曲面當一塊、塊的邊界照第二步的起點切開），照
  *      放不進的少 → 沒重疊 → **程式補剪的線少** → 片少 → 縫短 挑（每一片容許補剪 1 條：一刀直線本來就是順的）
  *   3. 每一種（只沿轉角／長條／環帶／花瓣）各留最好的一份，各自照第二步接完 ⇒ `options`；最好的那份當提案
+ *      （幾種之間：放不進的少 → 沒重疊 →（不要細切口時）細切口少 → **片少** → 補剪少 → 縫短；2026-10-21 kang 定「最少方案優先呈現」）
  *   ⚠ 「只沿轉角」那一份**完全照第二步**（塊照 30° 分、跟「程式本來剪的」比）—— 只有平面的物件結果一個字都不變
  *   ⚠ 圓環繞管子 12 段 ＝ 每格轉 30°，剛好卡在分塊的 30° 上 ⇒ 第二步會把它切成 12 圈；所以曲面另外用 46° 找
  *
@@ -597,6 +598,8 @@ function* proposeGen(obj, opt = {}) {
       /** 長邊小於 `minPiece` cm 的片幾片（面板講；「不要細切口」時小片併不掉就留著）*/
       small: pick.r.pieces.reduce((n, p) => n + (Math.max(p.width, p.height) < minPiece ? p.qty : 0), 0),
       minPiece,
+      /** 程式另外多剪的片幾片：一片補剪 2 條以上（1 條是一刀直線、本來就順，⛔ 算 —— 跟排名的 `jag` 同一個判準）*/
+      jagPieces: pick.r.pieces.reduce((n, p) => n + (((p.autoCut && p.autoCut.lines) || 0) > 1 ? p.qty : 0), 0),
       keepCut: pick.r.keepCut || 0,
       cutLen: pick.cutLen,
       usedBaseline,
@@ -674,11 +677,16 @@ function* proposeGen(obj, opt = {}) {
      * 「不要細切口」時，挑切法也比細切口（第四步，2026-10-21）：放不進的少 → 沒重疊 → 細切口少 → 照第三步。
      * ⚠ 花瓣的 V 形切口是設計（沿經線切到極點附近停）⇒ ⛔ 算；長條、環帶、只沿轉角照算
      * 【實證】小圓柱：長條 2 片但蓋子邊留 32 個細切口，以前會勝過只沿轉角 3 片。
+     * 🔴 **再來比片數、才比程式補剪**（2026-10-21，kang 看球的對照圖：「初始判斷時...都是以最少方案來做優先呈現...其餘都是可選擇的」）——
+     * 以前「補剪少」排在「片少」前面：球 1,058 面寧可挑 37 條一格寬的細環，也不挑花心被剪開一圈的花瓣 2 片。
+     * 其他切法照樣在「其他切法」按鈕裡；挑到有補剪的，面板講幾片被程式另外多剪（`jagPieces`）。
+     * ⚠ 只改這一步（幾種切法之間）；每塊曲面挑候選（`rg.top`）照舊用第三步的判準。
      */
     const notchEff = o => (slits === 'none' && o.kind !== 'petal' ? o._score.notch || 0 : 0);
     const better5 = (x, y) => {
       if (x._score.misfit !== y._score.misfit || x._score.overlap !== y._score.overlap) return better3(x._score, y._score);
       if (notchEff(x) !== notchEff(y)) return notchEff(x) < notchEff(y);
+      if (x._score.total !== y._score.total) return x._score.total < y._score.total;
       return better3(x._score, y._score);
     };
     options.sort((x, y) => (better5(x, y) ? -1 : better5(y, x) ? 1 : 0));
