@@ -108,6 +108,7 @@ export class UnfoldPanel {
         </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。關掉就回到原本的存法（SVG 一片一個檔、DXF 排成一長條）">
           <label class="uwCk"><input type="checkbox" id="uwNest"> 排版到板子上</label>
+          <select id="uwNPre" title="常用的大小：選了就把板寬、板高填好（紙模多半印在 A4、A3）。自己打數字就變「自訂」"></select>
           <span class="lbl">板寬</span><input type="number" id="uwNW" min="1" step="1" style="width:64px">
           <span class="lbl">板高</span><input type="number" id="uwNH" min="1" step="1" style="width:64px">
           <span class="lbl">間距</span><input type="number" id="uwNG" min="0" step="0.5" style="width:52px">
@@ -191,7 +192,22 @@ export class UnfoldPanel {
       saveOpt(this.opt);
       if (this.result) this._render(this.result, this.objs);
     };
-    for (const k of Object.keys(nestIn)) nestIn[k].onchange = nestChanged;
+    for (const k of Object.keys(nestIn)) nestIn[k].onchange = () => { nestChanged(); syncPre(); };
+    /**
+     * 常用的板子大小（2026-10-21，T11：`實驗-匯入狐狸存錢筒.md` 可以增加 1 —— 紙模多半印在 A4、A3，以前要自己打）。
+     * 只是幫忙填板寬、板高；預設板子照舊（⛔ 換材質就自動換板子 —— 記住的設定是使用者的）。橫的擺（寬 ≥ 高），跟預設 240 × 120 一樣。
+     */
+    const PRESETS = [['', '自訂'], ['29.7x21', 'A4（29.7 × 21）'], ['42x29.7', 'A3（42 × 29.7）'], ['59.4x42', 'A2（59.4 × 42）'], ['240x120', '大板（240 × 120）']];
+    const preSel = $('uwNPre');
+    for (const [v, t] of PRESETS) { const o = document.createElement('option'); o.value = v; o.textContent = t; preSel.appendChild(o); }
+    const syncPre = () => { const k = `${N.w}x${N.h}`; preSel.value = PRESETS.some(p => p[0] === k) ? k : ''; };
+    preSel.onchange = () => {
+      if (!preSel.value) return;
+      const [w, h] = preSel.value.split('x').map(Number);
+      nestIn.w.value = w; nestIn.h.value = h;
+      nestChanged();
+    };
+    syncPre();
 
     this.foldIn = $('uwFold');
     /** ⑤-16：人自己勾過 ⇒ 這一份檔案開著的時候記住（`open()`）；新建、開檔清掉（`resetForNewDoc()`）*/
@@ -469,7 +485,12 @@ export class UnfoldPanel {
     const head = box(big ? 'uwWarn' : 'uwSkip',
       (normal ? `排版：需要 ${normal} 張 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`
               : `排版：沒有一片擺得進 ${fmt(N.w)} × ${fmt(N.h)} cm 的板子`)
-      + (big ? `　⚠ ${normal ? '另有 ' : ''}${big} 片比板子還大，各自單獨一張（要換大板或再切小）` : '')
+      /**
+       * ⚠ 2026-10-21（T11：`實驗-匯入狐狸存錢筒.md` 不足 4）：智慧分切「放得進板子」照**提案當下**的板子算 ——
+       * 先提案、後改小板子就會放不下；回分片重新提案會照現在的板子切小（狐狸改 A3 只多 1 條縫就全部放得下）。
+       */
+      + (big ? `　⚠ ${normal ? '另有 ' : ''}${big} 片比板子還大，各自單獨一張（要換大板或再切小 —— `
+        + '回「分片」按「智慧分切：提案」重新提案，會照現在的板子把大片切小）' : '')
       + '　存 SVG／DXF 時一張板一個檔');
     this.body.appendChild(head);
     for (const sh of sheets) {

@@ -62,6 +62,7 @@ import { alignPositions, distributePositions, spacePositions, currentGaps,
          worldBounds, AXIS_KEYS, ALIGN, ALIGN_LABEL } from '../core/align.js';
 import { fetchLatest } from '../core/appver.js';
 import { meshGearPair, gearClash } from '../core/gearPair.js';
+import { ask } from './askBox.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -394,9 +395,9 @@ export class Panel {
       this._rowBtn(`打散成 ${obj.copies} 個獨立物件`,
         '每一份變成可以各自搬動、各自改參數的物件。' +
         '但打散之後就不再是「同一件 ×N」了，備料時會被當成不同的件。' +
-        '資訊只能往下走，所以能不打散就不要打散。', () => {
+        '資訊只能往下走，所以能不打散就不要打散。', async () => {
           /** ⚠ 2026-10-19（實驗 T6：`實驗-綜合評估.md` ②-15）以前寫「收不回來」—— Ctrl+Z 收得回來；真正回不去的是「之後不再是同一組」 */
-          if (!confirm(`會變成 ${obj.copies} 個獨立物件，之後不會再自動合回同一組（要反悔可以馬上按 Ctrl+Z），確定嗎？`)) return;
+          if (!(await ask(`會變成 ${obj.copies} 個獨立物件，之後不會再自動合回同一組（要反悔可以馬上按 Ctrl+Z），確定嗎？`))) return;
           this.app.onExplode(obj);
         });
       this._freezeBtn(obj, '排列方式與份數');
@@ -427,9 +428,9 @@ export class Panel {
       this._rowBtn(`打散成 ${obj.src.shapes.length} 個獨立物件`,
         '每個形狀變成可以各自移動、旋轉、縮放的物件。'
         + '版面維持原樣，而且每個物件的原點都在自己的中心。'
-        + '拆開之後就不再是同一份稿了（Ctrl+Z 可以復原）。', () => {
-          if (!confirm(`會變成 ${obj.src.shapes.length} 個獨立物件，`
-            + '之後不會再自動合回同一份稿（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
+        + '拆開之後就不再是同一份稿了（Ctrl+Z 可以復原）。', async () => {
+          if (!(await ask(`會變成 ${obj.src.shapes.length} 個獨立物件，`
+            + '之後不會再自動合回同一份稿（要反悔可以馬上按 Ctrl+Z），確定嗎？'))) return;
           this.app.onExplode(obj);
         });
       this._toPenBtn(obj);    // ④-7
@@ -514,11 +515,11 @@ export class Panel {
                 + '「編輯路徑」會消失，改錨點、拉把手、加洞全部回不去。'
                 + '⭐ 形狀本身一格都不會變'
               : ''),
-          () => {
+          async () => {
             /** ⑤-12（2026-10-20，kang「照建議」）：照「凍結」的寫法先問一句（T5 按下去才發現參數全沒了）*/
-            if (!confirm('轉成網格之後就不能再改上面的參數了'
+            if (!(await ask('轉成網格之後就不能再改上面的參數了'
               + (isPen ? '，而且那串錨點會不見（「編輯路徑」回不去，形狀本身不會變）' : '')
-              + '（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
+              + '（要反悔可以馬上按 Ctrl+Z），確定嗎？'))) return;
             obj.bake();
             this._edit('轉成網格');
             /**
@@ -564,10 +565,10 @@ export class Panel {
         + '⭐ 展開仍然走得動，但攤出來的是盒子的展開圖'
         + '（一片 100×60、板厚 1 → 展開後是 202×260 的六片攤開），'
         + '不再是原本那一片板',
-        () => {
+        async () => {
           /** ⑤-12：先問一句（理由同上一顆）*/
-          if (!confirm('板厚會烤進網格裡、變成實體：之後就不能再改板厚，展開圖也會變成盒子的展開'
-            + '（要反悔可以馬上按 Ctrl+Z），確定嗎？')) return;
+          if (!(await ask('板厚會烤進網格裡、變成實體：之後就不能再改板厚，展開圖也會變成盒子的展開'
+            + '（要反悔可以馬上按 Ctrl+Z），確定嗎？'))) return;
           const before = obj.mesh().faces.length;
           const r = obj.bakeShelled();
           if (!r.ok) { this.app.toast(r.reason, true); return; }
@@ -1490,9 +1491,9 @@ export class Panel {
     if (n > 0 || keeps > 0) {
       const parts = [n ? `切開 ${n} 條` : '', keeps ? `不准切 ${keeps} 條` : ''].filter(Boolean).join('、');
       this._rowBtn(`清除全部標記（${parts}）`,
-        '回到自動判斷。取消標記是把決定交還給材料規則，不是強迫它折起來', () => {
+        '回到自動判斷。取消標記是把決定交還給材料規則，不是強迫它折起來', async () => {
           /** ⑤-12（2026-10-20）：一條一條標的東西一下就沒了 ⇒ 先問一句（T8）*/
-          if (!confirm(`會清掉全部的標記（${parts}）、回到自動判斷（要反悔可以馬上按 Ctrl+Z），確定嗎？`)) return;
+          if (!(await ask(`會清掉全部的標記（${parts}）、回到自動判斷（要反悔可以馬上按 Ctrl+Z），確定嗎？`))) return;
           clearSeams(obj.mesh());
           clearKeeps(obj.mesh());
           this.app.view.markSeamsDirty();
@@ -1828,8 +1829,8 @@ export class Panel {
   _freezeBtn(obj, whatYouLose) {
     this._rowBtn('凍結成網格',
       '把目前算出來的形狀固定下來。之後開檔不用再算一次（快很多），' +
-      `但就不能再回頭改${whatYouLose}了。確定不會再改的模型才凍結。`, () => {
-        if (!confirm(`凍結之後就不能再改${whatYouLose}了，確定嗎？`)) return;
+      `但就不能再回頭改${whatYouLose}了。確定不會再改的模型才凍結。`, async () => {
+        if (!(await ask(`凍結之後就不能再改${whatYouLose}了，確定嗎？`))) return;
         obj.bake();
         this._edit('凍結成網格');
       });

@@ -19287,6 +19287,32 @@ section('匯入 3D 模型 第二步：極小碎面合併掉（短邊縮到中點
   ok('★★★ 縮了會讓邊被三個面以上共用的那一條不縮（細圓環：還是封閉、沒有接不起來的邊）', kr.open === 0 && kr.nonManifold === 0 && kr.flipped === 0 && r1.stats.kept > 0, JSON.stringify(r1.stats));
 }
 
+section('T11 修的這一批：確認框畫在頁面裡、凍結的名字對齊、改板子提醒重新提案、紙的板子大小（2026-10-21）');
+{
+  /** kang「同意你的建議」—— `實驗-匯入狐狸存錢筒.md`「修的這一批」。這幾件都在畫面上（碰 DOM），這裡讀程式守著 ⛔ 被改回去 */
+  const { readFileSync, readdirSync, statSync } = await import('node:fs');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const files = [];
+  const walk = d => { for (const n of readdirSync(d)) { const q = join(d, n); if (statSync(q).isDirectory()) walk(q); else if (n.endsWith('.js')) files.push(q); } };
+  walk(join(root, 'js'));
+  // 去掉註解再找（註解裡會提到 confirm()）
+  const code = f => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const native = files.filter(f => /(^|[^.\w])confirm\s*\(|window\.confirm\s*\(|(^|[^.\w])prompt\s*\(/.test(code(f)));
+  ok('★★★ 程式裡⛔ 用瀏覽器自己的 confirm()／prompt()（Claude App 內建的瀏覽器會直接當成取消 ⇒ 按了沒反應）', native.length === 0, native.map(f => f.slice(root.length)).join('、'));
+  const askUsers = files.filter(f => /\bawait ask\(/.test(code(f))).map(f => f.replace(/\\/g, '/').split('/').pop());
+  ok('★★ 　 改用頁面裡的確認框（main.js、toolbar.js 都在用）', askUsers.includes('main.js') && askUsers.includes('toolbar.js'), askUsers.join('、'));
+  const A = await import('../js/ui/askBox.js');
+  ok('★★ 　 askBox 匯得進來、一開始沒開著（模組層級⛔ 碰 DOM）', typeof A.ask === 'function' && A.isAskOpen() === false);
+  const main = readFileSync(join(root, 'js/main.js'), 'utf8'), tb = readFileSync(join(root, 'js/ui/toolbar.js'), 'utf8');
+  const freezeLabel = (tb.match(/_freezeBtn\(obj, whatYouLose\) \{\s*this\._rowBtn\('([^']+)'/) || [])[1];
+  const boolWord = (main.match(/if \(obj\.isBool\) return \{ btn: '([^']+)'/) || [])[1];
+  ok('★★★ 提示裡布林物件那顆按鈕的名字 ＝ 面板上那顆（以前提示寫「轉成可編輯網格」、面板叫「凍結成網格」）', !!freezeLabel && freezeLabel === boolWord, `${freezeLabel} / ${boolWord}`);
+  ok('★★ 　 編輯模式點到參數物件 ⇒ 直接問要不要變網格（⛔ 只跳一句）', /el\.kind === 'blocked'\) \{ offerBake\(el\.obj\)/.test(main));
+  const up = readFileSync(join(root, 'js/ui/unfoldPanel.js'), 'utf8');
+  ok('★★ 大片放不下 ⇒ 提醒回分片重新提案（智慧分切照提案當下的板子算）', /比板子還大，各自單獨一張（要換大板或再切小 —— `\s*\+ '回「分片」按「智慧分切：提案」重新提案/.test(up));
+  ok('★★ 排版有常用的板子大小：A4、A3（紙模）、照舊的 240 × 120', /'29\.7x21', 'A4/.test(up) && /'42x29\.7', 'A3/.test(up) && /'240x120'/.test(up) && /id="uwNPre"/.test(up));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -55,6 +55,7 @@ import { ExportPanel } from './ui/exportPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
 import { Import3DPanel } from './ui/import3dPanel.js';
+import { ask, isAskOpen } from './ui/askBox.js';
 
 /**
  * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
@@ -3716,10 +3717,39 @@ function toggleEditMode() {
  */
 function editBlockText(obj, n = 1) {
   const who = n > 1 ? `「${obj.name}」等 ${n} 個` : `「${obj.name}」`;
+  const b = bakeWords(obj);
   return `${who}是參數物件（照尺寸算出來的），編輯模式點不到它的點、邊、面 —— `
-    + '要拉點線面，先在右側面板按「轉成可編輯網格」（之後就不能再改尺寸'
-    + (obj.src && obj.src.type === 'pen' ? '，鋼筆的錨點也會不見' : '')
-    + '；按 Ctrl+Z 可以反悔）';
+    + `要拉點線面，先在右側面板按「${b.btn}」（之後就不能再改${b.lose}；按 Ctrl+Z 可以反悔）`;
+}
+
+/**
+ * 參數物件變網格那顆按鈕**在面板上叫什麼**、變了會失去什麼（2026-10-21，T11：`實驗-匯入狐狸存錢筒.md` 不足 1）。
+ * ⚠ 布林、陣列的面板上那顆叫「凍結成網格」（`toolbar.js` `_freezeBtn()`），其他叫「轉成可編輯網格」——
+ * 以前提示一律寫「轉成可編輯網格」，布林物件的面板上找不到。
+ */
+function bakeWords(obj) {
+  if (obj.isBool) return { btn: '凍結成網格', lose: '運算元的參數' };
+  if (obj.isArray) return { btn: '凍結成網格', lose: '排列方式與份數' };
+  if (obj.src && obj.src.type === 'pen') return { btn: '轉成可編輯網格', lose: '尺寸，鋼筆的錨點也會不見' };
+  return { btn: '轉成可編輯網格', lose: '尺寸' };
+}
+
+/**
+ * 編輯模式點到參數物件 ⇒ 直接問要不要現在變網格（2026-10-21，T11 不足 1、2：以前只跳一句、要自己去面板找按鈕）。
+ * 按確定 ＝ 跟面板那顆一模一樣（`obj.bake()`、記一步、Ctrl+Z 退得回來），然後就點得到了。
+ */
+async function offerBake(obj) {
+  const b = bakeWords(obj);
+  const ok = await ask(`「${obj.name}」是參數物件（照尺寸算出來的），編輯模式點不到它的點、邊、面。\n\n`
+    + `要現在「${b.btn}」嗎？之後就不能再改${b.lose}（要反悔可以馬上按 Ctrl+Z）。`);
+  if (!ok || !doc.byId(obj.id) || !obj.isParametric) return;
+  obj.bake();
+  view.sync(doc);
+  commit(b.btn);
+  sel.refreshVertexDots();
+  panel.refresh();
+  updateBar();
+  toast(`已經${b.btn}：現在點得到「${obj.name}」的點、邊、面了`);
 }
 
 /**
@@ -3974,7 +4004,7 @@ function editPick(el, info = {}) {
     return;
   }
   /** ⑤-10（2026-10-20）：編輯模式講編輯模式自己的話（以前跳的是分片那一句「分片標記存不進檔案」）*/
-  if (el.kind === 'blocked') { toast(editBlockText(el.obj), true); return; }
+  if (el.kind === 'blocked') { offerBake(el.obj); return; }
 
   /**
    * ⚠ **型別／物件不合而被重設時一定要講。**
@@ -6310,14 +6340,15 @@ function groupPick(hit) {
   toast(msg + (c && S.size ? (c.overlap ? `　✗ 這一群攤開會疊（${c.overlap} 個面，紅色）` : '　✓ 這一群攤得平、不會疊') : ''), !!(c && c.overlap));
 }
 
-function groupCut() {
+async function groupCut() {
   validateGroup();
   if (!groupSel || !groupSel.regions.size) { toast('先在 3D 上點面，選好要切成一片的那一群', true); return; }
   const { obj, mesh, regions } = groupSel;
   const R = regionInfo(mesh);
   const eff = withTiny(R, regions, tinyRegions(R, groupTiny));
   const n = components(R, eff);
-  if (n > 1 && !confirm(`選的面沒有連在一起：切下去會變成 ${n} 片（不是一片）。照樣切嗎？`)) return;
+  if (n > 1 && !(await ask(`選的面沒有連在一起：切下去會變成 ${n} 片（不是一片）。照樣切嗎？`))) return;
+  if (!groupSel) return;                     // 問的時候選取被清掉了
   const res = applyGroup(mesh, eff);
   const tinyN = eff.size - regions.size;
   groupClear(false);
@@ -7301,9 +7332,9 @@ function clashStale() {
 
 $('save').onclick = () => { download(doc); toast('已存檔'); };
 $('load').onclick = loadFile;
-$('newDoc').onclick = () => {
+$('newDoc').onclick = async () => {
   /** ③-6：只剩參考線也要問 —— 新建不能復原（`hist.reset`），以前只看物件 ⇒ 參考線會被默默清掉 */
-  if ((doc.objects.length || doc.guideCount()) && !confirm('新建會清空目前內容（物件與參考線），確定嗎？')) return;
+  if ((doc.objects.length || doc.guideCount()) && !(await ask('新建會清空目前內容（物件與參考線），確定嗎？'))) return;
   newDoc();
 };
 
@@ -7316,7 +7347,7 @@ window.addEventListener('keydown', e => {
    * 以前展開圖開著按 Delete，後面的物件被刪掉、展開圖跟著變空；
    * Ctrl+Z、W／E／R 也一樣穿透過去。視窗是「看結果」的地方，⛔ 不是編輯的地方。
    */
-  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen) {
+  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen || isAskOpen()) {
     /** ⚠ Ctrl+S／Ctrl+D ⛔ 不可以掉回瀏覽器（另存網頁、加入書籤）*/
     if ((e.ctrlKey || e.metaKey) && 'sd'.includes(e.key.toLowerCase())) e.preventDefault();
     return;
