@@ -19157,6 +19157,30 @@ section('智慧分切 試候選只攤那一塊曲面（2026-10-21）');
   ok('★★★ 每個候選：只攤那一塊 ＝ 整個重攤（放不進、重疊、片數、程式補剪）', n > 50 && bad === 0, `${n} 個候選、不一樣 ${bad}`);
 }
 
+section('智慧分切 快的接法（乙）：每一次接都跟整片重攤一樣（2026-10-21）');
+{
+  /**
+   * 接兩組時只擺新接上的那一組、只查附近 —— 片數、重疊、放不進、細切口要跟整片重攤一模一樣（`verifyJoin` 每一次都照舊算一次來比）；
+   * 開關（`fastJoin: false` 全部照舊）兩種結果也要一樣。不夠確定、很短的邊、不平的面 ⇒ 照舊（`_joinCheck.exact`）。
+   */
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const mk = (t, over = {}) => {
+    const o = new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t], ...over } });
+    o.bake();
+    return o;
+  };
+  const sig = p => [p.kind, p.total, p.notch, p.edges.length].join('/');
+  let fast = 0, bad = 0;
+  for (const [t, over, mat, o2] of [['gear', { teeth: 8 }, 'paper', {}], ['gear', { teeth: 8 }, 'paper', { slits: 'allow' }], ['cylinder', {}, 'foamboard', {}], ['tube', {}, 'foamboard', {}], ['roundBox', {}, 'foamboard', { cutOrder: 'fewest' }], ['dome', {}, 'foamboard', {}], ['stairs', {}, 'foamboard', {}]]) {
+    const a = proposeSeams(mk(t, over), { material: mat, ...o2, verifyJoin: true });
+    const b = proposeSeams(mk(t, over), { material: mat, ...o2, fastJoin: false });
+    fast += a._joinCheck.fast; bad += a._joinCheck.bad;
+    ok(`★★ 　 ${t}${o2.slits ? '（片少一點）' : o2.cutOrder ? '（片數最少）' : ''}：快的 ＝ 全部照舊`, sig(a) === sig(b), `${sig(a)} vs ${sig(b)}`);
+  }
+  ok('★★★ 每一次走快的接：跟整片重攤一模一樣', fast > 300 && bad === 0, `走快的 ${fast} 次、不一樣 ${bad}`);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

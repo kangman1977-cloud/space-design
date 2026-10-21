@@ -2448,3 +2448,6 @@ function groupIdentical(pieces, merge = true) {
   out.forEach((p, i) => { p.name = `展開片 ${i + 1}`; });
   return out;
 }
+
+// 智慧分切的快的接法（propose.js）共用重疊判法
+export { polyHit as _polyHit, exactHit as _exactHit, isConvex as _isConvex, sharesEdge as _sharesEdge, boxHit as _boxHit, OVERLAP_MAX_POLYS as _OVMAX };

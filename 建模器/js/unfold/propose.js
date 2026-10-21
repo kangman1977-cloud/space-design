@@ -46,7 +46,7 @@
  */
 
 import * as THREE from 'three';
-import { unfoldMesh, OVERLAP_MAX_POLYS } from './flatten.js';
+import { unfoldMesh, OVERLAP_MAX_POLYS, FLAT_TOL_DEG, _polyHit, _exactHit, _isConvex, _sharesEdge, _boxHit, _OVMAX } from './flatten.js';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { isMarkable, isSeam, markSignature, vertexAngles, NOTCH_DEG } from './seam.js';
 import { EDGE_ROLE } from '../core/mesh.js';
@@ -449,6 +449,8 @@ function* proposeGen(obj, opt = {}) {
   /**
    * ── 第四步：「只沿轉角」的新接法（見檔頭）── 回傳 `{start, cur}`，格式跟 `engine().merge()` 一樣。
    */
+  /** 快的接法（10.9）：走快的幾次、照舊幾次、比對不一樣幾次（`opt.verifyJoin` 才比）*/
+  const joinCheck = { fast: 0, exact: 0, bad: 0 };
   const cornerPlan = function* () {
     // 1. 塊 ＝ 平面；碎面跟主人、不准切先接
     const R = regionInfo(base);
@@ -466,8 +468,9 @@ function* proposeGen(obj, opt = {}) {
       const a = blk(h.face), b = blk(h.twin.face);
       if (a === b) continue;
       const k = pk(a, b);
-      if (!pairs.has(k)) pairs.set(k, { a, b, len: 0, ang: 0, cave: 0 });
+      if (!pairs.has(k)) pairs.set(k, { a, b, len: 0, ang: 0, cave: 0, hs: [] });
       const pr = pairs.get(k);
+      pr.hs.push(h);
       const L = h.v.p.distanceTo(h.to.p);
       pr.len += L;
       pr.ang += deg(h) * L;
@@ -549,8 +552,227 @@ function* proposeGen(obj, opt = {}) {
         G.set(g, { faces, open, sc });
       }
     }
-    /** `strict`：true ＝ 補剪、細切口都不准多；'notch' ＝ 只有細切口不准多（小片那一步、不要細切口時）；false ＝ 都放寬 */
-    const tryJoin = (pr, strict) => {
+    /**
+     * 🔴 **快的接法（乙）**（2026-10-21，`分片成群-設計方向.md` 10.9，kang「同意你的建議」；照 Blender 紙模外掛的接法）：
+     * 每一組記住自己攤開的樣子；接兩組時只把新接上的那一組轉過去擺好（剛體）、只查它跟附近的面碰不碰到、
+     * 只看兩組都碰到的頂點有沒有多細切口 —— ⛔ 把越接越大的整片重攤（`tryJoinExact()` 那一條）。
+     * ⭐ 片數、重疊、放不進、細切口跟整片重攤**一模一樣**才走快的；下面幾種**照舊整片攤**：
+     *   組裡有程式補剪／重疊／不只一片；接的邊攤不上；沒有折線（擺正看最長的切邊）；
+     *   很短的邊（< 0.01 cm，展開程式拿它當軸會放大誤差）；不平的面；
+     *   **不夠確定**：組裡或接的那幾條縫兩側差超過 0.0001 cm（門檻 0.001 的十分之一 —— 齒輪 80 齒那種 10 微米誤差的縫，兩條路判斷會相反）。
+     * 【實證 2026-10-21 沙箱】對照組 87 項、齒輪 40／80 齒、球、圓環逐條一樣；中型快約 2 倍。
+     * `opt.fastJoin === false` ＝ 全部照舊；`opt.verifyJoin` ＝ 走快的時也照舊算一次比對（`_joinCheck`，給回歸測試守著）。
+     */
+    const FAST = opt.fastJoin !== false, VERIFY = !!opt.verifyJoin;
+    const matCut = h => { const d = base.dihedral(h); if (d === null) return true; const dd = d * DEG; if (Math.abs(dd) <= FLAT_TOL_DEG) return false; return !rule.canFold(dd); };
+    const isFold = h => { const d = base.dihedral(h); return d !== null && Math.abs(d * DEG) > FLAT_TOL_DEG; };
+    const roleCut = (h, has) => isUserCut(h) || (blk(h.face) !== blk(h.twin.face) && !has(pk(blk(h.face), blk(h.twin.face))));
+    const forder = order;
+    const vFaces = new Map(), vEdges = new Map();
+    for (const f of base.faces) for (const h of base.faceLoop(f)) {
+      if (!vFaces.has(h.v.id)) vFaces.set(h.v.id, []);
+      vFaces.get(h.v.id).push(f.id);
+      if (!h.twin || !h.twin.face || h.id > h.twin.id) continue;
+      for (const v of [h.v, h.to]) { if (!vEdges.has(v.id)) vEdges.set(v.id, []); vEdges.get(v.id).push(h); }
+    }
+    let elen = 0, ecount = 0;
+    for (const h of inner) { elen += h.v.p.distanceTo(h.to.p); ecount++; }
+    const CS = Math.max(1e-3, (elen / Math.max(1, ecount)) * 2);
+    /** 很短的邊（跟展開程式「很短的邊最後才當軸」同一個數）、不平的面 ⇒ 剛體攤法跟走哪條路有關 ⇒ 照舊 */
+    const MICRO = 0.01;
+    const micro = h => h.v.p.distanceTo(h.to.p) < MICRO;
+    const bentFace = new Set();
+    for (const f of base.faces) {
+      const vs = base.faceVerts(f);
+      if (vs.length < 4) continue;
+      const c = vs.reduce((a, v) => a.add(v.p), new THREE.Vector3()).divideScalar(vs.length);
+      for (const v of vs) if (Math.abs(new THREE.Vector3().subVectors(v.p, c).dot(f.normal)) > 1e-7) { bentFace.add(f.id); break; }
+    }
+    const cellsOf = b => {
+      const x0 = Math.floor(b.minX / CS), x1 = Math.floor(b.maxX / CS), y0 = Math.floor(b.minY / CS), y1 = Math.floor(b.maxY / CS);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) return null;           // 太大的面放「大的」那一堆
+      const out = [];
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.push(x + ',' + y);
+      return out;
+    };
+    const bb = P2 => { let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity; for (const q of P2) { if (q.x < a) a = q.x; if (q.x > c) c = q.x; if (q.y < b) b = q.y; if (q.y > d) d = q.y; } return { minX: a, minY: b, maxX: c, maxY: d }; };
+    const gridAdd = (g, fid, P2) => {
+      const box = bb(P2);
+      g.poly.set(fid, { P: P2, box, cvx: _isConvex(P2) });
+      const cs = cellsOf(box);
+      if (!cs) { g.big.push(fid); return; }
+      for (const c of cs) { if (!g.grid.has(c)) g.grid.set(c, []); g.grid.get(c).push(fid); }
+    };
+    const hull = pts => {
+      const P2 = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+      if (P2.length < 3) return P2;
+      const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      const lo = [], up = [];
+      for (const q of P2) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+      for (let i = P2.length - 1; i >= 0; i--) { const q = P2[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+      return lo.slice(0, -1).concat(up.slice(0, -1));
+    };
+    const keyLess = (x, y) => (y === null) || (x !== null && (x.k0 < y.k0 || (x.k0 === y.k0 && x.k1 < y.k1)));
+    const placeF = (th, O2, T2, L) => {
+      const face = th.face, o = th.v.p;
+      const e1 = new THREE.Vector3().subVectors(th.to.p, o);
+      if (e1.lengthSq() < 1e-20) return false;
+      e1.normalize();
+      const e2 = new THREE.Vector3().crossVectors(face.normal, e1);
+      const dx = T2.x - O2.x, dy = T2.y - O2.y, len = Math.hypot(dx, dy);
+      if (len < 1e-12) return false;
+      const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+      const d = new THREE.Vector3();
+      for (const he of base.faceLoop(face)) { d.subVectors(he.v.p, o); const u = d.dot(e1), w = d.dot(e2); L.set(he.id, { x: O2.x + ux * u + px * w, y: O2.y + uy * u + py * w }); }
+      return true;
+    };
+    /** 一組的攤法（剛體；這一組沒補剪、一片 ⇒ 攤法只有一種）＋ 格子、外殼、第一條折線 */
+    const layoutOf = g => {
+      if (g.L) return true;
+      if (g.L === false) return false;
+      const set = new Set(g.faces.map(f => f.id));
+      const has = k => g.open.has(k);
+      const L = new Map();
+      const seed = g.faces[0];
+      const loop = base.faceLoop(seed);
+      const o = loop[0].v.p;
+      const e1 = new THREE.Vector3().subVectors(loop[1].v.p, o).normalize();
+      const e2 = new THREE.Vector3().crossVectors(seed.normal, e1);
+      for (const he of loop) { const d = new THREE.Vector3().subVectors(he.v.p, o); L.set(he.id, { x: d.dot(e1), y: d.dot(e2) }); }
+      const done = new Set([seed.id]), q = [seed];
+      while (q.length) {
+        const f = q.pop();
+        for (const he of base.faceLoop(f)) {
+          const th = he.twin;
+          if (!th || !th.face || !set.has(th.face.id) || done.has(th.face.id)) continue;
+          if (roleCut(he, has) || matCut(he)) continue;
+          if (!placeF(th, L.get(he.next.id), L.get(he.id), L)) { g.L = false; return false; }
+          done.add(th.face.id); q.push(th.face);
+        }
+      }
+      if (done.size !== set.size) { g.L = false; return false; }
+      g.L = L; g.set = set; g.poly = new Map(); g.grid = new Map(); g.big = [];
+      // 照舊的情況（名字沿用 micro）：不平的面、縫兩側差超過 0.0001 cm、很短的邊
+      g.micro = g.faces.some(f => bentFace.has(f.id));
+      for (const f of g.faces) for (const he of base.faceLoop(f)) {
+        const th = he.twin;
+        if (!th || !th.face || !set.has(th.face.id) || roleCut(he, has) || matCut(he)) continue;
+        const a1 = L.get(he.id), b1 = L.get(he.next.id), b2 = L.get(th.id), a2 = L.get(th.next.id);
+        if (Math.hypot(a1.x - a2.x, a1.y - a2.y) > 1e-4 || Math.hypot(b1.x - b2.x, b1.y - b2.y) > 1e-4) g.micro = true;
+      }
+      for (const f of g.faces) for (const he of base.faceLoop(f)) { const th = he.twin; if (th && th.face && set.has(th.face.id) && !roleCut(he, has) && !matCut(he) && micro(he)) g.micro = true; }
+      for (const f of g.faces) gridAdd(g, f.id, base.faceLoop(f).map(he => L.get(he.id)));
+      g.hull = hull([...L.values()]);
+      g.ff = null;
+      const sorted = [...g.faces].sort((x, y) => forder.get(x.id) - forder.get(y.id));
+      outer2:
+      for (const f of sorted) {
+        const lp = base.faceLoop(f);
+        for (let i = 0; i < lp.length; i++) {
+          const he = lp[i], th = he.twin;
+          if (!th || !th.face || !set.has(th.face.id)) continue;
+          if (roleCut(he, has) || matCut(he) || !isFold(he)) continue;
+          g.ff = { k0: forder.get(f.id), k1: i, he };
+          break outer2;
+        }
+      }
+      return true;
+    };
+    /** 快的試接：回傳 null ＝ 這一對不適用（照舊整片攤）；否則 { ok, sc, apply() } */
+    const fastJoin = (pr, A, B, strict) => {
+      if (A.sc.n !== 1 || B.sc.n !== 1 || A.sc.auto || B.sc.auto || A.sc.overlap || B.sc.overlap) return null;
+      if (!layoutOf(A) || !layoutOf(B)) return null;
+      if (A.micro || B.micro) return null;
+      // 這一對的邊：一側在 A、一側在 B；能折的才連得起來
+      const hs = [];
+      for (const h0 of pr.hs) { const h = A.set.has(h0.face.id) ? h0 : h0.twin; if (!A.set.has(h.face.id) || !B.set.has(h.twin.face.id)) return null; if (!matCut(h)) hs.push(h); }
+      if (!hs.length) return { ok: false, why: '沒有連得起來的邊' };
+      if (hs.some(micro)) return null;
+      // 把 B 轉到 A 上：hs[0] 在 A 的兩點 ＝ B 的兩點
+      const h = hs[0];
+      const Pa = A.L.get(h.id), Qa = A.L.get(h.next.id);
+      const Pb = B.L.get(h.twin.next.id), Qb = B.L.get(h.twin.id);
+      const rot = Math.atan2(Qa.y - Pa.y, Qa.x - Pa.x) - Math.atan2(Qb.y - Pb.y, Qb.x - Pb.x);
+      const c = Math.cos(rot), sn = Math.sin(rot);
+      const T = q => { const x = q.x - Pb.x, y = q.y - Pb.y; return { x: Pa.x + x * c - y * sn, y: Pa.y + x * sn + y * c }; };
+      for (const h2 of hs) {
+        const a1 = A.L.get(h2.id), b1 = A.L.get(h2.next.id);
+        const a2 = T(B.L.get(h2.twin.next.id)), b2 = T(B.L.get(h2.twin.id));
+        if (Math.hypot(a1.x - a2.x, a1.y - a2.y) > 1e-4 || Math.hypot(b1.x - b2.x, b1.y - b2.y) > 1e-4) return null;  // 不夠確定（門檻 0.001 的十分之一）⇒ 照舊
+      }
+      // 第一條折線（擺正用）
+      let ff = keyLess(A.ff, B.ff) ? A.ff : B.ff;
+      for (const h2 of hs) {
+        if (!isFold(h2)) continue;
+        const fa = h2.face, fb = h2.twin.face;
+        const e = forder.get(fa.id) < forder.get(fb.id) ? h2 : h2.twin;
+        const cand = { k0: forder.get(e.face.id), k1: base.faceLoop(e.face).indexOf(e), he: e };
+        if (keyLess(cand, ff)) ff = cand;
+      }
+      if (!ff) return null;                                     // 沒有折線 ⇒ 擺正看最長的切邊，照舊
+      const posU = id => (A.L.has(id) ? A.L.get(id) : T(B.L.get(id)));
+      const fa0 = posU(ff.he.id), fb0 = posU(ff.he.next.id);
+      const ang = Math.atan2(fb0.y - fa0.y, fb0.x - fa0.x) - Math.PI / 2;
+      const rc = Math.cos(-ang), rs = Math.sin(-ang);
+      const hullU = hull(A.hull.concat(B.hull.map(T)));
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const q of hullU) { const x = q.x * rc - q.y * rs, y = q.x * rs + q.y * rc; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      const w = x1 - x0, hh = y1 - y0;
+      const misfit = fitsBoard(w, hh, board) ? 0 : 1;
+      // 重疊：B 的每個面只跟 A 附近的面比（跟「只查兩邊之間」同一套判法）
+      let overlap = false;
+      const nU = A.faces.length + B.faces.length;
+      const Bp = new Map();
+      for (const f of B.faces) Bp.set(f.id, B.poly.get(f.id).P.map(T));
+      if (nU <= _OVMAX) {
+        scan:
+        for (const f of B.faces) {
+          const Pq = Bp.get(f.id), box = bb(Pq), cvx = B.poly.get(f.id).cvx;
+          const cs = cellsOf({ minX: box.minX - 1e-6, minY: box.minY - 1e-6, maxX: box.maxX + 1e-6, maxY: box.maxY + 1e-6 });
+          const cand = new Set(A.big);
+          if (cs) { for (const k of cs) { const arr = A.grid.get(k); if (arr) for (const x of arr) cand.add(x); } }
+          else for (const x of A.poly.keys()) cand.add(x);
+          for (const fid of cand) {
+            const pa = A.poly.get(fid);
+            if (!_boxHit(pa.box, box)) continue;
+            if (_sharesEdge(pa.P, Pq)) continue;
+            if (pa.cvx && cvx ? _polyHit(pa.P, Pq) : _exactHit(pa.P, Pq)) { overlap = true; break scan; }
+          }
+        }
+      }
+      // 細切口：只有「A、B 都碰到的頂點」會變
+      const newKey = pk(pr.a, pr.b);
+      const hasU = k => k === newKey || A.open.has(k) || B.open.has(k);
+      let dn = 0;
+      const seenV = new Set();
+      for (const f of B.faces) for (const v of base.faceVerts(f)) {
+        if (seenV.has(v.id)) continue;
+        seenV.add(v.id);
+        const fs = vFaces.get(v.id) || [];
+        if (!fs.some(id => A.set.has(id))) continue;
+        if (!fs.every(id => A.set.has(id) || B.set.has(id))) continue;   // 還在這一片的外框上
+        const k = vi.get(v.id);
+        if (border.has(k)) continue;
+        let dg = 0;
+        for (const e of vEdges.get(v.id) || []) if (roleCut(e, hasU)) dg++;
+        if (dg === 1 && (2 * Math.PI - (gapOf.get(k) || 0)) * DEG < notchDeg) dn++;
+      }
+      const sc = { n: 1, overlap, misfit, auto: 0, notch: A.sc.notch + B.sc.notch + dn, size: Math.max(w, hh) };
+      let ok = sc.n < A.sc.n + B.sc.n && !sc.overlap && sc.misfit <= A.sc.misfit + B.sc.misfit;
+      if (ok && strict && sc.notch > A.sc.notch + B.sc.notch) ok = false;
+      const apply = () => {
+        for (const [id, q] of B.L) A.L.set(id, T(q));
+        for (const f of B.faces) { A.set.add(f.id); gridAdd(A, f.id, Bp.get(f.id)); }
+        A.faces = A.faces.concat(B.faces);
+        for (const k of B.open) A.open.add(k);
+        A.open.add(newKey);
+        A.hull = hullU; A.ff = ff; A.sc = sc;
+        return A;
+      };
+      return { ok, sc, apply };
+    };
+    /** 照舊：把兩組合起來整片攤一次（`local()`）。`strict`：true ＝ 補剪、細切口都不准多；'notch' ＝ 只有細切口不准多（小片那一步、不要細切口時）；false ＝ 都放寬 */
+    const tryJoinExact = (pr, strict) => {
       const ga = P.find(pr.a), gb = P.find(pr.b);
       if (ga === gb) return false;                 // 已經同一片（再接會繞成一圈）
       const A = G.get(ga), B = G.get(gb);
@@ -565,6 +787,33 @@ function* proposeGen(obj, opt = {}) {
       const g = P.find(ga);
       G.delete(ga); G.delete(gb);
       G.set(g, { faces, open, sc });
+      return true;
+    };
+    const scSig = sc => [sc.n, sc.overlap ? 1 : 0, sc.misfit, sc.auto, sc.notch].join('/');
+    /** 試接一對：能走快的就走快的，否則照舊；接受的話兩組合成一組 */
+    const tryJoin = (pr, strict) => {
+      const ga = P.find(pr.a), gb = P.find(pr.b);
+      if (ga === gb) return false;                 // 已經同一片（再接會繞成一圈）
+      const A = G.get(ga), B = G.get(gb);          // pr.a 在 A、pr.b 在 B
+      if (A.faces.length + B.faces.length > maxFaces) return false;   // 每一片最多幾個面（10.5）
+      const fj = FAST ? fastJoin(pr, A, B, strict) : null;
+      if (!fj) { joinCheck.exact++; return tryJoinExact(pr, strict); }
+      joinCheck.fast++;
+      if (VERIFY) {
+        const faces = A.faces.concat(B.faces);
+        const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
+        const ex = local(faces, open, new Set(A.faces.map(f => f.id)));
+        let okx = ex.n < A.sc.n + B.sc.n && !ex.overlap && ex.misfit <= A.sc.misfit + B.sc.misfit;
+        if (okx && strict === true && ex.auto > A.sc.auto + B.sc.auto) okx = false;
+        if (okx && strict && ex.notch > A.sc.notch + B.sc.notch) okx = false;
+        if (okx !== fj.ok || (fj.ok && scSig(ex) !== scSig(fj.sc)) || (fj.ok && Math.abs(ex.size - fj.sc.size) > 1e-6)) joinCheck.bad++;
+      }
+      if (!fj.ok) return false;
+      const U = fj.apply();
+      P.union(ga, gb);
+      const g = P.find(ga);
+      G.delete(ga); G.delete(gb);
+      G.set(g, U);
       return true;
     };
     step('只沿轉角：接塊', list.length * 2 * (slits === 'none' ? 1 : 2));
@@ -780,6 +1029,7 @@ function* proposeGen(obj, opt = {}) {
     nonGrid,
     timedOut,
     _partCheck: partCheck,
+    _joinCheck: joinCheck,
     board,
     slits, notchDeg, cutOrder,
     sig: markSignature(own),
