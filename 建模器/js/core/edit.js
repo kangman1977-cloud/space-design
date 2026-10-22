@@ -7740,19 +7740,28 @@ export function visibleAround(mesh, verts, inside = null) {
 /**
  * 🔴 **放開時：拉之前看得見、現在變成看不見的邊 ⇒ 標 `hard`**（規則 2；跟 `visibleAround()` 成對）。
  *
- * ⭐ 只會**加** `hard`，⛔ 拿掉：拿掉 `hard` 只有「合成一個面」一個地方（規則 3，`mergeFacesSelected`）。
+ * ⭐ 只會**加** `hard`，⛔ 拿掉別人標的：刻意拿掉 `hard` 只有「合成一個面」一個地方（規則 3，`mergeFacesSelected`）；
+ * 　唯一的例外是下面那條 —— 撤掉**自己上一次**用同一份 `before` 標的。
  * 加 `hard` 永遠安全 —— 它說的是「這條邊拉之前就是一條真的邊」，之後再拉開、拉回同一平面，線照樣在。
  * 前置：**法向要先算好**（走 `refreshAfterEdit()` 就不用自己記）。
+ *
+ * 🔴 **同一份 `before` 再跑一次 ⇒ 先撤掉上一次用它標的**（2026-10-23 線上先驗抓到）：
+ * 拖完「打數字」是**取代**剛才那一次（`select.js` 用同一份拖曳資料重算）—— 剛才那一下的位置如果碰巧
+ * 讓別的邊落在同一平面（拖到吸附格），那幾條已經標了 `hard`；取代之後那個位置根本沒發生過，標記卻留著。
+ * 那幾條拖曳開始時都沒標 `hard`（不然不會變看不見），所以撤回去 ＝ 回到拖之前，再照新的位置重判一次。
  *
  * @returns {number} 這一下被留住的邊數
  */
 export function keepApart(mesh, before) {
   let n = 0;
   if (!mesh || !before) return n;
+  if (before.marked) for (const he of before.marked) mesh.setHard(he, false);
+  const marked = [];
   for (const he of before) {
     if (!he.face || !he.twin || !he.twin.face) continue;
-    if (mesh.isHiddenEdge(he)) { mesh.setHard(he, true); n++; }
+    if (mesh.isHiddenEdge(he)) { mesh.setHard(he, true); marked.push(he); n++; }
   }
+  before.marked = marked;
   return n;
 }
 

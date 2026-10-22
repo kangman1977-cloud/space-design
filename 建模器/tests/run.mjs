@@ -19516,6 +19516,15 @@ section('網格核心第三批 a：拉到同一平面不自動合、壓平只合
   const bx = edit.mergeCoplanarFaces(buildPrim('box', { w: 10, h: 10, d: 10 })).mesh;
   const kb = edit.visibleAround(bx, bx.verts);
   ok('★★ 方塊整顆：記到 12 條稜線、對角線⛔ 記', kb.size === 12, String(kb.size));
+  // 打數字「取代剛才那一次」（2026-10-23 線上先驗抓到）：32 段圓柱 x = 25 那條直邊先拖到 26（吸附格）⇒ 旁邊兩條剛好同一平面被留住；
+  // 再打數字取代成 25·cos 11.25°（中間那條落在同一平面）⇒ 旁邊兩條要撤掉、只留中間那條
+  const cy3 = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 70, seg: 32 })).mesh; cy3.computeNormals();
+  const e3 = [...cy3.edges()].find(h => h.twin && Math.abs(h.v.p.z) < 1e-6 && Math.abs(h.to.p.z) < 1e-6 && h.v.p.x > 1 && Math.abs(h.v.p.y - h.to.p.y) > 1);
+  const v3 = [e3.v, e3.to], b3 = v3.map(v => v.p.clone()), k3b = edit.visibleAround(cy3, v3);
+  v3.forEach(v => { v.p.x = 26; }); const d1 = edit.refreshAfterEdit(cy3, { keepApart: k3b });
+  v3.forEach((v, i) => { v.p.copy(b3[i]); v.p.x = 25 * Math.cos(Math.PI / 16); }); const d2 = edit.refreshAfterEdit(cy3, { keepApart: k3b });
+  const hz = [...cy3.edges()].filter(h => h.hard).map(h => Math.round(h.v.p.z * 1000) / 1000);
+  ok('★★★ 打數字取代剛才那一次：剛才那一下留住的（旁邊 2 條）撤掉、照新位置只留中間 1 條', d1.keptApart === 2 && d2.keptApart === 1 && hz.length === 1 && hz[0] === 0, `拖 ${d1.keptApart}、打數字 ${d2.keptApart}、hard z ${hz.join(',')}`);
   // ② 壓平只合選到的面（kang 2026-10-23「壓平用甲」）—— 跟 main.js flattenSelected() 同一套步驟
   const flat2 = (m, hard) => {
     m.computeNormals();
@@ -19569,7 +19578,10 @@ section('網格核心第三批 a：拉到同一平面不自動合、壓平只合
   const tools = ['flattenSelected', 'toCircleSelected', 'slideSelected', 'smoothVertsSelected'];
   const miss = tools.filter(t => { const b = body(t); return !(b.length > 30 && /visibleAround\(/.test(b) && /refreshAfterEdit\([^)]*\{ keepApart \}\)/.test(b)); });
   ok('★★★ 壓平、變成正圓、滑動、平滑頂點：動點之前記、refreshAfterEdit 交出去', miss.length === 0, miss.join('、'));
-  ok('★★ 拿掉 hard 只有 mergeFaces 一個地方（其他地方⛔ setHard(…, false)）', (readFileSync(join(here, '../js/core/edit.js'), 'utf8').match(/setHard\([^)]*false\)/g) || []).length === 1
+  const ed3 = readFileSync(join(here, '../js/core/edit.js'), 'utf8');
+  const edBody = name => { const i = ed3.indexOf('export function ' + name + '('); return ed3.slice(i, ed3.indexOf('\n}', i)); };
+  ok('★★ 拿掉 hard 只有 mergeFaces，加上 keepApart 撤自己上一次標的（其他地方⛔ setHard(…, false)）', (ed3.match(/setHard\([^)]*false\)/g) || []).length === 2
+    && /setHard\(he, false\)/.test(edBody('mergeFaces')) && /if \(before\.marked\) for \(const he of before\.marked\) mesh\.setHard\(he, false\);/.test(edBody('keepApart'))
     && !/setHard\([^)]*false\)/.test(mn3) && !/setHard\([^)]*false\)/.test(sl3));
   ok('★★ 工具列有「合成一個面」、接到 mergeFacesSelected', /id="mergeFaces"/.test(ih3) && /\$\('mergeFaces'\)\.onclick = \(\) => mergeFacesSelected\(\);/.test(mn3) && /mergeFaces\(mesh, els\.map\(e => e\.face\)\)/.test(body('mergeFacesSelected')));
 }
