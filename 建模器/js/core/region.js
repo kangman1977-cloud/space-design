@@ -94,9 +94,11 @@ export function planarRegions(mesh, tolDeg = 0.5) {
          *
          * ⚠ 展開不受影響 —— `flatten.js` 從頭到尾沒有用 `planarRegions()`。
          * 實測方塊環切前後：片數都是 3、尺寸完全一樣、警告數一樣。
+         *
+         * ⭐ 2026-10-22 起「看不見」只有一支判斷：`mesh.isHiddenEdge()`（平 ＆ 沒標 `hard` ＆ 內部邊）——
+         * 只穿過看不見的邊（網格核心第一批 → `規格\建模器-網格核心.md`）。
          */
-        if (he.hard) continue;
-        if (!mesh.isFlat(he, tolDeg)) continue;
+        if (!mesh.isHiddenEdge(he, tolDeg)) continue;
         nb.region = r.id;
         stack.push(nb);
       }

@@ -84,9 +84,11 @@ export function isMarkable(mesh, he, tolDeg = FLAT_TOL_DEG) {
    *
    * ⚠ 不放行的話環切等於白做：實測方塊切完，新的一圈 4 條邊
    * **「點得到」的 0 條**，連選都選不到，更別說拉。
+   *
+   * ⭐ 2026-10-22 起「看不見」只有一支判斷：`mesh.isHiddenEdge()`（平 ＆ 沒標 `hard`）——
+   * 看得見 ＝ 點得到 ＝ 可以標（網格核心第一批 → `規格\建模器-網格核心.md`）。
    */
-  if (he.hard) return true;
-  return !mesh.isFlat(he, tolDeg);                           // 共面 → 看不見
+  return !mesh.isHiddenEdge(he, tolDeg);
 }
 
 /** 所有可以標的邊。每條邊只回傳一次（edges() 已經保證了）。 */

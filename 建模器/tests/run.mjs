@@ -19419,6 +19419,36 @@ if (csgOK) {
   ok('★★ 沒有布林函式庫 ⇒ 照舊、照舊叫人先做聯集', /if \(list\.length > 1 && !canMerge\)/.test(sj) && /請先做布林聯集再切/.test(sj));
 }
 
+section('網格核心第一批：「看得見／看不見」只有一支判斷（2026-10-22）');
+{
+  /** `規格\建模器-網格核心.md` 第 2 節：看不見 ＝ 內部邊 ＆ 沒標 hard ＆ 兩側共面；選面、點邊、標縫全部問 `isHiddenEdge()` */
+  const { isMarkable } = await import('../js/unfold/seam.js');
+  const { planarRegions } = await import('../js/core/region.js');
+  const box = buildPrim('box', { w: 10, h: 10, d: 10 });          // 12 個三角形
+  const inner = m => [...m.edges()].filter(h => h.face && h.twin && h.twin.face);
+  const diag = inner(box).filter(h => box.isFlat(h)), rim = inner(box).filter(h => !box.isFlat(h));
+  ok('★★★ 方塊：6 條對角線看不見、12 條稜線看得見', diag.length === 6 && diag.every(h => box.isHiddenEdge(h)) && rim.length === 12 && rim.every(h => !box.isHiddenEdge(h)), `${diag.length}/${rim.length}`);
+  const plate = buildPrim('plate', { w: 10, d: 10, segW: 1, segD: 1 });
+  ok('★★ 邊界邊一律看得見（⛔ 算看不見）', [...plate.edges()].filter(h => !h.twin || !h.twin.face).every(h => !plate.isHiddenEdge(h)));
+  const b2 = buildPrim('box', { w: 10, h: 10, d: 10 }); const d0 = inner(b2).find(h => b2.isFlat(h));
+  b2.setHard(d0, true);
+  ok('★★★ 對角線標了「看得見」（hard）⇒ 看得見、點得到、那一面拆成兩個', !b2.isHiddenEdge(d0) && isMarkable(b2, d0) && planarRegions(b2).length === 7);
+  // 一致性：點得到 ⇔ 看得見；面與面之間的邊 ⇔ 看得見
+  const { unionMeshes } = await import('../js/build/bool.js');
+  const samples = [buildPrim('box', { w: 6, h: 4, d: 3 }), buildPrim('cylinder', { r: 5, h: 8, seg: 16 }), buildPrim('sphere', { r: 5, segW: 12, segH: 8 }), buildPrim('gear', {})];
+  if (csgOK) { const u = unionMeshes([buildPrim('box', { w: 60, h: 45, d: 40 }), buildPrim('cylinder', { r: 25, h: 70, seg: 32 })]); samples.push(u.mesh || u); }
+  let bad = 0, tot = 0;
+  for (const m of samples) { planarRegions(m); for (const h of inner(m)) { tot++; const hid = m.isHiddenEdge(h); if (isMarkable(m, h) === hid) bad++; if ((h.face.region === h.twin.face.region) !== hid) bad++; } }
+  ok('★★★ 5 種網格每條內部邊：點得到 ⇔ 看得見；同一個面 ⇔ 看不見', bad === 0 && tot > 1000, `${bad} 條不一致 / ${tot}`);
+  // 讀程式守著：選面、點邊⛔ 各寫一套
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rj = readFileSync(join(here, '../js/core/region.js'), 'utf8'), sm = readFileSync(join(here, '../js/unfold/seam.js'), 'utf8');
+  const fnBody = (src, name) => { const i = src.indexOf('export function ' + name); return src.slice(i, src.indexOf('\n}', i)); };
+  ok('★★ planarRegions() 只問 isHiddenEdge()（⛔ 自己看 hard、isFlat）', /mesh\.isHiddenEdge\(he, tolDeg\)/.test(fnBody(rj, 'planarRegions')) && !/he\.hard|isFlat\(/.test(fnBody(rj, 'planarRegions').replace(/\/\*\*[\s\S]*?\*\//g, '')));
+  ok('★★ isMarkable() 只問 isHiddenEdge()', /return !mesh\.isHiddenEdge\(he, tolDeg\)/.test(fnBody(sm, 'isMarkable')) && !/he\.hard|isFlat\(/.test(fnBody(sm, 'isMarkable').replace(/\/\*\*[\s\S]*?\*\//g, '')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
