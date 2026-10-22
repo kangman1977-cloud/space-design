@@ -33,7 +33,7 @@ import { guideSnapDelta, sameGuideHits } from '../core/guideSnap.js';
 const GUIDE_AXES_LIST = ['x', 'y', 'z'];
 import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          snapshotVerts, restoreVerts, applyElementTransform, regionOf,
-         remapElements, proportionalVerts, PROP_DEFAULT_RADIUS }
+         remapElements, proportionalVerts, PROP_DEFAULT_RADIUS, visibleAround }
   from '../core/edit.js';
 import { measureLabels } from '../core/measure.js';
 import { planarRegions } from '../core/region.js';
@@ -4031,6 +4031,9 @@ export class Selection {
       /** 選到的那幾個點（權重 1 的那些）。給「動到幾個點」的提示與上色用。 */
       coreCount: core.length,
       base: snapshotVerts(verts),
+      /** 🔴 網格核心第三批 a 規則 2：動之前看得見的邊 ⇒ 放開時拉到同一平面也留著（`edit.js` `visibleAround()`）。
+       *  ⚠ 跟 `base` 一樣是初始狀態 —— 打數字取代剛才那一次也用這一份 */
+      keepApart: visibleAround(el.obj.mesh(), verts),
       start: {
         pos: this._proxy.position.clone(),
         quat: this._proxy.quaternion.clone(),
@@ -4100,7 +4103,7 @@ export class Selection {
        */
       this._rememberEnd(d);
     }
-    if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el, committing ? { tag: d.id } : undefined);
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(committing, el, committing ? { tag: d.id, keepApart: d.keepApart } : undefined);
   }
 
   /**
@@ -4244,7 +4247,7 @@ export class Selection {
     this._drawEditMark();
     this._rememberEnd(d);
     /** ⑤-11：打數字是改「剛才那一次」⇒ 取代那一步，⛔ 多記一步（以前要按兩次復原）*/
-    if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel, { tag: d.id, replace: true });
+    if (this.hooks.onEditDrag) this.hooks.onEditDrag(true, this.editSel, { tag: d.id, replace: true, keepApart: d.keepApart });
     return true;
   }
 

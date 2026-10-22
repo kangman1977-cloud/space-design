@@ -19490,6 +19490,90 @@ section('網格核心第二批：稜線一個標準、選取以「面」為單�
   ok('★★ 工具列有「選整片曲面」、跟選轉角共用度數、要先選面', /id="selSurface"/.test(ih) && /surfaceFaces\(el\.obj\.mesh\(\), el\.face, deg\)/.test(mn) && /canSurface = sel\.editMode && !!sel\.editSel && sel\.editSel\.kind === 'face'/.test(mn));
 }
 
+section('網格核心第三批 a：拉到同一平面不自動合、壓平只合選到的面、合成一個面（2026-10-23）');
+{
+  /** `規格\建模器-網格核心.md` 第 3 節規則 2、3，第 10 節 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const nF = m => { m.computeNormals(); return planarRegions(m).length; };
+  const hinge = () => {     // 兩片 10×10 板，中間折 30°
+    const a = Math.PI / 6;
+    return Mesh.fromFaceList([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10], [-10 * Math.cos(a), 10 * Math.sin(a), 0], [-10 * Math.cos(a), 10 * Math.sin(a), 10]]
+      .map(p => new THREE.Vector3(...p)), [[0, 1, 2, 3], [4, 0, 3, 5]]);
+  };
+  const unfold = m => { m.verts[4].p.set(-10, 0, 0); m.verts[5].p.set(-10, 0, 10); };
+  // ① 規則 2：拉到同一平面
+  const h1 = hinge(); const keep = edit.visibleAround(h1, [h1.verts[4], h1.verts[5]]);
+  unfold(h1); const r1 = edit.refreshAfterEdit(h1, { keepApart: keep });
+  ok('★★★ 鉸鏈拉平：拉之前記下 ⇒ 還是 2 個面、中間的線標 hard、回報留住 1 條', nF(h1) === 2 && r1.keptApart === 1 && [...h1.edges()].some(h => h.hard), `${nF(h1)} 面、留住 ${r1.keptApart}`);
+  const h0 = hinge(); h0.computeNormals(); unfold(h0); edit.refreshAfterEdit(h0);
+  ok('★★ 　 對照：沒記（以前的路）⇒ 併成 1 個面 —— 證明上一項不是天生就 2', nF(h0) === 1);
+  const h2 = hinge(); const k2 = edit.visibleAround(h2, [h2.verts[4], h2.verts[5]]);
+  h2.verts[4].p.y += 1; const r2 = edit.refreshAfterEdit(h2, { keepApart: k2 });
+  ok('★★ 拉了但沒到同一平面 ⇒ 不加 hard', r2.keptApart === 0 && ![...h2.edges()].some(h => h.hard));
+  const h3 = hinge(); const k3 = edit.visibleAround(h3, [h3.verts[1]]);
+  ok('★★ 只記碰到移動點的小面的邊：動 1 號點也記到中間那條（它在同一個小面上）', k3.size === 1);
+  const bx = edit.mergeCoplanarFaces(buildPrim('box', { w: 10, h: 10, d: 10 })).mesh;
+  const kb = edit.visibleAround(bx, bx.verts);
+  ok('★★ 方塊整顆：記到 12 條稜線、對角線⛔ 記', kb.size === 12, String(kb.size));
+  // ② 壓平只合選到的面（kang 2026-10-23「壓平用甲」）—— 跟 main.js flattenSelected() 同一套步驟
+  const flat2 = (m, hard) => {
+    m.computeNormals();
+    if (hard) for (const h of m.edges()) if (h.twin && h.twin.face) m.setHard(h, true);
+    const inside = new Set(m.faces.slice(0, 2));
+    const k = edit.visibleAround(m, m.verts, inside);
+    const f = edit.flattenElements(m, [{ kind: 'face', face: m.faces[0] }, { kind: 'face', face: m.faces[1] }]);
+    const r = edit.refreshAfterEdit(m, { keepApart: k });
+    const g = edit.mergeCoplanarFaces(m);
+    return { f, r, n: nF(g.ok ? g.mesh : m) };
+  };
+  const p4 = flat2(hinge(), false);
+  ok('★★★ 壓平兩片（中間是一般的折線）⇒ 合成 1 個面（kang 2026-08-27 要的「seg 變成一個面」）', p4.f.ok && p4.f.before > 0 && p4.r.keptApart === 0 && p4.n === 1, `before ${p4.f.before}、${p4.n} 面`);
+  const p5 = flat2(hinge(), true);
+  ok('★★★ 壓平兩片（中間是你畫的線，標了 hard）⇒ 線留著、還是 2 個面', p5.f.ok && p5.n === 2, `${p5.n} 面`);
+  const a6 = Math.PI / 6, c6 = 10 * Math.cos(a6), s6 = 10 * Math.sin(a6);
+  const tri = Mesh.fromFaceList([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10], [-c6, s6, 0], [-c6, s6, 10], [10 + c6, -s6, 0], [10 + c6, -s6, 10]]
+    .map(p => new THREE.Vector3(...p)), [[0, 1, 2, 3], [4, 0, 3, 5], [1, 6, 7, 2]]);
+  const k6 = edit.visibleAround(tri, tri.verts, new Set(tri.faces.slice(0, 2)));
+  const has = (a, b) => [...k6].some(h => (h.face === a && h.twin.face === b) || (h.face === b && h.twin.face === a));
+  ok('★★★ 三片選前兩片：選到的兩片之間不記（讓它合）、跟沒選到那片之間要記（不一起併）', k6.size === 1 && !has(tri.faces[0], tri.faces[1]) && has(tri.faces[0], tri.faces[2]), String(k6.size));
+  // ③ 合成一個面
+  h1.computeNormals(); planarRegions(h1);
+  const mg = edit.mergeFaces(h1, [h1.faces[0], h1.faces[1]]);
+  ok('★★★ 合成一個面：拉平後的鉸鏈 ⇒ 1 個面、拿掉 1 條線', mg.ok && mg.merged === 2 && mg.cleared === 1 && nF(h1) === 1);
+  const h5 = hinge(); h5.computeNormals(); planarRegions(h5);
+  const m5 = edit.mergeFaces(h5, [h5.faces[0], h5.faces[1]]);
+  ok('★★★ 不在同一平面 ⇒ ⛔ 合、講轉角、叫人先壓平、標記一條都沒動', !m5.ok && /30\.0°/.test(m5.reason) && /壓平/.test(m5.reason) && nF(h5) === 2);
+  ok('★★ 只選一個 ⇒ 講原因', !edit.mergeFaces(h5, [h5.faces[0]]).ok);
+  bx.computeNormals(); planarRegions(bx);
+  const top = bx.faces.find(f => f.normal.y > 0.99), bot = bx.faces.find(f => f.normal.y < -0.99);
+  ok('★★ 不相鄰（頂＋底）⇒ 講原因', /沒有相鄰/.test(edit.mergeFaces(bx, [top, bot]).reason));
+  // 兩片分開的鉸鏈放在同一個網格：各自相鄰但兩塊沒連在一起
+  const tw = Mesh.fromFaceList([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10], [-10, 0, 0], [-10, 0, 10], [30, 0, 0], [40, 0, 0], [40, 0, 10], [30, 0, 10], [20, 0, 0], [20, 0, 10]]
+    .map(p => new THREE.Vector3(...p)), [[0, 1, 2, 3], [4, 0, 3, 5], [6, 7, 8, 9], [10, 6, 9, 11]]);
+  for (const h of tw.edges()) if (h.twin && h.twin.face) tw.setHard(h, true);
+  tw.computeNormals(); planarRegions(tw);
+  ok('★★ 選到兩塊沒連在一起 ⇒ 講分成 2 塊', /分成 2 塊/.test(edit.mergeFaces(tw, tw.faces).reason || ''));
+  // ④ 讀程式守著：每一條就地改點的路都有記、有交給 refreshAfterEdit
+  const mn3 = readFileSync(join(here, '../js/main.js'), 'utf8'), sl3 = readFileSync(join(here, '../js/view/select.js'), 'utf8'), ih3 = readFileSync(join(here, '../index.html'), 'utf8');
+  const body = name => { const i = mn3.indexOf('function ' + name + '('); return mn3.slice(i, mn3.indexOf('\n}', i)); };
+  ok('★★★ 拖曳：開始時記、放手與打數字都交出去', /keepApart: visibleAround\(el\.obj\.mesh\(\), verts\)/.test(sl3)
+    && /\{ tag: d\.id, keepApart: d\.keepApart \}/.test(sl3) && /\{ tag: d\.id, replace: true, keepApart: d\.keepApart \}/.test(sl3)
+    && /refreshAfterEdit\(el\.obj\.mesh\(\), \{ keepApart \}\)/.test(body('editDrag')));
+  const fb = body('flattenSelected');
+  ok('★★★ 壓平併了面之後選取還在：commit() 之前先算好新的選取、之後選回去（⛔ commit() 之後才搬 —— revalidate() 已經清掉了）',
+    /moved = remapElements\(oldMesh, g\.mesh, sel\.editSels, g\.remap\)/.test(fb) && fb.indexOf('moved = remapElements(') < fb.indexOf('commit(n > 1')
+    && /if \(moved\.length\) sel\.selectFaces\(obj, moved\.map\(e => e\.face\)\);/.test(fb) && !/sel\.remapEditSels\(/.test(fb));
+  ok('★★ 合成一個面之後重新選一次（照面去重，讀數⛔ 寫選到 2 個）', /sel\.selectFaces\(obj, els\.map\(e => e\.face\)\);/.test(body('mergeFacesSelected')));
+  ok('★★ 壓平把選到的面交給 visibleAround(…, inside)',/visibleAround\(oldMesh, elementVerts\(oldMesh, sel\.editSels\), inside\)/.test(body('flattenSelected')));
+  const tools = ['flattenSelected', 'toCircleSelected', 'slideSelected', 'smoothVertsSelected'];
+  const miss = tools.filter(t => { const b = body(t); return !(b.length > 30 && /visibleAround\(/.test(b) && /refreshAfterEdit\([^)]*\{ keepApart \}\)/.test(b)); });
+  ok('★★★ 壓平、變成正圓、滑動、平滑頂點：動點之前記、refreshAfterEdit 交出去', miss.length === 0, miss.join('、'));
+  ok('★★ 拿掉 hard 只有 mergeFaces 一個地方（其他地方⛔ setHard(…, false)）', (readFileSync(join(here, '../js/core/edit.js'), 'utf8').match(/setHard\([^)]*false\)/g) || []).length === 1
+    && !/setHard\([^)]*false\)/.test(mn3) && !/setHard\([^)]*false\)/.test(sl3));
+  ok('★★ 工具列有「合成一個面」、接到 mergeFacesSelected', /id="mergeFaces"/.test(ih3) && /\$\('mergeFaces'\)\.onclick = \(\) => mergeFacesSelected\(\);/.test(mn3) && /mergeFaces\(mesh, els\.map\(e => e\.face\)\)/.test(body('mergeFacesSelected')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

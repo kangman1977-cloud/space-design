@@ -35,15 +35,15 @@ import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, component
   from './unfold/group.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial, holeDistance } from './core/mate.js';
-import { elementVerts, refreshAfterEdit, extrudeFace,
-         flattenElements, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
+import { elementVerts, refreshAfterEdit, visibleAround, extrudeFace,
+         flattenElements, mergeFaces, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut,
          sampleCurve, sampleCurveInfo, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
-         extrudeBoundaryEdges, regionOf,
+         extrudeBoundaryEdges, regionOf, remapElements,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm, fmtDragReadout } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
@@ -905,6 +905,7 @@ $('efBoundary').onclick = () => {
     : '含外緣：關。回到平常的行為（外圈點不到）');
 };
 $('flatten').onclick = () => flattenSelected();
+$('mergeFaces').onclick = () => mergeFacesSelected();
 $('toCircle').onclick = () => toCircleSelected();
 $('loopCut').onclick = () => loopCutSelected();
 $('slide').onclick = () => slideSelected();
@@ -4069,6 +4070,15 @@ function editPick(el, info = {}) {
  * 放手時才跑一次，而且**非跑不可** —— 不跑的話法向、折線、`smooth`
  * 三件事同時變成謊話，展開長度會錯，而圖看起來完全正常。
  */
+/**
+ * 🔴 **拉到同一平面、線照樣留著 —— 講一句**（網格核心第三批 a，2026-10-23）。
+ * 以前這種時候兩個面會悄悄合成一個；現在不合了，⛔ 講的話人會以為「怎麼拉平了線還在」是壞掉。
+ * ⭐ 拖曳、壓平、變成正圓、滑動、平滑頂點共用這一句（⛔ 各寫一份）。
+ */
+function keptApartNote(n) {
+  return `${n} 條線兩邊被拉到同一個平面上，線照樣留著（要合起來：選那幾個面按「合成一個面」）`;
+}
+
 function editDrag(committing, el, opt) {
   /**
    * ⚠ **拖曳中不重繪面板。** `panel.refresh()` 會把整個表單的 DOM 重建一次，
@@ -4078,7 +4088,9 @@ function editDrag(committing, el, opt) {
   updateDragReadout();
   if (!committing) { view.sync(doc); updateBar(); updateEditNum(); return; }
 
-  const r = refreshAfterEdit(el.obj.mesh());
+  /** 🔴 網格核心第三批 a 規則 2：拖之前看得見的邊（`select.js` 拖曳開始記的）⇒ 拉到同一平面照樣留著 */
+  const { keepApart, ...cOpt } = opt || {};
+  const r = refreshAfterEdit(el.obj.mesh(), { keepApart });
   view.markGeomDirty();
   view.markSeamsDirty();      // 折線變了，接縫線也要重畫
   /**
@@ -4087,7 +4099,7 @@ function editDrag(committing, el, opt) {
    * 三種都寫「拉面」的話，他分不出要退回哪一步。
    */
   const n = sel.editCount;
-  commit(`${XF_NAME[sel.mode] || '拉'}${n > 1 ? `${n} 個` : ''}${EDIT_NAME[el.kind]}`, opt);
+  commit(`${XF_NAME[sel.mode] || '拉'}${n > 1 ? `${n} 個` : ''}${EDIT_NAME[el.kind]}`, cOpt);
   panel.refresh();
   updateEditNum();
 
@@ -4108,6 +4120,7 @@ function editDrag(committing, el, opt) {
   /** ⚠ 2026-10-19（②-17）⛔ 猜原因（以前寫「拉回去就恢復」，半徑推成 0 的那種拉不回去）*/
   if (r.degenerate) bits.push(`${r.degenerate} 個面被壓扁成沒有面積（把那些點拉開或按 Ctrl+Z 就恢復）`);
   if (r.nonPlanar) bits.push(`${r.nonPlanar} 個面不再是平的（展開會變近似；剖面分切與 3D 列印不受影響）`);
+  if (r.keptApart) bits.push(keptApartNote(r.keptApart));
   if (bits.length) toast(bits.join('　'));
 }
 
@@ -4314,7 +4327,14 @@ function extrudeEdgesSelected() {
  * 是可切容許值（0.1mm）的 **96 倍** —— 那不是近似，是做不出來。
  *
  * 壓平之後那幾片**真的共面**了，`mergeCoplanarFaces()` 就會自己併掉，
- * 而且是**真正平的**面、展開仍然精確。**所以併面是壓平的免費附贈。**
+ * 而且是**真正平的**面、展開仍然精確。
+ * 🔴 **併的範圍（網格核心第三批 a，kang 2026-10-23「壓平用甲」）**：
+ * · **選到的面之間**的折線 ⇒ 合（＝ kang 2026-08-27 要的「選 3 片 seg 變成一個面」，按一下就好）；
+ * · **你畫的線**（環切、刀具…標了 `hard`）⇒ 照樣留著（`mergeCoplanarFaces()` 不跨過 `hard`）；
+ * · 選到的跟**沒選到的**旁邊的面剛好同一平面 ⇒ ⛔ 一起併（以前會）—— 壓之前 `visibleAround(…, inside)`
+ * 　記下選取外緣看得見的邊，`refreshAfterEdit(…, { keepApart })` 標 `hard`。
+ * 〔AI 一度建議「壓平不合併」，理由是「環切的線會不見」—— 那是錯的（環切的線早就標 `hard`），
+ * 　kang 照錯的例子同意後 AI 自己查到、更正，kang 改定甲。經過 → `規格\建模器-網格核心.md` 第三批 a〕
  *
  * ⚠ **形狀會變，這是它的本質。** 所以 toast 一定要講出「壓平前偏離多少」——
  * 那個數字就是他即將付出的代價，而且他自己驗得出來（坑第 24 條）。
@@ -4329,6 +4349,9 @@ function flattenSelected() {
   const oldMesh = obj.mesh();
   const n = sel.editCount;
 
+  const inside = new Set();
+  for (const e of sel.editSels) if (e.kind === 'face' && e.face) for (const f of regionOf(oldMesh, e.face).faces) inside.add(f);
+  const keepApart = visibleAround(oldMesh, elementVerts(oldMesh, sel.editSels), inside);
   const r = flattenElements(oldMesh, sel.editSels, sel.editPivot);
   if (!r.ok) { toast(r.reason, true); return; }
 
@@ -4342,25 +4365,30 @@ function flattenSelected() {
     return;
   }
 
-  refreshAfterEdit(oldMesh);
+  const rf = refreshAfterEdit(oldMesh, { keepApart });
 
   /**
-   * 壓平之後那幾片真的共面了 → 併掉它們。
+   * 壓平之後那幾片真的共面了 → 併掉它們（選取的外緣、你畫的線都標著 `hard`，不會被跨過）。
    * ⚠ 併面會**換掉整個網格物件**，所以要走 `setMesh()` ＋ 搬選取，
-   * 而且一定要在 `commit()` 之後才搬（擠出那一輪學到的）。
+   * 而且一定要在 `commit()` 之後才選回去（擠出那一輪學到的）。
+   * 🔴 **新的選取要在 `commit()` 之前算好**（2026-10-23 網格核心第三批 a 本機查到）：`commit()` 裡的
+   * `sel.revalidate()` 一看到網格換了就把選取清掉 ⇒ 以前 `commit()` 之後才 `remapEditSels()`，手上已經是空的
+   * ⇒ 壓平只要真的併了面，選取就不見、提示只能說「已併掉 N 個面」。
    */
   const g = mergeCoplanarFaces(oldMesh);
   let merged = 0;
+  let moved = [];
   if (g.ok) {
     obj.setMesh(g.mesh);
     refreshAfterEdit(g.mesh);
     merged = g.before - g.after;
+    moved = remapElements(oldMesh, g.mesh, sel.editSels, g.remap).filter(e => e.kind === 'face');
   }
   view.markGeomDirty();
   view.markSeamsDirty();
   commit(n > 1 ? `壓平 ${n} 個面` : '壓平一個面');
 
-  if (g.ok) sel.remapEditSels(obj, oldMesh, g.mesh, g.remap);
+  if (moved.length) sel.selectFaces(obj, moved.map(e => e.face));
   panel.refresh();
   updateBar();
   updateEditNum();
@@ -4371,11 +4399,42 @@ function flattenSelected() {
    */
   const bits = [`已壓平${n > 1 ? ` ${n} 個面` : ''}（原本最遠偏離 ${r.before.toFixed(3)} cm）`];
   if (merged > 0) {
+    /** ⚠ 選到的面被你畫的線（環切…）隔開時會合成好幾個 ⇒ 照實際幾個講，⛔ 只看最後選的那一個說「一個 ○ 邊形」 */
     const now = sel.editSel && sel.editSel.face
       ? obj.mesh().faceVerts(sel.editSel.face).length : 0;
-    bits.push(now ? `已併成一個 ${now} 邊形` : `已併掉 ${merged} 個面`);
+    bits.push(moved.length > 1 ? `合成 ${moved.length} 個面（你畫的線把它們隔開，線照樣留著）`
+      : now ? `已併成一個 ${now} 邊形` : `已併掉 ${merged} 個面`);
   }
+  if (rf.keptApart) bits.push(keptApartNote(rf.keptApart));
   toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **合成一個面**（網格核心第三批 a，規則 3，2026-10-23 → `規格\建模器-網格核心.md` 第 10 節）。
+ * 數學在 `edit.js` `mergeFaces()`：只拿掉選到的面之間的 `hard` ⇒ 只動標記、⛔ 換網格 ⇒ 選取原封不動留著。
+ * ⚠ 合不起來（不相鄰、沒連在一起、不在同一平面）⇒ 講原因、⛔ 記一步 Undo。
+ */
+function mergeFacesSelected() {
+  const els = sel.editSels.filter(e => e.kind === 'face' && e.face);
+  if (!sel.editMode || !els.length) {
+    toast('先在編輯模式下選面（開「加選」選兩個以上相鄰的面），再按「合成一個面」', true);
+    return;
+  }
+  const obj = els[0].obj;
+  const mesh = obj.mesh();
+  const r = mergeFaces(mesh, els.map(e => e.face));
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  refreshAfterEdit(mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(`合成一個面（${r.merged} 個面）`);
+  /** 合起來之後是同一個面 ⇒ 重新選一次（`selectFaces()` 照面去重），⛔ 讀數還寫「選到 2 個」 */
+  sel.selectFaces(obj, els.map(e => e.face));
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  toast(`已把 ${r.merged} 個面合成一個面（拿掉中間 ${r.cleared} 條線）`);
 }
 
 /**
@@ -4464,10 +4523,11 @@ function toCircleSelected() {
     return;
   }
 
+  const keepApart = visibleAround(oldMesh, elementVerts(oldMesh, sel.editSels));   // 第三批 a 規則 2
   const r = toCircle(oldMesh, sel.editSels, { radius: want });
   if (!r.ok) { toast(r.reason, true); return; }
 
-  refreshAfterEdit(oldMesh);
+  const rf = refreshAfterEdit(oldMesh, { keepApart });
   view.markGeomDirty();
   view.markSeamsDirty();
   commit(`變成正圓（半徑 ${r.radius.toFixed(2)}）`);
@@ -4486,6 +4546,9 @@ function toCircleSelected() {
   if (r.flattened >= PLANAR_TOL_CM) bits.push(`順便壓平了 ${r.flattened.toFixed(3)} cm`);
   if (want !== undefined && Math.abs(want - r.fitted) >= PLANAR_TOL_CM) {
     bits.push(`⚠ 你指定的 ${want} 跟最接近的 ${r.fitted.toFixed(3)} 差 ${Math.abs(want - r.fitted).toFixed(3)}，形狀會變比較多`);
+  }
+  if (rf.keptApart) {
+    bits.push(keptApartNote(rf.keptApart));
   }
   toast(bits.join('　'));
 }
@@ -4536,10 +4599,11 @@ function slideSelected() {
   const mesh = obj.mesh();
   const hes = sel.editSels.filter(e => e.kind === 'edge' && e.he).map(e => e.he);
 
+  const keepApart = visibleAround(mesh, elementVerts(mesh, sel.editSels));   // 第三批 a 規則 2
   const r = slideEdges(mesh, hes, amt, { mode });
   if (!r.ok) { toast(r.reason, true); return; }
 
-  refreshAfterEdit(mesh);
+  const rf = refreshAfterEdit(mesh, { keepApart });
   view.markGeomDirty();
   view.markSeamsDirty();
   commit(mode === 'pct' ? `沿面滑動 ${amt}%` : `沿面滑動 ${amt} cm`);
@@ -4555,6 +4619,9 @@ function slideSelected() {
   if (mode === 'pct') bits.push(`（${amt}%）`);
   if (r.clamped) {
     bits.push(`⚠ 有 ${r.clamped} 個點滑到底了（最多只能滑 ${r.maxCm.toFixed(2)} cm）`);
+  }
+  if (rf.keptApart) {
+    bits.push(keptApartNote(rf.keptApart));
   }
   toast(bits.join('　'));
 }
@@ -5874,11 +5941,13 @@ function smoothVertsSelected() {
   }
   const obj = els[0].obj;
   const mesh = obj.mesh();
-  const r = smoothVerts(mesh, elementVerts(mesh, els));
+  const verts = elementVerts(mesh, els);
+  const keepApart = visibleAround(mesh, verts);   // 第三批 a 規則 2
+  const r = smoothVerts(mesh, verts);
   if (!r.ok) { toast(r.reason, true); return; }
   if (!r.moved) { toast('選到的這一塊已經是平順的，沒有東西要順'); return; }
 
-  const rf = refreshAfterEdit(mesh);
+  const rf = refreshAfterEdit(mesh, { keepApart });
   view.markGeomDirty();
   view.markSeamsDirty();
   commit('平滑頂點');
@@ -5895,6 +5964,7 @@ function smoothVertsSelected() {
   const bits = [`已順一次：動了 ${r.moved} 個點，最多挪 ${r.maxMove.toFixed(2)} cm`];
   if (r.rim) bits.push(`開口那一圈 ${r.rim} 個點沒動`);
   if (rf.nonPlanar) bits.push(`${rf.nonPlanar} 個面不再是平的（展開會變近似）`);
+  if (rf.keptApart) bits.push(keptApartNote(rf.keptApart));
   bits.push('不夠順再按一次');
   toast(bits.join('　'));
 }
@@ -7664,10 +7734,18 @@ function updateBar() {
   $('flatten').hidden = !face;
   $('flatten').title = face
     ? (sel.editCount > 1
-        ? `把選到的 ${sel.editCount} 個面壓到同一個平面上，然後自動併成一個面。⚠ 形狀會變`
+        ? `把選到的 ${sel.editCount} 個面壓到同一個平面上，合成一個面（你畫的線，例如環切、刀具，照樣留著；旁邊沒選到的面不會一起併）。⚠ 形狀會變`
         : '把這個面壓平。⚠ 本來就是平的話不會有動作')
     : (sel.editMode ? '先選一個面（可以開「加選」選好幾個）'
                     : '先按「拉點線面」進入編輯模式，再選面');
+
+  /** 網格核心第三批 a：合成一個面 —— 跟壓平同一個條件（選到面）；選不到兩個面按下去會講原因 */
+  $('mergeFaces').hidden = !face;
+  $('mergeFaces').title = face
+    ? (sel.editCount > 1
+        ? `把選到的 ${sel.editCount} 個面合成一個面（要相鄰、在同一個平面上；中間的線會拿掉）`
+        : '再選一個相鄰、在同一個平面上的面（開「加選」），才合得起來')
+    : '先選面（可以開「加選」選好幾個）';
 
   updateToCircleBtn();
 

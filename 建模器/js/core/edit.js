@@ -1008,6 +1008,60 @@ export function flattenElements(mesh, el, pivot = 'median', tolDeg = 0.5) {
   return { ok: true, moved, before };
 }
 
+/**
+ * 🔴 **合成一個面（工具列「合成一個面」）：選到的幾個相鄰、同一平面的面 ⇒ 一個面**
+ * （網格核心第三批 a，規則 3，2026-10-23 → `規格\建模器-網格核心.md` 第 3、10 節）。
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * 拉到同一平面⛔ 自動合（規則 2）；壓平只合**選到的面之間的折線**，你畫的線（`hard`）照樣留著
+ * （kang 2026-10-23「壓平用甲」）—— **要把 `hard` 拿掉只有這一個地方**：把選到的面之間那幾條線的 `hard` 拿掉，它們就變成看不見的邊，
+ * 那幾個面自然是一個面（「一個面」的定義只看 `isHiddenEdge()`）。
+ *
+ * ── ⛔ 它不做的事 ─────────────────────────────────────
+ * · ⛔ 把不在同一平面上的面硬合 —— 講轉角多大、叫人先「壓平」（形狀要不要變是人決定的）。
+ * · ⛔ 順手把小面重新排成一個多邊形（`mergeCoplanarFaces()` 會動到**整個網格**別的地方）——
+ * 　中間的邊看不見就已經是一個面；小面怎麼排是第四批的事。
+ * · ⛔ 碰 `hard` 以外的標記（切開／折、平滑、不准切照舊）。
+ *
+ * @param {Mesh} mesh **就地修改**
+ * @param {Face[]} faces 選到的面（每個面給一個小面就好）
+ * @returns {{ok:boolean, reason?:string, merged?:number, cleared?:number}}
+ */
+export function mergeFaces(mesh, faces, tolDeg = 0.5) {
+  if (!mesh) return { ok: false, reason: '沒有網格' };
+  mesh.computeNormals();
+  const regs = planarRegions(mesh, tolDeg);
+  const ids = [...new Set((faces || []).filter(Boolean).map(f => f.region))];
+  if (ids.length < 2) return { ok: false, reason: '至少要選兩個面（開「加選」再點第二個面）' };
+  const inSel = new Set(ids);
+  const root = new Map(ids.map(i => [i, i]));
+  const find = i => { while (root.get(i) !== i) i = root.get(i); return i; };
+  const shared = [];
+  let worst = 0;
+  for (const i of ids) {
+    for (const f of regs[i].faces) {
+      for (const he of mesh.faceLoop(f)) {
+        const t = he.twin && he.twin.face;
+        if (!t) continue;
+        const j = t.region;
+        if (j === i || !inSel.has(j) || j < i) continue;     // 一條邊只算一次
+        shared.push(he);
+        root.set(find(i), find(j));
+        const d = mesh.dihedral(he);
+        if (d !== null) worst = Math.max(worst, Math.abs(d));
+      }
+    }
+  }
+  const groups = new Set(ids.map(find)).size;
+  if (!shared.length) return { ok: false, reason: '選到的面沒有相鄰（中間要共用一條邊才合得起來）' };
+  if (groups > 1) return { ok: false, reason: `選到的面沒有全部連在一起（分成 ${groups} 塊）—— 一次合連在一起的那一塊` };
+  if (worst > THREE.MathUtils.degToRad(tolDeg)) {
+    return { ok: false, reason: `這幾個面不在同一個平面上（中間的轉角最大 ${(worst * 180 / Math.PI).toFixed(1)}°）—— 要先「壓平」再合` };
+  }
+  for (const he of shared) mesh.setHard(he, false);
+  return { ok: true, merged: ids.length, cleared: shared.length };
+}
+
 // ═══════════════════════════════════════════════════════
 //  面合併（＝ Blender 的「限制性溶解」）
 // ═══════════════════════════════════════════════════════
@@ -7644,6 +7698,65 @@ export function demoteSmooth(mesh, cornerDeg = DEFAULT_CORNER_DEG) {
 }
 
 /**
+ * 🔴 **動點之前：記下這些點附近「看得見」的邊**（網格核心第三批 a，規則 2，2026-10-23 →
+ * `規格\建模器-網格核心.md` 第 3、10 節；kang 2026-10-22「同意你的建議」不自動合）。
+ *
+ * ── 它拿來做什麼 ──────────────────────────────────────
+ * 兩個面被拉到**剛好同一個平面**上，中間那條邊就變成「沒標 hard ＆ 共面」＝ 看不見 ⇒ 兩個面悄悄合成一個，
+ * 你畫的線不見了。放開時要知道「這條邊**拉之前**是不是看得見」才擋得住 —— 那一刻已經問不到了，
+ * 所以**動之前**先記下來，放開時交給 `refreshAfterEdit(mesh, { keepApart })`。
+ *
+ * ── 範圍 ──────────────────────────────────────────────
+ * 只記**碰到這些點的小面**的邊：夾角只看兩側小面的法向，兩側都沒碰到移動的點，它就不可能變。
+ * ⚠ 只給**就地改點**的操作用（拖曳、打數字、壓平、變成正圓、滑動、平滑頂點）——
+ * 重建網格的工具（擠出、環切…）半邊都換了人，記下來的那一份對不上新網格。
+ *
+ * `inside`：**兩側都在這裡面的邊不記**（＝ 允許它們合）—— 只給「壓平」用：kang 2026-10-23 定
+ * 「壓平就把選到的面合成一個」⇒ 選到的面之間的折線讓它合；選到的跟**沒選到的**旁邊的面之間照樣留著。
+ * ⭐ 你畫的線（標了 `hard`）本來就不會被合（`mergeCoplanarFaces()` 不跨過 `hard`），⛔ 靠這裡。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[]} verts 這一下會動到的點
+ * @param {Set<Face>} [inside] 選到的面（小面）；兩側都在裡面的邊不記
+ * @returns {Set<HalfEdge>} 看得見的內部邊（一條邊記一個半邊）
+ */
+export function visibleAround(mesh, verts, inside = null) {
+  const out = new Set();
+  if (!mesh || !verts || !verts.length) return out;
+  const vs = new Set(verts);
+  mesh.computeNormals();            // ⚠ isHiddenEdge() 讀的是 face.normal
+  for (const f of mesh.faces) {
+    const loop = mesh.faceLoop(f);
+    if (!loop.some(he => vs.has(he.v))) continue;
+    for (const he of loop) {
+      if (!he.twin || !he.twin.face || out.has(he.twin)) continue;
+      if (inside && inside.has(he.face) && inside.has(he.twin.face)) continue;
+      if (!mesh.isHiddenEdge(he)) out.add(he);
+    }
+  }
+  return out;
+}
+
+/**
+ * 🔴 **放開時：拉之前看得見、現在變成看不見的邊 ⇒ 標 `hard`**（規則 2；跟 `visibleAround()` 成對）。
+ *
+ * ⭐ 只會**加** `hard`，⛔ 拿掉：拿掉 `hard` 只有「合成一個面」一個地方（規則 3，`mergeFacesSelected`）。
+ * 加 `hard` 永遠安全 —— 它說的是「這條邊拉之前就是一條真的邊」，之後再拉開、拉回同一平面，線照樣在。
+ * 前置：**法向要先算好**（走 `refreshAfterEdit()` 就不用自己記）。
+ *
+ * @returns {number} 這一下被留住的邊數
+ */
+export function keepApart(mesh, before) {
+  let n = 0;
+  if (!mesh || !before) return n;
+  for (const he of before) {
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    if (mesh.isHiddenEdge(he)) { mesh.setHard(he, true); n++; }
+  }
+  return n;
+}
+
+/**
  * 改完幾何之後跑這一支。順序不能換：
  *
  *   法向 → 折線 → smooth
@@ -7654,17 +7767,21 @@ export function demoteSmooth(mesh, cornerDeg = DEFAULT_CORNER_DEG) {
  * ⚠ **不要放進拖曳的每一幀。** 它走訪所有的邊，是 O(邊數)。
  * 放開滑鼠時跑一次就好（坑第 3、22 條）。
  *
- * @returns {{folds:object, smoothOff:number, nonPlanar:number}}
+ * `opts.keepApart`：動點之前 `visibleAround()` 記下的那一份 ⇒ 拉到同一平面的邊標 `hard`（規則 2）。
+ * ⚠ 法向一定要先算，所以排在 `computeNormals()` 後面、折線前面。
+ *
+ * @returns {{folds:object, smoothOff:number, nonPlanar:number, degenerate:number, keptApart:number}}
  */
 export function refreshAfterEdit(mesh, opts = {}) {
   const tolDeg = opts.flatTolDeg ?? FLAT_TOL_DEG;
   const cornerDeg = opts.cornerDeg ?? DEFAULT_CORNER_DEG;
   mesh.computeNormals();
+  const keptApart = keepApart(mesh, opts.keepApart);
   const folds = remarkFolds(mesh, tolDeg);
   const smoothOff = demoteSmooth(mesh, cornerDeg);
   const nonPlanar = nonPlanarFaces(mesh, opts.planarTolCm ?? PLANAR_TOL_CM).length;
   const degenerate = degenerateFaces(mesh).length;
-  return { folds, smoothOff, nonPlanar, degenerate };
+  return { folds, smoothOff, nonPlanar, degenerate, keptApart };
 }
 
 /**
