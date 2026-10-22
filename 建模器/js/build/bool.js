@@ -390,6 +390,31 @@ export function slabShadow(mesh, basis, z0, z1, label = '物件') {
 }
 
 /**
+ * 🔴 **剖面分切「每片自動合併」：同一片的輪廓照「被任何一圈包住就是料」合成一張**（2026-10-22，第二輪第一批（二）甲）。
+ * 放在這裡的理由同 `slabShadow()`：只有這個檔可以碰 Manifold（`CrossSection`）。
+ * ⭐ 填法用 Positive（繞的圈數 > 0 才是料）：外圈逆時針 +1、洞順時針 −1 ⇒ 洞照樣是洞；
+ * 兩個物件疊在一起 ⇒ 重疊處 +2 還是料、只算一次；別的物件塞進洞裡 ⇒ −1 ＋ 1 ＋ 1 ＝ 料。
+ * ⚠ 整圈順時針、外面沒有包它的那一圈（翻面的物件、外圈斷掉只剩洞）⇒ 不算料、會被拿掉。
+ * 〔PrusaSlicer 的預設也是 Positive【已查證 · 外部參考-3D列印與剖面分切.md】〕
+ * @param {Array<{x:number,y:number}[]>} polys 同一片的所有輪廓
+ * @returns {Array<{x:number,y:number}[]>} 合併後的輪廓：外圈逆時針、洞順時針
+ */
+export function mergeLoops(polys) {
+  const w = need();
+  const made = [];
+  try {
+    const cs = new w.CrossSection(polys.map(pts => pts.map(p => [p.x, p.y])), 'Positive');
+    made.push(cs);
+    if (cs.isEmpty()) return [];
+    return cs.toPolygons().map(poly => poly.map(p => ({ x: p[0], y: p[1] })));
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **一圈平面上的點往外（`delta` > 0）或往內（< 0）推一段距離**（2026-10-19，展開圖的縫份／黏合片：`out/sheet.js` `marginGeometry()`）。
  * 放在這裡的理由同 `slabShadow()`：只有這個檔可以碰 Manifold（`CrossSection.offset()`）。
  * ⭐ 轉角用「尖角」（Miter，上限 2 倍 ⇒ 很尖的角會被削平，⛔ 長出一根刺）—— 縫份、黏合片的外框都是直角接。

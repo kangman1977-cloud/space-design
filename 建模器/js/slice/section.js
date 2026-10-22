@@ -19,7 +19,7 @@
  */
 
 import * as THREE from 'three';
-import { csgReady, slabShadow } from '../build/bool.js';
+import { csgReady, slabShadow, mergeLoops } from '../build/bool.js';
 
 /**
  * 三個切片軸。
@@ -92,6 +92,15 @@ export const MAX_SLABS = 2000;
 
 /** 串接輪廓時判斷「同一個點」的量化格線 */
 const SNAP = 1e6;
+
+/**
+ * 🔴 **每片自動合併：面積差多少才算「真的有疊到」**（cm²；2026-10-22，第二輪第一批（二）甲）。
+ * 合併前後的面積一樣 ⇒ **原樣留著原本的輪廓**（乾淨的模型一個點都不動）；差超過這個量才換成合併後的。
+ * 0.0001 cm² ＝ 0.01 mm²，遠小於任何切得出來的東西；⛔ 用 1e-9 那種浮點的尺度（`FIT_TOL` 那一段講的同一件事）。
+ * 加上面積的百萬分之一：大的片（幾千 cm²）合併時的浮點殘留跟著大。
+ */
+const MERGE_TOL = 1e-4;
+const MERGE_REL = 1e-6;
 
 // ═══════════════════════════════════════════════════════
 //  一、分段：一段一段疊上去
@@ -415,9 +424,18 @@ export function sliceMany(meshes, opt = {}) {
     warnings.push(`有 ${open} 個物件不是封閉的實體（是開放曲面），`
       + '剖面切出來的線接不成封閉輪廓。請先改成實體或做布林聯集。');
   }
-  if (list.length > 1) {
-    warnings.push(`一次切了 ${list.length} 個物件。若它們互相重疊，`
-      + '重疊處會畫出兩圈線 —— 請先做布林聯集再切。');
+  /**
+   * 🔴 **每片自動合併**（2026-10-22，第二輪第一批（二）甲；kang「同意你的建議」）。
+   * 以前多個物件只講「若它們互相重疊…請先做布林聯集再切」，切出來照樣是兩圈線：
+   * 方塊＋圓柱疊在一起 70 片有 45 片面積算兩次（多算 19%），雷切照線切一片碎成 3 塊；
+   * 一個物件裡零件穿插（匯入的汽車）同樣算兩次，而且連那一句都沒有。
+   * ⭐ 現在每一片的輪廓交給 `mergeLoops()`（Positive）合成一張；⛔ 有疊到的片原樣不動。
+   * ⚠ 沒有布林函式庫就合不了 ⇒ 照舊、照舊提醒。
+   */
+  const canMerge = csgReady();
+  if (list.length > 1 && !canMerge) {
+    warnings.push(`一次切了 ${list.length} 個物件。布林函式庫還沒載入（或載入失敗），`
+      + '重疊的地方沒辦法自動合併 —— 若它們互相重疊，重疊處會畫出兩圈線，請先做布林聯集再切。');
   }
 
   const plan = planSlabs(height, opt.bands);
@@ -444,10 +462,12 @@ export function sliceMany(meshes, opt = {}) {
 
   const slices = [];
   let openTotal = 0;
+  const mergedAt = [];
+  let before = 0, after = 0;
 
   for (const s of plan.slabs) {
     const coord = lo + s.mid;
-    const loops = [];
+    let loops = [];
     let op = 0;
     for (const m of list) {
       if (canMax && m.isClosed()) {
@@ -459,6 +479,19 @@ export function sliceMany(meshes, opt = {}) {
       op += r.open;
     }
     openTotal += op;
+    let area = loops.reduce((a, l) => a + l.area, 0);
+    let overlap = 0;
+    if (canMerge && loops.length > 1) {
+      const merged = shadowLoops(mergeLoops(loops.map(l => l.pts)));
+      const mArea = merged.reduce((a, l) => a + l.area, 0);
+      if (Math.abs(area - mArea) > MERGE_TOL + MERGE_REL * Math.abs(area)) {
+        overlap = area - mArea;
+        mergedAt.push(s.index);
+        before += area; after += mArea;
+        loops = merged;
+        area = mArea;
+      }
+    }
     slices.push({
       index: s.index,
       band: s.band,
@@ -466,10 +499,17 @@ export function sliceMany(meshes, opt = {}) {
       z0: lo + s.z0, z1: lo + s.z1,
       coord,
       loops,
-      area: loops.reduce((a, l) => a + l.area, 0),
+      area,
+      overlap,          // 合併前多算的面積（cm²）；0 ＝ 沒有疊到、輪廓原樣
       open: op,
       bounds: loopsBounds(loops)
     });
+  }
+
+  if (mergedAt.length) {
+    warnings.push(`第 ${listNums(mergedAt)} 片有輪廓疊在一起（`
+      + (list.length > 1 ? `${list.length} 個物件互相重疊` : '物件裡的零件互相穿插')
+      + `），已經照「被任何一圈包住就是料」合成一圈，重疊的地方只算一次：這幾片原本算 ${r2(before)} cm²、合併後 ${r2(after)} cm²。`);
   }
 
   if (openTotal > 0) {
@@ -514,6 +554,7 @@ export function sliceMany(meshes, opt = {}) {
       used: plan.used,
       diff: plan.diff,
       area: slices.reduce((a, s) => a + s.area, 0),
+      merged: mergedAt.length,
       thickKinds: [...new Set(slices.map(s => r2(s.t)))].sort((a, b) => a - b)
     }
   };

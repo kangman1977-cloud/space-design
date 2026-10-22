@@ -19372,6 +19372,53 @@ section('第二輪第一批（一）：封閉的判斷、補洞、3D 列印先�
   ok('★★ 　 卡片上可以換（改成補洞／改成加厚成殼）', /'改成補洞' : '改成加厚成殼'/.test(ep));
 }
 
+section('第二輪第一批（二）甲：剖面每片自動合併（2026-10-22）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md`「順序調整」：自己建的模型最常碰到的是「疊在一起沒做聯集」；kang「同意你的建議」*/
+  const { unionMeshes } = await import('../js/build/bool.js');
+  const mv = (m, x, y, z) => m.transformed(new THREE.Matrix4().makeTranslation(x, y, z));
+  const box = buildPrim('box', { w: 60, h: 45, d: 40 });
+  const cyl = mv(buildPrim('cylinder', { r: 25, h: 70, seg: 32 }), 30, 0, 0);
+  const u = unionMeshes([box, cyl]);
+  const ref = sect.sliceMany([u.mesh || u], { axis: 'y' });
+  const r = sect.sliceMany([box, cyl], { axis: 'y' });
+
+  // ① 疊在一起的兩個物件：重疊的那幾片合成一圈，面積 ＝ 先做聯集
+  ok('★★★ 方塊＋圓柱疊在一起：重疊的片合併（45 片）', r.stats.merged === 45, String(r.stats.merged));
+  near('★★★ 　 總面積 ＝ 先做布林聯集再切', r.stats.area, ref.stats.area, 1e-6 * ref.stats.area);
+  ok('★★★ 　 合併的每一片只剩一圈（以前兩圈 ⇒ 雷切碎成 3 塊）', r.slices.filter(s => s.overlap > 0).every(s => s.loops.length === 1));
+  ok('★★ 　 每片記著多算了多少（合併前 − 合併後 > 0）', r.slices.filter(s => s.overlap > 0).length === 45 && r.slices.every(s => s.overlap >= 0));
+  ok('★★ 　 提示講出哪幾片、照什麼合、面積前後', r.warnings.some(w => /第 14~58 片有輪廓疊在一起（2 個物件互相重疊），已經照「被任何一圈包住就是料」合成一圈/.test(w)));
+  ok('★★ 　 ⛔ 再叫人「請先做布林聯集再切」', !r.warnings.some(w => /兩圈線/.test(w)));
+
+  // ② 沒疊到就原樣：分開放的兩個物件、管子＋插在洞裡的棒子、一個乾淨的物件
+  const far = sect.sliceMany([box, mv(buildPrim('cylinder', { r: 25, h: 70, seg: 32 }), 100, 0, 0)], { axis: 'y' });
+  ok('★★★ 分開放沒碰到：⛔ 合併、兩圈照舊', far.stats.merged === 0 && far.slices.some(s => s.loops.length === 2));
+  ok('★★ 　 ⛔ 誤報「若它們互相重疊…」（以前切兩個物件就一定講）', !far.warnings.some(w => /重疊/.test(w)));
+  const tube = buildPrim('tube', { rOuter: 25, rInner: 20, h: 70, seg: 32 }), rod = buildPrim('cylinder', { r: 10, h: 80, seg: 32 });
+  const tr = sect.sliceMany([tube, rod], { axis: 'y' });
+  ok('★★★ 管子＋插在洞裡的棒子：洞照樣是洞、棒子照樣是料，⛔ 合併', tr.stats.merged === 0 && tr.slices.some(s => s.loops.length === 3));
+  const sph = buildPrim('sphere', { r: 30, segW: 32, segH: 16 });
+  const sr = sect.sliceMany([sph], { axis: 'y' });
+  const s5 = sr.slices[5], raw = sect.sectionAt(sph, 'y', s5.coord);
+  ok('★★★ 乾淨的物件：輪廓一個點都不動（跟 sectionAt 直接切的一樣）', sr.stats.merged === 0 && JSON.stringify(s5.loops) === JSON.stringify(raw.loops));
+
+  // ③ 一個物件裡零件穿插（匯入的汽車那種）：同樣合併、講「零件互相穿插」
+  const pts = [], faces = [];
+  for (const m of [box, cyl]) { const vi = m._vertIndex(), base = pts.length; m.verts.forEach(v => pts.push(v.p.clone())); m.faces.forEach(f => faces.push(m.faceVerts(f).map(v => base + vi.get(v.id)))); }
+  const one = Mesh.fromFaceList(pts, faces);
+  const or = sect.sliceMany([one], { axis: 'y' });
+  ok('★★★ 一個物件裡零件穿插：照樣合併、面積 ＝ 聯集', or.stats.merged === 45 && Math.abs(or.stats.area - ref.stats.area) < 1e-6 * ref.stats.area, `${or.stats.merged} / ${or.stats.area}`);
+  ok('★★ 　 提示講「物件裡的零件互相穿插」', or.warnings.some(w => /物件裡的零件互相穿插/.test(w)));
+
+  // ④ 照最大外形切也合併；沒有布林函式庫時照舊提醒（讀程式守著）
+  const mx = sect.sliceMany([box, cyl], { axis: 'y', maxOutline: true });
+  ok('★★ 照最大外形切：疊到的片也合成一圈', mx.stats.merged > 0 && mx.slices.filter(s => s.overlap > 0).every(s => s.loops.length === 1));
+  const { readFileSync } = await import('node:fs');
+  const sj = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../js/slice/section.js'), 'utf8');
+  ok('★★ 沒有布林函式庫 ⇒ 照舊、照舊叫人先做聯集', /if \(list\.length > 1 && !canMerge\)/.test(sj) && /請先做布林聯集再切/.test(sj));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
