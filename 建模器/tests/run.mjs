@@ -19449,6 +19449,47 @@ section('網格核心第一批：「看得見／看不見」只有一支判斷�
   ok('★★ isMarkable() 只問 isHiddenEdge()', /return !mesh\.isHiddenEdge\(he, tolDeg\)/.test(fnBody(sm, 'isMarkable')) && !/he\.hard|isFlat\(/.test(fnBody(sm, 'isMarkable').replace(/\/\*\*[\s\S]*?\*\//g, '')));
 }
 
+section('網格核心第二批：稜線一個標準、選取以「面」為單位、選整片曲面（2026-10-22）');
+{
+  /** `規格\建模器-網格核心.md` 第 5 節 */
+  const so = await import('../js/core/selectops.js');
+  const { planarRegions } = await import('../js/core/region.js');
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  // ① 選相似：照面比（凍結前的方塊是 12 個三角形、6 個面）
+  const tb = buildPrim('box', { w: 10, h: 10, d: 10 }); tb.computeNormals();
+  const top = tb.faces.find(f => f.normal.y > 0.99);
+  const sides = so.similarTo(tb, { kind: 'face', face: top }, 'sides'), area = so.similarTo(tb, { kind: 'face', face: top }, 'area'), nrm = so.similarTo(tb, { kind: 'face', face: top }, 'normal');
+  ok('★★★ 三角形的方塊：同邊數 ⇒ 6 個面（都是四個角的面，⛔ 12 個三角形）', sides.faces.length === 6 && sides.scanned === 6, `${sides.faces.length} / 掃過 ${sides.scanned}`);
+  ok('★★★ 　 同面積 ⇒ 6 個面（整個面的面積，⛔ 拿半個三角形去比）', area.faces.length === 6);
+  ok('★★ 　 同法向 ⇒ 1 個面', nrm.faces.length === 1);
+  const rb = buildPrim('box', { w: 10, h: 4, d: 6 }); rb.computeNormals();
+  ok('★★ 長方體 寬 10 高 4 深 6：同面積從頂面（10×6）出發 ⇒ 頂、底 2 個面', so.similarTo(rb, { kind: 'face', face: rb.faces.find(f => f.normal.y > 0.99) }, 'area').faces.length === 2);
+  // ② 選整片曲面
+  const cy = buildPrim('cylinder', { r: 5, h: 8, seg: 32 }); cy.computeNormals(); planarRegions(cy);
+  const sideF = cy.faces.find(f => Math.abs(f.normal.y) < 0.1);
+  const s30 = so.surfaceFaces(cy, sideF, 30);
+  ok('★★★ 圓柱 32 段、30 度：從側面一格出發 ⇒ 整圈側面 32 個面（停在上下蓋）', s30.faces.length === 32, String(s30.faces.length));
+  ok('★★ 　 同一個面只回一個（32 格是 64 個三角形）', new Set(s30.faces.map(f => f.region)).size === 32);
+  ok('★★ 　 度數調到 10（側面每格 11.25°）⇒ 只有自己', so.surfaceFaces(cy, sideF, 10).faces.length === 1);
+  const bx = buildPrim('box', { w: 10, h: 10, d: 10 }); bx.computeNormals();
+  ok('★★ 方塊從頂面出發 ⇒ 只有自己（四周都是 90°）', so.surfaceFaces(bx, bx.faces.find(f => f.normal.y > 0.99), 30).faces.length === 1);
+  const sp = buildPrim('sphere', { r: 5, segW: 32, segH: 16 }); sp.computeNormals();
+  ok('★★ 球 30 度 ⇒ 整顆（每一個面都選到）', so.surfaceFaces(sp, sp.faces[0], 30).faces.length === planarRegions(sp).length);
+  const tr = buildPrim('torus', {}); tr.computeNormals(); const smoothE = [...tr.edges()].filter(h => h.smooth).length;
+  const withS = so.surfaceFaces(tr, tr.faces[0], 1).faces.length;
+  const tr2 = buildPrim('torus', {}); for (const h of tr2.edges()) tr2.setSmooth(h, false); tr2.computeNormals();
+  const noS = so.surfaceFaces(tr2, tr2.faces[0], 1).faces.length;
+  ok('★★ 平滑的邊照樣穿過：圓環 1 度（每格都折超過 1°）—— 標了平滑的連成一條、拿掉平滑只剩自己', smoothE > 0 && withS > 1 && noS === 1, `smooth ${smoothE}、有平滑 ${withS}、沒有 ${noS}`);
+  ok('★★ 沒選面 ⇒ 講原因', so.surfaceFaces(cy, null, 30).reason !== '');
+  // ③ 讀程式守著：畫稜線、框選、選面去重
+  const sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8'), sl = readFileSync(join(here, '../js/view/select.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★★ 畫稜線照 isHiddenEdge()，⛔ 再用 EdgesGeometry(…, 1)', /shown\.isHiddenEdge\(he\)/.test(sc) && !/new THREE\.EdgesGeometry\(node\.geometry/.test(sc));
+  ok('★★ 框選面：一個面一個中心、照面去重', /for \(const r of planarRegions\(mesh\)\)/.test(sl) && /if \(this\._findEditSel\(el\) >= 0\) continue;/.test(sl));
+  ok('★★ selectFaces() 一個面只選一次', /seenR\.has\(f\.region\)/.test(sl));
+  ok('★★ 工具列有「選整片曲面」、跟選轉角共用度數、要先選面', /id="selSurface"/.test(ih) && /surfaceFaces\(el\.obj\.mesh\(\), el\.face, deg\)/.test(mn) && /canSurface = sel\.editMode && !!sel\.editSel && sel\.editSel\.kind === 'face'/.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

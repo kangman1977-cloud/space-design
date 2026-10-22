@@ -36,6 +36,7 @@ import { elementVerts, elementCenter, regionBoundaryEdges, elementBasis,
          remapElements, proportionalVerts, PROP_DEFAULT_RADIUS }
   from '../core/edit.js';
 import { measureLabels } from '../core/measure.js';
+import { planarRegions } from '../core/region.js';
 
 /**
  * 🔴 **鋼筆鎖角度時，方向只能落在幾度的倍數。**
@@ -2103,14 +2104,19 @@ export class Selection {
         if (v.he) items.verts.push({ el: { obj, kind: 'vertex', vert: v }, pts: [toWorld(v.p)] });
       }
     } else if (f === 'face') {
-      mesh.computeNormals();
-      for (const face of mesh.faces) {
-        const vs = mesh.faceVerts(face);
-        if (!vs.length) continue;
+      /**
+       * 🔴 **一個面算一個**（2026-10-22，網格核心第二批）：以前照網格裡的小面一塊一塊算中心 ——
+       * 匯入的平面是一堆碎塊時，框到其中一小塊就算選到，同一個面還會被選進去好幾次。
+       * 現在每個面（`planarRegions()`）一個中心點（面上所有點的平均），中心在框裡才算。
+       */
+      for (const r of planarRegions(mesh)) {
+        const vs = new Set();
+        for (const face of r.faces) for (const v of mesh.faceVerts(face)) vs.add(v);
+        if (!vs.size) continue;
         const c = new THREE.Vector3();
         for (const v of vs) c.add(v.p);
-        c.divideScalar(vs.length);
-        items.faces.push({ el: { obj, kind: 'face', face }, pts: [toWorld(c)] });
+        c.divideScalar(vs.size);
+        items.faces.push({ el: { obj, kind: 'face', face: r.faces[0] }, pts: [toWorld(c)] });
       }
     } else {
       /** `'auto'` 與 `'edge'` 都走邊 —— 判準用 `isMarkable()`，⛔ 不另寫一套 */
@@ -2130,7 +2136,7 @@ export class Selection {
     for (const el of els) {
       /** 同一次多選裡型別必須一致 —— 跟 `pickEdit()` 同一條規矩 */
       if (this.editSels.length && this.editSels[0].kind !== el.kind) continue;
-      if (this.editSels.some(x => this._sameHover(x, el))) continue;
+      if (this._findEditSel(el) >= 0) continue;     // 面照「面」比（跟點選同一支），⛔ 比小面
       this.editSels.push(el);
     }
     if (this.editSels.length) { this._attachEditProxy(); }
@@ -3438,9 +3444,16 @@ export class Selection {
    * @returns {number} 實際選起來的個數
    */
   selectFaces(obj, faces) {
-    const list = (faces || []).filter(Boolean);
-    if (!obj || !list.length) { this.clearEditSel(); return 0; }
+    const raw = (faces || []).filter(Boolean);
+    if (!obj || !raw.length) { this.clearEditSel(); return 0; }
     const mesh = obj.mesh();
+    /**
+     * 🔴 **一個面只選一次**（2026-10-22，網格核心第二批）：傳進來的若是同一個面裡的好幾個小面
+     * （凍結前方塊的頂面是 2 個三角形、匯入的平面是一堆碎塊），只留一個 —— 不然「選了幾個」會說謊（坑第 20 條）。
+     */
+    planarRegions(mesh);
+    const seenR = new Set(), list = [];
+    for (const f of raw) { if (seenR.has(f.region)) continue; seenR.add(f.region); list.push(f); }
     this.editSels = list.map(face => ({ obj, kind: 'face', face, mesh }));
     this._drag = null;
     this._attachEditProxy();

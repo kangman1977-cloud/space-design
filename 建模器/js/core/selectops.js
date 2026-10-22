@@ -28,6 +28,7 @@ import { markableEdges } from '../unfold/seam.js';
  * ⛔ 不要為了避免跨檔就在這裡重寫一支走訪。
  */
 import { edgeRing } from './edit.js';
+import { planarRegions } from './region.js';
 
 /**
  * 🔴 **「一樣大」「一樣長」的容許值：0.01 cm。**
@@ -681,15 +682,36 @@ export function sharpEdges(mesh, deg, opt = {}) {
   return out;
 }
 
-/** 一個面的面積。⛔ 一律走 `faceTriangles()`（全專案唯一入口，鐵律二） */
-function faceArea(mesh, face) {
-  let s = 0;
-  for (const [a, b, c] of mesh.faceTriangles(face)) {
-    const ab = new THREE.Vector3().subVectors(b.p, a.p);
-    const ac = new THREE.Vector3().subVectors(c.p, a.p);
-    s += ab.cross(ac).length() / 2;
+/**
+ * 🔴 **選整片曲面（工具列「選整片曲面」）**（2026-10-22，網格核心第二批 → `規格\建模器-網格核心.md` 第 5 節）。
+ * 從選到的面出發，往四周擴，**穿過不是轉角的邊**：看不見的邊、標了平滑（`smooth`）的邊、夾角小於 `deg` 的邊。
+ * ⭐ 跟「選轉角」用同一個度數、同一個判準的反面：選轉角選的是夾角 ≥ deg 的邊，這裡停在那些邊上
+ * ⇒ 圓柱 32 段（側面每格 11.25°）30 度 ⇒ 整圈側面、停在上下蓋；方塊 ⇒ 只有自己（四周都是 90°）。
+ * 每個面回一個代表的小面（`selectFaces()` 也照面去重）。
+ * @returns {{faces:object[], scanned:number, reason:string}}
+ */
+export function surfaceFaces(mesh, face, deg, opt = {}) {
+  const out = { faces: [], scanned: 0, reason: '' };
+  if (!mesh || !face) { out.reason = '沒有選到面'; return out; }
+  if (!Number.isFinite(deg) || deg <= 0) { out.reason = '度數要打一個大於 0 的數字'; return out; }
+  const regs = planarRegions(mesh, opt.tolDeg);
+  const thr = THREE.MathUtils.degToRad(Math.max(0, deg - THRESH_TOL_DEG));
+  const seen = new Set([face]), stack = [face];
+  while (stack.length) {
+    const f = stack.pop();
+    for (const he of mesh.faceLoop(f)) {
+      const nb = he.twin && he.twin.face;
+      if (!nb || seen.has(nb)) continue;
+      const d = mesh.dihedral(he);
+      const pass = mesh.isHiddenEdge(he, opt.tolDeg) || he.smooth || (d !== null && Math.abs(d) < thr);
+      if (!pass) continue;
+      seen.add(nb); stack.push(nb);
+    }
   }
-  return s;
+  const got = new Set();
+  for (const f of seen) if (!got.has(f.region)) { got.add(f.region); out.faces.push(regs[f.region].faces[0]); }
+  out.scanned = regs.length;
+  return out;
 }
 
 /** 一條邊的長度 */
@@ -752,19 +774,26 @@ export function similarTo(mesh, seed, mode, opt = {}) {
     const f0 = seed.face;
     if (!f0) { out.reason = '沒有選到面'; return out; }
 
-    const n0 = mesh.computeFaceNormal(f0).clone();
-    const a0 = faceArea(mesh, f0);
-    const k0 = mesh.faceVerts(f0).length;
+    /**
+     * 🔴 **以「面」為單位比，⛔ 以小面**（2026-10-22，網格核心第二批 → `規格\建模器-網格核心.md` 第 5 節）。
+     * 以前比的是網格裡的小面：方塊凍結前頂面是 2 個三角形 ⇒「同邊數」選三角形、「同面積」拿半個面去比，
+     * 同一個面還會被選進去兩次（坑第 20 條）。現在照面（`planarRegions()`）：
+     * 同法向 ＝ 面的法向、同面積 ＝ 整個面（有洞的扣洞）、同邊數 ＝ 外框的轉角數；每個面回一個代表的小面。
+     */
+    const regs = planarRegions(mesh, opt.tolDeg);
+    const r0 = regs[f0.region];
+    if (!r0) { out.reason = '找不到這個面'; return out; }
+    const sides = r => (r.loops[0] || []).length;
     const cosTol = Math.cos(
       THREE.MathUtils.degToRad(opt.normalTolDeg ?? SIMILAR_NORMAL_TOL_DEG));
 
-    for (const f of mesh.faces) {
+    for (const r of regs) {
       out.scanned++;
       let hit = false;
-      if (mode === 'normal') hit = mesh.computeFaceNormal(f).dot(n0) >= cosTol;
-      else if (mode === 'area') hit = Math.abs(faceArea(mesh, f) - a0) <= tolCm;
-      else hit = mesh.faceVerts(f).length === k0;
-      if (hit) out.faces.push(f);
+      if (mode === 'normal') hit = r.normal.dot(r0.normal) >= cosTol;
+      else if (mode === 'area') hit = Math.abs(r.area - r0.area) <= tolCm;
+      else hit = sides(r) === sides(r0);
+      if (hit) out.faces.push(r.faces[0]);
     }
     return out;
   }

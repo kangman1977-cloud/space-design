@@ -48,7 +48,7 @@ import { elementVerts, refreshAfterEdit, extrudeFace,
 import { fmtCm, fmtDragReadout } from './core/measure.js';
 import { strokeToPicks } from './core/stroke.js';
 import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick, seamLoopEdges, seamSpanEdges,
-         boundaryRingFrom } from './core/selectops.js';
+         boundaryRingFrom, surfaceFaces } from './core/selectops.js';
 import { worldBounds, unionBounds, freeSpot, besideShift } from './core/align.js';
 import { findClashes, clashLine } from './core/interfere.js';
 import { ExportPanel } from './ui/exportPanel.js';
@@ -963,6 +963,7 @@ $('selAllEdges').onclick = () => selectAllEdges();
 $('selAllFaces').onclick = () => selectAllFacesOrVerts('face');    // ④-18
 $('selAllVerts').onclick = () => selectAllFacesOrVerts('vertex');  // ④-18
 $('selSharp').onclick = () => selectSharpEdges();
+$('selSurface').onclick = () => selectSurface();
 $('selSimilar').onclick = () => selectSimilar();
 $('selChecker').onclick = () => selectChecker();
 $('inset').onclick = () => insetSelected();
@@ -5628,6 +5629,31 @@ function selectSharpEdges() {
 }
 
 /**
+ * 🔴 **選整片曲面**（2026-10-22，網格核心第二批 → `規格\建模器-網格核心.md` 第 5 節）。
+ * 從選到的面往四周擴，碰到轉角（夾角 ≥ 旁邊「選轉角」那一格的度數）就停 —— 圓柱 30 度 ⇒ 整圈側面；方塊 ⇒ 只有自己。
+ * ⚠ 只有自己時要講原因（坑第 21 條：按了沒反應）。
+ */
+function selectSurface() {
+  const el = sel.editSel;
+  if (!sel.editMode || !el || el.kind !== 'face') {
+    toast('先在編輯模式下選一個面當起點，再按「選整片曲面」', true);
+    return;
+  }
+  const deg = +$('sharpDeg').value;
+  const r = surfaceFaces(el.obj.mesh(), el.face, deg);
+  if (r.reason) { toast(r.reason, true); return; }
+  const got = sel.selectFaces(el.obj, r.faces);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+  if (got <= 1) {
+    toast(`這個面四周都是 ${deg} 度以上的轉角，整片就是它自己。要連緩一點的轉角也算進來，把旁邊的度數調大`, true);
+    return;
+  }
+  toast(`已選起整片曲面：${got} 個面（碰到 ${deg} 度以上的轉角就停）`);
+}
+
+/**
  * 🔴 **選相似：跟【最後選的】那一個同一類的，全部選起來。**
  *
  * ── ⚠ 種子是 active，不是第一個選的 ────────────────────
@@ -7764,6 +7790,13 @@ function updateBar() {
   $('selSharp').title = canAll
     ? '把所有折起來的邊一次選起來（夾角大於旁邊那個度數）。標分片切割線的捷徑'
     : '先按「拉點線面」進入編輯模式，再選一個物件';
+
+  /** 選整片曲面（2026-10-22）：要先選到一個「面」當起點；度數跟選轉角共用旁邊那一格 */
+  const canSurface = sel.editMode && !!sel.editSel && sel.editSel.kind === 'face';
+  $('selSurface').hidden = !canSurface;
+  $('selSurface').title = canSurface
+    ? `從選到的面往四周擴，碰到 ${$('sharpDeg').value} 度以上的轉角就停（度數改旁邊那一格）`
+    : '先在編輯模式下選一個面當起點';
 
   /**
    * 選相似：**一定要先選到一個元素當範本** ——
