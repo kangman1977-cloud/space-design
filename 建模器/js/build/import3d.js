@@ -280,9 +280,11 @@ export const MICRO_DIV = 500;
  * 只看碰到的那幾個面（一條邊縮掉，會變的只有接著兩端的面）。
  * @param {{points:number[][], faces:number[][]}} p 一個部分（`toParts()` 的一個，cm）
  * @param {number} tol 比這個短的邊縮掉（cm）
- * @returns {{points, faces, stats:{collapsed, kept, removed, maxMove}}}（`kept` ＝ 會壞所以沒縮的邊；`maxMove` cm）
+ * @param {Set<number>|null} [keep] 這些點⛔ 動：碰到它們的邊都不縮（照原檔一格一格的平面，網格核心第五批 b ② → `importPlanes.js`）
+ * @returns {{points, faces, from, stats:{collapsed, kept, removed, maxMove}}}（`kept` ＝ 會壞所以沒縮的邊；`maxMove` cm；
+ *   `from[k]` ＝ 清過的第 k 個面是原本的第幾個面）
  */
-export function collapseShort(p, tol) {
+export function collapseShort(p, tol, keep = null) {
   const P = p.points.map(q => q.slice());
   const faces = p.faces.map(f => f.slice());     // 縮掉的面變 null
   const alive = faces.map(() => true);
@@ -299,7 +301,7 @@ export function collapseShort(p, tol) {
   // 拿出來時重算長度：變長了就照新的長度放回去 ⇒ 每次拿到的都是現在真的最短的那一條
   // （只有接著 a 的邊會變短，那些都重新排過）。⛔ 每一步把所有候選掃一遍（16 萬面 6.6 秒）。
   const heap = new MinHeap(), bad = new Set();
-  const addCand = f => { for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], l = dist(a, b); if (l < tol) heap.push(l, a < b ? a : b, a < b ? b : a); } };
+  const addCand = f => { for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], l = dist(a, b); if (l < tol && !(keep && (keep.has(a) || keep.has(b)))) heap.push(l, a < b ? a : b, a < b ? b : a); } };
   faces.forEach(addCand);
   let collapsed = 0, removed = 0;
   for (;;) {
@@ -363,9 +365,11 @@ export function collapseShort(p, tol) {
   let maxMove = 0;
   p.points.forEach((q, i) => { const r = P[find(i)]; maxMove = Math.max(maxMove, Math.hypot(r[0] - q[0], r[1] - q[1], r[2] - q[2])); });
   const live = faces.filter((f, i) => alive[i]);
+  const from = [];
+  alive.forEach((on, i) => { if (on) from.push(i); });
   const used = new Map(), pts = [];
   const out = live.map(f => f.map(v => { if (!used.has(v)) { used.set(v, pts.length); pts.push(P[v]); } return used.get(v); }));
-  return { ...p, points: pts, faces: out, stats: { collapsed, kept: bad.size, removed, maxMove } };
+  return { ...p, points: pts, faces: out, from, stats: { collapsed, kept: bad.size, removed, maxMove } };
 }
 
 /** 最小的先出來（長度一樣 ⇒ 點的編號小的先，結果才不會因為放進去的順序而變）*/

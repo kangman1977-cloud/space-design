@@ -19814,6 +19814,75 @@ section('網格核心第五批 b ①：匯入的焊點只合位置完全一樣�
   ok('★★ cleanModel() 的合點鑰匙是座標本身（⛔ 再除容許值四捨五入）', /const k = p\.join\(','\);/.test(body) && !/Math\.round\(v \/ tol\)/.test(body));
 }
 
+section('網格核心第五批 b ②：匯入時每一片平面各自判斷（先判斷再清碎面、碎塊看不見、格子照原檔）（2026-10-23）');
+{
+  /** `網格核心-研究.md` 8.2、10.7；kang 2026-10-23「第 ② 小批照你的建議：先判斷再清碎面、碎塊維持看不見、視窗加三選一預設照建議」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const PL = await import('../js/build/importPlanes.js');
+  const O = await import('../js/out/obj.js');
+  const { defaultSrc } = await import('../js/build/prim.js');
+  const toMesh = q => Mesh.fromFaceList(q.points.map(v => new THREE.Vector3(v[0], v[1], v[2])), q.faces);
+  /** 跟匯入視窗 `_parts()`＋`_import()` 同一條路：判斷 → 照原檔的點保護 → 清碎面 → 建網格 → 格線標 hard */
+  const pipe = (p, mode, tol) => {
+    const j = PL.judgePlanes(p), regs = PL.keptRegions(j, mode);
+    const q = tol ? im.collapseShort(p, tol, regs.length ? PL.keepVerts(p, regs) : null) : { ...p, from: p.faces.map((_, k) => k) };
+    const m = toMesh(q); const hard = PL.markGrid(m, PL.gridEdges(q, regs, q.from)); m.computeNormals();
+    return { j, q, m, hard, faces: planarRegions(m).length };
+  };
+  // ① 一塊是不是碎塊
+  const sq = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]];
+  ok('★★ 三角形 ⇒ 碎塊；正方形 ⇒ 不是', PL.isSliver(sq, [0, 1, 2]) && !PL.isSliver(sq, [0, 1, 2, 3]));
+  const rect = w => [[0, 0, 0], [w, 0, 0], [w, 1, 0], [0, 1, 0]];
+  ok('★★ 細長：12 × 1 的長方形還不算（最長邊² ÷ 2 面積 ＝ 6）、13 × 1 算；最小角 < 15° 的平行四邊形算',
+    !PL.isSliver(rect(12), [0, 1, 2, 3]) && PL.isSliver(rect(13), [0, 1, 2, 3]) && PL.isSliver([[0, 0, 0], [4, 0, 0], [8, 1, 0], [4, 1, 0]], [0, 1, 2, 3]));
+  // ② 一個部分裡兩種都有：上面 2 × 2 的格子、旁邊立起來的面是兩個三角形
+  const two = { name: 'x', points: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0], [1, 1, 0], [2, 1, 0], [0, 2, 0], [1, 2, 0], [2, 2, 0], [0, 0, 1], [2, 0, 1]],
+    faces: [[0, 1, 4, 3], [1, 2, 5, 4], [3, 4, 7, 6], [4, 5, 8, 7], [0, 9, 10], [0, 10, 2]] };
+  const j2 = PL.judgePlanes(two);
+  ok('★★★ 同一個部分兩種都有 ⇒ 每一片各自判：格子 1 片（4 塊）、碎塊 1 片（2 塊）', j2.grid === 1 && j2.gridFaces === 4 && j2.cut === 1 && j2.cutFaces === 2, JSON.stringify({ g: j2.grid, c: j2.cut }));
+  const g2 = pipe(two, 'suggest', 0), m2 = pipe(two, 'merge', 0), k2 = pipe(two, 'keep', 0);
+  ok('★★★ 照建議：格子 4 格各自一個面、格線 4 條看得見；三角形那片合成一個面 ⇒ 看到 5 個面', g2.hard === 4 && g2.faces === 5, `${g2.hard} 條、${g2.faces} 面`);
+  ok('★★★ 全部合成一個面 ⇒ 2 個面、一條都不標（跟以前一樣）；全部照原檔 ⇒ 6 個面、格線＋三角形中間那條共 5 條',
+    m2.hard === 0 && m2.faces === 2 && k2.hard === 5 && k2.faces === 6, `合成 ${m2.faces}／照原檔 ${k2.faces} 面 ${k2.hard} 條`);
+  // ③ 清碎面不動照原檔的平面：格子小於門檻
+  const tiny = { name: 't', points: two.points.map(v => v.map(x => x * 0.01)), faces: two.faces };
+  const c0 = im.collapseShort(tiny, 0.05), c1 = im.collapseShort(tiny, 0.05, PL.keepVerts(tiny, PL.keptRegions(PL.judgePlanes(tiny), 'suggest')));
+  ok('★★★ 格子比門檻小：不保護會被縮掉；保護的話格子那 9 個點一個都不動、4 格都在',
+    c0.stats.collapsed > 0 && c1.faces.filter(f => f.length === 4).length === 4 && [0, 1, 2, 3, 4, 5, 6, 7, 8].every(i => c1.points.some(q => q.join() === tiny.points[i].join())), `沒保護縮 ${c0.stats.collapsed}、保護後 ${c1.faces.length} 面`);
+  ok('★★ collapseShort() 多給 from：清過的第 k 個面是原本第幾個（沒縮的照順序、縮掉的跳過）', c1.from.length === c1.faces.length && c1.from.every((v, k) => k === 0 || v > c1.from[k - 1]));
+  // ④ 建模器自己細分的方塊，存成 OBJ 再匯入 ⇒ 格子照原檔，跟原本一樣 96 個面
+  const box = edit.mergeCoplanarFaces(prim.buildPrim('box', { w: 60, h: 45, d: 40 })).mesh, sub = edit.subdivideFaces(box, box.faces.slice(), 4).mesh;
+  const txt = O.toOBJ([{ name: '細分方塊', mesh: sub, matrix: new THREE.Matrix4() }], { unit: 'cm' }).text;
+  const rb = im.cleanModel(im.readModel('b.obj', new TextEncoder().encode(txt).buffer)), [pb] = im.toParts(rb, { cmPerUnit: 1, up: 'y', split: false });
+  const sb = pipe(pb, 'suggest', 60 / im.MICRO_DIV), mb = pipe(pb, 'merge', 60 / im.MICRO_DIV);
+  ok('★★★ 自己細分的方塊存 OBJ 再匯入：6 片都判成格子、照建議 96 個面（跟存出去之前一樣）；全部合成 ⇒ 6 個面（以前的樣子）',
+    sb.j.grid === 6 && sb.j.cut === 0 && sb.faces === 96 && planarRegions(sub).length === 96 && mb.faces === 6, `${sb.faces}／${mb.faces}`);
+  ok('★★ 只標平面「裡面」的線：6 面 × 每面 24 條 ＝ 144 條（兩片平面交界的稜線不標 —— 那本來就看得見）', sb.hard === 144, `${sb.hard} 條`);
+  // ⑤ 真的樣本
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const tolOf = (ps) => { const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (const p of ps) for (const q of p.points) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], q[k]); hi[k] = Math.max(hi[k], q[k]); } return Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / im.MICRO_DIV; };
+  const rh = rd('Construction_site_safety_helmet.stl'), [ph] = im.toParts(rh, { cmPerUnit: 0.1, up: 'z', split: false }), th = tolOf([ph]);
+  const hs = pipe(ph, 'suggest', th), hOld = toMesh(im.collapseShort(ph, th)); hOld.computeNormals();
+  ok('★★★ 工地帽（STL 三角形）：沒有格子 ⇒ 照建議跟以前一模一樣（4302 面、一條都不標、看到的面一樣）',
+    hs.j.grid === 0 && hs.hard === 0 && hs.q.faces.length === 4302 && hs.faces === planarRegions(hOld).length, `${hs.q.faces.length} 面、看到 ${hs.faces}`);
+  const ri = rd('Iphone seceond version finished.obj'), pis = im.toParts(ri, { cmPerUnit: im.UNIT_CM[im.guessUnit('obj', ri.size)], up: 'y', split: true }), ti = tolOf(pis);
+  let gi = 0, poly = 0, polyOld = 0;
+  for (const p of pis) { const r = pipe(p, 'suggest', ti); gi += r.j.grid; poly += r.q.faces.length; polyOld += im.collapseShort(p, ti).faces.length; }
+  ok('★★★ iPhone：機身的格子 1,282 片判成格子；先判斷再清 ⇒ 清完還有 108,402 個面（以前先清碎面只剩 27,298，格子幾乎都被縮掉）',
+    gi === 1282 && poly === 108402 && polyOld === 27298, `格子 ${gi}、${poly}（以前 ${polyOld}）`);
+  // ⑥ 讀程式守著
+  const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8');
+  const pp = ps.slice(ps.indexOf('  _parts() {'), ps.indexOf('  _planeRow('));
+  ok('★★ 視窗：先判斷（judgePlanes）再清碎面（collapseShort 帶 keepVerts）、判斷照拆法快取', pp.indexOf('judgePlanes') > 0 && pp.indexOf('judgePlanes') < pp.indexOf('collapseShort(p, micro.tol, regs.length ? keepVerts(p, regs) : null)') && /this\._judged\.split !== split/.test(pp));
+  ok('★★ 視窗：三選一預設照建議、記在這個瀏覽器、匯入時標格線（markGrid）、換檔案清掉判斷',
+    /planes: 'suggest'/.test(ps) && /this\.opt\.planes = sel\.value; save\(this\.opt\)/.test(ps) && /^\s+markGrid\(mesh, p\.grid\);/m.test(ps) && /this\._judged = null;/.test(ps)
+    && PL.PLANE_MODES.suggest === '照建議' && Object.keys(PL.PLANE_MODES).join() === 'suggest,merge,keep');
+  const rowSrc = ps.slice(ps.indexOf('  _planeRow('), ps.indexOf('  /** 碎面那一列'));
+  ok('★ 視窗那一列的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapseShort, MICRO_DIV, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
+import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { Mesh } from '../core/mesh.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
 import { worldBounds, unionBounds, freeSpot } from '../core/align.js';
@@ -24,8 +25,11 @@ export class Import3DPanel {
   /** @param {object} app { doc, sel, onEdit, toast, view } */
   constructor(app) {
     this.app = app;
-    /** split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；micro ＝ 清掉極小的碎面（預設開，kang 選甲）*/
-    this.opt = { split: true, micro: true, ...loadOpt() };
+    /**
+     * split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；micro ＝ 清掉極小的碎面（預設開，kang 選甲）；
+     * planes ＝ 平面上的小塊怎麼辦（`PLANE_MODES`，預設照建議 —— 網格核心第五批 b ②）
+     */
+    this.opt = { split: true, micro: true, planes: 'suggest', ...loadOpt() };
     this.fileName = '';
     this.read = null;            // 讀出來、清理過的
     this.unit = '';              // '' ＝ 照猜的
@@ -112,6 +116,7 @@ export class Import3DPanel {
     this.unit = ''; this.up = ''; this.cmFix = 0; this.microMm = 0;
     const r = readModel(name, buf);
     this.read = r.ok ? { ...cleanModel(r), ok: true } : r;
+    this._judged = null;
     if (this.read.ok) this.read.check = edgeCheck(this.read.faces);
     this._render();
   }
@@ -140,20 +145,70 @@ export class Import3DPanel {
   /**
    * 會建立的部分（cm、Y 朝上）；碎面打開的話每個部分先清（`collapseShort()`）。
    * 預覽與匯入用同一支 ⇒ 視窗寫的就是匯進去的。
+   * 🔴 **先判斷每一片平面、再清碎面**（網格核心第五批 b ②）：照原檔一格一格的平面，它的點清碎面⛔ 動；
+   * 每個部分多帶 `grid`（那幾片平面裡面的線，匯入時標 `hard`）。
    */
   _parts() {
     const r = this.read, s = this._setting();
-    let parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split: this.opt.split !== false });
+    const split = this.opt.split !== false;
+    let parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split });
     const micro = { on: this.opt.micro !== false, ...this._microTol(), collapsed: 0, kept: 0, removed: 0, maxMove: 0 };
-    if (micro.on) {
-      parts = parts.map(p => {
-        const c = collapseShort(p, micro.tol);
-        micro.collapsed += c.stats.collapsed; micro.kept += c.stats.kept; micro.removed += c.stats.removed;
-        micro.maxMove = Math.max(micro.maxMove, c.stats.maxMove);
-        return c;
-      });
+    const mode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
+    /**
+     * 判斷只看角度與比例，跟單位、朝上無關 ⇒ 同一個檔、同一種拆法只判一次（大的模型要幾秒，⛔ 每改一個設定就重來）。
+     * ⚠ `toParts()` 換單位、朝上只動座標，面的編號不變 —— 所以快取用拆法當鑰匙就夠。
+     */
+    if (!this._judged || this._judged.split !== split) this._judged = { split, list: parts.map(judgePlanes) };
+    const planes = { mode, cut: 0, grid: 0, cutFaces: 0, gridFaces: 0, kept: 0, keptFaces: 0 };
+    parts = parts.map((p, i) => {
+      const j = this._judged.list[i], regs = keptRegions(j, mode);
+      for (const k of ['cut', 'grid', 'cutFaces', 'gridFaces']) planes[k] += j[k];
+      planes.kept += regs.length;
+      for (const g of regs) planes.keptFaces += g.faces.length;
+      let q = p, from = p.faces.map((_, k) => k);
+      if (micro.on) {
+        q = collapseShort(p, micro.tol, regs.length ? keepVerts(p, regs) : null);
+        from = q.from;
+        micro.collapsed += q.stats.collapsed; micro.kept += q.stats.kept; micro.removed += q.stats.removed;
+        micro.maxMove = Math.max(micro.maxMove, q.stats.maxMove);
+      }
+      return { ...q, grid: gridEdges(q, regs, from) };
+    });
+    return { parts, micro, planes };
+  }
+
+  /**
+   * 平面上的小塊那一列：三選一、判出來的數字（照實講）。
+   * 沒有「好幾塊拼成」的平面就不出現（柺杖這種低多邊形、STL 平的地方一定是三角形拼的 ⇒ 會出現、都是碎塊）。
+   */
+  _planeRow(pl) {
+    const d = document.createElement('div');
+    d.className = 'uwSkip';
+    d.innerHTML = `
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span>平面上的小塊：</span>
+        <select id="i3Planes">${Object.entries(PLANE_MODES).map(([k, t]) => `<option value="${k}">${t}${k === 'suggest' ? '（預設）' : ''}</option>`).join('')}</select>
+      </div>
+      <div id="i3PlanesRes" style="margin-top:4px"></div>`;
+    const sel = d.querySelector('#i3Planes'), res = d.querySelector('#i3PlanesRes');
+    sel.value = pl.mode;
+    sel.title = '一片平面由好幾小塊拼成時：\n'
+      + '・像匯出時自動切出來的碎塊（有三角形或細長的）⇒ 合成一個面，中間的線看不見\n'
+      + '・像畫好的格子（全是方正的四邊形）⇒ 照原檔一格一格，格線看得見、點得到（跟建模器自己細分的一樣）\n'
+      + '「照建議」每一片各自判斷；不對的話選「全部合成一個面」或「全部照原檔一格一格」。'
+      + '照原檔的平面，清碎面不會動它的點';
+    sel.onchange = () => { this.opt.planes = sel.value; save(this.opt); this._render(); };
+    const n = pl.cut + pl.grid;
+    if (pl.mode === 'merge') res.textContent = `${n} 片平面是好幾塊拼成的 ⇒ 全部合成一個面（中間的線看不見）`;
+    else if (pl.mode === 'keep') res.textContent = `${n} 片平面是好幾塊拼成的 ⇒ 全部照原檔一格一格（${pl.keptFaces} 塊），格線看得見`;
+    else {
+      const t = [];
+      if (pl.cut) t.push(`${pl.cut} 片像匯出時切的碎塊（有三角形或細長的）⇒ 合成一個面`);
+      if (pl.grid) t.push(`${pl.grid} 片像畫好的格子（${pl.gridFaces} 塊）⇒ 照原檔一格一格，格線看得見`);
+      res.textContent = `${n} 片平面是好幾塊拼成的：` + t.join('；');
     }
-    return { parts, micro };
+    if (pl.kept && this.opt.micro !== false) res.textContent += '（照原檔的平面，清碎面不會動它）';
+    return d;
   }
 
   /** 碎面那一列：勾不勾、門檻、清了多少（照實講）*/
@@ -221,10 +276,11 @@ export class Import3DPanel {
     }
     this._fillSelects();
     this.goBtn.disabled = false;
-    const { parts, micro } = this._parts();
+    const { parts, micro, planes } = this._parts();
     const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
     this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件`;
     this.body.appendChild(this._sizeCard());
+    if (planes.cut + planes.grid) this.body.appendChild(this._planeRow(planes));
     this.body.appendChild(this._microRow(micro));
 
     // 清理、檢查：照實講
@@ -309,6 +365,7 @@ export class Import3DPanel {
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
       const mesh = Mesh.fromFaceList(p.points.map(q => new THREE.Vector3(q[0], q[1], q[2])), p.faces);
+      markGrid(mesh, p.grid);                            // 照原檔一格一格的平面：格線看得見（網格核心第五批 b ②）
       const o = new ModelObject({ name: this._name(p, i), kind: KIND.SOLID, src: { type: 'mesh' }, mesh });
       recenterOrigin(o);                                 // 原點在自己的中心、位置照原樣
       objs.push(o);
