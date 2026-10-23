@@ -438,13 +438,23 @@ export class Import3DPanel {
      * 再寫「程式不自己補」就跟上面矛盾（線上先驗看到的）⇒ 改成講「原檔有…，上面選的做法會處理」；
      * 三面共用（隔板）這兩種做法都修不了，照舊警告。
      */
+    /**
+     * 三面共用（隔板）：③b 起選了「聯集」會修剖面比得過的那幾塊（線上先驗又看到「程式不自己補」跟上面矛盾）⇒
+     * 有修好的就講「修好其中幾塊、其他照原樣」，一塊都沒修好才照舊警告。
+     */
+    const uinfo = solid === 'union' && this._solid && this._solid.variants.union ? this._solid.variants.union.info : null;
+    const partFixed = uinfo ? uinfo.partFixed || 0 : 0;
     const bad = [];
     if (ck.open) bad.push([`有 ${ck.open} 條邊只接一個面（模型有破洞，或本來就是開口的面）`, true]);
-    if (ck.nonManifold) bad.push([`有 ${ck.nonManifold} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, false]);
+    if (ck.nonManifold) bad.push([`有 ${ck.nonManifold} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, partFixed > 0]);
     if (ck.flipped) bad.push([`有 ${ck.flipped} 條邊兩邊的面繞的方向不一致（有面翻過來了）`, true]);
     for (const [b, fixable] of bad) {
-      if (fixable && solid !== 'raw') this.body.appendChild(box('uwSkip', `原檔${b} —— 上面選了「${SOLID_MODES[solid]}」會處理，處理之後的樣子看那張卡`));
-      else this.body.appendChild(box('uwWarn', '⚠ ' + (solid !== 'raw' ? '原檔' : '') + b + ' —— 程式不自己補，匯進來之後照實看'));
+      const part = /三個以上的面共用/.test(b);
+      if (fixable && solid !== 'raw') {
+        this.body.appendChild(box('uwSkip', part
+          ? `原檔${b} —— 上面選了「${SOLID_MODES[solid]}」修好其中 ${partFixed} 塊的隔板${uinfo.kept ? `、${uinfo.kept} 塊照原樣` : ''}，處理之後的樣子看那張卡`
+          : `原檔${b} —— 上面選了「${SOLID_MODES[solid]}」會處理，處理之後的樣子看那張卡`));
+      } else this.body.appendChild(box('uwWarn', '⚠ ' + (solid !== 'raw' ? '原檔' : '') + b + ' —— 程式不自己補，匯進來之後照實看'));
     }
     if (!bad.length) this.body.appendChild(box('uwSkip', '檢查：沒有破洞、沒有接不起來的邊、面的方向一致'));
     if (r.faces.length > MANY_FACES) {

@@ -19964,8 +19964,10 @@ section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補�
     && /const pick = this\._solidPick\(\), r = pick\.read/.test(ps) && /this\._judged\.solid !== pick\.mode/.test(ps) && /this\.solidMode = '';/.test(ps));
   ok('★★ 視窗：每個做法一張卡（小圖＋數字）、建議的框起來寫理由、點卡片換、點小圖放大；破洞紅線、三面共用橘線',
     /className = 'i3Card'/.test(ps) && /' sug'/.test(ps) && /this\.solidMode = mode; this\._render\(\)/.test(ps) && /this\._bigThumb\(mode\)/.test(ps) && /0xff3b30/.test(ps) && /0xff9f0a/.test(ps));
-  ok('★★ 選了補洞或聯集 ⇒ 下面那幾行講「原檔有…，上面選的做法會處理」、不再寫「程式不自己補」；三面共用照舊警告（線上先驗看到的矛盾）',
-    /if \(fixable && solid !== 'raw'\)/.test(ps) && /上面選了「\$\{SOLID_MODES\[solid\]\}」會處理/.test(ps) && /bad\.push\(\[`有 \$\{ck\.nonManifold\} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, false\]\)/.test(ps));
+  // 〔③a 時三面共用一律照舊警告（第三個條件寫死 false）；③b 起聯集會修隔板 ⇒ 修好幾塊就講幾塊，一塊都沒修好才警告 —— ③b 線上先驗又看到同一類矛盾〕
+  ok('★★ 選了補洞或聯集 ⇒ 下面那幾行講「原檔有…，上面選的做法會處理」、不再寫「程式不自己補」；三面共用：聯集修好幾塊就講幾塊、一塊都沒修好才警告（線上先驗看到的矛盾）',
+    /if \(fixable && solid !== 'raw'\)/.test(ps) && /上面選了「\$\{SOLID_MODES\[solid\]\}」會處理/.test(ps) && /bad\.push\(\[`有 \$\{ck\.nonManifold\} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, partFixed > 0\]\)/.test(ps)
+    && /修好其中 \$\{partFixed\} 塊的隔板/.test(ps));
   const rowSrc = ps.slice(ps.indexOf('  _solidRow('), ps.indexOf('  _bigThumb('));
   ok('★ 卡片的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
 }
