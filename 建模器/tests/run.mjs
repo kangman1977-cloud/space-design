@@ -19586,6 +19586,63 @@ section('網格核心第三批 a：拉到同一平面不自動合、壓平只合
   ok('★★ 工具列有「合成一個面」、接到 mergeFacesSelected', /id="mergeFaces"/.test(ih3) && /\$\('mergeFaces'\)\.onclick = \(\) => mergeFacesSelected\(\);/.test(mn3) && /mergeFaces\(mesh, els\.map\(e => e\.face\)\)/.test(body('mergeFacesSelected')));
 }
 
+section('網格核心第三批 b：不平的面標琥珀色、展開前列出來（拆開／壓平／照現在這樣）（2026-10-23）');
+{
+  /** `規格\建模器-網格核心.md` 第 6 節 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const V = a => a.map(p => new THREE.Vector3(...p));
+  const bent = () => Mesh.fromFaceList(V([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 1, 10]]), [[0, 1, 2, 3]]);   // 一個角翹起 1 cm 的四邊形
+  // ① 哪些算不平
+  const b1 = bent(); b1.computeNormals();
+  ok('★★★ 翹起的四邊形算不平，回報偏離', edit.nonPlanarFaces(b1).length === 1 && edit.nonPlanarFaces(b1)[0].dev > 0.1);
+  const b2 = Mesh.fromFaceList(V([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 1, 10], [-10, 0, 0], [-10, 0, 10]]), [[0, 1, 2, 3], [4, 0, 3, 5]]);
+  for (const h of b2.edges()) if (h.twin && h.twin.face) b2.setSmooth(h, true);
+  b2.computeNormals();
+  ok('★★★ 曲面的格子（碰到標了平滑的邊）本來就可以不平 ⇒ ⛔ 算', edit.isCurvedCell(b2, b2.faces[0]) && edit.nonPlanarFaces(b2).length === 0
+    && edit.nonPlanarFaces(Mesh.fromFaceList(V([[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 1, 10], [-10, 0, 0], [-10, 0, 10]]), [[0, 1, 2, 3], [4, 0, 3, 5]])).length >= 1);
+  const tri = Mesh.fromFaceList(V([[0, 0, 0], [10, 0, 0], [3, 7, 10]]), [[0, 1, 2]]);
+  ok('★★ 三角形一定平', edit.nonPlanarFaces(tri).length === 0);
+  const rf = edit.refreshAfterEdit(bent());
+  ok('★★ refreshAfterEdit 回報不平幾個、最遠多少（提示要講）', rf.nonPlanar === 1 && rf.nonPlanarWorst > 0.1);
+  // ② 拆開
+  const b3 = bent(); b3.computeNormals();
+  const d02 = b3.verts[0].p.distanceTo(b3.verts[2].p), d13 = b3.verts[1].p.distanceTo(b3.verts[3].p);
+  const s3 = edit.splitUnflat(b3, [b3.faces[0]]);
+  const hard3 = s3.ok ? [...s3.mesh.edges()].filter(h => h.hard) : [];
+  const diagLen = hard3.length ? hard3[0].v.p.distanceTo(hard3[0].to.p) : 0;
+  ok('★★★ 四邊形沿短的那條對角線拆成 2 塊、都平、新的線標 hard', s3.ok && s3.pieces === 2 && edit.nonPlanarFaces(s3.mesh).length === 0
+    && hard3.length === 1 && Math.abs(diagLen - Math.min(d02, d13)) < 1e-9, `${s3.pieces} 塊、對角線 ${diagLen.toFixed(3)}（短 ${Math.min(d02, d13).toFixed(3)}）`);
+  ok('★★ 　 拆開不改形狀（面積一樣）', s3.ok && Math.abs(s3.mesh.area() - b3.area()) < 1e-9);
+  const pent = Mesh.fromFaceList(V([[0, 0, 0], [10, 0, 0], [13, 0, 8], [5, 3, 13], [-3, 0, 8]]), [[0, 1, 2, 3, 4]]);
+  const s4 = edit.splitUnflat(pent, [pent.faces[0]]);
+  ok('★★★ 歪掉的五邊形一直拆到每一塊都平', s4.ok && s4.pieces === 3 && edit.nonPlanarFaces(s4.mesh).length === 0 && [...s4.mesh.edges()].filter(h => h.hard).length === 2);
+  ok('★★ 平的面拆不開 ⇒ 講原因', !edit.splitUnflat(tri, [tri.faces[0]]).ok);
+  const fox = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T8/狐狸頭.json'), 'utf8'))).objects[0].mesh();
+  fox.computeNormals();
+  const npF = edit.nonPlanarFaces(fox);
+  const roleN = m => [...m.edges()].filter(h => h.role === EDGE_ROLE.CUT).length, hardN = m => [...m.edges()].filter(h => h.hard).length;
+  const sF = edit.splitUnflat(fox, npF.map(x => x.face));
+  ok('★★★ 狐狸頭（實驗 T8）：2 個不平的面拆成 4 塊 ⇒ 不平剩 0、看得見的線多 2 條、切開的縫一條沒少', npF.length === 2 && sF.ok && sF.pieces === 4
+    && edit.nonPlanarFaces(sF.mesh).length === 0 && hardN(sF.mesh) === hardN(fox) + 2 && roleN(sF.mesh) === roleN(fox), `${npF.length} 面、hard ${hardN(fox)}→${sF.ok && hardN(sF.mesh)}、縫 ${roleN(fox)}→${sF.ok && roleN(sF.mesh)}`);
+  // ③ 讀程式守著
+  const sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8'), up = readFileSync(join(here, '../js/ui/unfoldPanel.js'), 'utf8');
+  const mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  const mbody = name => { const i = mn.indexOf('function ' + name + '('); return mn.slice(i, mn.indexOf('\n}', i)); };
+  ok('★★★ 3D 畫面：不平的面照 nonPlanarFaces() 畫琥珀色斜線，跟稜線同一個時機重建（⛔ 紅色）', /for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
+    && /unflat\.name = 'unflat'/.test(sc) && /UNFLAT_COLORS = \[0xba7517, 0xfac775\]/.test(sc));
+  ok('★★★ 展開圖：每次畫都列不平的面；三顆「全部拆開／全部壓平／照現在這樣（近似）」；打開時重新列', /this\._renderUnflat\(objs \|\| \[\]\);/.test(up)
+    && /'全部拆開'/.test(up) && /'全部壓平'/.test(up) && /'照現在這樣（近似）'/.test(up) && /this\._unflatAccepted = false;\s*\n\s*this\.run\(\);/.test(up));
+  ok('★★★ 存 SVG、存 DXF 之前還有不平的面就再問一次（只提醒不擋）', /async _saveSVG\(\) \{\s*if \(!this\._has\(\)\) return;\s*if \(!\(await this\._unflatSaveOk\(\)\)\) return;/.test(up)
+    && /async _saveDXF\(\) \{\s*if \(!this\._has\(\)\) return;\s*if \(!\(await this\._unflatSaveOk\(\)\)\) return;/.test(up));
+  ok('★★ 清單用琥珀色（.uwUnflat），⛔ 用紅色的 uwWarn', /\.uwUnflat \{/.test(ih) && /wrap\.className = 'uwUnflat';/.test(up));
+  ok('★★ 拆開走 splitUnflat()、壓平走第三批 a 那一套（visibleAround inside ＋ keepApart）、記成一步', /splitUnflat\(mesh, live\)/.test(mbody('fixUnflat'))
+    && /visibleAround\(mesh, mesh\.faceVerts\(f\), inside\)/.test(mbody('fixUnflat')) && /refreshAfterEdit\(mesh, \{ keepApart \}\)/.test(mbody('fixUnflat'))
+    && (mbody('fixUnflat').match(/commit\(/g) || []).length === 1);
+  ok('★★ 拖曳、平滑頂點的提示講最遠偏離多少（共用 unflatNote）', /bits\.push\(unflatNote\(r\)\)/.test(mbody('editDrag')) && /bits\.push\(unflatNote\(rf\)\)/.test(mbody('smoothVertsSelected'))
+    && /nonPlanarWorst\.toFixed\(3\)/.test(mbody('unflatNote')));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

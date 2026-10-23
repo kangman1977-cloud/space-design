@@ -21,6 +21,8 @@ import { seamCount } from '../unfold/seam.js';
 import { toDXF, boardDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
+import { nonPlanarFaces } from '../core/edit.js';
+import { ask } from './askBox.js';
 
 const LS_KEY = 'modeler_unfold';
 
@@ -323,6 +325,8 @@ export class UnfoldPanel {
      * 〔更正：這裡以前寫「⛔ 不存」，查過那是 AI 自己的註解、⛔ 是 kang 定的；kang 2026-10-09 定的只有「做成開關、關掉要提醒」〕
      */
     this.foldIn.checked = this._foldUser != null ? this._foldUser : this._targets().some(hasSeams);
+    /** 第三批 b：每次打開都重新列「不平的面」（上一次按的「照現在這樣」只管那一次） */
+    this._unflatAccepted = false;
     this.run();
   }
 
@@ -411,6 +415,7 @@ export class UnfoldPanel {
       : only + '沒有可以展開的東西';
 
     if (this._matNote) { this.body.appendChild(box('uwSkip', this._matNote)); this._matNote = null; }
+    this._renderUnflat(objs || []);
     for (const msg of r.skipped) this.body.appendChild(box('uwSkip', msg));
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
 
@@ -575,6 +580,7 @@ export class UnfoldPanel {
    */
   async _saveSVG() {
     if (!this._has()) return;
+    if (!(await this._unflatSaveOk())) return;
     if (this.opt.nest.on) {
       // 🔴 排版開著：一張板一個檔（kang 2026-10-09）
       const jobs = this._boardSheets({ strainFill: false }).map((sh, i) => ({
@@ -598,6 +604,7 @@ export class UnfoldPanel {
 
   async _saveDXF() {
     if (!this._has()) return;
+    if (!(await this._unflatSaveOk())) return;
     if (this.opt.nest.on) {
       // 🔴 排版開著：一張板一個檔（kang 2026-10-09）。標題只能英數（R12）
       const sheets = this._boardSheets({ strainFill: false });
@@ -638,6 +645,74 @@ export class UnfoldPanel {
   _say(msg) { this.sum.textContent = msg + '　' + this.sum.textContent; }
 
   _has() { return !!(this.result && this.result.pieces.length); }
+
+  /**
+   * 🔴 **輸出前檢查：不平的面**（網格核心第三批 b，kang 2026-10-23 → `規格\建模器-網格核心.md` 第 6 節）。
+   * 有不平的面 ⇒ 最上面一條琥珀色的清單：每個面「拆開」「壓平」，或全部拆開／全部壓平／照現在這樣（近似）。
+   * ⭐ **只提醒不擋**（早期定的：程式沒資格替人決定做不做得出來）⇒ 展開圖照樣畫，按「照現在這樣」就收成一行、
+   * 　存 SVG／DXF 時還有不平的面再問一次（`_unflatSaveOk()`）。
+   * 判斷照 `edit.js` `nonPlanarFaces()`（跟 3D 畫面的琥珀色、編輯提示同一支）。
+   */
+  _renderUnflat(objs) {
+    const items = [];
+    for (const obj of objs) for (const x of nonPlanarFaces(obj.mesh())) items.push({ obj, face: x.face, dev: x.dev });
+    this._unflat = items;
+    if (!items.length) return;
+    const worst = items.reduce((m, x) => Math.max(m, x.dev), 0);
+    const wrap = document.createElement('div');
+    wrap.className = 'uwUnflat';
+    const head = document.createElement('div');
+    head.textContent = `有 ${items.length} 個面不平（最遠 ${worst.toFixed(3)} cm），展開圖上這幾片是近似的`;
+    wrap.appendChild(head);
+    const btn = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.textContent = label; b.title = title; b.onclick = fn;
+      return b;
+    };
+    if (this._unflatAccepted) {
+      head.textContent += '（照現在這樣）';
+      wrap.appendChild(btn('列出來', '再把不平的面列出來，選拆開或壓平', () => { this._unflatAccepted = false; this._render(this.result, this.objs); }));
+      this.body.appendChild(wrap);
+      return;
+    }
+    const SHOW = 20;
+    const no = new Map();
+    const table = document.createElement('table');
+    for (const it of items.slice(0, SHOW)) {
+      no.set(it.obj, (no.get(it.obj) || 0) + 1);
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = `${it.obj.name}・面 ${no.get(it.obj)}　偏離 ${it.dev.toFixed(3)} cm`;
+      a.title = '在 3D 畫面選起這個面';
+      a.onclick = e => { e.preventDefault(); this.app.unflatPick(it.obj, it.face); };
+      td.appendChild(a);
+      const tdB = document.createElement('td');
+      tdB.append(btn('拆開', '沿最短的對角線拆到平，新的折線看得到；形狀不變', () => this.app.fixUnflat('split', [it])),
+        btn('壓平', '把這個面壓平；形狀會變一點，旁邊的面可能跟著不平', () => this.app.fixUnflat('flatten', [it])));
+      tr.append(td, tdB);
+      table.appendChild(tr);
+    }
+    wrap.appendChild(table);
+    if (items.length > SHOW) wrap.appendChild(box('dim', `……另外還有 ${items.length - SHOW} 個（用下面的「全部」一起處理）`));
+    const row = document.createElement('div');
+    row.append(btn('全部拆開', '每個不平的面都沿最短的對角線拆到平；形狀不變', () => this.app.fixUnflat('split', items)),
+      btn('全部壓平', '每個不平的面都壓平；形狀會變一點', () => this.app.fixUnflat('flatten', items)),
+      btn('照現在這樣（近似）', '不處理，照現在的樣子展開（這幾片的尺寸是近似的）；存 SVG／DXF 時會再問一次',
+        () => { this._unflatAccepted = true; this._render(this.result, this.objs); }));
+    wrap.appendChild(row);
+    this.body.appendChild(wrap);
+  }
+
+  /** 存 SVG／DXF 前：還有不平的面 ⇒ 再問一次（第三批 b）。⚠ 按「照現在這樣」的那一次也要問 —— 那是看圖，存檔是交出去 */
+  async _unflatSaveOk() {
+    const items = this._unflat || [];
+    if (!items.length) return true;
+    const worst = items.reduce((m, x) => Math.max(m, x.dev), 0);
+    return ask(`還有 ${items.length} 個面不平（最遠 ${worst.toFixed(3)} cm），存出來的這幾片是近似的。`
+      + '照現在這樣存嗎？（要處理就按「取消」，用展開圖上方的「拆開」或「壓平」）');
+  }
 }
 
 /** 這個物件有沒有自己標過切線（＝ 打版那一類）。參數物件標不了，網格算不出來也當沒有 */

@@ -1385,8 +1385,8 @@ export class Panel {
     if (np.length) {
       const worst = np.reduce((a, b) => (a.dev > b.dev ? a : b));
       this.form.appendChild(note(
-        `${np.length} 個面不再是平的（最大偏離 ${f(worst.dev)} cm）。`
-        + '展開會從精確變成近似；剖面分切與 3D 列印不受影響。'
+        `${np.length} 個面不再是平的（最大偏離 ${f(worst.dev)} cm），畫面上標成琥珀色斜線。`
+        + '展開圖會先列出來，讓你選「拆開」「壓平」或照現在這樣（近似）；剖面分切與 3D 列印不受影響。'
         + '要保持平面就整個面一起拉 —— 一整片平移不會歪，'
         + '只動一個點或一條邊才會。'
       ));

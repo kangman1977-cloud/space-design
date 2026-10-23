@@ -7326,10 +7326,100 @@ export function degenerateFaces(mesh) {
 export function nonPlanarFaces(mesh, tolCm = PLANAR_TOL_CM) {
   const out = [];
   for (const f of mesh.faces) {
+    /** 網格核心第三批 b（2026-10-23）：三角形一定平（⛔ 浪費時間算）；曲面的格子本來就可以不平、⛔ 算（`isCurvedCell()`）*/
+    if (f.he && f.he.next.next.next === f.he) continue;
+    if (isCurvedCell(mesh, f)) continue;
     const r = facePlanarity(mesh, f, tolCm);
     if (!r.planar) out.push({ face: f, dev: r.dev });
   }
   return out;
+}
+
+/**
+ * 🔴 **曲面的格子：碰到一條標了 `smooth` 的邊** ⇒ 它是一片曲面（圓柱側面、球、旋轉成形…）的一小塊，
+ * 本來就可以不平，⛔ 算「不平的面」、⛔ 標琥珀色（`規格\建模器-網格核心.md` 第 1 節）。
+ */
+export function isCurvedCell(mesh, face) {
+  return mesh.faceLoop(face).some(he => he.smooth);
+}
+
+/** 一圈點離它自己的平面最遠多少（Newell 法向、平均點）—— `splitUnflat()` 判斷拆夠了沒 */
+function ringDev(pts) {
+  const n = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+    c.add(a);
+  }
+  if (!(n.length() > 1e-12)) return 0;
+  n.normalize(); c.divideScalar(pts.length);
+  let d = 0;
+  for (const p of pts) d = Math.max(d, Math.abs(new THREE.Vector3().subVectors(p, c).dot(n)));
+  return d;
+}
+
+/**
+ * 🔴 **把不平的面拆開（展開圖上方清單的「拆開」）**（網格核心第三批 b，2026-10-23 → `規格\建模器-網格核心.md` 第 6 節）。
+ *
+ * 四邊形沿**短的那條**對角線拆；五個角以上就**一直挑最短、在面裡面的對角線**拆，拆到每一塊都平（≤ `tolCm`）。
+ * 新的線標 `hard`（看得見）—— 它是一條真的折線，⛔ 悄悄挑一條看不見的對角線（做法二的本意）。
+ * 其他標記照 `marksOf()`／`applyMarks()` 搬（坑 31）。整個網格只重建一次。
+ *
+ * @param {Mesh} mesh 不會被改動，回傳一個新的
+ * @param {Face[]} faces 要拆的面
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map, split?:number, pieces?:number}}
+ */
+export function splitUnflat(mesh, faces, tolCm = PLANAR_TOL_CM) {
+  const want = new Set((faces || []).filter(Boolean));
+  if (!mesh || !want.size) return { ok: false, reason: '沒有要拆的面' };
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const marks = new Map();
+  for (const he of mesh.edges()) marks.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+
+  let split = 0, pieces = 0;
+  const cut = idx => {
+    if (idx.length <= 3 || ringDev(idx.map(i => points[i])) <= tolCm) return [idx];
+    const n = idx.length, cands = [];
+    for (let i = 0; i < n; i++) for (let k = i + 2; k < n; k++) {
+      if (i === 0 && k === n - 1) continue;
+      cands.push([i, k, points[idx[i]].distanceTo(points[idx[k]])]);
+    }
+    cands.sort((a, b) => a[2] - b[2]);
+    const pts = idx.map(i => points[i]);
+    for (const [i, k] of cands) {
+      if (!chordInsideFace(pts, i, k)) continue;
+      marks.set(kOf(idx[i], idx[k]), Object.assign({}, marks.get(kOf(idx[i], idx[k])), { hard: true }));
+      return [...cut(idx.slice(i, k + 1)), ...cut([...idx.slice(k), ...idx.slice(0, i + 1)])];
+    }
+    return [idx];                                  // 找不到在面裡面的對角線 ⇒ 原樣留著
+  };
+  const out = [];
+  for (const f of mesh.faces) {
+    const idx = mesh.faceLoop(f).map(he => vi.get(he.v.id));
+    if (!want.has(f)) { out.push(idx); continue; }
+    const parts = cut(idx);
+    if (parts.length > 1) { split++; pieces += parts.length; }
+    out.push(...parts);
+  }
+  if (!split) return { ok: false, reason: '這些面拆不開（找不到在面裡面的對角線）' };
+
+  const pre = preflightRebuild(points, out);
+  if (!pre.ok) return { ok: false, reason: `拆下去做出壞掉的網格：${pre.fatal[0]}` };
+  const clean = cleanRebuild(points, out);
+  const res = Mesh.fromFaceList(clean.points, clean.faces);
+  res.computeNormals();
+  const to = i => clean.remap.get(i);
+  const di = res._vertIndex();
+  const moved = new Map();
+  for (const [k, m] of marks) {
+    const [a, b] = k.split('-').map(Number);
+    const x = to(a), y = to(b);
+    if (x !== undefined && y !== undefined) moved.set(kOf(x, y), m);
+  }
+  for (const he of res.edges()) res.applyMarks(he, moved.get(kOf(di.get(he.v.id), di.get(he.to.id))));
+  return { ok: true, mesh: res, remap: clean.remap, split, pieces };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -7788,9 +7878,12 @@ export function refreshAfterEdit(mesh, opts = {}) {
   const keptApart = keepApart(mesh, opts.keepApart);
   const folds = remarkFolds(mesh, tolDeg);
   const smoothOff = demoteSmooth(mesh, cornerDeg);
-  const nonPlanar = nonPlanarFaces(mesh, opts.planarTolCm ?? PLANAR_TOL_CM).length;
+  const np = nonPlanarFaces(mesh, opts.planarTolCm ?? PLANAR_TOL_CM);
+  const nonPlanar = np.length;
+  /** 第三批 b：提示要講「最遠的點離平面多少」（規格第 6 節）*/
+  const nonPlanarWorst = np.reduce((m, x) => Math.max(m, x.dev), 0);
   const degenerate = degenerateFaces(mesh).length;
-  return { folds, smoothOff, nonPlanar, degenerate, keptApart };
+  return { folds, smoothOff, nonPlanar, nonPlanarWorst, degenerate, keptApart };
 }
 
 /**

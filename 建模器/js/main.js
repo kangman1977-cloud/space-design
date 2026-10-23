@@ -35,7 +35,7 @@ import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, component
   from './unfold/group.js';
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial, holeDistance } from './core/mate.js';
-import { elementVerts, refreshAfterEdit, visibleAround, extrudeFace,
+import { elementVerts, refreshAfterEdit, visibleAround, splitUnflat, nonPlanarFaces, extrudeFace,
          flattenElements, mergeFaces, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
@@ -487,6 +487,9 @@ const app = {
   /** 🔴 干涉檢查（④-20）：面板按「檢查」／點清單的一列（`runClash()`、`clashPick()` 在下面才定義，⛔ 在建構時呼叫） */
   runClash: () => runClash(),
   clashPick: i => clashPick(i),
+  /** 網格核心第三批 b：展開圖上方「不平的面」清單（`fixUnflat()`、`unflatPick()` 在下面才定義，⛔ 在建構時呼叫） */
+  fixUnflat: (how, items) => fixUnflat(how, items),
+  unflatPick: (obj, face) => unflatPick(obj, face),
   getClash: () => clashResult,
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   toast: (msg, bad) => toast(msg, bad)
@@ -4075,6 +4078,14 @@ function editPick(el, info = {}) {
  * 以前這種時候兩個面會悄悄合成一個；現在不合了，⛔ 講的話人會以為「怎麼拉平了線還在」是壞掉。
  * ⭐ 拖曳、壓平、變成正圓、滑動、平滑頂點共用這一句（⛔ 各寫一份）。
  */
+function unflatNote(r) {
+  /**
+   * 🔴 **面被拉到不平 —— 講最遠偏離多少、畫面上是琥珀色、展開前會列出來**（網格核心第三批 b，規格第 6 節）。
+   * ⚠ 平滑頂點每按一次都會跳 ⇒ ⛔ 寫太長（本機先驗抓過整句被切掉一截）。拖曳、平滑頂點共用這一句。
+   */
+  return `${r.nonPlanar} 個面不平了（最遠離平面 ${r.nonPlanarWorst.toFixed(3)} cm，標成琥珀色；展開前會列出來）`;
+}
+
 function keptApartNote(n) {
   return `${n} 條線兩邊被拉到同一個平面上，線照樣留著（要合起來：選那幾個面按「合成一個面」）`;
 }
@@ -4119,7 +4130,7 @@ function editDrag(committing, el, opt) {
   const bits = [];
   /** ⚠ 2026-10-19（②-17）⛔ 猜原因（以前寫「拉回去就恢復」，半徑推成 0 的那種拉不回去）*/
   if (r.degenerate) bits.push(`${r.degenerate} 個面被壓扁成沒有面積（把那些點拉開或按 Ctrl+Z 就恢復）`);
-  if (r.nonPlanar) bits.push(`${r.nonPlanar} 個面不再是平的（展開會變近似；剖面分切與 3D 列印不受影響）`);
+  if (r.nonPlanar) bits.push(unflatNote(r));
   if (r.keptApart) bits.push(keptApartNote(r.keptApart));
   if (bits.length) toast(bits.join('　'));
 }
@@ -5963,7 +5974,7 @@ function smoothVertsSelected() {
    */
   const bits = [`已順一次：動了 ${r.moved} 個點，最多挪 ${r.maxMove.toFixed(2)} cm`];
   if (r.rim) bits.push(`開口那一圈 ${r.rim} 個點沒動`);
-  if (rf.nonPlanar) bits.push(`${rf.nonPlanar} 個面不再是平的（展開會變近似）`);
+  if (rf.nonPlanar) bits.push(unflatNote(rf));
   if (rf.keptApart) bits.push(keptApartNote(rf.keptApart));
   bits.push('不夠順再按一次');
   toast(bits.join('　'));
@@ -7409,6 +7420,85 @@ function runClash() {
     : `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：沒有零件穿進彼此裡面${touch}${skip}`, !!r.list.length);
   return r;
 }
+/**
+ * 🔴 **展開圖上方清單的「拆開」「壓平」**（網格核心第三批 b，kang 2026-10-23 → `規格\建模器-網格核心.md` 第 6 節）。
+ * · 拆開：`edit.js` `splitUnflat()` —— 沿最短的對角線拆到平，新的線看得到；形狀不變。
+ * · 壓平：一個一個面走第三批 a 的壓平那一套（`visibleAround(…, inside)` ＋ `refreshAfterEdit(…, { keepApart })`）——
+ * 　⚠ 會動到點 ⇒ 旁邊的面可能跟著不平【實證：狐狸頭那 2 面壓平後還剩 0.0132 cm】⇒ 提示照實講、清單照實更新。
+ * · 參數物件：網格每次照參數重做，改了留不住 ⇒ 講「先轉成可編輯網格」、⛔ 動它。
+ * 全部記成**一步** Undo。
+ * @param {'split'|'flatten'} how
+ * @param {Array<{obj:object, face:object}>} items
+ */
+function fixUnflat(how, items) {
+  const byObj = new Map();
+  for (const it of items || []) {
+    if (!it || !doc.objects.includes(it.obj)) continue;
+    if (!byObj.has(it.obj)) byObj.set(it.obj, []);
+    byObj.get(it.obj).push(it.face);
+  }
+  const param = [...byObj.keys()].filter(o => o.isParametric);
+  let done = 0, pieces = 0;
+  for (const [obj, faces] of byObj) {
+    if (obj.isParametric) continue;
+    const mesh = obj.mesh();
+    const live = faces.filter(f => mesh.faces.includes(f));
+    if (!live.length) continue;
+    if (how === 'split') {
+      const r = splitUnflat(mesh, live);
+      if (!r.ok) continue;
+      obj.setMesh(r.mesh);
+      refreshAfterEdit(r.mesh);
+      done += r.split; pieces += r.pieces;
+    } else {
+      for (const f of live) {
+        const inside = new Set(regionOf(mesh, f).faces);
+        const keepApart = visibleAround(mesh, mesh.faceVerts(f), inside);
+        const r = flattenElements(mesh, [{ kind: 'face', face: f }], 'median');
+        if (!r.ok) continue;
+        refreshAfterEdit(mesh, { keepApart });
+        done++;
+      }
+    }
+  }
+  if (param.length && !done) {
+    toast(`${param.map(o => `「${o.name}」`).join('、')}是參數物件，改了留不住 —— 先按「轉成可編輯網格」再處理`, true);
+    return;
+  }
+  if (!done) { toast('沒有面被處理（模型可能已經改過）—— 展開圖重新列一次', true); if (unfoldWin.isOpen) unfoldWin.run(); return; }
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(how === 'split' ? `拆開 ${done} 個不平的面` : `壓平 ${done} 個不平的面`);
+  panel.refresh();
+  updateBar();
+  const left = [...byObj.keys()].filter(o => !o.isParametric).reduce((n, o) => n + nonPlanarFaces(o.mesh()).length, 0);
+  const bits = [how === 'split' ? `已拆開 ${done} 個不平的面（拆成 ${pieces} 塊，新的折線看得到；形狀不變）` : `已壓平 ${done} 個面（形狀會變一點）`];
+  if (left) bits.push(`還有 ${left} 個面不平${how === 'flatten' ? '（壓平會動到旁邊的面）—— 可以再壓一次，或改用「拆開」' : ''}`);
+  if (param.length) bits.push(`${param.map(o => `「${o.name}」`).join('、')}是參數物件沒動 —— 先轉成可編輯網格`);
+  toast(bits.join('　'));
+  if (unfoldWin.isOpen) unfoldWin.run();
+}
+
+/**
+ * 點清單的一列 ⇒ 3D 畫面選起那個面（第三批 b）。跟干涉清單點一列同一個做法（選物件、鏡頭入鏡）；
+ * 可編輯的物件再進編輯模式選起那一面，接著就能拉、壓平。
+ */
+function unflatPick(obj, face) {
+  if (!doc.objects.includes(obj)) { toast('這個物件已經不在了 —— 展開圖重新列一次', true); if (unfoldWin.isOpen) unfoldWin.run(); return; }
+  exitOtherModes();
+  sel.set([obj.id]);
+  view.frameAll(doc, sel.ids);
+  if (!obj.isParametric && obj.mesh().faces.includes(face)) {
+    if (!sel.editMode) { sel.setEditMode(true); $('edit').classList.add('on'); }
+    setEditFilter('face', true);
+    sel.selectFaces(obj, [face]);
+  }
+  syncModeButtons();
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+}
+
 function clashPick(i) {
   const c = clashResult && clashResult.list[i];
   if (!c || clashResult.stale) return;

@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { seamKinds, keepEdges } from '../unfold/seam.js';
+import { nonPlanarFaces } from '../core/edit.js';
 
 /**
  * 🔴 **3D 上「開口」的顏色：黃綠**（2026-10-12，kang「依照你建議」）。縫照舊橘色（`0xff7a1a`）。
@@ -29,6 +30,24 @@ export const DART_COLOR = 0x9be22d;
  */
 export const KEEP_COLOR = 0x2f6fd6;
 export const PROPOSAL_COLOR = 0x2ad4d4;
+
+/**
+ * 🔴 **不平的面：琥珀色加斜線**（網格核心第三批 b，kang 2026-10-23 → `規格\建模器-網格核心.md` 第 6 節）。
+ * ⚠ ⛔ 紅色：紅在這個畫面上是「這裡破了」「兩個物件撞在一起」，而不平是使用者自己拉出來的、要注意不是錯（坑第 28 條）。
+ * 斜線用螢幕座標畫（`gl_FragCoord`）⇒ 不管面多大、怎麼轉，線距都一樣；跟選取的黃色（實心）分得開。
+ */
+export const UNFLAT_COLORS = [0xba7517, 0xfac775];
+function unflatMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { cA: { value: new THREE.Color(UNFLAT_COLORS[0]) }, cB: { value: new THREE.Color(UNFLAT_COLORS[1]) } },
+    vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform vec3 cA; uniform vec3 cB;'
+      + 'void main() { float s = mod(gl_FragCoord.x + gl_FragCoord.y, 12.0);'
+      + ' gl_FragColor = s < 5.0 ? vec4(cA, 0.85) : vec4(cB, 0.45); }',
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1
+  });
+}
 
 /**
  * 🔴 **稜線的顏色跟著物件深淺換**：亮的物件用深線、暗的物件用淺線（kang 2026-10-14 看樣板選 B）。
@@ -412,6 +431,13 @@ export class SceneView {
     line.raycast = () => {};      // 線不要參與點選
     node.add(line);
 
+    /** 第三批 b：不平的面（琥珀色斜線）—— 內容在 `_updateNode()` 跟著網格重建 */
+    const unflat = new THREE.Mesh(new THREE.BufferGeometry(), unflatMaterial());
+    unflat.name = 'unflat';
+    unflat.raycast = () => {};
+    unflat.renderOrder = 1;
+    node.add(unflat);
+
     /**
      * 接縫：使用者標的分片切割線。
      *
@@ -686,6 +712,21 @@ export class SceneView {
       edges.geometry.dispose();
       edges.geometry = new THREE.BufferGeometry();
       edges.geometry.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
+
+      /**
+       * 🔴 **不平的面標琥珀色**（網格核心第三批 b）：跟稜線同一個時機重建 ⇒ 拖曳中每一幀都跟著變、拉回平的就消失。
+       * 判斷照 `edit.js` `nonPlanarFaces()`（⛔ 另寫一套 —— 編輯提示、展開圖清單問的是同一支）；
+       * 三角形直接跳過，所以匯入的三角形大模型幾乎不花時間。
+       */
+      const tri = [];
+      for (const { face } of nonPlanarFaces(shown)) {
+        for (const t of shown.faceTriangles(face)) for (const v of t) tri.push(v.p.x, v.p.y, v.p.z);
+      }
+      const unflat = node.getObjectByName('unflat');
+      unflat.geometry.dispose();
+      unflat.geometry = new THREE.BufferGeometry();
+      unflat.geometry.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
+      unflat.visible = tri.length > 0;
 
       /**
        * 環切加出來的邊（`hard`）以前要另外補畫（`EdgesGeometry` 只畫轉折 > 1° 的，共面的環切線一條都畫不出來，
