@@ -423,11 +423,19 @@ export class Import3DPanel {
     if (st.dup) cleaned.push(`重複的面拿掉：${st.dup} 個（有的檔把同一個面寫了兩次）`);
     if (st.degen) cleaned.push(`壞掉的面（少於 3 個不同的點）拿掉：${st.degen} 個`);
     if (cleaned.length) this.body.appendChild(box('uwSkip', '自動清理 —— ' + cleaned.join('；')));
+    /**
+     * 這幾行講的是**原檔**。上面選了補洞或聯集（網格核心第五批 b ③a）⇒ 破洞、翻面那兩種會被處理 ——
+     * 再寫「程式不自己補」就跟上面矛盾（線上先驗看到的）⇒ 改成講「原檔有…，上面選的做法會處理」；
+     * 三面共用（隔板）這兩種做法都修不了，照舊警告。
+     */
     const bad = [];
-    if (ck.open) bad.push(`有 ${ck.open} 條邊只接一個面（模型有破洞，或本來就是開口的面）`);
-    if (ck.nonManifold) bad.push(`有 ${ck.nonManifold} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`);
-    if (ck.flipped) bad.push(`有 ${ck.flipped} 條邊兩邊的面繞的方向不一致（有面翻過來了）`);
-    for (const b of bad) this.body.appendChild(box('uwWarn', '⚠ ' + b + ' —— 程式不自己補，匯進來之後照實看'));
+    if (ck.open) bad.push([`有 ${ck.open} 條邊只接一個面（模型有破洞，或本來就是開口的面）`, true]);
+    if (ck.nonManifold) bad.push([`有 ${ck.nonManifold} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, false]);
+    if (ck.flipped) bad.push([`有 ${ck.flipped} 條邊兩邊的面繞的方向不一致（有面翻過來了）`, true]);
+    for (const [b, fixable] of bad) {
+      if (fixable && solid !== 'raw') this.body.appendChild(box('uwSkip', `原檔${b} —— 上面選了「${SOLID_MODES[solid]}」會處理，處理之後的樣子看那張卡`));
+      else this.body.appendChild(box('uwWarn', '⚠ ' + (solid !== 'raw' ? '原檔' : '') + b + ' —— 程式不自己補，匯進來之後照實看'));
+    }
     if (!bad.length) this.body.appendChild(box('uwSkip', '檢查：沒有破洞、沒有接不起來的邊、面的方向一致'));
     if (r.faces.length > MANY_FACES) {
       this.body.appendChild(box('uwWarn', `⚠ 面很多（${r.faces.length} 個）：分片、智慧分切、展開會比較慢 —— 找面少一點的模型（low poly）比較好改`));
