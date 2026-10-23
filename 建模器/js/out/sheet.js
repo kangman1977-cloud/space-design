@@ -1256,7 +1256,9 @@ export function sliceTitleLines(slice, opt = {}) {
     out.push(`案件：${opt.head.name}${opt.head.date ? '　' + opt.head.date : ''}`);
   }
   if (!slice.loops.length) out.push('⚠ 這一片是空的，切不出東西');
-  if (slice.open) out.push(`⚠ 有 ${slice.open} 條線接不成封閉輪廓，這一片切不出來`);
+  // 斷線的片補過了（網格核心第五批 b ⑥）⇒ ⛔ 再說「切不出來」（跟剖面分切視窗上面那一句打架）
+  if (slice.open && slice.patched) out.push(`⚠ 有 ${slice.open} 條線接不起來，這一片的輪廓是補出來的（斷線頭尾接起來再一列一列掃），切之前看一下形狀`);
+  else if (slice.open) out.push(`⚠ 有 ${slice.open} 條線接不成封閉輪廓，這一片切不出來`);
   return out;
 }
 

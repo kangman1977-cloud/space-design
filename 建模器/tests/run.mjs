@@ -20120,6 +20120,86 @@ section('網格核心第五批 b ⑤：兩兩合併只合平的（2026-10-24）'
   ok('★ 三角形那一區的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
 }
 
+section('網格核心第五批 b ⑥：剖面斷線的片用掃描線補（2026-10-24）');
+{
+  /** `匯入整理-研究.md` 第 9 節 ⑥；kang 2026-10-22「先依照你的判斷建議處理」⇒ 斷線的片自動改用掃描線補、並講出「第幾片有斷線、已經補了」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const SC = await import('../js/slice/section.js');
+  const loopSegs = pts => pts.map((a, i) => ({ a, b: pts[(i + 1) % pts.length] }));
+  const sq = (x0, y0, n) => [{ x: x0, y: y0 }, { x: x0 + n, y: y0 }, { x: x0 + n, y: y0 + n }, { x: x0, y: y0 + n }];
+  const area = L => L.reduce((a, l) => a + l.area, 0);
+  // ① 掃描線本身
+  ok('★★ 一圈 10 × 10 的正方形 ⇒ 掃出 100（精度 0.1 mm）', Math.abs(area(SC.scanFill(loopSegs(sq(0, 0, 10)))) - 100) < 0.2);
+  // 兩圈疊一半、右邊那圈少了右邊那條線（汽車那種：零件疊著、其中一個破了）⇒ 掃到最後還沒回到 0 ⇒ 收在最後一條線（左邊那圈的右邊）
+  const broken = [...loopSegs(sq(0, 0, 10)), ...loopSegs(sq(5, 0, 10)).filter((_, i) => i !== 1)];
+  ok('★★★ 斷線、但一列裡還有別的線可以收尾 ⇒ 補到最後一條線為止（0～10 ＝ 100）', Math.abs(area(SC.scanFill(broken)) - 100) < 0.2, `${area(SC.scanFill(broken)).toFixed(2)}`);
+  // 斷線先接頭尾（bridgeEnds）：只靠「收在最後一條線」補不起來、或補錯的三種
+  const lone = loopSegs(sq(0, 0, 10)).filter((_, i) => i !== 1);                      // 右邊那條線不見了（U 字）
+  const loneEnds = [{ head: { x: 10, y: 10 }, tail: { x: 10, y: 0 } }];
+  ok('★★★ 一列裡只剩一條線（U 字、開口朝旁邊）⇒ 只靠掃描線補不起來（0）；先接頭尾（尾巴接回自己的頭）⇒ 100', SC.scanFill(lone).length === 0
+    && Math.abs(area(SC.scanFill([...lone, ...SC.bridgeEnds(loneEnds)])) - 100) < 0.2);
+  // 收納盒盒身第 4 片（kang 自己的板件：20 × 12 的一圈牆、右邊牆上有洞、下面牆上有缺口）
+  const P2 = (x, y) => ({ x, y });
+  const wall = [[P2(10, -6), P2(10, -0.793)], [P2(10, 0.793), P2(10, 6)], [P2(-10, 6), P2(-10, -6)], [P2(-10, -6), P2(-3, -6)], [P2(3, -6), P2(10, -6)], [P2(10, 6), P2(-10, 6)]].map(([a, b]) => ({ a, b }));
+  const wallEnds = [{ head: P2(10, 0.793), tail: P2(-3, -6) }, { head: P2(3, -6), tail: P2(10, -0.793) }];
+  const w0 = SC.scanFill(wall), w1 = SC.scanFill([...wall, ...SC.bridgeEnds(wallEnds)]);
+  ok('★★★ 一圈牆上有兩個缺口 ⇒ 只靠掃描線被切成 2 塊（208.4）；先接頭尾（短的先接）⇒ 1 塊 240、跟上下片一樣', w0.length === 2 && Math.abs(area(w0) - 208.4) < 0.3
+    && w1.length === 1 && Math.abs(area(w1) - 240) < 0.3, `${w0.length} 塊 ${area(w0).toFixed(1)} → ${w1.length} 塊 ${area(w1).toFixed(1)}`);
+  // 收納盒的隔板（兩片沒有厚度的板子，各切到一條直線）
+  const fins = [{ a: P2(-3.38, -5.5), b: P2(-3.38, 5.5) }, { a: P2(3.29, -5.5), b: P2(3.29, 5.5) }];
+  const f0 = SC.scanFill(fins), f1 = SC.scanFill([...fins, ...SC.bridgeEnds(fins.map(g => ({ head: g.a, tail: g.b })))]);
+  ok('★★★ 兩片隔板各切到一條直線 ⇒ 只靠掃描線把中間整個填滿（73.4，憑空多出來的料）；先接頭尾（各自接回自己）⇒ 圍不出面積、⛔ 補', Math.abs(area(f0) - 73.4) < 0.3 && f1.length === 0, `${area(f0).toFixed(1)} → ${area(f1).toFixed(1)}`);
+  ok('★★ 很多條斷線（400 條小 U 字、只找最近的幾個頭）⇒ 每條尾巴都接回自己的頭、一條都沒漏', (() => {
+    const E = []; for (let i = 0; i < 400; i++) E.push({ head: P2(i * 3, 1), tail: P2(i * 3, 0) });
+    const br = SC.bridgeEnds(E); return br.length === 400 && br.every((g, k) => g.a.x === g.b.x);
+  })());
+  ok('★★ 最近的幾個頭都被別人接走的尾巴 ⇒ 從剩下的頭裡接（⛔ 漏接）', (() => {
+    const E = []; for (let i = 0; i < 10; i++) E.push({ head: P2(i, 0), tail: i < 9 ? P2(i + 1, 0.01) : P2(1000, 0) });
+    const br = SC.bridgeEnds(E); return br.length === 10 && br.some(g => g.a.x === 1000 && g.b.x === 0);
+  })());
+  // ② 剖面分切：開口的方塊（少一個側面），開口朝四個方向
+  const cube = edit.mergeCoplanarFaces(prim.buildPrim('box', { w: 10, h: 10, d: 10 })).mesh;
+  const vi = cube._vertIndex(); const P = cube.verts.map(v => v.p.clone()), F = cube.faces.map(f => cube.faceVerts(f).map(v => vi.get(v.id)));
+  const opened = [['x', 5], ['x', -5], ['z', 5], ['z', -5]].map(([ax, v]) => {
+    const side = F.findIndex(f => f.every(i => Math.abs(P[i][ax] - v) < 1e-9));
+    return SC.sliceMany([Mesh.fromFaceList(P, F.filter((_, i) => i !== side))], { axis: 'y' });
+  });
+  ok('★★★ 開口的方塊（一整個側面不見）切 y、開口朝 +x／−x／+z／−z ⇒ 每一片都斷線、都補成 100 cm²、提示講第幾片已經補了（以前開口朝 x 時 10 片全空）',
+    opened.every(so => so.ok && so.slices.every(x => x.open > 0 && x.patched && Math.abs(x.area - 100) < 0.3) && so.warnings.some(w => /片有斷線.*已經補成實心的片/.test(w))),
+    opened.map(so => so.slices.map(x => x.area.toFixed(0)).join(',')).join(' / '));
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const finMesh = Mesh.fromFaceList([V(-3, 0, -5), V(-3, 0, 5), V(-3, 10, 5), V(-3, 10, -5), V(3, 0, -5), V(3, 0, 5), V(3, 10, 5), V(3, 10, -5)], [[0, 1, 2, 3], [4, 5, 6, 7]]);
+  const sf = SC.sliceMany([finMesh], { axis: 'y' });
+  ok('★★★ 兩片沒有厚度的隔板切 y ⇒ 每片都斷線、⛔ 補（0 cm²，⛔ 把中間填滿）、提示講「補不起來…圍不出面積」、⛔ 講已經補了', sf.ok && sf.slices.every(x => x.open > 0 && !x.patched && x.area === 0)
+    && sf.warnings.some(w => /片有斷線、補不起來.*圍不出面積/.test(w)) && !sf.warnings.some(w => /已經補成/.test(w)), sf.warnings.join(' / ').slice(0, 160));
+  const sc = SC.sliceMany([cube], { axis: 'y' });
+  ok('★★ 封閉的方塊 ⇒ 一片都不補（照舊精確的輪廓）、提示⛔ 講補線', sc.slices.every(x => !x.patched && x.open === 0) && !sc.warnings.some(w => /斷線|補成/.test(w)));
+  // ③ 真的樣本：汽車（10-22 原型量過的那一份）
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const cr = rd('LLT_3D_Print_1k72.STL'), [cp] = im.toParts(cr, { cmPerUnit: 12.35 / cr.size[2], up: 'z', split: false });
+  const car = SC.sliceMany([Mesh.fromFaceList(cp.points.map(q => new THREE.Vector3(...q)), cp.faces)], { axis: 'y' });
+  ok('★★★ 汽車（高 12.35 cm）切 y：12 片裡 11 片斷線、11 片都補了、一片都不空；第 2 片 507.99 cm²（跟 10-22 原型一樣）', car.slices.length === 12 && car.slices.filter(x => x.patched).length === 11
+    && car.slices.every(x => x.loops.length) && Math.abs(car.slices[1].area - 507.99) < 0.05, `${car.slices.filter(x => x.patched).length} 片、第 2 片 ${car.slices[1].area.toFixed(2)}`);
+  const besideBox = (() => { const side = F.findIndex(f => f.every(i => Math.abs(P[i].x - 5) < 1e-9)); return Mesh.fromFaceList(P, F.filter((_, i) => i !== side)).transformed(new THREE.Matrix4().makeTranslation(20, 0, 0)); })();
+  const mx = SC.sliceMany([cube, besideBox], { axis: 'y', maxOutline: true });
+  ok('★★★ 照最大外形切：封閉的方塊（走影子）＋旁邊開口的方塊（補）⇒ 每片 100 ＋ 100 ＝ 200、兩圈（封閉的那個⛔ 被補的蓋掉）', mx.ok && mx.slices.every(x => x.patched && x.loops.length === 2 && Math.abs(x.area - 200) < 0.5),
+    mx.slices.map(x => x.area.toFixed(1)).join(','));
+  // 收納盒整份一起切（本機抓到）：盒身牆上缺口的線頭⛔ 接到旁邊隔板的線上
+  const T3 = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T3/收納盒.json'), 'utf8')));
+  const t3 = SC.sliceMany(T3.objects.map(o => o.mesh().transformed(o.matrix())), { axis: 'y' });
+  ok('★★★ kang 的收納盒（盒身＋蓋子＋隔板）整份一起切 ⇒ 斷線只在同一個物件裡面接 ⇒ 第 1～8 片都是一圈 240 cm²（接到隔板上第 4～6 片會多一個斜的缺口、203.45）',
+    t3.ok && t3.slices.slice(0, 8).every(x => x.loops.length === 1 && Math.abs(x.area - 240) < 0.3), t3.slices.map(x => x.area.toFixed(1)).join(','));
+  const tl = sliceTitleLines(car.slices[1]).join(' / '), tlFin = sliceTitleLines(sf.slices[0]).join(' / ');
+  ok('★★★ 每一片的說明（排版預覽、SVG、列印）：補過的片講「輪廓是補出來的」、⛔ 說「切不出來」（本機抓到跟視窗上面那一句打架）；補不起來的照舊講切不出來',
+    /383 條線接不起來，這一片的輪廓是補出來的/.test(tl) && !/切不出來/.test(tl) && /條線接不成封閉輪廓，這一片切不出來/.test(tlFin), tl.slice(-80));
+  // ④ 讀程式守著
+  const ss = readFileSync(join(here, '../js/slice/section.js'), 'utf8'), bs = readFileSync(join(here, '../js/build/bool.js'), 'utf8');
+  ok('★★ 精度 0.1 mm、拉直 0.05 mm；有斷線才補（op > 0）、先接頭尾再掃（每個物件各接各的、每條尾巴比最近 8 個頭）、補過的片不再合併；Manifold 只在 bool.js', SC.SCAN_H === 0.01 && SC.SCAN_EPS === 0.005
+    && /if \(op > 0 && canMerge && segs\.length\) \{\s*for \(const e of ends\) for \(const g of bridgeEnds\(e\)\) segs\.push\(g\);\s*const filled = scanFill\(segs\);/.test(ss) && /const BRIDGE_K = 8;/.test(ss) && /if \(canMerge && loops\.length > 1 && \(!patched \|\| shadows\.length\)\) \{/.test(ss) && /export function rowsToLoops\(rects, eps\)/.test(bs) && !/CrossSection/.test(ss));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

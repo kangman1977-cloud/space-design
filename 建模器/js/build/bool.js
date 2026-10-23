@@ -472,6 +472,31 @@ export function mergeLoops(polys) {
 }
 
 /**
+ * 🔴 **剖面斷線那一片：一堆掃描線的細長方塊合成輪廓、把階梯拉直**（網格核心第五批 b ⑥ → `slice/section.js` `scanFill()`）。
+ * 放在這裡的理由同 `mergeLoops()`：只有這個檔可以碰 Manifold（`CrossSection` NonZero 聯集＋`simplify()`）。
+ * @param {Array<[number,number][]>} rects 每個是一列裡實心的那一段（四個角）
+ * @param {number} eps 拉直的容許值（cm）：比這個小的鋸齒拿掉
+ * @returns {{x:number,y:number}[][]}
+ */
+export function rowsToLoops(rects, eps) {
+  if (!rects.length) return [];
+  const w = need();
+  const made = [];
+  try {
+    const cs = new w.CrossSection(rects, 'NonZero');
+    made.push(cs);
+    if (cs.isEmpty()) return [];
+    const sm = eps > 0 ? cs.simplify(eps) : cs;
+    if (sm !== cs) made.push(sm);
+    return sm.toPolygons().map(poly => poly.map(p => ({ x: p[0], y: p[1] })));
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **一圈平面上的點往外（`delta` > 0）或往內（< 0）推一段距離**（2026-10-19，展開圖的縫份／黏合片：`out/sheet.js` `marginGeometry()`）。
  * 放在這裡的理由同 `slabShadow()`：只有這個檔可以碰 Manifold（`CrossSection.offset()`）。
  * ⭐ 轉角用「尖角」（Miter，上限 2 倍 ⇒ 很尖的角會被削平，⛔ 長出一根刺）—— 縫份、黏合片的外框都是直角接。

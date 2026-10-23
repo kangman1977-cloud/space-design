@@ -19,7 +19,7 @@
  */
 
 import * as THREE from 'three';
-import { csgReady, slabShadow, mergeLoops } from '../build/bool.js';
+import { csgReady, slabShadow, mergeLoops, rowsToLoops } from '../build/bool.js';
 
 /**
  * 三個切片軸。
@@ -92,6 +92,10 @@ export const MAX_SLABS = 2000;
 
 /** 串接輪廓時判斷「同一個點」的量化格線 */
 const SNAP = 1e6;
+/** 斷線補線：每一列多高（cm）＝ 精度 0.1 mm；拉直的容許值（cm）*/
+export const SCAN_H = 0.01, SCAN_EPS = 0.005;
+/** 斷線接頭尾：每條尾巴找最近的幾個頭來比 */
+const BRIDGE_K = 8;
 
 /**
  * 🔴 **每片自動合併：面積差多少才算「真的有疊到」**（cm²；2026-10-22，第二輪第一批（二）甲）。
@@ -262,7 +266,116 @@ export function sectionAt(mesh, axisKey, coord) {
     }
   }
 
-  return chain(segs);
+  return { ...chain(segs), segs };     // segs：斷線的時候掃描線補要用（網格核心第五批 b ⑥）
+}
+
+/**
+ * 🔴 **斷線那一片用掃描線補**（網格核心第五批 b ⑥，2026-10-24 → `匯入整理-研究.md` 第 9 節 ⑥；
+ * kang 2026-10-22「先依照你的判斷建議處理」⇒ 斷線的片自動改用掃描線補、並講出「第幾片有斷線、已經補了」）。
+ * 外來的破模型（汽車 41 片有 36 片）切到斷線，那一片照舊「沒有板」或少一塊 —— ⛔ 有人要那個結果。
+ * 做法（10-22 原型 `slice_proto5.mjs`）：線段一列一列掃（每列 `SCAN_H` ＝ 0.01 cm），照線段的方向數進出，
+ * **被任何一圈包住就算料**（非零規則）⇒ 每一列實心的那一段變成細長方塊 ⇒ 合成輪廓、把階梯拉直（`SCAN_EPS`）。
+ * ⚠ 呼叫前先把斷線的頭尾接起來（`bridgeEnds()`）—— 只靠「收在最後一條線」的話，一列裡只剩一條線的地方
+ * （開口朝某一邊、牆上有缺口）整列補不起來：開口的方塊開口朝 x 時 10 片全空、收納盒有把手洞的片被切成兩塊。
+ * 乾淨的片⛔ 走這裡（照舊精確的輪廓）。
+ * @param {{a:{x,y}, b:{x,y}}[]} segs 這一刀所有物件的有向線段（含接頭尾補的線）
+ * @returns {{pts, area, isHole}[]}
+ */
+export function scanFill(segs) {
+  let y0 = Infinity, y1 = -Infinity;
+  for (const { a, b } of segs) { y0 = Math.min(y0, a.y, b.y); y1 = Math.max(y1, a.y, b.y); }
+  if (!(y1 > y0)) return [];
+  const rows = Math.ceil((y1 - y0) / SCAN_H), by = Array.from({ length: rows }, () => []);
+  for (const { a, b } of segs) {
+    if (a.y === b.y) continue;
+    const lo = Math.min(a.y, b.y), hi = Math.max(a.y, b.y), w = b.y > a.y ? 1 : -1;
+    for (let r = Math.max(0, Math.ceil((lo - y0) / SCAN_H - 0.5)); r < rows; r++) {
+      const y = y0 + (r + 0.5) * SCAN_H;
+      if (y >= hi) break;
+      if (y < lo) continue;
+      by[r].push([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), w]);
+    }
+  }
+  const rects = [];
+  by.forEach((xs, r) => {
+    if (!xs.length) return;
+    xs.sort((p, q) => p[0] - q[0]);
+    const yb = y0 + r * SCAN_H, yt = yb + SCAN_H;
+    let wn = 0, st = 0, last = 0;
+    for (const [x, sg] of xs) {
+      const was = wn !== 0;
+      wn += sg;
+      if (!was && wn !== 0) st = x;
+      else if (was && wn === 0 && x > st) rects.push([[st, yb], [x, yb], [x, yt], [st, yt]]);
+      last = x;
+    }
+    // 掃到最後還沒回到 0（斷掉的線少一條）⇒ 收在最後一條線
+    if (wn !== 0 && last > st) rects.push([[st, yb], [last, yb], [last, yt], [st, yt]]);
+  });
+  return shadowLoops(rowsToLoops(rects, SCAN_EPS));
+}
+
+/**
+ * 🔴 **斷線先接頭尾**（網格核心第五批 b ⑥）：每一條斷掉的線，尾巴接到最近、還沒被接過的頭
+ * （可以是自己的頭 ⇒ 開口的 U 字自己封起來）。所有配對照距離排、**短的先接**、一個頭只接一次。
+ * 只有一條直線的斷線（沒有厚度的板子切到的那一條）接回自己 ⇒ 圍不出面積 ⇒ ⛔ 憑空補出料
+ * （以前「收在最後一條線」會把兩片隔板中間整個填滿）。
+ * 每條尾巴只找最近的 `BRIDGE_K` 個頭（格子一圈一圈往外找）⇒ 斷線多也⛔ 變成兩兩全比；
+ * 那幾個頭都被別人接走的尾巴最後再從剩下的頭裡找最近的。
+ * @param {{head:{x,y}, tail:{x,y}}[]} ends `chain()` 回傳的斷線頭尾
+ * @returns {{a:{x,y}, b:{x,y}}[]} 補上的線（尾 → 頭）
+ */
+export function bridgeEnds(ends) {
+  const n = ends.length;
+  if (!n) return [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  // ⚠ 格子要把頭跟尾都包進去：只包頭的話，只有一條斷線時格子小到 0、尾巴在無限遠的格子外 ⇒ 一圈一圈找不完（測試抓到）
+  for (const { head: h, tail: t } of ends) {
+    x0 = Math.min(x0, h.x, t.x); y0 = Math.min(y0, h.y, t.y); x1 = Math.max(x1, h.x, t.x); y1 = Math.max(y1, h.y, t.y);
+  }
+  const cell = Math.max(x1 - x0, y1 - y0, 1e-9) / Math.ceil(Math.sqrt(n));
+  const gx = x => Math.floor((x - x0) / cell), gy = y => Math.floor((y - y0) / cell);
+  const nx = gx(x1), ny = gy(y1), grid = new Map();
+  ends.forEach(({ head: h }, j) => {
+    const k = gx(h.x) + ',' + gy(h.y);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(j);
+  });
+  const dist = (t, j) => Math.hypot(ends[j].head.x - t.x, ends[j].head.y - t.y);
+  const pairs = [];
+  ends.forEach(({ tail: t }, i) => {
+    const cx = gx(t.x), cy = gy(t.y), found = [];
+    for (let r = 0; ; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          for (const j of grid.get((cx + dx) + ',' + (cy + dy)) || []) if (j !== i) found.push([dist(t, j), j]);
+        }
+      }
+      // 外面一圈的頭至少離 r 格遠 ⇒ 已經找到 K 個、而且第 K 個不比那更遠就夠了
+      if (found.length >= BRIDGE_K) {
+        found.sort((p, q) => p[0] - q[0]);
+        if (found[BRIDGE_K - 1][0] <= r * cell) break;
+      }
+      if (cx - r <= 0 && cy - r <= 0 && cx + r >= nx && cy + r >= ny) break;    // 整張格子都找過了
+    }
+    found.sort((p, q) => p[0] - q[0]);
+    for (const [d, j] of found.slice(0, BRIDGE_K)) pairs.push([d, i, j]);
+    pairs.push([dist(t, i), i, i]);
+  });
+  pairs.sort((p, q) => p[0] - q[0]);
+  const tUsed = new Set(), hUsed = new Set(), out = [];
+  const join = (i, j) => { tUsed.add(i); hUsed.add(j); out.push({ a: ends[i].tail, b: ends[j].head }); };
+  for (const [, i, j] of pairs) if (!tUsed.has(i) && !hUsed.has(j)) join(i, j);
+  // 剩下的（找的那幾個頭都被接走了）：剩下的尾巴跟剩下的頭照樣短的先接
+  const ti = [], hj = [];
+  for (let i = 0; i < n; i++) { if (!tUsed.has(i)) ti.push(i); if (!hUsed.has(i)) hj.push(i); }
+  const rest = [];
+  // ⚠ 剩下太多（⛔ 遇過）就不兩兩全比 —— 沒接到的交給掃描線「收在最後一條線」
+  if (ti.length * hj.length <= 4e6) for (const i of ti) for (const j of hj) rest.push([dist(ends[i].tail, j), i, j]);
+  rest.sort((p, q) => p[0] - q[0]);
+  for (const [, i, j] of rest) if (!tUsed.has(i) && !hUsed.has(j)) join(i, j);
+  return out;
 }
 
 /**
@@ -282,6 +395,7 @@ function chain(segs) {
 
   const loops = [];
   let open = 0;
+  const ends = [];                      // 斷掉的線的頭與尾（網格核心第五批 b ⑥ 接頭尾要用）
   const used = new Set();
 
   for (const s0 of segs) {
@@ -303,7 +417,7 @@ function chain(segs) {
       cur = cand;
     }
 
-    if (!closed) { open++; continue; }
+    if (!closed) { open++; ends.push({ head: pts[0], tail: pts[pts.length - 1] }); continue; }
 
     const clean = dropCollinear(pts);
     if (clean.length < 3) continue;
@@ -316,7 +430,8 @@ function chain(segs) {
   return {
     loops,
     area: loops.reduce((s, l) => s + l.area, 0),
-    open
+    open,
+    ends
   };
 }
 
@@ -422,7 +537,7 @@ export function sliceMany(meshes, opt = {}) {
      * 這裡不擋，但一定要講 —— 沉默地給一張接不起來的圖最糟。
      */
     warnings.push(`有 ${open} 個物件不是封閉的實體（是開放曲面），`
-      + '剖面切出來的線接不成封閉輪廓。請先改成實體或做布林聯集。');
+      + '剖面切出來的線可能接不成封閉輪廓（有斷線的片補了沒有，下面會講）。要精確的輪廓，請先改成實體或做布林聯集。');
   }
   /**
    * 🔴 **每片自動合併**（2026-10-22，第二輪第一批（二）甲；kang「同意你的建議」）。
@@ -462,6 +577,7 @@ export function sliceMany(meshes, opt = {}) {
 
   const slices = [];
   let openTotal = 0;
+  const patchedAt = [], unpatchedAt = [];
   const mergedAt = [];
   let before = 0, after = 0;
 
@@ -469,19 +585,35 @@ export function sliceMany(meshes, opt = {}) {
     const coord = lo + s.mid;
     let loops = [];
     let op = 0;
+    const segs = [], ends = [], shadows = [];
     for (const m of list) {
       if (canMax && m.isClosed()) {
-        loops.push(...shadowLoops(slabShadow(m, basis, lo + s.z0, lo + s.z1)));
+        for (const l of shadowLoops(slabShadow(m, basis, lo + s.z0, lo + s.z1))) { loops.push(l); shadows.push(l); }
         continue;
       }
       const r = sectionAt(m, axis, coord);
       loops.push(...r.loops);
       op += r.open;
+      for (const g of r.segs) segs.push(g);
+      if (r.ends.length) ends.push(r.ends);
     }
     openTotal += op;
+    /**
+     * 有斷線 ⇒ 斷線先接頭尾、這一片整片改用掃描線補（所有物件的線段一起掃 ⇒ 疊在一起的也一次合好）。
+     * ⚠ 頭尾**只在同一個物件裡面接**：收納盒整份一起切，盒身牆上缺口的線頭被接到旁邊隔板的線上 ⇒ 第 4～6 片
+     * 多出一個斜的缺口（203.45 cm²，本機抓到）；各接各的 ⇒ 240、跟上下片一樣。
+     */
+    let patched = false;
+    if (op > 0 && canMerge && segs.length) {
+      for (const e of ends) for (const g of bridgeEnds(e)) segs.push(g);
+      const filled = scanFill(segs);
+      // ⚠ 照最大外形切時封閉的物件走影子、⛔ 在線段裡 ⇒ 影子要留著、跟補出來的再合一次（⛔ 留的話那些物件整個不見）
+      if (filled.length) { loops = [...shadows, ...filled]; patched = true; patchedAt.push(s.index); }
+      else unpatchedAt.push(s.index);       // 接起來也圍不出面積（只切到沒有厚度的板子的一條線）
+    }
     let area = loops.reduce((a, l) => a + l.area, 0);
     let overlap = 0;
-    if (canMerge && loops.length > 1) {
+    if (canMerge && loops.length > 1 && (!patched || shadows.length)) {
       const merged = shadowLoops(mergeLoops(loops.map(l => l.pts)));
       const mArea = merged.reduce((a, l) => a + l.area, 0);
       if (Math.abs(area - mArea) > MERGE_TOL + MERGE_REL * Math.abs(area)) {
@@ -502,6 +634,7 @@ export function sliceMany(meshes, opt = {}) {
       area,
       overlap,          // 合併前多算的面積（cm²）；0 ＝ 沒有疊到、輪廓原樣
       open: op,
+      patched,          // 有斷線、已經用掃描線補（網格核心第五批 b ⑥）
       bounds: loopsBounds(loops)
     });
   }
@@ -512,8 +645,17 @@ export function sliceMany(meshes, opt = {}) {
       + `），已經照「被任何一圈包住就是料」合成一圈，重疊的地方只算一次：這幾片原本算 ${r2(before)} cm²、合併後 ${r2(after)} cm²。`);
   }
 
-  if (openTotal > 0) {
-    warnings.push(`有 ${openTotal} 條線接不成封閉輪廓，那些地方切不出可裁的片。`);
+  if (patchedAt.length) {
+    warnings.push(`第 ${listNums(patchedAt)} 片有斷線（模型有破洞、零件沒接好，或是開口的板件，共 ${openTotal} 條線接不起來），`
+      + '已經補成實心的片：斷掉的線頭尾接到最近的線、再一列一列掃，被任何一圈包住就算料，精度 0.1 mm —— 這幾片的輪廓是補出來的，切之前看一下形狀對不對。');
+  }
+  if (unpatchedAt.length) {
+    warnings.push(`第 ${listNums(unpatchedAt)} 片有斷線、補不起來（斷掉的線接起來也圍不出面積 —— 例如只切到沒有厚度的板子的一條線）`
+      + ' —— 那幾片只剩接得起來的輪廓；外來的破模型先補好（匯入時選「補洞＋修方向」）再切。');
+  }
+  if (!patchedAt.length && !unpatchedAt.length && openTotal > 0) {
+    warnings.push(`有 ${openTotal} 條線接不成封閉輪廓，那些地方切不出可裁的片`
+      + (canMerge ? '。' : '（布林運算函式庫沒載入，沒辦法用掃描線補）。'));
   }
 
   /**
