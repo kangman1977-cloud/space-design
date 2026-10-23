@@ -2665,7 +2665,13 @@ section('貼合（mate.js）');
    * `標尺寸` 報的重心**同一個定義**。
    */
   {
-    const mB = B.mesh();
+    /**
+     * ⚠ 網格核心第四批（2026-10-23）起參數方塊算出來就合成 6 個面 ⇒ 改用**三角形網格的物件**守同一件事
+     * （匯入的 STL、布林凍結前的網格都是三角形，點到哪一個三角形一樣要貼在同一個位置）。
+     */
+    const Bt = new io.ModelObject({ name: 'B', src: { type: 'mesh' }, kind: 'solid', pos: V3(0, 0, 0) });
+    Bt._mesh = buildPrim('box', { w: 60, h: 45, d: 40 });
+    const mB = Bt.mesh();
     mB.computeNormals();
     const tris = mB.faces.filter(f => mB.computeFaceNormal(f).x > 0.99);
     ok('前提：方塊的一個面是 2 個三角形（⛔ 不是 1 個）', tris.length === 2);
@@ -2673,7 +2679,7 @@ section('貼合（mate.js）');
     const out = tris.map(t => {
       const A = mkA();
       const fA = faceAt(A, V3(-20, 0, 0));
-      const r = M.mateFaceToFace(A, M.faceFrame(A, fA), M.faceFrame(B, t));
+      const r = M.mateFaceToFace(A, M.faceFrame(A, fA), M.faceFrame(Bt, t));
       return [r.pos.x, r.pos.y, r.pos.z].map(n => n.toFixed(9)).join(',');
     });
     eq('★★★ 點到面的哪一個三角形，貼出來的位置完全一樣', out[0], out[1]);
@@ -5439,7 +5445,8 @@ section('bake 順手還原多邊形 ＋ 平面性防護');
   const v0 = o.mesh().volume(), a0 = o.mesh().area();
   o.bake();
   const m = o.mesh();
-  eq('★ bake 之後 方塊面數 12 → 6', `${before}/${m.faces.length}`, '12/6');
+  /** ⚠ 網格核心第四批（2026-10-23）起參數物件算出來就合好了（`io.js` `mesh()`）⇒ bake 前後都是 6（以前 12 → 6）*/
+  eq('★ bake 前後 方塊都是 6 個面（第四批起參數物件算出來就合好）', `${before}/${m.faces.length}`, '6/6');
   rel('★ 體積精確不變', m.volume(), v0);
   rel('★ 面積精確不變', m.area(), a0);
   eq('　　src 有換成 mesh', o.src.type, 'mesh');
@@ -17555,11 +17562,13 @@ if (csgOK) {
     ok(`★★ 　 程式剪的邊都是物件自己網格上的邊（${ra.autoEdges.length} 條）`, ra.autoEdges.length > 0 && ra.autoEdges.every(h => own.has(h) || own.has(h.twin)));
   }
   const notch = new io.ModelObject({ name: '挖角', kind: io.KIND.SOLID, src: cases[0][1] });
+  const b0faces = src => { const x = new io.ModelObject({ name: 'x', kind: io.KIND.SOLID, src: JSON.parse(JSON.stringify(src)) }); x.bake(); return x.mesh().faces.length; };
   const rn = unfoldObject(notch, { material: 'foamboard' });
   ok('★★★ 挖掉一角：沒轉就攤也⛔ 重疊（以前 125 × 65 重疊）', rn.pieces.every(p => !p.overlap), sig(rn));
-  ok('★★ 　 物件自己的網格⛔ 換（還是布林算出來的三角形，畫面、匯出照舊）', notch.mesh().faces.length > 8 && notch.isBool, `${notch.mesh().faces.length} 面`);
-  // 對照：直接攤三角形（舊做法）會重疊 —— 這個測試抓得到那個病
-  const old = unfoldMesh(notch.mesh(), makeRule('foamboard', notch.thickness));
+  /** ⚠ 網格核心第四批（2026-10-23）起物件自己的網格算出來就合好了（`io.js` `mesh()`）⇒ 以前這一項守「還是三角形」，改成守「已經合好」 */
+  ok('★★ 　 物件自己的網格算出來就合好（第四批起；跟轉成網格一樣）', notch.mesh().faces.length === b0faces(cases[0][1]) && notch.isBool, `${notch.mesh().faces.length} 面`);
+  // 對照：直接攤三角形（舊做法）會重疊 —— 這個測試抓得到那個病（第四批起用 `buildSrc()` 直接算出來、還沒合的那一份）
+  const old = unfoldMesh(io.buildSrc(notch.src, notch.thickness), makeRule('foamboard', notch.thickness));
   ok('　　對照：直接攤三角形（舊做法）會重疊', old.pieces.some(p => p.overlap));
 } else {
   ok('（略過：CSG 沒載入）', true);
@@ -17843,7 +17852,8 @@ section('平滑的圓錐面當一段曲線帶（2026-10-19 綜合評估 ①-11�
   // 沒有平滑標記的基本形狀：一條線都不變（數字是 2026-10-19 改之前量的）
   const drawn = t => unfoldObject(new io.ModelObject({ name: t, kind: io.KIND.SOLID, src: { type: t, ...PRIM_DEFAULTS[t] } }), { material: 'paper' })
     .pieces.reduce((n, p) => n + p.folds.filter(f => !f.isArcEdge).length, 0);
-  eq('★★★ 沒有平滑標記的照舊畫折線：方塊 5、圓柱 2、圓錐 43、球 493、階梯 11', ['box', 'cylinder', 'cone', 'sphere', 'stairs'].map(drawn).join(','), '5,2,43,493,11');
+  /** ⚠ 網格核心第四批（2026-10-23）：球 493 → 505 —— 參數物件算出來就合好，505 ＝ 以前「轉成網格再攤」的數（沙箱：沒合 493、合過 505；其他四種合不合都一樣）*/
+  eq('★★★ 沒有平滑標記的照舊畫折線：方塊 5、圓柱 2、圓錐 43、球 505（＝ 轉成網格再攤）、階梯 11', ['box', 'cylinder', 'cone', 'sphere', 'stairs'].map(drawn).join(','), '5,2,43,505,11');
   /** ⚠ 圓環、半球是旋轉做出來的、本來就有平滑標記 ⇒ 跟著變（改之前 70、38 道）—— 2026-10-19 跟 kang 報告過 */
   eq('★★ 圓環、半球（旋轉做的，有平滑標記）：圖上的折線 70 → 38、38 → 8', ['torus', 'dome'].map(drawn).join(','), '38,8');
 }
@@ -18369,7 +18379,8 @@ section('綜合評估 ④ 第二批（三）：同軸貼合（2026-10-20）');
   const wantDir = new THREE.Vector3(0, 1, 0).applyEuler(shaft.rot);
   ok('★★★ ④-9 點圓柱的側面 ⇒ 中心線穿過它的中心、方向 ＝ 它轉過之後的高度方向、半徑 0.3', fs.ok
     && fs.point.distanceTo(new THREE.Vector3(5, 3, 2)) < 1e-6 && Math.abs(Math.abs(fs.dir.dot(wantDir)) - 1) < 1e-9 && Math.abs(fs.radius - 0.3) < 1e-6, fs.reason || fs.point.toArray().join());
-  ok('★★ 　 那一圈長到整個側面就停（蓋子 90° ⛔ 算進來）：64 個三角形', fs.ok && fs.count === 64, fs.count);
+  /** ⚠ 網格核心第四批（2026-10-23）起參數圓柱算出來就合好 ⇒ 側面是 32 個四邊形（以前 64 個三角形，同一圈）*/
+  ok('★★ 　 那一圈長到整個側面就停（蓋子 90° ⛔ 算進來）：32 個四邊形', fs.ok && fs.count === 32, fs.count);
   const m0 = shaft.mesh();
   const cap = m0.faces.find(f => f.normal.y > 0.9);
   ok('★★ 　 點到平的蓋子 ⇒ ⛔ 猜、講「要點圓的側面」', !M.cylinderFrame(shaft, cap).ok && M.cylinderFrame(shaft, cap).reason.includes('圓的側面'));
@@ -19650,6 +19661,54 @@ section('網格核心第三批 b：不平的面標琥珀色、展開前列出來
   }
   ok('★★ 拖曳、平滑頂點的提示講最遠偏離多少（共用 unflatNote）', /bits\.push\(unflatNote\(r\)\)/.test(mbody('editDrag')) && /bits\.push\(unflatNote\(rf\)\)/.test(mbody('smoothVertsSelected'))
     && /nonPlanarWorst\.toFixed\(3\)/.test(mbody('unflatNote')));
+}
+
+section('網格核心第四批：參數物件算出來就在最外層合一次（沒轉網格 ＝ 轉了網格）（2026-10-23）');
+{
+  /** `規格\建模器-網格核心.md` 第四批；kang 2026-10-23「照你的建議做：只在最外層合，基準換成新的一份」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const { PRIM_DEFAULTS } = await import('../js/build/prim.js');
+  const sig = r => r.pieces.map(p => `${p.width.toFixed(3)}×${p.height.toFixed(3)}×${p.qty}`).join(',') + `｜剪 ${r.autoEdges.length}`;
+  const pair = src => {
+    const a = new io.ModelObject({ name: 'a', kind: io.KIND.SOLID, src: JSON.parse(JSON.stringify(src)) });
+    const b = new io.ModelObject({ name: 'b', kind: io.KIND.SOLID, src: JSON.parse(JSON.stringify(src)) }); b.bake();
+    return [a, b];
+  };
+  const bad = [];
+  for (const t of Object.keys(PRIM_DEFAULTS)) {
+    if (t === 'gear') continue;                                   // 齒輪大、慢；面數兩邊本來就一樣（平面帶孔合不了）
+    const [a, b] = pair({ type: t, ...PRIM_DEFAULTS[t] });
+    const ma = a.mesh(), mb = b.mesh();
+    const same = ma.faces.length === mb.faces.length && triangles(ma).length === triangles(mb).length
+      && sig(unfoldObject(a, { material: 'paper' })) === sig(unfoldObject(b, { material: 'paper' }));
+    if (!same) bad.push(t);
+  }
+  ok('★★★ 每一種基本形狀：沒轉網格跟轉了網格 —— 面數、STL 三角形數、展開（外框、片數、程式剪）都一樣', bad.length === 0, bad.join('、'));
+  const [bx] = pair({ type: 'box', ...PRIM_DEFAULTS.box }), [cy] = pair({ type: 'cylinder', ...PRIM_DEFAULTS.cylinder });
+  ok('★★ 　 方塊算出來就是 6 個面、圓柱 34 個面（以前 12、128 個三角形）', bx.mesh().faces.length === 6 && cy.mesh().faces.length === 34);
+  ok('★★ 　 體積、面積跟沒合的一模一樣', Math.abs(cy.mesh().volume() - io.buildSrc(cy.src).volume()) < 1e-6 && Math.abs(cy.mesh().area() - io.buildSrc(cy.src).area()) < 1e-6);
+  const [sa, sb] = pair({ type: 'sphere', ...PRIM_DEFAULTS.sphere });
+  const pa = proposeSeams(sa, { material: 'paper' }), pb = proposeSeams(sb, { material: 'paper' });
+  ok('★★★ 球的智慧分切提案：沒轉網格 ＝ 轉了網格（以前沒轉 18 片只沿轉角、轉了 2 片花瓣）', pa.total === pb.total && pa.label === pb.label && Math.abs(pa.cutLen - pb.cutLen) < 1e-6, `${pa.total} 片 ${pa.label} ／ ${pb.total} 片 ${pb.label}`);
+  if (csgOK) {
+    const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+    const boolSrc = { type: 'bool', op: BOOL_OPS.SUBTRACT, items: [it({ type: 'box', w: 40, h: 30, d: 20 }), it({ type: 'cylinder', r: 5, h: 40, seg: 32 }, [5, 0, 0])] };
+    const [ba, bb] = pair(boolSrc);
+    ok('★★★ 布林（方塊挖圓孔）：沒轉 ＝ 轉了（面數、STL 三角形數、展開）', ba.mesh().faces.length === bb.mesh().faces.length
+      && triangles(ba.mesh()).length === triangles(bb.mesh()).length && sig(unfoldObject(ba, { material: 'paper' })) === sig(unfoldObject(bb, { material: 'paper' })),
+      `${ba.mesh().faces.length}／${bb.mesh().faces.length}`);
+  }
+  const box4 = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', w: 10, h: 10, d: 10 } });
+  const arr = new io.ModelObject({ name: '環形', kind: io.KIND.SOLID, src: io.arraySrcFrom(box4, ARRAY_MODES.RADIAL) });
+  ok('★★ 陣列的「每一份都在同一個位置」記號合完照樣帶著（第一版漏帶、舊測試抓到）', arr.mesh().arrayStacked === true && io.buildSrc(arr.src).arrayStacked === true, `${arr.mesh().arrayStacked}／${io.buildSrc(arr.src).arrayStacked}`);
+  // 讀程式守著：只在最外層合
+  const iosrc = readFileSync(join(here, '../js/core/io.js'), 'utf8');
+  const fb = (src, name) => { const i = src.indexOf(name); return src.slice(i, src.indexOf('\n}', i)); };
+  ok('★★★ 只在最外層（`mesh()`）合，⛔ 在 `buildSrc()` 裡每一層都合（原型試過：法蘭、齒輪底座排法會跟轉網格不一樣）',
+    !/mergeCoplanarFaces/.test(fb(iosrc, 'export function buildSrc(')) && /if \(this\.isParametric\) \{\s*const r = mergeCoplanarFaces\(this\._mesh\);/.test(iosrc)
+    && /if \(this\._mesh\.arrayStacked\) r\.mesh\.arrayStacked = true;/.test(iosrc));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

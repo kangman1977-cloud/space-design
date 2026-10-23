@@ -400,6 +400,25 @@ export class ModelObject {
 
     try {
       this._mesh = buildSrc(this.src, this.thickness);
+      /**
+       * 🔴 **參數物件算出來就在最外層合一次**（網格核心第四批，kang 2026-10-23「照你的建議做：只在最外層合，基準換成新的一份」
+       * → `規格\建模器-網格核心.md` 第四批）。跟 `bake()`（轉成可編輯網格）同一支 `mergeCoplanarFaces()` ⇒
+       * 同一個形狀「沒轉網格」跟「轉了網格」的展開排法、分切提案、STL 三角形數一模一樣
+       * （以前球沒轉網格提案 18 片只沿轉角、轉了網格 2 片花瓣）。
+       * ⚠ **只在這裡（最外層）合，⛔ 在 `buildSrc()` 裡每一層都合** —— 原型試過：布林的運算元先合，
+       * 法蘭、齒輪底座的展開排法就跟轉網格之後不一樣（`bake()` 只合最後那一份）。
+       */
+      if (this.isParametric) {
+        const r = mergeCoplanarFaces(this._mesh);
+        /**
+         * ⚠ 合出來是一個**新的** Mesh ⇒ 網格身上掛的額外記號要帶過去 —— 目前只有陣列的 `arrayStacked`
+         * （「每一份都在同一個位置」，`stacked` 讀它；第四批第一版漏帶、回歸測試抓到）。
+         */
+        if (r.ok) {
+          if (this._mesh.arrayStacked) r.mesh.arrayStacked = true;
+          this._mesh = r.mesh;
+        }
+      }
       this.error = null;
     } catch (e) {
       this.error = e.message || String(e);
