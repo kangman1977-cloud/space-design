@@ -16,10 +16,16 @@
 import * as THREE from 'three';
 import { Mesh } from '../core/mesh.js';
 import { fillHoles, recalcNormalsOutside } from '../core/edit.js';
-import { unionSolids, csgReady } from './bool.js';
+import { unionSolids, solidInfo, csgReady } from './bool.js';
 import { edgeCheck } from './import3d.js';
+import { windTree, windSure, sectionDiff } from './winding.js';
 
 export const SOLID_MODES = { raw: '原樣', fill: '補洞＋修方向', union: '聯集成一個實體' };
+/** 有隔板的一塊切出來超過這麼多片就不修（iPhone 機身 15,914 片：快速版也要 217 秒、修完還有破洞 —— `匯入整理-研究.md` 第 11 節）*/
+export const MAX_PATCHES = 2000;
+/** 修前修後剖面差（÷ 修前最大的那一刀）超過這個就不用修過的那份（kang 2026-10-24「只修剖面比得過的」）*/
+export const SECTION_TOL = 0.01;
+const PARTITION = '有三面共用的邊';
 /** 穿插：重疊的體積（各塊加總 − 聯集）佔各塊加總的這個比例以上才算（浮點誤差以下的不算）*/
 export const OVERLAP_MIN = 1e-4;
 
@@ -65,7 +71,7 @@ function fromMesh(m) {
 function fixMesh(m) {
   const st = { holes: 0, turned: 0, flippedSolids: 0, failed: '' };
   const e0 = edgeCheck(fromMesh(m).faces);
-  if (e0.nonManifold) { st.failed = '有三面共用的邊'; return { mesh: m, st }; }
+  if (e0.nonManifold) { st.failed = PARTITION; return { mesh: m, st }; }
   if (e0.open) {
     const f = fillHoles(m);
     if (f.ok) { m = f.mesh; st.holes = f.holes; } else st.failed = f.reason;
@@ -134,15 +140,22 @@ function localGroup(points, fs, part) {
  */
 export function unionVariant(r) {
   if (!csgReady()) return { read: null, info: { why: '布林運算函式庫還沒載入' } };
-  const info = { united: 0, kept: 0, holes: 0, turned: 0, sumVolume: 0, volume: 0, overlap: 0, pieces: 0, dropped: 0, why: '' };
+  const info = { united: 0, kept: 0, holes: 0, turned: 0, sumVolume: 0, volume: 0, overlap: 0, pieces: 0, dropped: 0, why: '',
+    partFixed: 0, partWorst: 0, partSkip: { many: 0, open: 0, section: 0 }, partSkipWorst: 0 };
   const solids = [], rest = [];
   for (const c of components(r.faces, r.points.length)) {
     const fs = c.map(i => r.faces[i]);
     const { mesh, st } = fixMesh(toMesh(r.points, fs));
     if (!st.failed && mesh.isClosed()) { solids.push(mesh); info.holes += st.holes; info.turned += st.turned; continue; }
+    if (st.failed === PARTITION) {
+      const fx = fixPartition(r.points, fs);
+      if (fx.ok) { solids.push(fx.mesh); info.partFixed++; info.partWorst = Math.max(info.partWorst, fx.diff); continue; }
+      info.partSkip[fx.why]++;
+      if (fx.why === 'section') info.partSkipWorst = Math.max(info.partSkipWorst, fx.diff);
+    }
     rest.push(c);
   }
-  if (solids.length < 2) return { read: null, info: { why: solids.length ? '只有一塊是實體，沒有東西可以聯集' : '沒有一塊是封閉的實體' } };
+  if (solids.length < 2 && !(solids.length === 1 && info.partFixed)) return { read: null, info: { why: solids.length ? '只有一塊是實體，沒有東西可以聯集' : '沒有一塊是封閉的實體' } };
   let u;
   try { u = unionSolids(solids); } catch (e) { return { read: null, info: { why: '聯集失敗：' + (e.message || e) } }; }
   info.united = solids.length; info.kept = rest.length;
@@ -157,6 +170,57 @@ export function unionVariant(r) {
 }
 
 /**
+ * 修一塊有隔板的（三面以上共用的邊）—— 10-22 原型的做法，加上兩道關（kang 2026-10-24「只修剖面比得過的，其他照原樣另外放、講出來」）：
+ *   1. 以三面共用的邊把面切成一片一片；每片取最大的 3 個三角形，往兩側各量一次環繞數（`winding.js`，快速、不確定才精確）：
+ *      一側裡一側外 ＝ 外皮（留）；兩側都在裡面 ＝ 隔板（丟）；兩側都在外面 ＝ 多出來的鰭（丟）；反過來 ＝ 外皮但方向反了（翻回來留）
+ *   2. 留下的 Manifold 要收得下（`solidInfo()`）
+ *   3. 修前修後沿最長的那一軸切 20 刀比面積，差 ≤ `SECTION_TOL` 才用 —— 汽車有 5 塊會被判錯、丟掉真的料（剖面差 49～111%），靠這一關擋下來
+ *   片太多（> `MAX_PATCHES`）的⛔ 修：iPhone 機身 15,914 片，快速版也要 217 秒、修完還有破洞
+ * @returns {{ok:true, mesh, diff}|{ok:false, why:'many'|'open'|'section', diff?}}
+ */
+export function fixPartition(points, faces) {
+  const used = new Map(), P = [], T = [];
+  for (const f of faces) for (let k = 1; k + 1 < f.length; k++) T.push([f[0], f[k], f[k + 1]].map(v => { if (!used.has(v)) { used.set(v, P.length); P.push(points[v]); } return used.get(v); }));
+  const ek = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  const E = new Map();
+  T.forEach((t, i) => { for (let k = 0; k < 3; k++) { const key = ek(t[k], t[(k + 1) % 3]); if (!E.has(key)) E.set(key, []); E.get(key).push(i); } });
+  const par = new Int32Array(T.length).map((_, i) => i);
+  const find = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+  for (const l of E.values()) if (l.length === 2) { const a = find(l[0]), b = find(l[1]); if (a !== b) par[a] = b; }
+  const patches = new Map();
+  T.forEach((_, i) => { const k = find(i); if (!patches.has(k)) patches.set(k, []); patches.get(k).push(i); });
+  if (patches.size > MAX_PATCHES) return { ok: false, why: 'many' };
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const p of P) for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
+  const eps = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 1e-4;
+  const W = windTree(P, T), keep = [];
+  for (const fl of patches.values()) {
+    const big = fl.map(i => { const n = triNormal(P, T[i]); return { i, n, A: Math.hypot(n[0], n[1], n[2]) }; }).sort((x, y) => y.A - x.A).slice(0, 3);
+    const votes = { skin: 0, wall: 0, fin: 0, flip: 0 };
+    for (const { i, n, A } of big) {
+      if (!(A > 0)) continue;
+      const t = T[i], c = [0, 1, 2].map(k => (P[t[0]][k] + P[t[1]][k] + P[t[2]][k]) / 3);
+      const out = windSure(W, c.map((x, k) => x + n[k] / A * eps)) > 0.5, inn = windSure(W, c.map((x, k) => x - n[k] / A * eps)) > 0.5;
+      votes[inn && !out ? 'skin' : inn && out ? 'wall' : !inn && !out ? 'fin' : 'flip']++;
+    }
+    let v = 'skin', best = -1;
+    for (const k of ['skin', 'wall', 'fin', 'flip']) if (votes[k] > best) { best = votes[k]; v = k; }
+    if (v === 'skin') for (const i of fl) keep.push(T[i]);
+    else if (v === 'flip') for (const i of fl) keep.push([T[i][0], T[i][2], T[i][1]]);
+  }
+  const mesh = toMesh(P, keep);
+  if (!keep.length || !solidInfo(mesh).ok) return { ok: false, why: 'open' };
+  const d = sectionDiff(P, T, P, keep).worst;
+  if (d > SECTION_TOL) return { ok: false, why: 'section', diff: d };
+  return { ok: true, mesh, diff: d };
+}
+function triNormal(P, t) {
+  const a = P[t[0]], b = P[t[1]], c = P[t[2]];
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  return [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+}
+
+/**
  * 建議哪一個（照 `匯入整理-研究.md` 第 9 節 ③、第 10 節）：
  *   零件之間有穿插（聯集算得出來、體積少了 `OVERLAP_MIN` 以上）⇒ 聯集；
  *   有破洞或翻面 ⇒ 補洞＋修方向；其他 ⇒ 原樣（只有隔板的也是 —— 隔板是 ③b）
@@ -164,10 +228,13 @@ export function unionVariant(r) {
  */
 export function suggestSolid(check, union) {
   if (union && union.read && union.info.overlap > OVERLAP_MIN) {
-    return { mode: 'union', why: `零件之間有穿插（重疊的體積佔各塊加總的 ${pct(union.info.overlap)}）` };
+    return { mode: 'union', why: `零件之間有穿插（重疊的體積佔各塊加總的 ${pct(union.info.overlap)}）` + (union.info.partFixed ? `；${union.info.partFixed} 塊的隔板修好了（修前修後剖面差 ≤ ${pct(SECTION_TOL)}）` : '') };
+  }
+  if (union && union.read && union.info.partFixed) {
+    return { mode: 'union', why: `${union.info.partFixed} 塊的隔板修好了（修前修後剖面差 ≤ ${pct(SECTION_TOL)}）` };
   }
   if (check.holes) return { mode: 'fill', why: `有 ${check.holes} 塊有破洞或面翻過來 —— 補的只是洞口，其他表面不動` };
-  if (check.partition) return { mode: 'raw', why: `有 ${check.partition} 塊裡面有隔板（三面以上共用的邊）—— 下一小批處理，現在先照原樣` };
+  if (check.partition) return { mode: 'raw', why: `有 ${check.partition} 塊裡面有隔板（三面以上共用的邊），修不好（看聯集那張卡寫的原因）—— 照原樣` };
   return { mode: 'raw', why: check.comps > 1 ? '每一塊都封閉、沒有穿插' : '封閉、乾淨' };
 }
 const pct = x => (Math.round(x * 1000) / 10) + '%';

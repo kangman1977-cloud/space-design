@@ -136,7 +136,7 @@ export class Import3DPanel {
     const r = this.read, check = solidCheck(r);
     const sol = { check, variants: { raw: { read: r, info: null } }, pending: false, suggest: { mode: 'raw', why: '' }, thumbs: {} };
     this._solid = sol;
-    const needFill = check.holes > 0, needUnion = check.comps > 1;
+    const needFill = check.holes > 0, needUnion = check.comps > 1 || check.partition > 0;   // 一塊有隔板的也要（③b：修好就是一個實體）
     sol.suggest = suggestSolid(check, null);
     if (!needFill && !needUnion) return;
     sol.pending = true;
@@ -276,10 +276,20 @@ export class Import3DPanel {
       for (const f of i.failed) t.push('補不了 ' + f);
     }
     if (mode === 'union') {
-      t.push(`${i.united} 塊聯集成 ${i.pieces} 個實體`);
+      if (i.united > 1) t.push(`${i.united} 塊聯集成 ${i.pieces} 個實體`);     // 只有一塊（修好隔板的那一塊）不寫「1 塊聯集成 1 個」
       if (i.overlap > 0) t.push(`重疊 ${Math.round(i.overlap * 1000) / 10}%`);
       if (i.dropped) t.push(`丟掉 ${i.dropped} 塊碎屑`);
-      if (i.kept) t.push(`${i.kept} 塊有隔板照原樣另外放`);
+      if (i.partFixed) t.push(`修好 ${i.partFixed} 塊的隔板（修前修後剖面一樣）`);
+      if (i.kept) {
+        /** 沒修的照實講為什麼（kang 2026-10-24「其他照原樣另外放、講出來」）*/
+        const s = i.partSkip || { many: 0, open: 0, section: 0 }, why = [];
+        if (s.many) why.push(`${s.many} 塊隔板太多`);
+        if (s.open) why.push(`${s.open} 塊修完還不封閉`);
+        if (s.section) why.push(`${s.section} 塊修完剖面差太多（最多 ${Math.round(i.partSkipWorst * 1000) / 10}%，會丟掉真的料）`);
+        const other = i.kept - s.many - s.open - s.section;
+        if (other > 0) why.push(`${other} 塊補不起來`);
+        t.push(`${i.kept} 塊照原樣另外放（${why.join('、')}）`);
+      }
       t.push(i.kept ? '聯集的那些匯入後是一個物件' : '匯入後是一個物件');
     }
     return t.join('　');

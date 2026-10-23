@@ -388,6 +388,24 @@ export function unionSolids(meshes, labels = []) {
 export const SPECK_FRAC = 1e-6;
 
 /**
+ * 這個網格 Manifold 收不收得下（是不是一個乾淨、朝外的實體）—— 匯入整理修完隔板先問一次（網格核心第五批 b ③b），
+ * 收不下的⛔ 送去聯集（一塊壞的會讓整個聯集失敗）。
+ * @returns {{ok: boolean, volume: number, reason: string}}
+ */
+export function solidInfo(mesh, label = '這一塊') {
+  let man = null;
+  try {
+    man = toManifold(mesh, label);
+    const v = man.volume();
+    return v > 0 ? { ok: true, volume: v, reason: '' } : { ok: false, volume: v, reason: '體積是負的（裡外反了）' };
+  } catch (e) {
+    return { ok: false, volume: 0, reason: e.message || String(e) };
+  } finally {
+    if (man) try { man.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+  }
+}
+
+/**
  * 🔴 **剖面分切「照最大外形切」：一段厚度裡最大的外形**（2026-10-19，實驗 T2 帽簷不見）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
  *

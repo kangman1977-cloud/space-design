@@ -19931,9 +19931,15 @@ section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補�
   ok('★★ 兩個方塊沒碰到 ⇒ 聯集算得出來（2 個實體）但沒有穿插 ⇒ 建議原樣', ua.info.pieces === 2 && ua.info.overlap < SO.OVERLAP_MIN && SO.suggestSolid(SO.solidCheck(model(cube(), cube([20, 0, 0]))), ua).mode === 'raw');
   const fin2 = cube([30, 0, 0]); fin2.P.push([35, -5, 0]); fin2.F.push([0, 1, 8]);
   const up = SO.unionVariant(model(cube(), cube([5, 0, 0]), { ...fin2, part: 2 }));
-  ok('★★★ 有隔板的那一塊 ⇒ 不聯集、照原樣另外放、部分照舊（③b 的事）', up.info.united === 2 && up.info.kept === 1 && up.read.partOf.filter(x => x === 2).length === 7, `${up.info.kept}`);
-  ok('★★ 只有破洞 ⇒ 建議補洞＋修方向；只有隔板 ⇒ 建議原樣（理由講下一小批）；乾淨的一塊 ⇒ 原樣',
-    SO.suggestSolid(ch, null).mode === 'fill' && SO.suggestSolid(cp, null).mode === 'raw' && /下一小批/.test(SO.suggestSolid(cp, null).why) && SO.suggestSolid(SO.solidCheck(model(cube())), null).mode === 'raw');
+  // 〔③a 時這一項是「有隔板的照原樣另外放」；③b 起會修 ⇒ 照實改（kang 2026-10-24「③b 照你的建議：只修剖面比得過的…」）〕
+  ok('★★★ 方塊多掛一片鰭（一條邊三個面用）⇒ ③b 把鰭拆掉、修好、一起聯集：3 塊聯集、0 塊另外放、修好 1 塊', up.info.united === 3 && up.info.kept === 0 && up.info.partFixed === 1, `${up.info.united}／${up.info.kept}／${up.info.partFixed}`);
+  const fin3 = cube([30, 0, 0], 10, { skip: 1 }); fin3.P.push([35, -5, 0]); fin3.F.push([0, 1, 8]);   // 少一個面＋一片鰭 ⇒ 拆掉鰭也不封閉
+  const uk = SO.unionVariant(model(cube(), cube([5, 0, 0]), { ...fin3, part: 2 }));
+  ok('★★★ 少一個面又掛一片鰭 ⇒ 修完還不封閉 ⇒ 照原樣另外放、部分照舊、原因記「修完還不封閉」', uk.info.united === 2 && uk.info.kept === 1 && uk.info.partSkip.open === 1 && uk.read.partOf.filter(x => x === 2).length === 6, JSON.stringify(uk.info.partSkip));
+  ok('★★ 只有破洞 ⇒ 建議補洞＋修方向；只有隔板、修不好 ⇒ 建議原樣（理由講修不好）；乾淨的一塊 ⇒ 原樣',
+    SO.suggestSolid(ch, null).mode === 'fill' && SO.suggestSolid(cp, null).mode === 'raw' && /修不好/.test(SO.suggestSolid(cp, null).why) && SO.suggestSolid(SO.solidCheck(model(cube())), null).mode === 'raw');
+  const uf = SO.unionVariant(model(fin));
+  ok('★★★ 一塊有隔板、修好了（沒有別塊可以聯集）⇒ 照樣算出一個實體、建議「聯集成一個實體」、理由講修好幾塊', uf.read && uf.info.partFixed === 1 && uf.info.pieces === 1 && SO.suggestSolid(cp, uf).mode === 'union' && /1 塊的隔板修好了/.test(SO.suggestSolid(cp, uf).why), uf.read ? SO.suggestSolid(cp, uf).why : uf.info.why);
   // ④ 真的樣本
   const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
   const hp = rd('helmetFP.stl'), hk = SO.solidCheck(hp), hf = SO.fillVariant(hp), he = im.edgeCheck(hf.read.faces);
@@ -19962,6 +19968,54 @@ section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補�
     /if \(fixable && solid !== 'raw'\)/.test(ps) && /上面選了「\$\{SOLID_MODES\[solid\]\}」會處理/.test(ps) && /bad\.push\(\[`有 \$\{ck\.nonManifold\} 條邊被三個以上的面共用（接不起來，分片、展開可能怪怪的）`, false\]\)/.test(ps));
   const rowSrc = ps.slice(ps.indexOf('  _solidRow('), ps.indexOf('  _bigThumb('));
   ok('★ 卡片的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
+}
+
+section('網格核心第五批 b ③b：零件裡面的隔板 —— 只修剖面比得過的，其他照原樣另外放、講出來（2026-10-24）');
+{
+  /** `匯入整理-研究.md` 第 11 節；kang 2026-10-24「③b 照你的建議：只修剖面比得過的，其他照原樣另外放、講出來」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const SO = await import('../js/build/importSolid.js');
+  const WN = await import('../js/build/winding.js');
+  const boxPT = (o = [0, 0, 0], n = 10) => { const P = [[0, 0, 0], [n, 0, 0], [n, n, 0], [0, n, 0], [0, 0, n], [n, 0, n], [n, n, n], [0, n, n]].map(q => q.map((v, k) => v + o[k]));
+    const T = [[0, 3, 2], [0, 2, 1], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]]; return { P, T }; };
+  // ① 環繞數
+  const B = boxPT();
+  ok('★★★ 環繞數：方塊裡面 1、外面 0（精確）', Math.abs(WN.windExact(B.P, B.T, [5, 5, 5]) - 1) < 1e-9 && Math.abs(WN.windExact(B.P, B.T, [15, 5, 5])) < 1e-9);
+  const sp = prim.buildPrim('sphere', { r: 10, segW: 48, segH: 24 }); const vi = sp._vertIndex(); const SP = sp.verts.map(v => [v.p.x, v.p.y, v.p.z]); const ST = [];
+  for (const f of sp.faces) { const ix = sp.faceVerts(f).map(v => vi.get(v.id)); for (let k = 1; k + 1 < ix.length; k++) ST.push([ix[0], ix[k], ix[k + 1]]); }
+  const W = WN.windTree(SP, ST); let worst = 0, flips = 0; const stat = { calls: 0, exact: 0 };
+  for (let i = 0; i < 60; i++) { const q = [Math.sin(i) * 14, Math.cos(i * 1.3) * 14, Math.sin(i * 0.7) * 14]; const e = WN.windExact(SP, ST, q), f = WN.windFast(W, q); worst = Math.max(worst, Math.abs(e - f)); if ((WN.windSure(W, q, stat) > 0.5) !== (e > 0.5)) flips++; }
+  ok('★★★ 快速版跟精確的差不多（球 2,256 個三角形、60 個點：誤差 < 0.3）；先快速、不確定才精確 ⇒ 裡外判斷 0 個不同', worst < 0.3 && flips === 0, `誤差 ${worst.toFixed(3)}、不同 ${flips}、精確 ${stat.exact}/${stat.calls}`);
+  // ② 剖面面積（被任何面包住就算實心）
+  const a1 = WN.sliceArea(B.P, B.T, 1, 5);
+  const B2 = boxPT([5, 0, 0]); const two = { P: [...B.P, ...B2.P], T: [...B.T, ...B2.T.map(t => t.map(i => i + 8))] };
+  const a2 = WN.sliceArea(two.P, two.T, 1, 5);
+  ok('★★ 剖面面積：方塊切一刀 100；兩個方塊穿插一半 ⇒ 150（重疊的不算兩次）', Math.abs(a1 - 100) < 1 && Math.abs(a2 - 150) < 1.5, `${a1.toFixed(2)}／${a2.toFixed(2)}`);
+  ok('★★ 修前修後比剖面：一樣 ⇒ 0；拿掉一個方塊 ⇒ 差很多（÷ 修前最大的那一刀）', WN.sectionDiff(two.P, two.T, two.P, two.T).worst === 0 && WN.sectionDiff(two.P, two.T, B.P, B.T).worst > 0.3);
+  // ③ 相鄰兩個方塊中間那道牆（三面共用的邊）
+  const wallP = [[0, 0, 0], [10, 0, 0], [20, 0, 0], [0, 10, 0], [10, 10, 0], [20, 10, 0], [0, 0, 10], [10, 0, 10], [20, 0, 10], [0, 10, 10], [10, 10, 10], [20, 10, 10]];
+  const wallF = [[0, 3, 4, 1], [1, 4, 5, 2], [6, 7, 10, 9], [7, 8, 11, 10], [0, 1, 7, 6], [1, 2, 8, 7], [3, 9, 10, 4], [4, 10, 11, 5], [0, 6, 9, 3], [2, 5, 11, 8], [1, 4, 10, 7]];
+  ok('★★ 兩個方塊中間的牆 ⇒ 判成「有隔板」', SO.solidCheck({ points: wallP, faces: wallF }).partition === 1);
+  const fw = SO.fixPartition(wallP, wallF);
+  ok('★★★ 修隔板：中間那道牆拆掉 ⇒ 一個 20 × 10 × 10 的實體、修前修後剖面差 0', fw.ok && fw.diff === 0 && Math.abs(fw.mesh.volume() - 2000) < 1e-6, fw.ok ? `${fw.mesh.volume()}` : fw.why);
+  // ④ 真的樣本
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const hat = rd('T12_帽子_Manifold平滑.stl'), hk = SO.solidCheck(hat), hu = SO.unionVariant(hat);
+  ok('★★★ Manifold 平滑帽子（一塊、有隔板）：修好 1 塊、剖面差 0、建議「聯集成一個實體」', hk.partition === 1 && hu.info.partFixed === 1 && hu.info.partWorst === 0 && SO.suggestSolid(hk, hu).mode === 'union', JSON.stringify(hu.info.partSkip));
+  const car = rd('LLT_3D_Print_1k72.STL'), cu = SO.unionVariant(car);
+  ok('★★★ 汽車：25 塊有隔板 ⇒ 修好 15 塊；6 塊修完不封閉、4 塊剖面差太多（最多 100%：會丟掉真的料，擋下來）⇒ 這 10 塊照原樣另外放',
+    cu.info.partFixed === 15 && cu.info.partSkip.open === 6 && cu.info.partSkip.section === 4 && cu.info.partSkipWorst > 0.4 && cu.info.kept === 10 && cu.info.partWorst <= SO.SECTION_TOL,
+    `修好 ${cu.info.partFixed}、${JSON.stringify(cu.info.partSkip)}、最多 ${cu.info.partSkipWorst}`);
+  const ip = rd('Iphone seceond version finished.obj'), iu = SO.unionVariant(ip);
+  ok('★★★ iPhone 機身（隔板切成 15,914 片）⇒ 片太多不修、照原樣另外放（原因記「隔板太多」）', iu.info.partSkip.many === 1 && iu.info.kept === 1 && iu.info.partFixed === 0);
+  // ⑤ 讀程式守著
+  const ss = readFileSync(join(here, '../js/build/importSolid.js'), 'utf8'), ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), ws = readFileSync(join(here, '../js/build/winding.js'), 'utf8');
+  ok('★★ 修隔板的兩道關：Manifold 收得下（solidInfo）＋修前修後剖面差 ≤ 1%；片超過 2000 不修', SO.SECTION_TOL === 0.01 && SO.MAX_PATCHES === 2000
+    && /if \(!keep\.length \|\| !solidInfo\(mesh\)\.ok\) return \{ ok: false, why: 'open' \};/.test(ss) && /if \(d > SECTION_TOL\) return \{ ok: false, why: 'section', diff: d \};/.test(ss) && /if \(patches\.size > MAX_PATCHES\) return \{ ok: false, why: 'many' \};/.test(ss));
+  ok('★★ 環繞數：快速版落在 0.2～0.8 之間改精確（算得對第一）', WN.UNSURE.join() === '0.2,0.8' && /if \(f > UNSURE\[0\] && f < UNSURE\[1\]\) \{ if \(stat\) stat\.exact\+\+; return windExact\(W\.P, W\.T, q\); \}/.test(ws));
+  ok('★★ 視窗：一塊有隔板的也算聯集那張；卡片講修好幾塊、沒修的照原因分開講', /needUnion = check\.comps > 1 \|\| check\.partition > 0/.test(ps) && /修好 \$\{i\.partFixed\} 塊的隔板/.test(ps) && /if \(s\.many\) why\.push\(`\$\{s\.many\} 塊隔板太多`\);/.test(ps) && /if \(s\.open\) why\.push\(`\$\{s\.open\} 塊修完還不封閉`\);/.test(ps) && /if \(s\.section\) why\.push\(`\$\{s\.section\} 塊修完剖面差太多/.test(ps));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
