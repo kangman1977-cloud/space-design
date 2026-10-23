@@ -15,6 +15,7 @@ import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapse
 import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { solidCheck, fillVariant, unionVariant, suggestSolid, SOLID_MODES } from '../build/importSolid.js';
 import { decimate, surfaceDev } from '../build/decimate.js';
+import { pairQuads } from '../build/quadify.js';
 import { Mesh } from '../core/mesh.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
 import { worldBounds, unionBounds, freeSpot } from '../core/align.js';
@@ -30,6 +31,8 @@ export const FACE_MODES = { raw: '原樣（不減）', clean: '清碎面', reduc
 /** 清碎面要減的超過這個比例 ⇒ 不自動清、建議原樣，要的話自己點（kang 10-22「超過一成停下來給 kang 看」）*/
 export const CLEAN_MAX = 0.1;
 /** 「減到 ___ 面」的快捷（kang 10-22 定）：3D 列印不減、剖面約 2 萬、展開紙模約 500 */
+/** 三角形那一區（網格核心第五批 b ⑤；kang 10-22 定、10-23「只合平的」）*/
+export const QUAD_MODES = { raw: '原樣（三角形）', pair: '兩兩合併' };
 export const REDUCE_PRESETS = [['給 3D 列印（不減）', 0], ['給剖面（約 2 萬面）', 20000], ['給展開、紙模（約 500 面）', 500]];
 
 export class Import3DPanel {
@@ -133,6 +136,7 @@ export class Import3DPanel {
     this._face = null;             // 面數那一區算好的（清碎面、減到 N 面）—— 換檔案清掉
     this.faceMode = '';            // '' ＝ 照建議
     this.reduceTarget = 0;         // 「減到 ___ 面」打的數字（0 ＝ 還沒打）
+    this.quadMode = '';            // 三角形那一區：'' ＝ 照建議（兩兩合併）
     if (this.read.ok) {
       this.read.check = edgeCheck(this.read.faces);
       this._startSolid();
@@ -216,11 +220,92 @@ export class Import3DPanel {
     const mode = face.using;
     const done = mode === 'raw' ? null : face[mode];
     const conv = s.up === 'z' ? q => [q[0] * s.cmPerUnit, q[2] * s.cmPerUnit, -q[1] * s.cmPerUnit] : q => [q[0] * s.cmPerUnit, q[1] * s.cmPerUnit, q[2] * s.cmPerUnit];
+    /**
+     * 三角形那一區（第五批 b ⑤）：最後一步，在換算後（cm）兩兩合併 —— 只合合完還平的（0.01 cm），形狀不變、格線不受影響。
+     * 很快（汽車 1.7 秒），但每次重畫都算太浪費 ⇒ 照「這一份面、這個比例」記住（比例會改 0.01 cm 等於檔案裡多長）。
+     */
+    if (!this._pairCache) this._pairCache = new WeakMap();
+    const quad = { tris: 0, pairs: 0, faces: 0, quads: 0 };
+    const pairedOf = (src, pts) => {
+      let m = this._pairCache.get(src);
+      if (!m) this._pairCache.set(src, m = new Map());
+      if (!m.has(s.cmPerUnit)) m.set(s.cmPerUnit, pairQuads(pts, src.faces));
+      return m.get(s.cmPerUnit);
+    };
     const parts = base.parts.map((p, i) => {
+      const src = done && done.parts ? done.parts[i] : p;
       const q = done && done.parts ? done.parts[i] : { ...p, grid: gridEdges(p, keptRegions(base.judged[i], planesMode), p.faces.map((_, k) => k)) };
-      return { ...q, points: q.points.map(conv) };
+      const pts = q.points.map(conv);
+      quad.tris += q.faces.filter(f => f.length === 3).length;
+      const pr = pairedOf(src, pts);
+      quad.pairs += pr.pairs;
+      return { ...q, points: pts, paired: pr.faces };
     });
-    return { parts, planes, solid: pick.mode, face };
+    quad.suggest = quad.pairs ? 'pair' : 'raw';
+    quad.using = (this.quadMode || quad.suggest) === 'pair' && quad.pairs ? 'pair' : 'raw';
+    const out = parts.map(p => (quad.using === 'pair' ? { ...p, faces: p.paired } : p));
+    for (const p of out) { quad.faces += p.faces.length; quad.quads += p.faces.filter(f => f.length === 4).length; }
+    quad.rawParts = parts;
+    return { parts: out, planes, solid: pick.mode, face, quad };
+  }
+
+  /**
+   * 三角形那一區：兩張卡（原樣／兩兩合併），小圖畫出每一條線（看得出三角形還是四邊形），建議兩兩合併。
+   * 沒有可以合的三角形（四邊形 OBJ、合完都不平）就只寫一行。最後寫一行 Instant Meshes（kang 10-22：先當外部轉換器）。
+   */
+  _quadRow(quad) {
+    const d = document.createElement('div');
+    d.className = 'uwSkip';
+    if (!quad.pairs) {
+      d.textContent = quad.tris ? `三角形：${quad.tris} 個，沒有「合完還平」的兩個可以合 —— 照原樣` : '三角形：沒有（照原樣）';
+      return d;
+    }
+    const pct4 = Math.round(100 * quad.quads / (quad.faces || 1));
+    const head = document.createElement('div');
+    head.textContent = `三角形：${quad.tris} 個　建議「兩兩合併」：形狀完全不變（只合合完還平的），變成四邊形之後選一圈、環切比較走得動`;
+    d.appendChild(head);
+    const row = document.createElement('div');
+    row.className = 'i3Cards';
+    for (const mode of Object.keys(QUAD_MODES)) {
+      const card = document.createElement('div');
+      card.className = 'i3Card' + (mode === quad.using ? ' on' : '') + (mode === quad.suggest ? ' sug' : '');
+      card.innerHTML = `<div class="i3Thumb"></div><b>${QUAD_MODES[mode]}${mode === quad.suggest ? '　（建議）' : ''}${mode === quad.using ? '　✓ 現在用這個' : ''}</b><div class="i3Nums"></div>`;
+      const rawFaces = quad.rawParts.reduce((n, p) => n + p.faces.length, 0);
+      const pairedFaces = rawFaces - quad.pairs;
+      card.querySelector('.i3Nums').textContent = mode === 'raw'
+        ? `${rawFaces} 個面（三角形 ${quad.tris} 個）`
+        : `${pairedFaces} 個面（合了 ${quad.pairs} 對，四邊形約 ${mode === quad.using ? pct4 : Math.round(100 * quad.pairs / (pairedFaces || 1))}%）　不平的面 0（只合平的）`;
+      card.title = '點卡片：用這個；點小圖：放大看（畫出每一條線）';
+      card.onclick = () => { this.quadMode = mode; this._render(); };
+      const th = card.querySelector('.i3Thumb');
+      th.onclick = e => { e.stopPropagation(); this._bigQuadThumb(mode); };
+      this._quadThumb(th, mode, quad, 200, 150);
+      row.appendChild(card);
+    }
+    d.appendChild(row);
+    const im = document.createElement('div');
+    im.style.marginTop = '6px';
+    im.textContent = '要整齊的四邊形（順著形狀排）：用 Instant Meshes（免費的外部程式）轉成 OBJ 再匯入 —— 建模器讀 OBJ 會照原樣保留四邊形';
+    d.appendChild(im);
+    return d;
+  }
+
+  /** 三角形那一區的小圖（畫出每一條線）：同一份面、同一個比例與朝上只畫一次 */
+  _quadThumb(el, mode, quad, w, h) {
+    const F = this._face, s = this._setting();
+    if (!F.thumbs) F.thumbs = {};
+    const parts = quad.rawParts.map(p => ({ points: p.points, faces: mode === 'pair' ? p.paired : p.faces }));
+    this._thumbPut(el, F.thumbs, `quad|${mode}|${F.using}|${F.reduce ? F.reduce.target : 0}|${s.cmPerUnit}|${s.up}|${w}`, () => this._face === F, () => parts, w, h, true);
+  }
+
+  _bigQuadThumb(mode) {
+    const { quad } = this._parts();
+    const ov = document.createElement('div');
+    ov.className = 'i3Big';
+    ov.innerHTML = `<div><b>${QUAD_MODES[mode]}</b>　<span>灰線 ＝ 每一個面的邊；紅線 ＝ 破洞的邊；橘線 ＝ 三面以上共用的邊。點一下關掉</span></div><div class="i3BigImg"></div>`;
+    ov.onclick = () => ov.remove();
+    this.el.appendChild(ov);
+    this._quadThumb(ov.querySelector('.i3BigImg'), mode, quad, 720, 540);
   }
 
   /** 拆好部分的原樣（檔案單位、Y 朝上）＋每一片平面的判斷；同一個做法、同一種拆法只算一次 */
@@ -400,13 +485,13 @@ export class Import3DPanel {
   }
 
   /** 畫小圖的共用：有畫過就拿、沒有就下一輪畫（`alive()` 不成立 ＝ 換了檔案或設定，不畫）*/
-  _thumbPut(el, cache, key, alive, getParts, w, h) {
+  _thumbPut(el, cache, key, alive, getParts, w, h, wire = false) {
     const put = url => { el.innerHTML = ''; const img = document.createElement('img'); img.src = url; img.width = w; img.height = h; el.appendChild(img); };
     if (cache[key]) { put(cache[key]); return; }
     el.textContent = '畫圖中…';
     requestAnimationFrame(() => {
       if (!alive()) return;
-      const url = thumbURL(getParts(), w, h);
+      const url = thumbURL(getParts(), w, h, wire);
       if (url) { cache[key] = url; put(url); } else el.textContent = '畫不出來';
     });
   }
@@ -578,7 +663,7 @@ export class Import3DPanel {
       return;
     }
     this._fillSelects();
-    const { parts, planes, solid, face } = this._parts();
+    const { parts, planes, solid, face, quad } = this._parts();
     /** 選的面數做法還在算 ⇒ 匯入鈕先不能按（不然匯進去的是原樣、跟卡片上選的不一樣）*/
     this.goBtn.disabled = !face.ready;
     this.goBtn.title = face.ready ? '' : '面數那一區還在算 —— 算好才能匯入';
@@ -588,6 +673,7 @@ export class Import3DPanel {
     if (this._solid) this.body.appendChild(this._solidRow(solid));
     if (planes.cut + planes.grid) this.body.appendChild(this._planeRow(planes));
     this.body.appendChild(this._faceRow(face, this._base.parts.reduce((n, p) => n + p.faces.length, 0)));
+    this.body.appendChild(this._quadRow(quad));
 
     // 清理、檢查：照實講
     const st = r.stats, ck = r.check;
@@ -684,7 +770,7 @@ export class Import3DPanel {
   _import() {
     const r = this.read;
     if (!r || !r.ok) return;
-    const { parts, face } = this._parts();
+    const { parts, face, quad } = this._parts();
     if (!face.ready) return;                               // 還在算（匯入鈕本來就不能按）
     const objs = [];
     for (let i = 0; i < parts.length; i++) {
@@ -715,6 +801,7 @@ export class Import3DPanel {
       this.app.toast(`已匯入「${this.fileName}」：${objs.length} 個網格物件、${nFaces} 個面，${f(z.w)} × ${f(z.h)} × ${f(z.d)} cm`
         + (face.using === 'clean' && face.clean.removed ? `（清碎面：少 ${face.clean.removed} 個面）` : '')
         + (face.using === 'reduce' ? `（減到 ${face.reduce.faces} 個面）` : '')
+        + (quad.using === 'pair' ? `（兩兩合併：合了 ${quad.pairs} 對）` : '')
         + (this._solidPick().mode !== 'raw' ? `（${SOLID_MODES[this._solidPick().mode]}）` : '')
         + '（鏡頭已拉到它們）　之後用建模器改它（拉點線面、刀具、布林…）');
     }
@@ -727,7 +814,7 @@ export class Import3DPanel {
  * 原樣跟補洞後一比就看得出補了哪裡。用換算後（cm、Y 朝上）的樣子、從斜上方看。
  */
 let _thumbR = null;
-function thumbURL(parts, w, h) {
+function thumbURL(parts, w, h, wire = false) {
   try {
     if (!_thumbR) _thumbR = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
     const R = _thumbR;
@@ -742,16 +829,23 @@ function thumbURL(parts, w, h) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.computeVertexNormals();
     const scene = new THREE.Scene();
-    scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x8fb3e8, side: THREE.DoubleSide })));
+    scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x8fb3e8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })));
     const cnt = new Map();
     for (const f of p.faces) for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], key = a < b ? a + '-' + b : b + '-' + a; cnt.set(key, (cnt.get(key) || 0) + 1); }
-    const red = [], orange = [];
-    for (const [key, n] of cnt) { if (n === 2) continue; const [a, b] = key.split('-').map(Number); (n === 1 ? red : orange).push(...p.points[a], ...p.points[b]); }
+    const red = [], orange = [], grey = [];
+    /** `wire` ＝ 每一條線都畫（三角形那一區要看得出三角形還是四邊形）；線太多（20 萬條以上）就不畫，⛔ 卡住 */
+    const drawAll = wire && cnt.size <= 200000;
+    for (const [key, n] of cnt) {
+      if (n === 2 && !drawAll) continue;
+      const [a, b] = key.split('-').map(Number);
+      (n === 1 ? red : n > 2 ? orange : grey).push(...p.points[a], ...p.points[b]);
+    }
     const lines = [];
-    for (const [arr, col] of [[red, 0xff3b30], [orange, 0xff9f0a]]) {
+    for (const [arr, col] of [[grey, 0x2a3445], [red, 0xff3b30], [orange, 0xff9f0a]]) {
       if (!arr.length) continue;
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
-      const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: col, depthTest: false }));
+      // 灰線（每一條邊）被前面的面擋住、背面的看不到；紅、橘（破洞、三面共用）照舊穿透 —— 藏在後面的也要看得到
+      const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: col, depthTest: col === 0x2a3445 }));
       l.renderOrder = 1; scene.add(l); lines.push(g);
     }
     scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));

@@ -20070,6 +20070,56 @@ section('網格核心第五批 b ④：保形狀減面（清碎面換做法、�
   ok('★ 面數卡片的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
 }
 
+section('網格核心第五批 b ⑤：兩兩合併只合平的（2026-10-24）');
+{
+  /** `匯入整理-研究.md` 第 9 節 ④；kang 2026-10-22 定原樣／兩兩合併、預設建議兩兩合併、Instant Meshes 寫一行；2026-10-23「兩兩合併只合平的」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const QD = await import('../js/build/quadify.js');
+  // ① 平的正方形拆成兩個三角形 ⇒ 合回一個四邊形；折起來的 ⇒ 不合
+  const flat = { P: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], F: [[0, 1, 2], [0, 2, 3]] };
+  const r1 = QD.pairQuads(flat.P, flat.F);
+  ok('★★★ 平的正方形拆成兩個三角形 ⇒ 合回一個四邊形、繞向不變', r1.pairs === 1 && r1.faces.length === 1 && r1.faces[0].length === 4 && im.edgeCheck([...r1.faces, [0, 3, 2, 1]]).flipped === 0);
+  const bent = { P: [[0, 0, 0], [1, 0, 0], [1, 1, 0.05], [0, 1, 0]], F: [[0, 1, 2], [0, 2, 3]] };
+  ok('★★★ 折起來一點點（0.05 cm，超過 0.01 cm）⇒ 不合（合了就是琥珀色的不平面）', QD.pairQuads(bent.P, bent.F).pairs === 0);
+  const tiny = { P: [[0, 0, 0], [1, 0, 0], [1, 1, 0.005], [0, 1, 0]], F: [[0, 1, 2], [0, 2, 3]] };
+  ok('★★ 偏 0.005 cm（容許值以內）⇒ 合', QD.pairQuads(tiny.P, tiny.F).pairs === 1);
+  const thin = { P: [[0, 0, 0], [10, 0, 0], [10.2, 1, 0], [0.2, 1, 0]], F: [[0, 1, 2], [0, 2, 3]] };
+  ok('★★ 合出來的角離直角太遠（細長的平行四邊形）⇒ 不合', QD.pairQuads(thin.P, [[0, 1, 2], [0, 2, 3]]).pairs === 1 && QD.pairQuads([[0, 0, 0], [10, 0, 0], [12, 1, 0], [2, 1, 0]], [[0, 1, 2], [0, 2, 3]]).pairs === 0);
+  const twoQ = QD.pairQuads([[0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0], [1, 1, 0], [2, 1, 0]], [[3, 0, 1, 4], [4, 1, 2, 5]]);   // 共用的邊 1–4 排在兩個面的前三條邊裡（排在第四條的話，改壞的程式碰巧也不會合）
+  ok('★★ 四邊形、多邊形照原樣不動（單獨一個、兩個相鄰同一平面的都一樣）', QD.pairQuads(flat.P, [[0, 1, 2, 3]]).faces[0].join() === '0,1,2,3'
+    && twoQ.pairs === 0 && twoQ.faces.map(f => f.join()).join('|') === '3,0,1,4|4,1,2,5');
+  // ② 真的樣本：工地帽、樹蛙
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const nonPlanar = (P, F) => { const m = Mesh.fromFaceList(P.map(q => new THREE.Vector3(q[0], q[1], q[2])), F); m.computeNormals(); return edit.nonPlanarFaces(m).length; };
+  const [hp] = im.toParts(rd('Construction_site_safety_helmet.stl'), { cmPerUnit: 0.1, up: 'z', split: false });
+  const hq = QD.pairQuads(hp.points, hp.faces), he = im.edgeCheck(hq.faces);
+  ok('★★★ 工地帽（原樣 4880 個三角形）：合了 1424 對、四邊形約 41%、不平的面 0、照樣封閉', hq.pairs === 1424 && hq.faces.length === 3456 && nonPlanar(hp.points, hq.faces) === 0 && !he.open && !he.nonManifold && !he.flipped, `${hq.pairs} 對`);
+  const [fp] = im.toParts(rd('treefrog_45_cut.stl'), { cmPerUnit: 0.1, up: 'z', split: false });
+  const fq = QD.pairQuads(fp.points, fp.faces), q4 = fq.faces.filter(f => f.length === 4).length;
+  ok('★★ 樹蛙：四邊形過半、不平的面 0', q4 / fq.faces.length > 0.5 && nonPlanar(fp.points, fq.faces) === 0, `${(100 * q4 / fq.faces.length).toFixed(0)}%`);
+  // iPhone（四邊形、三角形都有）：合完的每一個新四邊形，都要剛好是原本的兩個三角形（四邊形、多邊形不能被拿去合）
+  // 用聯集後的那一份（建議的做法）：機身（有隔板、另外放）還是四邊形，其他聯集出來是三角形 —— 原樣的三角形大多是細長的碎塊，一對都合不了
+  const SO = await import('../js/build/importSolid.js');
+  const ipr = SO.unionVariant(rd('Iphone seceond version finished.obj')).read, [ipp] = im.toParts(ipr, { cmPerUnit: im.UNIT_CM[im.guessUnit('obj', ipr.size)], up: 'y', split: false });
+  const iq = QD.pairQuads(ipp.points, ipp.faces);
+  const keyOf = f => [...f].sort((x, y) => x - y).join(','), inKeys = new Set(ipp.faces.map(keyOf)), triKeys = new Set(ipp.faces.filter(f => f.length === 3).map(keyOf));
+  const okFace = f => inKeys.has(keyOf(f)) || (f.length === 4 && ((triKeys.has(keyOf([f[0], f[1], f[2]])) && triKeys.has(keyOf([f[0], f[2], f[3]]))) || (triKeys.has(keyOf([f[1], f[2], f[3]])) && triKeys.has(keyOf([f[1], f[3], f[0]])))));
+  ok('★★★ iPhone（四邊形、三角形都有）：合了一些、每一個新四邊形都剛好是原本的兩個三角形、原本的四邊形一個都沒動', iq.pairs > 0 && iq.faces.every(okFace)
+    && (() => { const outKeys = new Set(iq.faces.filter(g => g.length !== 3).map(keyOf)); return ipp.faces.filter(f => f.length !== 3).every(f => outKeys.has(keyOf(f))); })(), `${iq.pairs} 對`);   // 用查表（⛔ 每個都到全部的面裡找一次 —— 機身十幾萬個面，跑不完）
+  // ③ 讀程式守著
+  const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), qs = readFileSync(join(here, '../js/build/quadify.js'), 'utf8');
+  ok('★★ 容許值跟琥珀色「不平的面」同一個（PLANAR_TOL_CM 0.01 cm）、夾角與角度 40°', /export function pairQuads\(P, F, tol = PLANAR_TOL_CM\)/.test(qs) && edit.PLANAR_TOL_CM === 0.01 && QD.PAIR_MAX_FACE === 40 && QD.PAIR_MAX_SHAPE === 40);
+  ok('★★ 視窗：原樣／兩兩合併兩張卡、預設建議兩兩合併、最後一步在 cm 做、照比例記住、寫一行 Instant Meshes、小圖畫出每一條線',
+    /export const QUAD_MODES = \{ raw: '原樣（三角形）', pair: '兩兩合併' \};/.test(ps) && /quad\.suggest = quad\.pairs \? 'pair' : 'raw';/.test(ps)
+    && /if \(!m\.has\(s\.cmPerUnit\)\) m\.set\(s\.cmPerUnit, pairQuads\(pts, src\.faces\)\);/.test(ps) && /Instant Meshes/.test(ps) && /this\._thumbPut\(el, F\.thumbs, `quad\|/.test(ps) && /, w, h, true\);/.test(ps));
+  ok('★ 匯入後提示講合了幾對；換檔案清回照建議；選了兩兩合併真的用合完的面', /（兩兩合併：合了 \$\{quad\.pairs\} 對）/.test(ps) && /this\.quadMode = '';/.test(ps)
+    && /const out = parts\.map\(p => \(quad\.using === 'pair' \? \{ \.\.\.p, faces: p\.paired \} : p\)\);/.test(ps));
+  const rowSrc = ps.slice(ps.indexOf('  _quadRow('), ps.indexOf('  /** 三角形那一區的小圖'));
+  ok('★ 三角形那一區的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
