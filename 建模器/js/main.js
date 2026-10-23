@@ -7536,6 +7536,17 @@ window.addEventListener('keydown', e => {
   if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen || isAskOpen()) {
     /** ⚠ Ctrl+S／Ctrl+D ⛔ 不可以掉回瀏覽器（另存網頁、加入書籤）*/
     if ((e.ctrlKey || e.metaKey) && 'sd'.includes(e.key.toLowerCase())) e.preventDefault();
+    /**
+     * 🔴 **例外：只有展開圖開著時，Ctrl+Z／Ctrl+Y（Ctrl+Shift+Z）照樣復原、重做**（網格核心第三批 b，kang 2026-10-23「要：展開圖開著時只接
+     * Ctrl+Z／Ctrl+Y，其他快速鍵照舊不碰」）—— 展開圖裡有「拆開」「壓平」會改模型，反悔要在同一個地方；
+     * Delete、W／E／R 照舊⛔ 穿過去（上面那條的原因還在）。⚠ 確認框開著、或別的視窗也開著 ⇒ 照舊不接。
+     */
+    const k0 = e.key.toLowerCase();
+    if (unfoldWin.isOpen && !exportWin.isOpen && !sliceWin.isOpen && !importWin.isOpen && !import3dWin.isOpen && !isAskOpen()
+        && (e.ctrlKey || e.metaKey) && (k0 === 'z' || k0 === 'y')) {
+      e.preventDefault();
+      jumpHistory(e.shiftKey || k0 === 'y');
+    }
     return;
   }
 

@@ -19639,6 +19639,15 @@ section('網格核心第三批 b：不平的面標琥珀色、展開前列出來
   ok('★★ 拆開走 splitUnflat()、壓平走第三批 a 那一套（visibleAround inside ＋ keepApart）、記成一步', /splitUnflat\(mesh, live\)/.test(mbody('fixUnflat'))
     && /visibleAround\(mesh, mesh\.faceVerts\(f\), inside\)/.test(mbody('fixUnflat')) && /refreshAfterEdit\(mesh, \{ keepApart \}\)/.test(mbody('fixUnflat'))
     && (mbody('fixUnflat').match(/commit\(/g) || []).length === 1);
+  {
+    /** kang 2026-10-23「要：展開圖開著時只接 Ctrl+Z／Ctrl+Y，其他快速鍵照舊不碰」 */
+    const i0 = mn.indexOf('if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen');
+    const gate = mn.slice(i0, mn.indexOf('\n  }\n', i0));
+    ok('★★★ 展開圖開著：只接 Ctrl+Z／Ctrl+Y（確認框或別的視窗開著就不接），其他快速鍵照舊 return', i0 > 0
+      && /if \(unfoldWin\.isOpen && !exportWin\.isOpen && !sliceWin\.isOpen && !importWin\.isOpen && !import3dWin\.isOpen && !isAskOpen\(\)\s*&& \(e\.ctrlKey \|\| e\.metaKey\) && \(k0 === 'z' \|\| k0 === 'y'\)\)/.test(gate)
+      && /jumpHistory\(e\.shiftKey \|\| k0 === 'y'\);/.test(gate) && /\n    return;$/.test(gate) && (gate.match(/jumpHistory\(/g) || []).length === 1
+      && !/deleteSelected|duplicateSelected|setMode\(/.test(gate));
+  }
   ok('★★ 拖曳、平滑頂點的提示講最遠偏離多少（共用 unflatNote）', /bits\.push\(unflatNote\(r\)\)/.test(mbody('editDrag')) && /bits\.push\(unflatNote\(rf\)\)/.test(mbody('smoothVertsSelected'))
     && /nonPlanarWorst\.toFixed\(3\)/.test(mbody('unflatNote')));
 }
