@@ -52,6 +52,7 @@ import { edgeLoop, sharpEdges, similarTo, loopFaces, boundaryEdges, checkerPick,
 import { worldBounds, unionBounds, freeSpot, besideShift } from './core/align.js';
 import { findClashes, clashLine } from './core/interfere.js';
 import { ExportPanel } from './ui/exportPanel.js';
+import { ObjPanel } from './ui/objPanel.js';
 import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
 import { Import3DPanel } from './ui/import3dPanel.js';
@@ -502,6 +503,8 @@ const sliceWin = new SlicePanel(app);
 const importWin = new ImportPanel(app);
 /** 匯入 3D 模型（STL／OBJ／GLB）當骨架（2026-10-21 → `規格\建模器-匯入3D模型.md`）*/
 const import3dWin = new Import3DPanel(app);
+/** 匯出 OBJ（網格核心第五批 a，2026-10-23 → `規格\建模器-網格核心.md` 第 8 節）*/
+const objWin = new ObjPanel(app);
 
 // ═══════════════════════════════════════════════════════
 //  動作
@@ -1452,6 +1455,7 @@ $('slice').onclick = () => sliceWin.open();
 $('importSvg').onclick = () => importWin.open();
 $('import3d').onclick = () => import3dWin.open();
 $('export3d').onclick = () => exportWin.open();
+$('exportObj').onclick = () => objWin.open();
 
 $('undo').onclick = () => jumpHistory(false);
 $('redo').onclick = () => jumpHistory(true);
@@ -7533,7 +7537,7 @@ window.addEventListener('keydown', e => {
    * 以前展開圖開著按 Delete，後面的物件被刪掉、展開圖跟著變空；
    * Ctrl+Z、W／E／R 也一樣穿透過去。視窗是「看結果」的地方，⛔ 不是編輯的地方。
    */
-  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen || isAskOpen()) {
+  if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen || importWin.isOpen || import3dWin.isOpen || objWin.isOpen || isAskOpen()) {
     /** ⚠ Ctrl+S／Ctrl+D ⛔ 不可以掉回瀏覽器（另存網頁、加入書籤）*/
     if ((e.ctrlKey || e.metaKey) && 'sd'.includes(e.key.toLowerCase())) e.preventDefault();
     /**
@@ -7542,7 +7546,7 @@ window.addEventListener('keydown', e => {
      * Delete、W／E／R 照舊⛔ 穿過去（上面那條的原因還在）。⚠ 確認框開著、或別的視窗也開著 ⇒ 照舊不接。
      */
     const k0 = e.key.toLowerCase();
-    if (unfoldWin.isOpen && !exportWin.isOpen && !sliceWin.isOpen && !importWin.isOpen && !import3dWin.isOpen && !isAskOpen()
+    if (unfoldWin.isOpen && !exportWin.isOpen && !sliceWin.isOpen && !importWin.isOpen && !import3dWin.isOpen && !objWin.isOpen && !isAskOpen()
         && (e.ctrlKey || e.metaKey) && (k0 === 'z' || k0 === 'y')) {
       e.preventDefault();
       jumpHistory(e.shiftKey || k0 === 'y');
@@ -8454,6 +8458,7 @@ function updateBar() {
 
   // 3D 匯出：只要有物件就能匯出（實體、板件都可以）
   $('export3d').disabled = doc.objects.length === 0;
+  $('exportObj').disabled = doc.objects.length === 0;
 
   /**
    * 剖面分切：跟展開同一條規矩 —— 有物件就開放，沒選就切全部。
@@ -8468,6 +8473,7 @@ function updateBar() {
   // 開著的時候跟著文件一起更新，改個板厚就能看到展開長跟著變
   if (unfoldWin.isOpen) unfoldWin.run();
   if (exportWin.isOpen) exportWin.run();
+  if (objWin.isOpen) objWin.run();
   if (sliceWin.isOpen) sliceWin.run();
 
   const act = sel.active;

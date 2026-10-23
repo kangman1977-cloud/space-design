@@ -19655,7 +19655,7 @@ section('網格核心第三批 b：不平的面標琥珀色、展開前列出來
     const i0 = mn.indexOf('if (unfoldWin.isOpen || exportWin.isOpen || sliceWin.isOpen');
     const gate = mn.slice(i0, mn.indexOf('\n  }\n', i0));
     ok('★★★ 展開圖開著：只接 Ctrl+Z／Ctrl+Y（確認框或別的視窗開著就不接），其他快速鍵照舊 return', i0 > 0
-      && /if \(unfoldWin\.isOpen && !exportWin\.isOpen && !sliceWin\.isOpen && !importWin\.isOpen && !import3dWin\.isOpen && !isAskOpen\(\)\s*&& \(e\.ctrlKey \|\| e\.metaKey\) && \(k0 === 'z' \|\| k0 === 'y'\)\)/.test(gate)
+      && /if \(unfoldWin\.isOpen && !exportWin\.isOpen && !sliceWin\.isOpen && !importWin\.isOpen && !import3dWin\.isOpen && !objWin\.isOpen && !isAskOpen\(\)\s*&& \(e\.ctrlKey \|\| e\.metaKey\) && \(k0 === 'z' \|\| k0 === 'y'\)\)/.test(gate)
       && /jumpHistory\(e\.shiftKey \|\| k0 === 'y'\);/.test(gate) && /\n    return;$/.test(gate) && (gate.match(/jumpHistory\(/g) || []).length === 1
       && !/deleteSelected|duplicateSelected|setMode\(/.test(gate));
   }
@@ -19709,6 +19709,79 @@ section('網格核心第四批：參數物件算出來就在最外層合一次�
   ok('★★★ 只在最外層（`mesh()`）合，⛔ 在 `buildSrc()` 裡每一層都合（原型試過：法蘭、齒輪底座排法會跟轉網格不一樣）',
     !/mergeCoplanarFaces/.test(fb(iosrc, 'export function buildSrc(')) && /if \(this\.isParametric\) \{\s*const r = mergeCoplanarFaces\(this\._mesh\);/.test(iosrc)
     && /if \(this\._mesh\.arrayStacked\) r\.mesh\.arrayStacked = true;/.test(iosrc));
+}
+
+section('網格核心第五批 a：匯出 OBJ（2026-10-23）');
+{
+  /** `規格\建模器-網格核心.md` 第 8 節；kang 2026-10-23「照你的建議：第五批拆開，先做匯出 OBJ，預設照你寫的」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const O = await import('../js/out/obj.js');
+  const im = await import('../js/build/import3d.js');
+  const { defaultSrc } = await import('../js/build/prim.js');
+  const mk = (t, name) => new io.ModelObject({ name: name || t, src: defaultSrc(t) });
+  const item = o => ({ name: o.name, mesh: o.mesh(), matrix: o.matrix() });
+  const L = (txt, tag) => txt.split('\n').filter(l => l.startsWith(tag + ' '));
+  // ① 方塊：預設 mm、多邊形照原樣
+  const bx = mk('box', '方塊');
+  const r1 = O.toOBJ([item(bx)]);
+  ok('★★★ 方塊：1 個 o「方塊」、8 個點、6 個四邊形面（多邊形照原樣）', L(r1.text, 'o').join() === 'o 方塊' && L(r1.text, 'v').length === 8
+    && L(r1.text, 'f').length === 6 && L(r1.text, 'f').every(l => l.split(' ').length === 5), `${L(r1.text, 'v').length} 點、${L(r1.text, 'f').length} 面`);
+  ok('★★★ 預設 mm（建模器 cm × 10）、檔頭講單位與 Y 朝上、方塊的角在 (±300, ±225, ±200)', r1.unit === 'mm' && /# 單位：mm/.test(r1.text) && /Y 朝上/.test(r1.text)
+    && L(r1.text, 'v').every(l => l.split(' ').slice(1).map(Number).every((v, k) => Math.abs(Math.abs(v) - [300, 225, 200][k]) < 1e-9)));
+  const corner = u => L(O.toOBJ([item(bx)], { unit: u }).text, 'v')[0].split(' ').slice(1).map(Number).map(Math.abs);
+  ok('★★ 單位換算：cm 30、m 0.3、in 11.811…', corner('cm')[0] === 30 && corner('m')[0] === 0.3 && Math.abs(corner('in')[0] - 30 / 2.54) < 1e-6, `${corner('cm')[0]}／${corner('m')[0]}／${corner('in')[0]}`);
+  // ② 寫出去再用建模器自己的 OBJ 讀檔程式讀回來
+  const objs = [mk('box', '方塊'), mk('cylinder', '圓柱'), mk('sphere', '球'), mk('torus', '圓環')];
+  objs[1].pos.set(100, 0, 0); objs[1].rot.set(0.3, 0, 0.2);
+  const back = tri => {
+    const r = O.toOBJ(objs.map(item), { unit: 'cm', triangulate: tri });
+    const c = im.cleanModel(im.readOBJ(r.text));
+    return { r, parts: im.toParts(c, { cmPerUnit: 1, up: 'y', split: true }) };
+  };
+  for (const tri of [false, true]) {
+    const { r, parts } = back(tri);
+    const vol = parts.map(p => Mesh.fromFaceList(p.points.map(q => new THREE.Vector3(...q)), p.faces).volume());
+    const want = objs.map(o => o.mesh().transformed(o.matrix()).volume());
+    ok(`★★★ ${tri ? '全部拆成三角形' : '多邊形照原樣'}：讀回來 4 個物件、名字對、每個體積跟原本一樣（含擺放與旋轉）`, parts.length === 4
+      && parts.map(p => p.name).join() === '方塊,圓柱,球,圓環' && vol.every((v, k) => Math.abs(v - want[k]) < 1e-3 * Math.max(1, Math.abs(want[k]))),
+      vol.map(v => v.toFixed(2)).join('／'));
+    if (tri) ok('★★ 　 拆成三角形：每個 f 都是 3 個點', L(r.text, 'f').every(l => l.split(' ').length === 4));
+    else {
+      /** ⚠ 體積⛔ 受移動、旋轉影響 ⇒ 擺放要另外比位置（第一版只比體積，改壞「沒套擺放」抓不到）*/
+      const cyl = parts[1].points, cx = cyl.reduce((a, q) => a + q[0], 0) / cyl.length;
+      const want = objs[1].mesh().transformed(objs[1].matrix()).bounds();
+      const lo = cyl.reduce((m, q) => Math.min(m, q[1]), Infinity);
+      ok('★★★ 　 擺放照套：圓柱（移到 x 100、轉過）讀回來中心在 x ≈ 100、最低點跟原本一樣', Math.abs(cx - 100) < 1 && Math.abs(lo - want.min.y) < 1e-3, `中心 x ${cx.toFixed(2)}、最低 ${lo.toFixed(3)}／${want.min.y.toFixed(3)}`);
+      ok('★★ 　 多邊形照原樣：面數 ＝ 小面數（方塊 6、圓柱 34、球 512、圓環 384）', r.faces === 6 + 34 + 512 + 384, String(r.faces));
+    }
+  }
+  // ③ 平滑群組
+  const tor = mk('torus', '圓環');
+  const sg = O.smoothGroups(tor.mesh());
+  const rt = O.toOBJ([item(bx), item(tor)]);
+  ok('★★ 平滑群組：方塊全部 s off、圓環的面在平滑群裡（標了平滑的邊連起來的那幾片）', [...O.smoothGroups(bx.mesh()).values()].every(g => g === 0)
+    && [...sg.values()].every(g => g > 0) && L(rt.text, 's').some(l => l === 's off') && L(rt.text, 's').some(l => /^s \d+$/.test(l)) && rt.groups > 0, `${rt.groups} 群`);
+  // ④ 有洞的面照小面寫（齒輪正面）
+  const gear = mk('gear', '齒輪');
+  const rg = O.toOBJ([item(gear)], { unit: 'cm' });
+  const gb = im.toParts(im.cleanModel(im.readOBJ(rg.text)), { cmPerUnit: 1, up: 'y', split: true })[0];
+  const gm = Mesh.fromFaceList(gb.points.map(q => new THREE.Vector3(...q)), gb.faces);
+  ok('★★★ 有洞的面（齒輪正面）照它的小面寫：讀回來封閉、體積一樣', gm.isClosed() && Math.abs(gm.volume() - gear.mesh().volume()) < 1e-6, `${gm.volume().toFixed(4)}／${gear.mesh().volume().toFixed(4)}`);
+  // ⑤ 幾個物件的點編號接著算、名字裡的換行拿掉、切開／折不帶出去
+  const a = mk('box', '甲\n乙'), b2 = mk('box', '丙');
+  const rm = O.toOBJ([item(a), item(b2)]);
+  const fl = L(rm.text, 'f').map(l => l.split(' ').slice(1).map(Number));
+  ok('★★ 第二個物件的面接著用第 9～16 個點；名字裡的換行拿掉', fl.slice(6).every(f => f.every(i => i >= 9 && i <= 16)) && L(rm.text, 'o')[0] === 'o 甲 乙');
+  ok('★★ 只有 #、o、v、s、f 這幾種行（⛔ 帶切開／折、參數）', rm.text.trim().split('\n').every(l => /^(#|o |v |s |f )/.test(l)));
+  // ⑥ 讀程式守著：照畫面的樣子、有選只匯出選到的、接線
+  const pn = readFileSync(join(here, '../js/ui/objPanel.js'), 'utf8'), sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8');
+  const mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★★ 照畫面上的樣子：加厚問畫面同一支 shellThickness()；有選只匯出選到的、沒選就全部', /this\.app\.view\.shellThickness\(o\)/.test(pn)
+    && /shellThickness\(obj\) \{ return this\._shellThickness\(obj\); \}/.test(sc) && /const objs = picked\.length \? picked : this\.app\.doc\.objects;/.test(pn));
+  ok('★★ 預設 mm、多邊形照原樣；Blender 那句講要選 m', /unit: 'mm', triangulate: false/.test(pn) && /給 Blender 用選 m/.test(pn));
+  ok('★★ 工具列「匯出 OBJ」、開著時快速鍵不穿過去、模型變了跟著重算', /id="exportObj"/.test(ih) && /\$\('exportObj'\)\.onclick = \(\) => objWin\.open\(\);/.test(mn)
+    && /import3dWin\.isOpen \|\| objWin\.isOpen \|\| isAskOpen\(\)/.test(mn) && /if \(objWin\.isOpen\) objWin\.run\(\);/.test(mn));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

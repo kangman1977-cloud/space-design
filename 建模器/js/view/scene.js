@@ -661,6 +661,9 @@ export class SceneView {
    * 面數太多時放棄加厚：加厚會讓面數變成兩倍多，而且每次都要重算。
    * 真的做到那個規模時，看不看得到板厚已經不是重點了。
    */
+  /** 對外：畫面上這個物件加厚多少（0 ＝ 不加厚）—— 匯出 OBJ 照畫面上的樣子寫，問同一支（網格核心第五批 a）*/
+  shellThickness(obj) { return this._shellThickness(obj); }
+
   _shellThickness(obj) {
     /**
      * 順序有意義：先擋掉便宜的條件，再問網格。
