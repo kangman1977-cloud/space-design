@@ -19784,6 +19784,36 @@ section('網格核心第五批 a：匯出 OBJ（2026-10-23）');
     && /import3dWin\.isOpen \|\| objWin\.isOpen \|\| isAskOpen\(\)/.test(mn) && /if \(objWin\.isOpen\) objWin\.run\(\);/.test(mn));
 }
 
+section('網格核心第五批 b ①：匯入的焊點只合位置完全一樣的點（2026-10-23）');
+{
+  /** `網格核心-研究.md` 10.5；kang 2026-10-23「第 ① 小批照你的修法：焉點只合位置完全一樣的點，整理好的資料不再焊留到第 ③ 小批」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  // ① STL 那種：每個三角形自己帶點，共用的點座標一模一樣 ⇒ 照樣合起來
+  const soup = { points: [[0, 0, 0], [10, 0, 0], [0, 10, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], faces: [[0, 1, 2], [3, 4, 5]], partOf: [0, 0], parts: ['x'] };
+  const c1 = im.cleanModel(soup);
+  ok('★★★ 位置完全一樣的點照樣合（STL 每個三角形自己帶點）：6 點 → 4 點、兩個面連起來', c1.points.length === 4 && c1.stats.merged === 2 && im.edgeCheck(c1.faces).edges === 5);
+  // ② 很近但不一樣（以前的容許值會合）⇒ 不合、細長面留著
+  const eps = 1e-5;   // 模型對角線約 14 ⇒ 以前的容許值 1.4e-5 會把它們合起來
+  const near = { points: [[0, 0, 0], [10, 0, 0], [0, 10, 0], [10 + eps, 0, 0], [10, 10, 0], [0, 10, 0]], faces: [[0, 1, 2], [1, 3, 4]], partOf: [0, 0], parts: ['x'] };
+  const c2 = im.cleanModel(near);
+  ok('★★★ 很近但不一樣的點⛔ 合（差 0.00001）⇒ 細長面照樣留著、⛔ 被當成廢面丟掉', c2.points.length === 5 && c2.stats.degen === 0 && c2.faces.length === 2, `${c2.points.length} 點、廢面 ${c2.stats.degen}`);
+  // ③ 面積 0 的廢面照樣清掉（iPhone 的蓋子那種：點排成一直線）
+  const junk = { points: [[0, 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 0], [10, 0, 0]], faces: [[0, 1, 2], [3, 4, 1]], partOf: [0, 0], parts: ['x'] };
+  const c3 = im.cleanModel(junk);
+  ok('★★ 同一個位置的點合完只剩兩個不同點的面 ⇒ 照樣丟掉（廢面）', c3.stats.degen === 1 && c3.faces.length === 1);
+  // ④ 真的樣本：工地帽（以前焊掉 52 個面，50 個是好面）
+  const buf = readFileSync(join(here, '../../輸出/匯入測試/Construction_site_safety_helmet.stl'));
+  const hr = im.readModel('helmet.stl', buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+  const hc = im.cleanModel(hr), he = im.edgeCheck(hc.faces);
+  ok('★★★ 工地帽：清掉的廢面 52 → 2（另外 50 個好面⛔ 再被焊掉）、照樣封閉（0 開口、0 三面共用）', hc.stats.degen === 2 && he.open === 0 && he.nonManifold === 0, `廢面 ${hc.stats.degen}、開口 ${he.open}、三面共用 ${he.nonManifold}`);
+  // ⑤ 讀程式守著
+  const src = readFileSync(join(here, '../js/build/import3d.js'), 'utf8');
+  const i = src.indexOf('export function cleanModel('), body = src.slice(i, src.indexOf('\n}', i));
+  ok('★★ cleanModel() 的合點鑰匙是座標本身（⛔ 再除容許值四捨五入）', /const k = p\.join\(','\);/.test(body) && !/Math\.round\(v \/ tol\)/.test(body));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

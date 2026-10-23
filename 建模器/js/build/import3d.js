@@ -179,17 +179,21 @@ export function readGLB(buf) {
 /**
  * 🔴 **清理**：位置一樣的點合成一個（STL、GLB 每個三角形自己帶點）、同一組點的面只留一個
  * （不管繞的方向 —— Kenney 的 OBJ 每個面寫了兩次）、少於 3 個不同點的面丟掉。
- * 容許值 ＝ 整個模型的對角線 × 10⁻⁶（照模型大小，⛔ 寫死一個長度 —— 這時候還不知道單位）。
+ *
+ * 🔴 **只合「位置完全一樣」的點**（網格核心第五批 b ①，kang 2026-10-23「第 ① 小批照你的修法：焉點只合位置完全一樣的點…」→
+ * `網格核心-研究.md` 10.5）。以前用容許值（整個模型的對角線 × 10⁻⁶）把「很近」的也合起來 ——
+ * 22 個樣本比過：只合完全一樣的⛔ 有一個變差；工地帽少焊掉 50 個好面、LLT 三面共用的邊 7,076 → 2,317；
+ * STL、GLB 同一個點寫出來的座標本來就一模一樣，照樣連得起來。
+ * ⚠ 已經整理好（Manifold 出來）的資料⛔ 再送進這一支：Manifold 在零件碰到的地方刻意讓位置一樣的點分開，
+ * 焊了就壞（整理好的汽車：只合完全一樣的也還有 654 條三面共用）—— 那條路是匯入整理「整理成實體」的事。
  * @returns 跟讀出來的一樣，多 `stats: {merged, dup, degen}`、`size`（檔案單位的長寬高）
  */
 export function cleanModel(r) {
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (const p of r.points) for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
-  const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
-  const tol = diag * 1e-6;
   const key = new Map(), points = [], remap = [];
   r.points.forEach((p, i) => {
-    const k = p.map(v => Math.round(v / tol)).join(',');
+    const k = p.join(',');
     if (!key.has(k)) { key.set(k, points.length); points.push(p); }
     remap[i] = key.get(k);
   });
