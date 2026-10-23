@@ -14,23 +14,33 @@ import * as THREE from 'three';
 import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapseShort, MICRO_DIV, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
 import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { solidCheck, fillVariant, unionVariant, suggestSolid, SOLID_MODES } from '../build/importSolid.js';
+import { decimate, surfaceDev } from '../build/decimate.js';
 import { Mesh } from '../core/mesh.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
 import { worldBounds, unionBounds, freeSpot } from '../core/align.js';
 
 const LS_KEY = 'modeler_import3d';
-/** 面超過這麼多就提醒：分片、展開會慢（減面是第三步，還沒做）*/
+/** 面超過這麼多就提醒：分片、展開會慢 —— 可以用「減到 ___ 面」*/
 const MANY_FACES = 20000;
+/**
+ * 面數那一區的三種（網格核心第五批 b ④；kang 2026-10-22 定、2026-10-24「第 ④ 小批照你的建議：減到 N 面時不保護格子、視窗用卡片、減到 N 面點了才算」）。
+ * `clean` ＝ 清碎面：同一個門檻（最長邊 ÷ 500，或自己打的 mm）決定減多少、點放在誤差最小的位置（保形狀減面）
+ */
+export const FACE_MODES = { raw: '原樣（不減）', clean: '清碎面', reduce: '減到 ___ 面' };
+/** 清碎面要減的超過這個比例 ⇒ 不自動清、建議原樣，要的話自己點（kang 10-22「超過一成停下來給 kang 看」）*/
+export const CLEAN_MAX = 0.1;
+/** 「減到 ___ 面」的快捷（kang 10-22 定）：3D 列印不減、剖面約 2 萬、展開紙模約 500 */
+export const REDUCE_PRESETS = [['給 3D 列印（不減）', 0], ['給剖面（約 2 萬面）', 20000], ['給展開、紙模（約 500 面）', 500]];
 
 export class Import3DPanel {
   /** @param {object} app { doc, sel, onEdit, toast, view } */
   constructor(app) {
     this.app = app;
     /**
-     * split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；micro ＝ 清掉極小的碎面（預設開，kang 選甲）；
+     * split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；〔micro ＝ 舊的「清掉極小的碎面」勾選 —— 第五批 b ④ 起改由面數那一區的卡片選，不再用〕；
      * planes ＝ 平面上的小塊怎麼辦（`PLANE_MODES`，預設照建議 —— 網格核心第五批 b ②）
      */
-    this.opt = { split: true, micro: true, planes: 'suggest', ...loadOpt() };
+    this.opt = { split: true, planes: 'suggest', ...loadOpt() };
     this.fileName = '';
     this.read = null;            // 讀出來、清理過的
     this.unit = '';              // '' ＝ 照猜的
@@ -117,9 +127,12 @@ export class Import3DPanel {
     this.unit = ''; this.up = ''; this.cmFix = 0; this.microMm = 0;
     const r = readModel(name, buf);
     this.read = r.ok ? { ...cleanModel(r), ok: true } : r;
-    this._judged = null;
+    this._base = null;             // 拆好部分的原樣＋平面判斷（換檔案一定要清：鑰匙只有做法與拆法）
     this._solid = null;
     this.solidMode = '';           // '' ＝ 照建議（換檔案清回來）
+    this._face = null;             // 面數那一區算好的（清碎面、減到 N 面）—— 換檔案清掉
+    this.faceMode = '';            // '' ＝ 照建議
+    this.reduceTarget = 0;         // 「減到 ___ 面」打的數字（0 ＝ 還沒打）
     if (this.read.ok) {
       this.read.check = edgeCheck(this.read.faces);
       this._startSolid();
@@ -182,38 +195,122 @@ export class Import3DPanel {
   }
 
   /**
-   * 會建立的部分（cm、Y 朝上）；碎面打開的話每個部分先清（`collapseShort()`）。
-   * 預覽與匯入用同一支 ⇒ 視窗寫的就是匯進去的。
-   * 🔴 **先判斷每一片平面、再清碎面**（網格核心第五批 b ②）：照原檔一格一格的平面，它的點清碎面⛔ 動；
-   * 每個部分多帶 `grid`（那幾片平面裡面的線，匯入時標 `hard`）。
+   * 會建立的部分（cm、Y 朝上）。預覽與匯入用同一支 ⇒ 視窗寫的就是匯進去的。
+   * 🔴 **先判斷每一片平面、再減面**（網格核心第五批 b ②）：照原檔一格一格的平面，清碎面⛔ 動它的點；每個部分多帶 `grid`（匯入時標 `hard`）。
+   * 🔴 **面數**（第五批 b ④）：清碎面、減到 N 面要算很久（汽車 36～66 秒）⇒ 在檔案單位、Y 朝上算好存起來（`_faceWork()`），
+   * 這裡只照現在的單位、朝上換座標（保形狀減面只看形狀、跟大小和轉向無關）；還沒算好的那個做法先用原樣、寫「正在算」。
    */
   _parts() {
-    const pick = this._solidPick(), r = pick.read, s = this._setting();
+    const pick = this._solidPick(), s = this._setting();
     const split = this.opt.split !== false;
-    let parts = toParts(r, { cmPerUnit: s.cmPerUnit, up: s.up, split });
-    const micro = { on: this.opt.micro !== false, ...this._microTol(), collapsed: 0, kept: 0, removed: 0, maxMove: 0 };
-    const mode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
-    /**
-     * 判斷只看角度與比例，跟單位、朝上無關 ⇒ 同一個檔、同一種拆法只判一次（大的模型要幾秒，⛔ 每改一個設定就重來）。
-     * ⚠ `toParts()` 換單位、朝上只動座標，面的編號不變 —— 所以快取用拆法當鑰匙就夠。
-     */
-    if (!this._judged || this._judged.split !== split || this._judged.solid !== pick.mode) this._judged = { split, solid: pick.mode, list: parts.map(judgePlanes) };
-    const planes = { mode, cut: 0, grid: 0, cutFaces: 0, gridFaces: 0, kept: 0, keptFaces: 0 };
-    parts = parts.map((p, i) => {
-      const j = this._judged.list[i], regs = keptRegions(j, mode);
+    const base = this._faceBase(pick, split);
+    const planesMode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
+    const planes = { mode: planesMode, cut: 0, grid: 0, cutFaces: 0, gridFaces: 0, kept: 0, keptFaces: 0 };
+    base.judged.forEach((j, i) => {
       for (const k of ['cut', 'grid', 'cutFaces', 'gridFaces']) planes[k] += j[k];
+      const regs = keptRegions(j, planesMode);
       planes.kept += regs.length;
       for (const g of regs) planes.keptFaces += g.faces.length;
-      let q = p, from = p.faces.map((_, k) => k);
-      if (micro.on) {
-        q = collapseShort(p, micro.tol, regs.length ? keepVerts(p, regs) : null);
-        from = q.from;
-        micro.collapsed += q.stats.collapsed; micro.kept += q.stats.kept; micro.removed += q.stats.removed;
-        micro.maxMove = Math.max(micro.maxMove, q.stats.maxMove);
-      }
-      return { ...q, grid: gridEdges(q, regs, from) };
     });
-    return { parts, micro, planes, solid: pick.mode };
+    const face = this._faceState(pick, split, planesMode);
+    const mode = face.using;
+    const done = mode === 'raw' ? null : face[mode];
+    const conv = s.up === 'z' ? q => [q[0] * s.cmPerUnit, q[2] * s.cmPerUnit, -q[1] * s.cmPerUnit] : q => [q[0] * s.cmPerUnit, q[1] * s.cmPerUnit, q[2] * s.cmPerUnit];
+    const parts = base.parts.map((p, i) => {
+      const q = done && done.parts ? done.parts[i] : { ...p, grid: gridEdges(p, keptRegions(base.judged[i], planesMode), p.faces.map((_, k) => k)) };
+      return { ...q, points: q.points.map(conv) };
+    });
+    return { parts, planes, solid: pick.mode, face };
+  }
+
+  /** 拆好部分的原樣（檔案單位、Y 朝上）＋每一片平面的判斷；同一個做法、同一種拆法只算一次 */
+  _faceBase(pick, split) {
+    const key = pick.mode + '|' + split;
+    if (!this._base || this._base.key !== key) {
+      const parts = toParts(pick.read, { cmPerUnit: 1, up: 'y', split });
+      this._base = { key, parts, judged: parts.map(judgePlanes) };
+    }
+    return this._base;
+  }
+
+  /**
+   * 面數那一區的狀態：清碎面算好了沒、少幾 %、建議哪一個、現在用哪一個。
+   * 清碎面一換檔、換整理做法、換拆法、換平面的選擇、換門檻就重算（下一輪、算完重畫）；減到 N 面點了才算。
+   */
+  _faceState(pick, split, planesMode) {
+    const s = this._setting();
+    const key = [pick.mode, split, planesMode, this.microMm, this.microMm > 0 ? s.cmPerUnit : ''].join('|');
+    if (!this._face || this._face.key !== key) this._face = { key, clean: null, reduce: null };
+    const F = this._face;
+    const solidBusy = this._solid && this._solid.pending;
+    if (!F.clean && !solidBusy) this._faceWork('clean');
+    if (F.clean && F.clean.lazy && this.faceMode === 'clean' && !solidBusy) this._faceWork('clean');   // 超過一成的：點了才真的減
+    if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget) && !solidBusy) this._faceWork('reduce');
+    const c = F.clean && (F.clean.parts || F.clean.lazy) ? F.clean : null;
+    F.suggest = !c ? { mode: 'raw', why: F.clean && !F.clean.pending ? '' : '正在算清碎面…' }
+      : !c.removed ? { mode: 'raw', why: '沒有比門檻短、清了不會壞的碎面 —— 不用清' }
+      : c.ratio <= CLEAN_MAX ? { mode: 'clean', why: `只有 ${pct(c.ratio)} 是碎面，清掉之後表面離原本最多 ${mm(c.dev * s.cmPerUnit)} mm` }
+      : { mode: 'raw', why: `清碎面會少 ${pct(c.ratio)}（超過一成，等於是減面）—— 不自動清，要的話點「清碎面」那張` };
+    let using = this.faceMode || F.suggest.mode;
+    if (using === 'reduce' && !(this.reduceTarget > 0)) using = 'raw';
+    F.using = using;
+    F.ready = using === 'raw' || !!(F[using] && F[using].parts);
+    return F;
+  }
+
+  /**
+   * 算清碎面或減到 N 面（下一輪算、算完重畫；換了檔案或設定就丟掉）。
+   * 清碎面：門檻（自動 ＝ 最長邊 ÷ 500）先用「兩端合到中點」數出會剩幾個面（⇒ 減多少跟 10-21 驗收的門檻一樣），
+   * 再用保形狀減面減到那個數（汽車：最多偏 0.1 mm → 0.005 mm）；照原檔的格子不動。
+   * 減到 N 面：照每個部分的面數分配，⛔ 保護格子（kang：你都要少面了）；減不下去的照實講。
+   */
+  _faceWork(kind) {
+    const F = this._face;
+    const full = kind === 'clean' && F.clean && F.clean.lazy;     // 先前只數過、現在點了要真的減
+    if (F[kind] && !full && (kind === 'clean' || F[kind].target === this.reduceTarget)) return;
+    const target = this.reduceTarget, counted = full ? F.clean.goals : null;
+    F[kind] = { pending: true, target };
+    setTimeout(() => {
+      if (this._face !== F) return;                       // 這中間換了設定
+      const base = this._base, planesMode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
+      const s = this._setting();
+      try {
+        const total = base.parts.reduce((n, p) => n + p.faces.length, 0);
+        let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (const p of base.parts) for (const q of p.points) for (let k = 0; k < 3; k++) { if (q[k] < lo[k]) lo[k] = q[k]; if (q[k] > hi[k]) hi[k] = q[k]; }
+        const tol = this.microMm > 0 ? this.microMm / 10 / s.cmPerUnit : Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / MICRO_DIV;
+        let left = 0, maxMove = 0, dev = 0;
+        /**
+         * 清碎面先數：照門檻用「兩端合到中點」數出每個部分會剩幾個面（汽車 13 秒）。
+         * 超過一成 ⇒ 先停在這裡（`lazy`，不自動清），點了「清碎面」那張才真的減 —— 汽車省下 40 秒左右的白等。
+         */
+        const goals = kind === 'clean' ? (counted || base.parts.map((p, i) => {
+          const regs = keptRegions(base.judged[i], planesMode);
+          return collapseShort(p, tol, regs.length ? keepVerts(p, regs) : null).faces.length;
+        })) : base.parts.map(p => Math.max(4, Math.round(target * p.faces.length / total)));
+        if (kind === 'clean' && !counted) {
+          const n = goals.reduce((a, b) => a + b, 0);
+          if ((total - n) / total > CLEAN_MAX && this.faceMode !== 'clean') {
+            F.clean = { lazy: true, goals, faces: n, removed: total - n, ratio: (total - n) / total, tol };
+            this._render();
+            return;
+          }
+        }
+        const parts = base.parts.map((p, i) => {
+          const regs = kind === 'clean' ? keptRegions(base.judged[i], planesMode) : [];
+          const keep = regs.length ? keepVerts(p, regs) : null;
+          const goal = goals[i];
+          const q = goal < p.faces.length ? decimate(p, { target: goal, keep }) : { ...p, from: p.faces.map((_, k) => k), stats: { maxMove: 0 } };
+          left += q.faces.length; maxMove = Math.max(maxMove, q.stats.maxMove);
+          if (q.faces.length < p.faces.length) dev = Math.max(dev, surfaceDev(p, q));   // 表面離原本最多多遠（⛔ 用點搬了多遠 —— 點會沿著表面滑）
+          return { ...q, grid: gridEdges(q, keptRegions(base.judged[i], planesMode).filter(() => kind === 'clean'), q.from) };
+        });
+        F[kind] = { target, parts, faces: left, removed: total - left, ratio: total ? (total - left) / total : 0, maxMove, dev, tol };
+      } catch (e) {
+        F[kind] = { target, error: '算的時候出錯：' + (e.message || e) };
+      }
+      this._render();
+    }, 30);
   }
 
   /**
@@ -297,15 +394,20 @@ export class Import3DPanel {
 
   /** 小圖：畫好放進 `el`（同一個做法、同一個朝上只畫一次）*/
   _thumbInto(el, mode, w, h) {
-    const s = this._setting(), key = `${mode}|${s.up}|${w}`;
-    const sol = this._solid;
+    const s = this._setting(), sol = this._solid;
+    this._thumbPut(el, sol.thumbs, `${mode}|${s.up}|${w}`, () => this._solid === sol,
+      () => toParts(sol.variants[mode].read, { cmPerUnit: s.cmPerUnit, up: s.up, split: false }), w, h);
+  }
+
+  /** 畫小圖的共用：有畫過就拿、沒有就下一輪畫（`alive()` 不成立 ＝ 換了檔案或設定，不畫）*/
+  _thumbPut(el, cache, key, alive, getParts, w, h) {
     const put = url => { el.innerHTML = ''; const img = document.createElement('img'); img.src = url; img.width = w; img.height = h; el.appendChild(img); };
-    if (sol.thumbs[key]) { put(sol.thumbs[key]); return; }
+    if (cache[key]) { put(cache[key]); return; }
     el.textContent = '畫圖中…';
     requestAnimationFrame(() => {
-      if (this._solid !== sol) return;
-      const url = thumbURL(sol.variants[mode].read, s, w, h);
-      if (url) { sol.thumbs[key] = url; put(url); } else el.textContent = '畫不出來';
+      if (!alive()) return;
+      const url = thumbURL(getParts(), w, h);
+      if (url) { cache[key] = url; put(url); } else el.textContent = '畫不出來';
     });
   }
 
@@ -349,34 +451,93 @@ export class Import3DPanel {
       if (pl.grid) t.push(`${pl.grid} 片像畫好的格子（${pl.gridFaces} 塊）⇒ 照原檔一格一格，格線看得見`);
       res.textContent = `${n} 片平面是好幾塊拼成的：` + t.join('；');
     }
-    if (pl.kept && this.opt.micro !== false) res.textContent += '（照原檔的平面，清碎面不會動它）';
+    if (pl.kept) res.textContent += '（照原檔的平面，清碎面不會動它）';
     return d;
   }
 
-  /** 碎面那一列：勾不勾、門檻、清了多少（照實講）*/
-  _microRow(m) {
+  /**
+   * 面數那一區：三張卡（原樣／清碎面／減到 ___ 面），小圖＋數字，建議的那張框起來、寫理由；點卡片換、點小圖放大。
+   * 清碎面的門檻（空白 ＝ 自動）放在卡片裡；減到 ___ 面打數字或按快捷才開始算（汽車要一分鐘左右）。
+   */
+  _faceRow(face, nRaw) {
+    const s = this._setting(), m = this._microTol();
     const d = document.createElement('div');
     d.className = 'uwSkip';
-    d.innerHTML = `
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="i3Micro"> 清掉極小的碎面：比</label>
-        <input type="number" id="i3MicroMm" step="0.01" min="0" style="width:70px" placeholder="${mm(m.auto)}" value="${this.microMm > 0 ? this.microMm : ''}">
-        <span>mm 短的邊縮掉（空白 ＝ 自動：最長的那一邊 ÷ ${MICRO_DIV} ＝ ${mm(m.auto)} mm）</span>
-      </div>
-      <div id="i3MicroRes" style="margin-top:4px"></div>`;
-    const ck = d.querySelector('#i3Micro'), inp = d.querySelector('#i3MicroMm'), res = d.querySelector('#i3MicroRes');
-    ck.checked = m.on;
-    ck.parentElement.title = '模型上很窄、很小的面（看不到，但展開時會報「重疊」）：比門檻短的邊兩端合到中點，小的面跟著不見。'
-      + '縮了會弄出破洞、讓面翻過去的那一條就不縮。不要清就取消勾選';
-    inp.title = '空白 ＝ 自動（照模型大小，放大縮小都清掉同樣的碎面）。自己打一個 mm 就照你的；打得太大會把真的細節也縮掉 —— 看下面寫的「形狀最多動」';
-    inp.disabled = !m.on;
-    ck.onchange = () => { this.opt.micro = ck.checked; save(this.opt); this._render(); };
-    inp.onchange = () => { this.microMm = Math.max(0, num(inp.value, 0)); this._render(); };
-    if (!m.on) res.textContent = '不清：照檔案原樣匯入';
-    else if (!m.collapsed) res.textContent = `沒有比 ${mm(m.tol)} mm 短、縮了不會壞的邊 —— 不用清`;
-    else res.textContent = `縮掉 ${m.collapsed} 條很短的邊、少 ${m.removed} 個面，形狀最多動 ${mm(m.maxMove)} mm`;
-    if (m.on && m.kept) res.textContent += `；另有 ${m.kept} 條比門檻短，但縮了會弄出破洞或讓面翻過去，留著`;
+    const head = document.createElement('div');
+    head.textContent = `面數：原檔 ${nRaw} 個面` + (face.suggest.why ? `　建議「${FACE_MODES[face.suggest.mode]}」：${face.suggest.why}` : '');
+    d.appendChild(head);
+    const row = document.createElement('div');
+    row.className = 'i3Cards';
+    const parts = mode => mode === 'raw' ? null : face[mode];
+    for (const mode of Object.keys(FACE_MODES)) {
+      const r = parts(mode), ok = mode === 'raw' || (r && (r.parts || r.lazy));
+      const card = document.createElement('div');
+      const sugReady = face.clean && !face.clean.pending;            // 清碎面算好或數好了 ⇒ 建議才算數
+      card.className = 'i3Card' + (mode === face.using ? ' on' : '') + (mode === face.suggest.mode && sugReady ? ' sug' : '');
+      const title = mode === 'reduce' && this.reduceTarget > 0 ? `減到 ${this.reduceTarget} 面` : FACE_MODES[mode];
+      card.innerHTML = `<div class="i3Thumb"></div><b>${title}${mode === face.suggest.mode && sugReady ? '　（建議）' : ''}${mode === face.using ? '　✓ 現在用這個' : ''}</b><div class="i3Nums"></div><div class="i3Ctl"></div>`;
+      const nums = card.querySelector('.i3Nums'), ctl = card.querySelector('.i3Ctl'), th = card.querySelector('.i3Thumb');
+      if (mode === 'raw') nums.textContent = `${nRaw} 個面　照檔案原樣`;
+      else if (mode === 'reduce' && !(this.reduceTarget > 0)) nums.textContent = '打一個面數或按下面的快捷（按了才開始算）';
+      else if (!r || r.pending) nums.textContent = '正在算…（面多的模型要一分鐘左右）';
+      else if (r.error) nums.textContent = r.error;
+      else if (r.lazy) nums.textContent = `會剩 ${r.faces} 個面（少 ${pct(r.ratio)}）　超過一成 —— 預設不清；點這張才開始算（面多的模型要一分鐘左右）`;
+      else {
+        const t = [`${r.faces} 個面（少 ${pct(r.ratio)}）`, `表面離原本最多 ${mm(r.dev * s.cmPerUnit)} mm`];
+        if (mode === 'clean' && !r.removed) t[0] = '沒有比門檻短、清了不會壞的碎面';
+        if (mode === 'reduce' && r.faces > this.reduceTarget * 1.05) t.push(`最少只能減到 ${r.faces} 個面（零件多、或再減會弄出破洞、讓面翻過去）`);
+        if (mode === 'clean' && r.ratio > CLEAN_MAX) t.push('超過一成 —— 預設不清');
+        nums.textContent = t.join('　');
+      }
+      if (mode === 'clean') {
+        ctl.innerHTML = `比 <input type="number" class="i3MicroMm" step="0.01" min="0" style="width:60px" placeholder="${mm(m.auto)}" value="${this.microMm > 0 ? this.microMm : ''}"> mm 短的邊算碎面（空白 ＝ 自動：最長的那一邊 ÷ ${MICRO_DIV}）`;
+        const inp = ctl.querySelector('input');
+        inp.title = '空白 ＝ 自動（照模型大小）。自己打一個 mm 就照你的；打得太大會把真的細節也減掉 —— 看上面寫的「表面離原本最多」';
+        inp.onclick = e => e.stopPropagation();
+        inp.onchange = () => { this.microMm = Math.max(0, num(inp.value, 0)); this._render(); };
+      }
+      if (mode === 'reduce') {
+        ctl.innerHTML = `<input type="number" class="i3Reduce" step="100" min="4" style="width:80px" placeholder="面數" value="${this.reduceTarget > 0 ? this.reduceTarget : ''}"> 面　`
+          + REDUCE_PRESETS.map(([t, n], k) => `<button class="mini" data-k="${k}">${t}</button>`).join(' ');
+        const inp = ctl.querySelector('input');
+        inp.onclick = e => e.stopPropagation();
+        inp.onchange = () => { const n = Math.round(num(inp.value, 0)); this.reduceTarget = n >= 4 ? n : 0; this.faceMode = this.reduceTarget ? 'reduce' : ''; this._render(); };
+        ctl.querySelectorAll('button').forEach(b => {
+          b.onclick = e => { e.stopPropagation(); const n = REDUCE_PRESETS[+b.dataset.k][1]; if (!n) { this.faceMode = 'raw'; this._render(); return; } this.reduceTarget = n; this.faceMode = 'reduce'; this._render(); };
+        });
+      }
+      if (ok) {
+        card.title = '點卡片：用這個；點小圖：放大看';
+        card.onclick = () => { if (mode === 'reduce' && !(this.reduceTarget > 0)) return; this.faceMode = mode; this._render(); };
+        if (r && r.lazy) th.textContent = '點了才算、才畫';   // 只數過、還沒減 ⇒ 不畫（畫出來會是原樣，誤導）
+        else {
+          th.onclick = e => { e.stopPropagation(); this._bigFaceThumb(mode, title); };
+          this._faceThumb(th, mode, 200, 150);
+        }
+      } else card.classList.add('off');
+      row.appendChild(card);
+    }
+    d.appendChild(row);
     return d;
+  }
+
+  /** 面數卡片的小圖（換算後的樣子）*/
+  _faceThumb(el, mode, w, h) {
+    const F = this._face, s = this._setting(), base = this._base;
+    if (!F.thumbs) F.thumbs = {};
+    const r = mode === 'raw' ? null : F[mode];
+    const conv = s.up === 'z' ? q => [q[0] * s.cmPerUnit, q[2] * s.cmPerUnit, -q[1] * s.cmPerUnit] : q => [q[0] * s.cmPerUnit, q[1] * s.cmPerUnit, q[2] * s.cmPerUnit];
+    this._thumbPut(el, F.thumbs, `${mode}|${r ? r.target : 0}|${s.up}|${w}`, () => this._face === F,
+      () => (r ? r.parts : base.parts).map(p => ({ points: p.points.map(conv), faces: p.faces })), w, h);
+  }
+
+  _bigFaceThumb(mode, title) {
+    const ov = document.createElement('div');
+    ov.className = 'i3Big';
+    ov.innerHTML = `<div><b>${esc(title)}</b>　<span>紅線 ＝ 破洞的邊；橘線 ＝ 三面以上共用的邊。點一下關掉</span></div><div class="i3BigImg"></div>`;
+    ov.onclick = () => ov.remove();
+    this.el.appendChild(ov);
+    this._faceThumb(ov.querySelector('.i3BigImg'), mode, 720, 540);
   }
 
   _fillSelects() {
@@ -417,14 +578,16 @@ export class Import3DPanel {
       return;
     }
     this._fillSelects();
-    this.goBtn.disabled = false;
-    const { parts, micro, planes, solid } = this._parts();
+    const { parts, planes, solid, face } = this._parts();
+    /** 選的面數做法還在算 ⇒ 匯入鈕先不能按（不然匯進去的是原樣、跟卡片上選的不一樣）*/
+    this.goBtn.disabled = !face.ready;
+    this.goBtn.title = face.ready ? '' : '面數那一區還在算 —— 算好才能匯入';
     const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
-    this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件`;
+    this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件` + (face.ready ? '' : '（面數那一區還在算）');
     this.body.appendChild(this._sizeCard());
     if (this._solid) this.body.appendChild(this._solidRow(solid));
     if (planes.cut + planes.grid) this.body.appendChild(this._planeRow(planes));
-    this.body.appendChild(this._microRow(micro));
+    this.body.appendChild(this._faceRow(face, this._base.parts.reduce((n, p) => n + p.faces.length, 0)));
 
     // 清理、檢查：照實講
     const st = r.stats, ck = r.check;
@@ -457,8 +620,8 @@ export class Import3DPanel {
       } else this.body.appendChild(box('uwWarn', '⚠ ' + (solid !== 'raw' ? '原檔' : '') + b + ' —— 程式不自己補，匯進來之後照實看'));
     }
     if (!bad.length) this.body.appendChild(box('uwSkip', '檢查：沒有破洞、沒有接不起來的邊、面的方向一致'));
-    if (r.faces.length > MANY_FACES) {
-      this.body.appendChild(box('uwWarn', `⚠ 面很多（${r.faces.length} 個）：分片、智慧分切、展開會比較慢 —— 找面少一點的模型（low poly）比較好改`));
+    if (nFaces > MANY_FACES) {
+      this.body.appendChild(box('uwWarn', `⚠ 面很多（${nFaces} 個）：分片、智慧分切、展開會比較慢 —— 可以用上面的「減到 ___ 面」，或找面少一點的模型（low poly）`));
     }
     for (const n of r.notes) this.body.appendChild(box('uwSkip', n));
 
@@ -521,7 +684,8 @@ export class Import3DPanel {
   _import() {
     const r = this.read;
     if (!r || !r.ok) return;
-    const { parts, micro } = this._parts();
+    const { parts, face } = this._parts();
+    if (!face.ready) return;                               // 還在算（匯入鈕本來就不能按）
     const objs = [];
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
@@ -549,7 +713,8 @@ export class Import3DPanel {
     const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
     if (this.app.toast) {
       this.app.toast(`已匯入「${this.fileName}」：${objs.length} 個網格物件、${nFaces} 個面，${f(z.w)} × ${f(z.h)} × ${f(z.d)} cm`
-        + (micro.on && micro.removed ? `（清掉 ${micro.removed} 個極小的碎面）` : '')
+        + (face.using === 'clean' && face.clean.removed ? `（清碎面：少 ${face.clean.removed} 個面）` : '')
+        + (face.using === 'reduce' ? `（減到 ${face.reduce.faces} 個面）` : '')
         + (this._solidPick().mode !== 'raw' ? `（${SOLID_MODES[this._solidPick().mode]}）` : '')
         + '（鏡頭已拉到它們）　之後用建模器改它（拉點線面、刀具、布林…）');
     }
@@ -562,13 +727,15 @@ export class Import3DPanel {
  * 原樣跟補洞後一比就看得出補了哪裡。用換算後（cm、Y 朝上）的樣子、從斜上方看。
  */
 let _thumbR = null;
-function thumbURL(read, s, w, h) {
+function thumbURL(parts, w, h) {
   try {
     if (!_thumbR) _thumbR = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
     const R = _thumbR;
     R.setPixelRatio(1);
     R.setSize(w, h, false);
-    const [p] = toParts(read, { cmPerUnit: s.cmPerUnit, up: s.up, split: false });
+    // 好幾個部分合成一份畫（點的編號接著算）
+    const p = { points: [], faces: [] };
+    for (const q of parts) { const b = p.points.length; for (const x of q.points) p.points.push(x); for (const f of q.faces) p.faces.push(f.map(i => i + b)); }
     const pos = [];
     for (const f of p.faces) for (let k = 1; k + 1 < f.length; k++) for (const i of [f[0], f[k], f[k + 1]]) pos.push(...p.points[i]);
     const geo = new THREE.BufferGeometry();
@@ -619,6 +786,7 @@ const baseName = s => String(s || '').replace(/\.[^.]+$/, '');
 const f = v => String(Math.round(v * 100) / 100);
 /** cm → mm 的字（小的留到 0.001）*/
 const mm = cm => String(Math.round(cm * 10 * 1000) / 1000);
+const pct = x => (Math.round(x * 1000) / 10) + '%';
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) ? x : d; };
 function loadOpt() {

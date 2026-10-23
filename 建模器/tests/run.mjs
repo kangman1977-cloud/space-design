@@ -19875,11 +19875,14 @@ section('網格核心第五批 b ②：匯入時每一片平面各自判斷（�
   // ⑥ 讀程式守著
   const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8');
   const pp = ps.slice(ps.indexOf('  _parts() {'), ps.indexOf('  _planeRow('));
-  ok('★★ 視窗：先判斷（judgePlanes）再清碎面（collapseShort 帶 keepVerts）、判斷照拆法快取', pp.indexOf('judgePlanes') > 0 && pp.indexOf('judgePlanes') < pp.indexOf('collapseShort(p, micro.tol, regs.length ? keepVerts(p, regs) : null)') && /this\._judged\.split !== split/.test(pp));
+  // 〔第五批 b ④ 起清碎面改到 `_faceWork()`（背景算、換成保形狀減面），判斷平面的快取改到 `_faceBase()` ⇒ 照新的位置守同一件事〕
+  ok('★★ 視窗：先判斷（judgePlanes）再清碎面（數面數的 collapseShort 與保形狀減面都帶 keepVerts）、判斷照做法＋拆法快取',
+    /this\._base = \{ key, parts, judged: parts\.map\(judgePlanes\) \}/.test(ps) && /const key = pick\.mode \+ '\|' \+ split;/.test(ps)
+    && /const keep = regs\.length \? keepVerts\(p, regs\) : null;/.test(ps) && /return collapseShort\(p, tol, regs\.length \? keepVerts\(p, regs\) : null\)\.faces\.length;/.test(ps) && /decimate\(p, \{ target: goal, keep \}\)/.test(ps));
   ok('★★ 視窗：三選一預設照建議、記在這個瀏覽器、匯入時標格線（markGrid）、換檔案清掉判斷',
-    /planes: 'suggest'/.test(ps) && /this\.opt\.planes = sel\.value; save\(this\.opt\)/.test(ps) && /^\s+markGrid\(mesh, p\.grid\);/m.test(ps) && /this\._judged = null;/.test(ps)
+    /planes: 'suggest'/.test(ps) && /this\.opt\.planes = sel\.value; save\(this\.opt\)/.test(ps) && /^\s+markGrid\(mesh, p\.grid\);/m.test(ps) && /this\._base = null;/.test(ps)
     && PL.PLANE_MODES.suggest === '照建議' && Object.keys(PL.PLANE_MODES).join() === 'suggest,merge,keep');
-  const rowSrc = ps.slice(ps.indexOf('  _planeRow('), ps.indexOf('  /** 碎面那一列'));
+  const rowSrc = ps.slice(ps.indexOf('  _planeRow('), ps.indexOf('  /**\n   * 面數那一區'));   // 〔第五批 b ④ 起下一段是面數那一區〕
   ok('★ 視窗那一列的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
 }
 
@@ -19961,7 +19964,7 @@ section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補�
   ok('★★ 大陣列⛔ 用 push(...)（汽車 50 萬點在瀏覽器會堆疊溢位 —— 本機實際撞到）', !/points\.push\(\.\.\./.test(ss));
   ok('★★ 視窗：先畫原樣、補洞聯集下一輪再算（算的時候出錯也要講）、換檔案不會蓋掉新的；選的做法用在拆部分之前、判斷平面的快取跟著做法換',
     /setTimeout\(\(\) => \{\s*\n\s*if \(this\._solid !== sol\) return;/.test(ps) && /const safe = f => \{ try \{ return f\(\); \} catch/.test(ps)
-    && /const pick = this\._solidPick\(\), r = pick\.read/.test(ps) && /this\._judged\.solid !== pick\.mode/.test(ps) && /this\.solidMode = '';/.test(ps));
+    && /const pick = this\._solidPick\(\), s = this\._setting\(\);/.test(ps) && /toParts\(pick\.read, \{ cmPerUnit: 1, up: 'y', split \}\)/.test(ps) && /const key = pick\.mode \+ '\|' \+ split;/.test(ps) && /this\.solidMode = '';/.test(ps));   // 〔第五批 b ④ 起拆部分移到 `_faceBase()`〕
   ok('★★ 視窗：每個做法一張卡（小圖＋數字）、建議的框起來寫理由、點卡片換、點小圖放大；破洞紅線、三面共用橘線',
     /className = 'i3Card'/.test(ps) && /' sug'/.test(ps) && /this\.solidMode = mode; this\._render\(\)/.test(ps) && /this\._bigThumb\(mode\)/.test(ps) && /0xff3b30/.test(ps) && /0xff9f0a/.test(ps));
   // 〔③a 時三面共用一律照舊警告（第三個條件寫死 false）；③b 起聯集會修隔板 ⇒ 修好幾塊就講幾塊，一塊都沒修好才警告 —— ③b 線上先驗又看到同一類矛盾〕
@@ -20018,6 +20021,53 @@ section('網格核心第五批 b ③b：零件裡面的隔板 —— 只修剖�
     && /if \(!keep\.length \|\| !solidInfo\(mesh\)\.ok\) return \{ ok: false, why: 'open' \};/.test(ss) && /if \(d > SECTION_TOL\) return \{ ok: false, why: 'section', diff: d \};/.test(ss) && /if \(patches\.size > MAX_PATCHES\) return \{ ok: false, why: 'many' \};/.test(ss));
   ok('★★ 環繞數：快速版落在 0.2～0.8 之間改精確（算得對第一）', WN.UNSURE.join() === '0.2,0.8' && /if \(f > UNSURE\[0\] && f < UNSURE\[1\]\) \{ if \(stat\) stat\.exact\+\+; return windExact\(W\.P, W\.T, q\); \}/.test(ws));
   ok('★★ 視窗：一塊有隔板的也算聯集那張；卡片講修好幾塊、沒修的照原因分開講', /needUnion = check\.comps > 1 \|\| check\.partition > 0/.test(ps) && /修好 \$\{i\.partFixed\} 塊的隔板/.test(ps) && /if \(s\.many\) why\.push\(`\$\{s\.many\} 塊隔板太多`\);/.test(ps) && /if \(s\.open\) why\.push\(`\$\{s\.open\} 塊修完還不封閉`\);/.test(ps) && /if \(s\.section\) why\.push\(`\$\{s\.section\} 塊修完剖面差太多/.test(ps));
+}
+
+section('網格核心第五批 b ④：保形狀減面（清碎面換做法、減到 ___ 面）（2026-10-24）');
+{
+  /** `匯入整理-研究.md` 第 9 節 ②⑤、第 12 節；kang 2026-10-24「第 ④ 小批照你的建議：減到 N 面時不保護格子、視窗用卡片、減到 N 面點了才算」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const PL = await import('../js/build/importPlanes.js');
+  const DC = await import('../js/build/decimate.js');
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const flow = f => { const r = rd(f); const [p] = im.toParts(r, { cmPerUnit: 1, up: 'y', split: false });
+    let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (const q of p.points) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], q[k]); hi[k] = Math.max(hi[k], q[k]); }
+    const tol = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / im.MICRO_DIV, regs = PL.keptRegions(PL.judgePlanes(p), 'suggest'), keep = regs.length ? PL.keepVerts(p, regs) : null;
+    const old = im.collapseShort(p, tol, keep), q = DC.decimate(p, { target: old.faces.length, keep });
+    return { p, old, q, devOld: DC.surfaceDev(p, old), devNew: DC.surfaceDev(p, q) }; };
+  // ① 減到同樣多、表面偏得少
+  const fox = flow('fox.stl'), hat = flow('Construction_site_safety_helmet.stl');
+  ok('★★★ 狐狸：清碎面減一樣多（376 → 368）、表面最多偏 0.046 → 0.003 mm 左右（保形狀）', fox.q.faces.length === 368 && fox.old.faces.length === 368 && fox.devNew < 0.006 && fox.devOld > 0.03, `${fox.devOld.toFixed(4)} → ${fox.devNew.toFixed(4)}`);
+  ok('★★★ 工地帽：減一樣多（4880 → 4302 ＝ 少 11.8%，超過一成）、表面偏得比兩端合到中點少', hat.q.faces.length === 4302 && hat.devNew < hat.devOld, `${hat.devOld.toFixed(4)} → ${hat.devNew.toFixed(4)}`);
+  const eh = im.edgeCheck(hat.q.faces);
+  ok('★★ 減完照樣封閉（沒有破洞、沒有三面共用）', !eh.open && !eh.nonManifold && !eh.flipped);
+  // ② 點被搬的距離 ≠ 表面偏差
+  ok('★★ 點被搬了多遠（狐狸 0.33 mm）遠大於表面偏差 —— 卡片寫表面偏差', fox.q.stats.maxMove > 10 * fox.devNew, `點 ${fox.q.stats.maxMove.toFixed(3)}、表面 ${fox.devNew.toFixed(4)}`);
+  // ③ 減到 N 面
+  const [hp] = im.toParts(rd('Construction_site_safety_helmet.stl'), { cmPerUnit: 1, up: 'y', split: false });
+  const h500 = DC.decimate(hp, { target: 500 }), e500 = im.edgeCheck(h500.faces);
+  ok('★★★ 工地帽減到 500 面：剛好 500、封閉、from 對得上', h500.faces.length === 500 && !e500.open && !e500.nonManifold && h500.from.length === 500 && h500.from.every((v, k) => k === 0 || v > h500.from[k - 1]));
+  // ④ 保護的點不動；四邊形照樣是四邊形
+  const quad = { points: [], faces: [] }; const N = 8;
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) quad.points.push([i, j, Math.sin(i * 0.4) * 0.3]);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = j * (N + 1) + i; quad.faces.push([a, a + 1, a + N + 2, a + N + 1]); }
+  const keepSet = new Set([0, 1, 2, 9, 10, 11]);
+  const dq = DC.decimate(quad, { target: 20, keep: keepSet });
+  ok('★★ 吃四邊形（不先拆三角形）、保護的點一個都不動', quad.faces.every(f => f.length === 4) && [...keepSet].every(i => dq.points.some(q => q.join() === quad.points[i].join())) && dq.faces.some(f => f.length === 4), `${dq.faces.length} 面`);
+  // ⑤ 讀程式守著
+  const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), ds = readFileSync(join(here, '../js/build/decimate.js'), 'utf8');
+  ok('★★ 面數那一區三張卡；超過一成不自動清、建議原樣；快捷 3D 列印不減／剖面 2 萬／紙模 500', /export const FACE_MODES = \{ raw: '原樣（不減）', clean: '清碎面', reduce: '減到 ___ 面' \};/.test(ps)
+    && /export const CLEAN_MAX = 0\.1;/.test(ps) && /\['給 3D 列印（不減）', 0\], \['給剖面（約 2 萬面）', 20000\], \['給展開、紙模（約 500 面）', 500\]/.test(ps)
+    && /c\.ratio <= CLEAN_MAX \? \{ mode: 'clean'/.test(ps));
+  ok('★★ 清碎面：同一個門檻數出要剩幾個面（collapseShort）再用保形狀減面減到那個數、格子保護；超過一成先只數（點了才減）', /goal = goals\[i\]/.test(ps) && /decimate\(p, \{ target: goal, keep \}\)/.test(ps)
+    && /if \(\(total - n\) \/ total > CLEAN_MAX && this\.faceMode !== 'clean'\)/.test(ps) && /F\.clean = \{ lazy: true, goals/.test(ps));
+  ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget\)/.test(ps)
+    && /this\.goBtn\.disabled = !face\.ready;/.test(ps) && /表面離原本最多 \$\{mm\(r\.dev \* s\.cmPerUnit\)\} mm/.test(ps) && /dev = Math\.max\(dev, surfaceDev\(p, q\)\)/.test(ps));
+  ok('★★ 量表面偏差用包圍盒樹（汽車的細長三角形會讓均勻格子卡住 —— 本機實際撞到）', /function boxTree\(P, T\)/.test(ds) && /const tree = boxTree\(P, T\);/.test(ds));
+  const rowSrc = ps.slice(ps.indexOf('  _faceRow('), ps.indexOf('  /** 面數卡片的小圖'));
+  ok('★ 面數卡片的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
