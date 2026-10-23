@@ -19883,6 +19883,85 @@ section('網格核心第五批 b ②：匯入時每一片平面各自判斷（�
   ok('★ 視窗那一列的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
 }
 
+section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補洞＋修方向／聯集，視窗並排比較）（2026-10-24）');
+{
+  /** `匯入整理-研究.md` 第 9、10 節；kang 2026-10-24「第 ③ 小批照你的建議：拆成 ③a、③b，只有破洞的改建議補洞＋修方向，先做 ③a」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const SO = await import('../js/build/importSolid.js');
+  const B = await import('../js/build/bool.js');
+  // 方塊（點、面），`o` 是點的位移、`skip` 拿掉第幾個面、`flip` 翻第幾個面
+  const cube = (o = [0, 0, 0], n = 10, { skip = -1, flip = -1 } = {}) => {
+    const P = [[0, 0, 0], [n, 0, 0], [n, n, 0], [0, n, 0], [0, 0, n], [n, 0, n], [n, n, n], [0, n, n]].map(q => q.map((v, k) => v + o[k]));
+    let F = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+    F = F.map((f, i) => (i === flip ? [...f].reverse() : f)).filter((_, i) => i !== skip);
+    return { P, F };
+  };
+  const model = (...cs) => { const points = [], faces = [], partOf = []; cs.forEach(({ P, F, part = 0 }, ci) => { const b = points.length; points.push(...P); for (const f of F) { faces.push(f.map(i => i + b)); partOf.push(Array.isArray(part) ? part.shift() : part); } }); return { points, faces, partOf, parts: ['甲', '乙', '丙'] }; };
+  // ① 狀況
+  const c2 = SO.solidCheck(model(cube(), cube([5, 0, 0])));
+  ok('★★ 兩個方塊 ⇒ 2 塊、都乾淨', c2.comps === 2 && c2.clean === 2 && !c2.holes && !c2.partition);
+  const ch = SO.solidCheck(model(cube([0, 0, 0], 10, { skip: 1 }))), cf = SO.solidCheck(model(cube([0, 0, 0], 10, { flip: 2 })));
+  ok('★★ 少一個面 ⇒ 有破洞；翻一個面 ⇒ 也算「破洞或翻面」', ch.holes === 1 && ch.openEdges === 4 && cf.holes === 1 && cf.flipEdges === 4, `${ch.openEdges}／${cf.flipEdges}`);
+  const fin = cube(); fin.P.push([5, -5, 0]); fin.F.push([0, 1, 8]);         // 底邊多掛一片 ⇒ 那條邊三個面用
+  const cp = SO.solidCheck(model(fin));
+  ok('★★ 一條邊三個面用 ⇒ 有隔板', cp.partition === 1 && cp.nmEdges === 1);
+  // ② 補洞＋修方向
+  const fh = SO.fillVariant(model(cube([0, 0, 0], 10, { skip: 1 }))), eh = im.edgeCheck(fh.read.faces);
+  ok('★★★ 少一個面的方塊：補洞 ⇒ 補 1 個洞、6 個面、封閉；原本的點一個都沒動', fh.info.holes === 1 && fh.read.faces.length === 6 && !eh.open && !eh.flipped
+    && cube().P.every(q => fh.read.points.some(x => x.join() === q.join())), JSON.stringify(eh));
+  const ff = SO.fillVariant(model(cube([0, 0, 0], 10, { flip: 2 }))), ef = im.edgeCheck(ff.read.faces);
+  ok('★★ 翻一個面的方塊：修方向 ⇒ 轉正 1 個面、方向一致', ff.info.turned === 1 && !ef.flipped && !ef.open);
+  // iPhone 那種：側壁跟上下蓋是不同的部分、合起來封閉 ⇒ ⛔ 多補蓋子、部分照舊
+  const side = cube(); const multi = model({ P: side.P, F: side.F, part: [1, 2, 0, 0, 0, 0] });
+  const fm = SO.fillVariant(multi);
+  ok('★★★ 側壁、上蓋、下蓋是三個部分，合起來封閉 ⇒ 什麼都不補、6 個面、每個面的部分照舊', fm.info.holes === 0 && fm.read.faces.length === 6 && fm.read.partOf.join() === '1,2,0,0,0,0', fm.read.partOf.join());
+  const open = cube([0, 0, 0], 10, { skip: 1 }); const fo = SO.fillVariant(model({ P: open.P, F: open.F, part: [1, 0, 0, 0, 0] }));
+  ok('★★ 少了上蓋（側壁是部分 0、下蓋是部分 1）⇒ 補出來的那一面歸給最多的部分 0', fo.read.faces.length === 6 && fo.read.partOf.filter(x => x === 0).length === 5 && fo.read.partOf.filter(x => x === 1).length === 1, fo.read.partOf.join());
+  // ③ 聯集
+  const uo = SO.unionVariant(model(cube(), cube([5, 0, 0]))), eu = im.edgeCheck(uo.read.faces);
+  ok('★★★ 兩個方塊穿插一半 ⇒ 聯集成 1 個實體、封閉、重疊佔加總的 1/4（各 1000，聯集 1500）、只剩 1 個部分',
+    uo.info.united === 2 && uo.info.pieces === 1 && !eu.open && !eu.nonManifold && Math.abs(uo.info.overlap - 0.25) < 1e-6 && new Set(uo.read.partOf).size === 1, `${uo.info.overlap}`);
+  const us = SO.unionVariant(model(cube(), cube([5, 0, 0]), cube([50, 0, 0], 0.001)));
+  ok('★★ 聯集完很小的一塊（體積是全部的一兆分之一）⇒ 當碎屑丟掉、講出丟了 1 塊', us.info.dropped === 1 && us.info.pieces === 1, `丟 ${us.info.dropped}、剩 ${us.info.pieces}`);
+  const sg = SO.suggestSolid(c2, uo);
+  ok('★★★ 有穿插 ⇒ 建議聯集、理由講重疊佔幾 %', sg.mode === 'union' && /重疊的體積佔各塊加總的 25%/.test(sg.why), sg.why);
+  const ua = SO.unionVariant(model(cube(), cube([20, 0, 0])));
+  ok('★★ 兩個方塊沒碰到 ⇒ 聯集算得出來（2 個實體）但沒有穿插 ⇒ 建議原樣', ua.info.pieces === 2 && ua.info.overlap < SO.OVERLAP_MIN && SO.suggestSolid(SO.solidCheck(model(cube(), cube([20, 0, 0]))), ua).mode === 'raw');
+  const fin2 = cube([30, 0, 0]); fin2.P.push([35, -5, 0]); fin2.F.push([0, 1, 8]);
+  const up = SO.unionVariant(model(cube(), cube([5, 0, 0]), { ...fin2, part: 2 }));
+  ok('★★★ 有隔板的那一塊 ⇒ 不聯集、照原樣另外放、部分照舊（③b 的事）', up.info.united === 2 && up.info.kept === 1 && up.read.partOf.filter(x => x === 2).length === 7, `${up.info.kept}`);
+  ok('★★ 只有破洞 ⇒ 建議補洞＋修方向；只有隔板 ⇒ 建議原樣（理由講下一小批）；乾淨的一塊 ⇒ 原樣',
+    SO.suggestSolid(ch, null).mode === 'fill' && SO.suggestSolid(cp, null).mode === 'raw' && /下一小批/.test(SO.suggestSolid(cp, null).why) && SO.suggestSolid(SO.solidCheck(model(cube())), null).mode === 'raw');
+  // ④ 真的樣本
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const hp = rd('helmetFP.stl'), hk = SO.solidCheck(hp), hf = SO.fillVariant(hp), he = im.edgeCheck(hf.read.faces);
+  ok('★★★ 頭盔 FP（17 條破洞邊）：建議補洞＋修方向 ⇒ 補 3 個洞、封閉、面 63,637 → 63,640（其他表面不動）',
+    SO.suggestSolid(hk, null).mode === 'fill' && hf.info.holes === 3 && !he.open && !he.flipped && !he.nonManifold && hf.read.faces.length === 63640, `${hf.read.faces.length}`);
+  const ip = rd('Iphone seceond version finished.obj'), ik = SO.solidCheck(ip), ifl = SO.fillVariant(ip), ie = im.edgeCheck(ifl.read.faces);
+  ok('★★★ iPhone 補洞＋修方向：14 塊（10 乾淨、3 破洞或翻面、1 隔板）⇒ 0 個洞要補（側壁跟蓋子合起來本來就封閉）、轉正 152 個面、沒有破洞邊',
+    ik.comps === 14 && ik.clean === 10 && ik.holes === 3 && ik.partition === 1 && ifl.info.holes === 0 && ifl.info.turned === 152 && ie.open === 0, `${ifl.info.holes} 洞、${ifl.info.turned} 面、${ie.open} 破洞邊`);
+  const iu = SO.unionVariant(ip);
+  ok('★★ iPhone 聯集：13 塊聯集、機身（有隔板）照原樣另外放 ⇒ 建議聯集（穿插 0.4%）', iu.info.united === 13 && iu.info.kept === 1 && SO.suggestSolid(ik, iu).mode === 'union', `${iu.info.united}／${iu.info.kept}`);
+  const ca = rd('aid-cane.obj'), cu = SO.unionVariant(ca);
+  ok('★★ 柺杖：兩根穿插 7.2% ⇒ 聯集成一個、100 個面', cu.info.pieces === 1 && Math.abs(cu.info.overlap - 0.0716) < 0.001 && cu.read.faces.length === 100, `${cu.info.overlap}`);
+  const fx = SO.solidCheck(rd('fox.stl'));
+  ok('★★ 狐狸（一塊、封閉）⇒ 原樣、不用算補洞聯集', fx.comps === 1 && fx.clean === 1 && SO.suggestSolid(fx, null).mode === 'raw');
+  // ⑤ 讀程式守著
+  const ss = readFileSync(join(here, '../js/build/importSolid.js'), 'utf8'), ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), bs = readFileSync(join(here, '../js/build/bool.js'), 'utf8');
+  ok('★★ 整理好的⛔ 再焊點：importSolid 不呼叫 cleanModel；視窗只在讀檔時焊一次；Manifold 只在 bool.js（unionSolids 丟碎屑）',
+    !/import \{[^}]*cleanModel[^}]*\}/.test(ss) && (ps.match(/cleanModel\(/g) || []).length === 1 && !/new\s+\w+\.Manifold|Manifold\.union/.test(ss) && /export function unionSolids/.test(bs) && /SPECK_FRAC/.test(bs));
+  ok('★★ 大陣列⛔ 用 push(...)（汽車 50 萬點在瀏覽器會堆疊溢位 —— 本機實際撞到）', !/points\.push\(\.\.\./.test(ss));
+  ok('★★ 視窗：先畫原樣、補洞聯集下一輪再算（算的時候出錯也要講）、換檔案不會蓋掉新的；選的做法用在拆部分之前、判斷平面的快取跟著做法換',
+    /setTimeout\(\(\) => \{\s*\n\s*if \(this\._solid !== sol\) return;/.test(ps) && /const safe = f => \{ try \{ return f\(\); \} catch/.test(ps)
+    && /const pick = this\._solidPick\(\), r = pick\.read/.test(ps) && /this\._judged\.solid !== pick\.mode/.test(ps) && /this\.solidMode = '';/.test(ps));
+  ok('★★ 視窗：每個做法一張卡（小圖＋數字）、建議的框起來寫理由、點卡片換、點小圖放大；破洞紅線、三面共用橘線',
+    /className = 'i3Card'/.test(ps) && /' sug'/.test(ps) && /this\.solidMode = mode; this\._render\(\)/.test(ps) && /this\._bigThumb\(mode\)/.test(ps) && /0xff3b30/.test(ps) && /0xff9f0a/.test(ps));
+  const rowSrc = ps.slice(ps.indexOf('  _solidRow('), ps.indexOf('  _bigThumb('));
+  ok('★ 卡片的字⛔ 用文件的縮寫符號（⛔）', !rowSrc.includes('⛔'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

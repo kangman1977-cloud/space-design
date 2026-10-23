@@ -349,6 +349,45 @@ export function unionMeshes(meshes, labels = []) {
 }
 
 /**
+ * 匯入整理「聯集成一個實體」（網格核心第五批 b ③a → `build/importSolid.js`）：每一塊各自是實體 ⇒ 全部聯集；
+ * 聯集完分開的碎屑（體積小於全部的百萬分之一 —— 汽車 49 塊、都是浮點誤差留下的）丟掉、講出丟了幾塊。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ * @param {Mesh[]} meshes 每一塊都要封閉、朝外（呼叫端先挑好、先修好）
+ * @returns {{mesh: Mesh, sumVolume: number, volume: number, pieces: number, dropped: number}}
+ *   `sumVolume` ＝ 各塊體積加總（> `volume` ⇒ 有穿插）；`pieces` ＝ 留下幾個分開的實體
+ */
+export function unionSolids(meshes, labels = []) {
+  if (!meshes || !meshes.length) throw new Error('沒有東西可以聯集');
+  const { Manifold } = need();
+  const made = [];
+  try {
+    let sumVolume = 0;
+    const mans = meshes.map((m, i) => {
+      const man = toManifold(m, labels[i] || `第 ${i + 1} 塊`);
+      made.push(man);
+      sumVolume += man.volume();
+      return man;
+    });
+    const acc = mans.length > 1 ? Manifold.union(mans) : mans[0];
+    if (acc !== mans[0]) made.push(acc);
+    if (acc.isEmpty()) throw new Error('聯集結果是空的');
+    const parts = acc.decompose();
+    made.push(...parts);
+    const total = parts.reduce((s, p) => s + Math.abs(p.volume()), 0);
+    const keep = parts.filter(p => Math.abs(p.volume()) >= total * SPECK_FRAC);
+    const out = keep.length === parts.length ? acc : Manifold.union(keep);
+    if (out !== acc) made.push(out);
+    return { mesh: fromManifold(out), sumVolume, volume: out.volume(), pieces: keep.length, dropped: parts.length - keep.length };
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+/** 碎屑：體積小於全部的這個比例 */
+export const SPECK_FRAC = 1e-6;
+
+/**
  * 🔴 **剖面分切「照最大外形切」：一段厚度裡最大的外形**（2026-10-19，實驗 T2 帽簷不見）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
  *
