@@ -13,8 +13,11 @@
  * 使用者不必再學一次怎麼操作。
  */
 
+import * as THREE from 'three';
 import { triangles, bedLayout, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
+import { DEFAULT_MIN_WALL_MM, DEFAULT_OVERHANG_DEG } from '../out/printShape.js';
+import { to3MF } from '../out/threemf.js';
 import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
 import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/selectops.js';
@@ -36,7 +39,9 @@ export class ExportPanel {
   constructor(app) {
     this.app = app;
     this.opt = {
-      unit: 'mm', format: 'binary', group: 'one', askPath: true, ...loadOpt()
+      unit: 'mm', format: 'binary', group: 'one', askPath: true,
+      minWallMM: DEFAULT_MIN_WALL_MM, overhangDeg: DEFAULT_OVERHANG_DEG,     // 第二輪第四批：跟人走（換噴嘴、換機器才改）
+      ...loadOpt()
     };
     this.items = [];
     this._build();
@@ -60,6 +65,7 @@ export class ExportPanel {
           <span class="lbl">格式</span><select id="exFmt">
             <option value="binary">二進位（檔案小，建議）</option>
             <option value="ascii">ASCII（看得懂，除錯用）</option>
+            <option value="3mf">3MF（檔案裡寫了單位、多個物件各有名字）</option>
           </select>
           <span class="lbl">多個物件</span><select id="exGroup">
             <option value="one">合成一個檔，保持相對位置</option>
@@ -68,6 +74,12 @@ export class ExportPanel {
           <label class="uwCk"><input type="checkbox" id="exAsk"> 指定存放位置</label>
           <span class="sp"></span>
           <button id="exGo">匯出 STL</button>
+        </div>
+        <div class="uwBar">
+          <span class="lbl">最薄的牆 mm</span>
+          <input type="number" id="exWall" step="0.1" min="0" style="width:60px">
+          <span class="lbl">懸空角度 °</span>
+          <input type="number" id="exOver" step="5" min="0" max="89" style="width:60px">
         </div>
         <div class="uwBody" id="exBody"></div>
       </div>`;
@@ -91,7 +103,11 @@ export class ExportPanel {
 
     const fmt = $('exFmt');
     fmt.value = this.opt.format;
-    fmt.onchange = () => { this.opt.format = fmt.value; saveOpt(this.opt); };
+    /** 第二輪第四批：多一個 3MF（kang「3MF 多一個格式、預設照舊 STL」）；按鈕跟著寫是哪一種 */
+    this.goBtn = $('exGo');
+    const label = () => { this.goBtn.textContent = this.opt.format === '3mf' ? '匯出 3MF' : '匯出 STL'; };
+    label();
+    fmt.onchange = () => { this.opt.format = fmt.value; label(); saveOpt(this.opt); this._render(); };
 
     const grp = $('exGroup');
     grp.value = this.opt.group;
@@ -105,6 +121,18 @@ export class ExportPanel {
         + '會自動退回一般下載';
     if (!canChoosePath()) this.askIn.parentElement.classList.add('off');
     this.askIn.onchange = () => { this.opt.askPath = this.askIn.checked; saveOpt(this.opt); };
+
+    /**
+     * 🔴 **兩個數字可以改、跟人走**（2026-10-24，第二輪第四批；kang「牆太薄預設 0.9 mm 可以改…懸空預設 45° 可以改」）。
+     */
+    const wall = $('exWall');
+    wall.value = this.opt.minWallMM;
+    wall.title = `比這個薄的地方黃色提醒。預設 ${DEFAULT_MIN_WALL_MM} mm ＝ 0.4 噴嘴印兩圈；0.6 噴嘴約 1.2、樹脂機約 0.4`;
+    wall.onchange = () => { this.opt.minWallMM = Math.max(0, num(wall.value, DEFAULT_MIN_WALL_MM)); this.run(); };
+    const over = $('exOver');
+    over.value = this.opt.overhangDeg;
+    over.title = `朝下、離垂直超過這個角度的面算懸空（藍色說明，切片軟體會加支撐）。預設 ${DEFAULT_OVERHANG_DEG}°；散熱好的機器可以到 60°`;
+    over.onchange = () => { this.opt.overhangDeg = Math.min(89, Math.max(0, num(over.value, DEFAULT_OVERHANG_DEG))); this.run(); };
 
     $('exClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
@@ -201,7 +229,8 @@ export class ExportPanel {
        * 列印前檢查只看形狀與體積，跟高度無關。
        */
       const tris = triangles(mesh, { matrix: o.matrix(), scale: s });
-      return { obj: o, mesh, tris, shelled, holes, check: printCheck(mesh, tris) };
+      return { obj: o, mesh, tris, shelled, holes, scale: s,
+        check: printCheck(mesh, tris, { mmPerUnit: 10 / s, minWallMM: this.opt.minWallMM, overhangDeg: this.opt.overhangDeg }) };
     });
 
     this._render();
@@ -224,8 +253,8 @@ export class ExportPanel {
       return;
     }
 
-    // 單位選錯是最容易發生又最難發現的錯，所以常駐提醒
-    if (this.opt.unit !== 'mm') {
+    // 單位選錯是最容易發生又最難發現的錯，所以常駐提醒（3MF 檔案裡寫了單位 ⇒ ⛔ 這個問題）
+    if (this.opt.unit !== 'mm' && this.opt.format !== '3mf') {
       this.body.appendChild(box('uwWarn',
         '⚠ 目前輸出單位是 cm。STL 檔案沒有單位欄位，'
         + '切片軟體一律當 mm 讀 —— 這個檔丟進去模型會變成十分之一大。'
@@ -296,7 +325,8 @@ export class ExportPanel {
     }
 
     for (const i of c.issues) {
-      const b = box(i.level === 'bad' ? 'uwWarn' : 'uwSkip',
+      /** 第二輪第四批：'caution' ＝ 黃色提醒（牆太薄、面互相穿過去），跟紅色「印不出來」、藍色說明分開 */
+      const b = box(i.level === 'bad' ? 'uwWarn' : i.level === 'caution' ? 'uwCaution' : 'uwSkip',
         (i.level === 'bad' ? '✗ ' : '⚠ ') + i.text);
 
       /**
@@ -322,6 +352,13 @@ export class ExportPanel {
         b.appendChild(this._pointBtn(
           '把破掉的地方在畫面上標成紅線，並關掉這個視窗',
           () => this._showHoles(it.obj)));
+      }
+      /** 形狀三項的「指出來」：把那些三角形的邊框畫在畫面上（顏色各一種，`scene.js` `setFacePreview()`）*/
+      if (FACE_KINDS[i.kind] && c.shape) {
+        const k = FACE_KINDS[i.kind];
+        b.appendChild(document.createTextNode(' '));
+        b.appendChild(this._pointBtn(`把${k.what}的地方在畫面上用${k.colorName}框起來，並關掉這個視窗`,
+          () => this._showFaces(it, i.kind)));
       }
       if (i.kind === 'nonmanifold') {
         b.appendChild(document.createTextNode(' '));
@@ -353,6 +390,25 @@ export class ExportPanel {
         + '板厚在右邊物件面板改。如果它是缺了一面的實心零件，請改成補洞';
     }
     return `<div class="bad uwOpenSolid">${head}${body}</div>`;
+  }
+
+  /**
+   * 🔴 **形狀三項指出來**（2026-10-24，第二輪第四批）：檢查表量的是匯出的三角形（mm、Z 朝上），
+   * ⇒ 換回世界座標（`triangles()` 的 Y 朝上 → Z 朝上反過來、除掉單位）再畫。
+   * ⚠ 板件量的是加厚之後的殼 ⇒ 框的是殼的面（畫面上看到的也是加厚的樣子）。
+   */
+  _showFaces(it, kind) {
+    const k = FACE_KINDS[kind], ids = it.check.shape[k.key].tris, s = it.scale;
+    const W = p => new THREE.Vector3(p.x / s, p.z / s, -p.y / s);
+    const pts = [];
+    for (const i of ids) {
+      const t = it.tris[i], a = W(t.a), b = W(t.b), c = W(t.c);
+      pts.push(a, b, b, c, c, a);
+    }
+    this.close();                       // ⚠ 先關視窗再畫（同 `_showHoles()`）
+    this.app.view.setFacePreview(pts, k.color);
+    this.app.toast(`已用${k.colorName}框出 ${ids.length.toLocaleString()} 個${k.what}的三角形`
+      + (kind === 'thin' && it.check.shape.thin.sampled ? '（面太多，只框抽到的那些）' : ''));
   }
 
   /** 三顆「指出來」共用的按鈕。⚠ `mini` 是這組面板既有的樣式，⛔ 不要發明新的 */
@@ -461,6 +517,32 @@ export class ExportPanel {
       : textBlob(toSTLAscii(tris, { name, fallback }), 'model/stl');
 
     const together = this.opt.group === 'one' || this.items.length === 1;
+
+    /**
+     * 🔴 **3MF**（2026-10-24，第二輪第四批）：合成一個檔 ⇒ 一個檔裡每個物件各一個、各有名字，整組一起落（相對位置照舊）；
+     * 每個物件一個檔 ⇒ 跟 STL 一樣各自移到平台中間。單位寫在檔案裡。
+     */
+    if (this.opt.format === '3mf') {
+      const unitKey = this.opt.unit;
+      const mk3 = parts => binaryBlob(to3MF(parts, { unit: unitKey }), 'model/3mf');
+      if (together) {
+        let zMin = Infinity;
+        for (const it of this.items) for (const t of it.tris) zMin = Math.min(zMin, t.a.z, t.b.z, t.c.z);
+        const parts = this.items.map(it => ({ name: it.obj.name,
+          tris: it.tris.map(t => ({ a: shiftZ(t.a, zMin), b: shiftZ(t.b, zMin), c: shiftZ(t.c, zMin) })) }));
+        await saveBlob(mk3(parts), `${this._base()}_${u}.3mf`, TYPES['3mf'], this.opt.askPath);
+        return;
+      }
+      const laid3 = bedLayout(this.items.map(it => it.tris), false);
+      const jobs3 = this.items.map((it, i) => ({
+        name: `${this._base()}_${String(i + 1).padStart(2, '0')}_${safeName(it.obj.name, '物件')}_${u}.3mf`,
+        blob: mk3([{ name: it.obj.name, tris: laid3[i] }])
+      }));
+      const n3 = await saveMany(jobs3, this.opt.askPath);
+      if (n3 > 1) this.sum.textContent = `已存 ${n3} 個 3MF。　` + this.sum.textContent;
+      return;
+    }
+
     // 各物件的三角形帶著世界座標；合成一個檔時整組一起落，相對位置因此完全保留
     const laid = bedLayout(this.items.map(it => it.tris), together);
 
@@ -487,6 +569,13 @@ export class ExportPanel {
 
 // ═══════════════════════════════════════════════════════
 
+/** 形狀三項：「指出來」的顏色（⛔ 跟紅＝破洞、紫＝黏在一起、橘＝你指定的、青＝程式算的 重複）*/
+const FACE_KINDS = {
+  thin: { key: 'thin', what: '太薄', color: 0xffd400, colorName: '黃框' },
+  cross: { key: 'cross', what: '面互相穿過去', color: 0xff5fd2, colorName: '粉紅框' },
+  overhang: { key: 'overhang', what: '懸空', color: 0x3fa9ff, colorName: '藍框' }
+};
+
 function box(cls, msg) {
   const d = document.createElement('div');
   d.className = cls;
@@ -503,6 +592,8 @@ function showBusy(body, msg) {
 }
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const num = (v, dflt) => { const x = parseFloat(v); return Number.isFinite(x) ? x : dflt; };
+const shiftZ = (p, dz) => new THREE.Vector3(p.x, p.y, p.z - dz);
 
 function loadOpt() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; }

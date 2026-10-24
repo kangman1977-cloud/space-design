@@ -34,6 +34,7 @@
 
 import * as THREE from 'three';
 import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/selectops.js';
+import { shapeCheck } from './printShape.js';
 
 /** 輸出單位。STL 沒有單位欄位，這裡只是換算倍率。 */
 export const STL_UNITS = {
@@ -491,9 +492,53 @@ export function printCheck(mesh, tris, opt = {}) {
     });
   }
 
+  /**
+   * 🔴 **形狀的三項：牆太薄、面互相穿過去（黃色提醒）、懸空（藍色說明）**（2026-10-24，第二輪第四批 → `printShape.js`）。
+   * ⚠ 只在封閉、方向對的模型上量：破的、翻面的本來就印不出來，量出來的厚度、懸空都不準（原樣的汽車會量出 43% 太薄）。
+   * ⚠ 這三項都⛔ 擋（`level` ⛔ 是 'bad'）：業界的檢查也只提醒 —— 懸空本來就是切片軟體加支撐的事。
+   * `opt.shape === false` ⇒ 不量（快）。單位：`opt.mmPerUnit`（三角形是 cm ⇒ 10）。
+   */
+  let shape = null;
+  if (opt.shape !== false && tris.length && v.closed && !rev.edges && vol > 0) {
+    shape = shapeCheck(tris, { mmPerUnit: opt.mmPerUnit ?? 1, minWallMM: opt.minWallMM, overhangDeg: opt.overhangDeg });
+    const mm2 = a => `${Math.round(a).toLocaleString()} mm²`;
+    const pct = p => (p * 100 < 0.1 ? '不到 0.1' : (Math.round(p * 1000) / 10).toLocaleString()) + '%';
+    const th = shape.thin;
+    if (th.tris.length) {
+      issues.push({
+        level: 'caution',
+        kind: 'thin',
+        text: `有 ${mm2(th.areaMM2)}（${th.pct * 100 < 0.1 ? '' : '約 '}${pct(th.pct)} 的表面）比 ${th.minWallMM} mm 薄，最薄 ${Math.round(th.minMM * 100) / 100} mm`
+            + (th.sampled ? `（面太多，抽 ${th.sampled.toLocaleString()} 個點量的）` : '')
+            + ' —— 0.4 mm 噴嘴印兩圈約 0.9 mm，太薄的地方印不出來或很容易斷。可以把那裡加厚；'
+            + '用別的噴嘴或樹脂機，把上面「最薄的牆」改成你的數字'
+      });
+    }
+    const cr = shape.cross;
+    if (cr.tris.length) {
+      issues.push({
+        level: 'caution',
+        kind: 'cross',
+        text: `有 ${cr.tris.length.toLocaleString()} 個三角形互相穿過去（${cr.pct * 100 < 0.1 ? '' : '約 '}${pct(cr.pct)} 的表面）`
+            + (cr.cut ? '（面太多，只比了一部分，實際可能更多）' : '')
+            + ' —— 常見在平滑之後摺起來的地方，或零件互相穿插。各家切片軟體處理不一樣（有的合起來印、有的把那裡挖空），要在切片軟體裡看過'
+      });
+    }
+    const ov = shape.overhang;
+    if (ov.tris.length) {
+      issues.push({
+        level: 'warn',
+        kind: 'overhang',
+        text: `有 ${pct(ov.pct)} 的表面懸空超過 ${ov.deg}°（朝下、底下沒有東西撐著；貼平台的不算）`
+            + ' —— 切片軟體會自動加支撐；想少一點就換個擺法'
+      });
+    }
+  }
+
   return {
     ok: !issues.some(i => i.level === 'bad'),
     issues,
+    shape,                             // 形狀三項的結果（「指出來」用 `tris` 編號；⛔ 量 ⇒ null）
     closed: v.closed,
     components: v.components,
     euler: v.euler,

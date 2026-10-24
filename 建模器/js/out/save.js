@@ -54,6 +54,7 @@ export const TYPES = {
   dxf:  [{ description: 'DXF 圖檔',  accept: { 'application/dxf': ['.dxf'] } }],
   svg:  [{ description: 'SVG 向量圖', accept: { 'image/svg+xml': ['.svg'] } }],
   stl:  [{ description: 'STL 3D 模型', accept: { 'model/stl': ['.stl'] } }],
+  '3mf': [{ description: '3MF 3D 列印檔', accept: { 'model/3mf': ['.3mf'] } }],
   obj:  [{ description: 'OBJ 3D 模型', accept: { 'model/obj': ['.obj'] } }],
   csv:  [{ description: 'CSV 檔',    accept: { 'text/csv': ['.csv'] } }],
   json: [{ description: 'JSON 檔',   accept: { 'application/json': ['.json'] } }],

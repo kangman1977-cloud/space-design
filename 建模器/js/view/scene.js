@@ -1637,6 +1637,15 @@ export class SceneView {
   }
 
   /**
+   * 🔴 **3D 列印形狀三項的「指出來」**（2026-10-24，第二輪第四批）：把那些三角形的邊框畫出來
+   * （黃＝太薄、粉紅＝面互相穿過去、藍＝懸空 —— 顏色由 `exportPanel.js` `FACE_KINDS` 給）。
+   * ⭐ 跟破洞、非流形共用同一個「這裡有問題」的槽（一次只看一種，清除路徑只有一條）。
+   */
+  setFacePreview(worldPts, color) {
+    this._setIssuePreview('facePreview', worldPts, color);
+  }
+
+  /**
    * 🔴 **兩種「這裡有問題」的標示共用同一個槽，⛔ 不是各存各的。**
    *
    * ⚠ **理由是清除路徑**：這個 overlay 有**兩條**清除路徑

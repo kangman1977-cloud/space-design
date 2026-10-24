@@ -20292,6 +20292,87 @@ section('剖面分切：說清楚（第二輪第三批，2026-10-24）');
   ok('★★ 小塊門檻：預設 1 cm、跟人走（記著）、面板可以改', sect.TINY_PIECE_CM === 1 && /tinyCm: TINY_PIECE_CM,/.test(sp) && /id="slTiny"/.test(sp) && /tinyCm: this\.opt\.tinyCm/.test(sp));
 }
 
+section('3D 列印：列印檢查補齊（牆太薄、懸空、面互相穿過去、3MF；第二輪第四批，2026-10-24）');
+{
+  /** `實驗-綜合評估-第二輪.md` 第四批；kang 2026-10-24「牆太薄預設 0.9 mm 可以改、黃色提醒；懸空預設 45° 可以改、藍色說明；面互相穿過去黃色提醒；三項都加指出來；3MF 多一個格式、預設照舊 STL」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const stlM = await import('../js/out/stl.js');
+  const PS = await import('../js/out/printShape.js');
+  const MF = await import('../js/out/threemf.js');
+  const im = await import('../js/build/import3d.js');
+  const tri = (m, M) => stlM.triangles(m, { matrix: M || null, scale: 10 });       // mm、Z 朝上
+  // 牆太薄
+  const boxM = prim.buildPrim('box', { w: 6, h: 4.5, d: 4 }), plate = prim.buildPrim('box', { w: 6, h: 0.05, d: 4 });
+  const cb = stlM.printCheck(boxM, tri(boxM), { mmPerUnit: 1 }), cp = stlM.printCheck(plate, tri(plate), { mmPerUnit: 1 });
+  ok('★★ 方塊 60 × 45 × 40 mm：形狀三項都沒事（⛔ 多跳任何一則）', cb.shape && !cb.shape.thin.tris.length && !cb.shape.overhang.tris.length && !cb.shape.cross.tris.length && !cb.issues.some(i => ['thin', 'cross', 'overhang'].includes(i.kind)));
+  const thinI = cp.issues.find(i => i.kind === 'thin');
+  ok('★★★ 0.5 mm 的薄板 ⇒ 黃色提醒「…比 0.9 mm 薄，最薄 0.5 mm」、照樣可以列印（⛔ 擋）', !!thinI && thinI.level === 'caution' && /比 0\.9 mm 薄，最薄 0\.5 mm/.test(thinI.text) && cp.ok && Math.abs(cp.shape.thin.minMM - 0.5) < 1e-6, thinI && thinI.text.slice(0, 80));
+  const cp2 = stlM.printCheck(plate, tri(plate), { mmPerUnit: 1, minWallMM: 0.4 });
+  const cpCm = stlM.printCheck(plate, stlM.triangles(plate, { scale: 1 }), { mmPerUnit: 10 });     // 匯出單位選 cm
+  ok('★★ 匯出單位選 cm（三角形是 cm）⇒ 照樣換成 mm 量：最薄 0.5 mm', cpCm.issues.some(i => i.kind === 'thin') && Math.abs(cpCm.shape.thin.minMM - 0.5) < 1e-3, cpCm.shape && cpCm.shape.thin.minMM);
+  ok('★★ 「最薄的牆」改成 0.4 mm ⇒ 0.5 mm 的薄板⛔ 提醒', !cp2.issues.some(i => i.kind === 'thin'));
+  // 懸空：球朝下超過 45° 的那一圈 ≈ (1 − sin45°) ÷ 2 ＝ 14.6%；60° ⇒ 6.7%
+  const ball = prim.buildPrim('sphere', { r: 3, seg: 64, rings: 48 });
+  const c45 = stlM.printCheck(ball, tri(ball), { mmPerUnit: 1 }), c60 = stlM.printCheck(ball, tri(ball), { mmPerUnit: 1, overhangDeg: 60 });
+  const ovI = c45.issues.find(i => i.kind === 'overhang');
+  ok('★★★ 球：懸空超過 45° 約 14.6%（算的 (1 − sin45°) ÷ 2）、藍色說明（level warn）講切片軟體會加支撐；改 60° ⇒ 約 6.7%（差一圈面以內）',
+    !!ovI && ovI.level === 'warn' && /懸空超過 45°/.test(ovI.text) && /切片軟體會自動加支撐/.test(ovI.text)
+    && Math.abs(c45.shape.overhang.pct - (1 - Math.SQRT1_2) / 2) < 0.01 && Math.abs(c60.shape.overhang.pct - (1 - Math.sqrt(3) / 2) / 2) < 0.02 && c60.shape.overhang.pct < c45.shape.overhang.pct,   // 60° 那一圈剛好落在兩圈面中間 ⇒ 差一圈
+    `${c45.shape.overhang.pct.toFixed(4)} / ${c60.shape.overhang.pct.toFixed(4)}`);
+  ok('★★ 方塊貼平台的底面⛔ 算懸空', !cb.shape.overhang.tris.length);
+  // 面互相穿過去
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const two = [...tri(boxM), ...tri(boxM, T(3, 1, 1))], apart = [...tri(boxM), ...tri(boxM, T(10, 0, 0))];   // ⚠ 只往一個方向移的話面都共平面、只碰到，⛔ 算穿過去
+  ok('★★★ 兩個方塊疊一半 ⇒ 有三角形互相穿過去；分開放 ⇒ 0', PS.shapeCheck(two).cross.tris.length > 0 && PS.shapeCheck(apart).cross.tris.length === 0);
+  const rd = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); const r = im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); const [q] = im.toParts(r, { cmPerUnit: 12 / r.size[2], up: 'z', split: false }); return Mesh.fromFaceList(q.points.map(v => new THREE.Vector3(...v)), q.faces); };
+  const hatF = rd('T12_帽子_Manifold平滑.stl'), hatS = rd('T12_帽子_平滑細分.stl');
+  ok('★★★ 工地帽（T12）平滑後有摺的 ⇒ 753 個三角形互相穿過去；平滑細分的 ⇒ 0（第二輪 ②-5）',
+    PS.shapeCheck(tri(hatF)).cross.tris.length === 753 && PS.shapeCheck(tri(hatS)).cross.tris.length === 0);
+  // 列印檢查裡：一個物件裡兩塊互相穿插（封閉、可以列印 ⇒ 會量）
+  const vi = boxM._vertIndex(), P0 = boxM.verts.map(v => v.p.clone()), F0 = boxM.faces.map(f => boxM.faceVerts(f).map(v => vi.get(v.id)));
+  const twoBox = Mesh.fromFaceList([...P0, ...P0.map(p => p.clone().add(new THREE.Vector3(3, 1, 1)))], [...F0, ...F0.map(f => f.map(i => i + P0.length))]);
+  const ct = stlM.printCheck(twoBox, tri(twoBox), { mmPerUnit: 1 });
+  const crI = ct.issues.find(i => i.kind === 'cross');
+  ok('★★★ 一個物件裡兩塊方塊互相穿插（封閉）⇒ 黃色提醒「有 ○ 個三角形互相穿過去…要在切片軟體裡看過」、照樣可以列印',
+    ct.ok && !!crI && crI.level === 'caution' && /個三角形互相穿過去/.test(crI.text) && /要在切片軟體裡看過/.test(crI.text), crI ? crI.text.slice(0, 50) : ct.issues.map(i => i.kind).join());
+  // 破的、開放的⛔ 量
+  const openBox = Mesh.fromFaceList(boxM.verts.map(v => v.p.clone()), (() => { const vi = boxM._vertIndex(); return boxM.faces.slice(1).map(f => boxM.faceVerts(f).map(v => vi.get(v.id))); })());
+  ok('★★ 開放的（沒封口）⇒ 形狀三項⛔ 量（shape 是 null，量出來不準）', stlM.printCheck(openBox, tri(openBox), { mmPerUnit: 1 }).shape === null);
+  // kang 的模型
+  const lion = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T10/獅子頭.json'), 'utf8'))).objects[0];
+  const cl = stlM.printCheck(lion.mesh(), tri(lion.mesh(), lion.matrix()), { mmPerUnit: 1 });
+  ok('★★★ kang 的獅子頭：一小片比 0.9 mm 薄（9 mm²、最薄 0.43 mm）黃色提醒、懸空 15.7% 藍色說明、⛔ 面穿過去、照樣可以列印',
+    cl.ok && /^有 9 mm²（不到 0\.1% 的表面）比 0\.9 mm 薄，最薄 0\.43 mm/.test((cl.issues.find(i => i.kind === 'thin') || {}).text || '')
+    && Math.abs(cl.shape.overhang.pct - 0.157) < 0.001 && !cl.shape.cross.tris.length, ((cl.issues.find(i => i.kind === 'thin') || {}).text || '').slice(0, 60));
+  // 3MF
+  const bytes = MF.to3MF([{ name: '方塊 & <盒>', tris: tri(boxM) }, { name: '球', tris: tri(ball) }], { unit: 'mm' });
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), dec = new TextDecoder();
+  const files = {}; let off = 0;
+  while (dv.getUint32(off, true) === 0x04034b50) {
+    const crc = dv.getUint32(off + 14, true), size = dv.getUint32(off + 18, true), nl = dv.getUint16(off + 26, true), xl = dv.getUint16(off + 28, true);
+    const name = dec.decode(bytes.subarray(off + 30, off + 30 + nl)), data = bytes.subarray(off + 30 + nl + xl, off + 30 + nl + xl + size);
+    files[name] = { data, crcOK: MF.crc32(data) === crc }; off += 30 + nl + xl + size;
+  }
+  const model = files['3D/3dmodel.model'] ? dec.decode(files['3D/3dmodel.model'].data) : '';
+  ok('★★★ 3MF：zip 裡有 [Content_Types].xml、_rels/.rels、3D/3dmodel.model，CRC 對', ['[Content_Types].xml', '_rels/.rels', '3D/3dmodel.model'].every(n => files[n] && files[n].crcOK), Object.keys(files).join(','));
+  const objs = [...model.matchAll(/<object id="(\d+)" type="model" name="([^"]*)">([\s\S]*?)<\/object>/g)];
+  const counts = objs.map(o => [(o[3].match(/<vertex /g) || []).length, (o[3].match(/<triangle /g) || []).length]);
+  ok('★★★ 3MF：寫了單位 millimeter、兩個物件各有名字（特殊字元照規矩寫）、方塊 8 個點 12 個三角形、build 裡兩個',
+    /<model unit="millimeter"/.test(model) && objs.length === 2 && objs[0][2] === '方塊 &amp; &lt;盒&gt;' && objs[1][2] === '球' && counts[0][0] === 8 && counts[0][1] === 12
+    && (model.match(/<item objectid=/g) || []).length === 2, JSON.stringify(counts));
+  ok('★★ zip 的 CRC32 對得上標準答案（"123456789" ⇒ CBF43926）', MF.crc32(new TextEncoder().encode('123456789')) === 0xCBF43926);
+  ok('★★ 3MF：選 cm ⇒ unit="centimeter"', /<model unit="centimeter"/.test(dec.decode(MF.to3MF([{ name: 'x', tris: tri(boxM) }], { unit: 'cm' }))));
+  // 讀程式守著（面板）
+  const ep = readFileSync(join(here, '../js/ui/exportPanel.js'), 'utf8'), sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 面板：最薄的牆、懸空角度兩格（預設 0.9、45、跟人走）；黃色提醒用 uwCaution；三項都有指出來（黃、粉紅、藍框）',
+    PS.DEFAULT_MIN_WALL_MM === 0.9 && PS.DEFAULT_OVERHANG_DEG === 45 && /minWallMM: DEFAULT_MIN_WALL_MM, overhangDeg: DEFAULT_OVERHANG_DEG,/.test(ep) && /id="exWall"/.test(ep) && /id="exOver"/.test(ep)
+    && /i\.level === 'caution' \? 'uwCaution'/.test(ep) && /\.uwCaution \{/.test(ih) && /thin: \{ key: 'thin'.*color: 0xffd400/.test(ep) && /cross: \{ key: 'cross'.*color: 0xff5fd2/.test(ep) && /overhang: \{ key: 'overhang'.*color: 0x3fa9ff/.test(ep)
+    && /setFacePreview\(worldPts, color\) \{/.test(sc) && /const W = p => new THREE\.Vector3\(p\.x \/ s, p\.z \/ s, -p\.y \/ s\);/.test(ep) && /mmPerUnit: 10 \/ s, minWallMM: this\.opt\.minWallMM, overhangDeg: this\.opt\.overhangDeg/.test(ep));
+  ok('★★ 面板：格式多 3MF、預設照舊 STL（二進位）、按鈕跟著寫、3MF ⛔ 跳「cm 會小十倍」', /unit: 'mm', format: 'binary'/.test(ep) && /<option value="3mf">3MF/.test(ep)
+    && /'匯出 3MF' : '匯出 STL'/.test(ep) && /this\.opt\.unit !== 'mm' && this\.opt\.format !== '3mf'/.test(ep));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
