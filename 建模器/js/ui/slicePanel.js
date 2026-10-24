@@ -21,6 +21,7 @@ import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
 import { sliceDXF, sliceBoardDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
 import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
+import { StackView } from './stackView.js';
 
 const LS_KEY = 'modeler_slice';
 /** 展開圖的設定（排版那一包第一次沿用它，kang 2026-10-14）*/
@@ -61,9 +62,15 @@ export class SlicePanel {
     } else {
       this.opt.nest = { ...NEST_DEFAULTS, ...this.opt.nest };
     }
+    /**
+     * 🔴 **立體預覽**（2026-10-24 第二輪第五批 5b，kang「方案一…預設＋可以調照表」）：
+     * 收起來、拉開、只看有問題的、原模型 ⇒ 跟人走（跟孔徑一起記著）；只看第幾片 ⇒ 跟模型走（`resetForNewDoc()`）。
+     */
+    this.opt.stack3d = { open: true, explode: false, faint: false, ghost: true, ...(this.opt.stack3d || {}) };
     this.result = null;
     this.pegs = null;
     this._build();
+    this.stack3d = new StackView(this.opt.stack3d, () => save(this.opt), i => this._jumpCard(i));
   }
 
   // ── 畫面骨架 ────────────────────────────────────────
@@ -241,6 +248,7 @@ export class SlicePanel {
     $('slMax').checked = false;
     this.result = null;
     this.pegs = null;
+    this.stack3d.reset();
     save(this.opt);
     if (this.isOpen) this.run();
   }
@@ -285,6 +293,7 @@ export class SlicePanel {
 
     this.frame = (this.result.ok && this.result.slices.length)
       ? stackBounds(this.result.slices) : null;
+    if (this.result.ok) this.stack3d.setResult(this.result.slices, this.opt.axis, meshes);
 
     this._render();
   }
@@ -304,6 +313,10 @@ export class SlicePanel {
     this.sum.textContent = `${st.count} 片　`
       + `板厚 ${st.thickKinds.map(t => f(t) + 'cm').join('、')}　`
       + `疊高 ${f(st.used)} / 模型 ${f(st.height)} cm`;
+
+    /** 5b：立體預覽放在最上面（設定那兩排下面、提示上面）—— 同一個元素接回來，⛔ 每次開新的 WebGL */
+    this.body.appendChild(this.stack3d.el);
+    this.stack3d.refresh();
 
     this.body.appendChild(this._bandTable());
 
@@ -383,6 +396,7 @@ export class SlicePanel {
       this.body.appendChild(box('uwSkip',
         `預覽只畫前 ${n} 片（共 ${r.slices.length} 片），匯出不受影響。`));
     }
+    this.stack3d.draw();     // 卡片排上去之後可能多了捲軸、變窄 ⇒ 照新的寬再畫一次
   }
 
   /** 分段表：一行一段，「板厚 × 片數」。片數留空 ＝ 剩下的填滿。 */
@@ -522,6 +536,7 @@ export class SlicePanel {
   _card(slice) {
     const card = document.createElement('div');
     card.className = 'uwCard';
+    card.dataset.slice = slice.index;     // 5b：立體預覽點一片 ⇒ 跳到這裡
 
     const opt = { ...this._progOpt(), pegs: this._pegsOf(slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊
     const lines = sliceTitleLines(slice, { ...opt, head: this.app.head });
@@ -550,6 +565,19 @@ export class SlicePanel {
     renderCanvas(ctx, prog, px);
     card.appendChild(cv);
     return card;
+  }
+
+  /**
+   * 5b：立體預覽點到第 ○ 片 ⇒ 卡片捲到畫面中間、框起來一下。
+   * 卡片只畫前 `PREVIEW_MAX` 片 —— 後面的沒有卡片，就在上面講一聲。
+   */
+  _jumpCard(i) {
+    const card = this.body.querySelector(`.uwCard[data-slice="${i}"]`);
+    if (!card) { this.stack3d.pickEl.textContent = `第 ${i} 片（卡片只畫前 ${PREVIEW_MAX} 片）`; return; }
+    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    card.classList.add('uwHit');
+    clearTimeout(this._hitT);
+    this._hitT = setTimeout(() => card.classList.remove('uwHit'), 1600);
   }
 
   /** 出圖用的共同參數。預覽、SVG、DXF 三邊一定要用同一份。 */

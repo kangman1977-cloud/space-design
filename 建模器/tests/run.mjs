@@ -20394,8 +20394,8 @@ if (csgOK) {
   const lo = prim.buildPrim('box', { w: 10, h: 5, d: 10 }).transformed(T(0, 2.5, 0)), hi = prim.buildPrim('box', { w: 10, h: 5, d: 10 }).transformed(T(9.6, 7.5, 9.6));
   const r2 = sect.sliceMany([lo, hi], { axis: 'y', bands }), r3 = sect.sliceMany([lo, hi], { axis: 'y', bands, minGlueCm2: 0.1 });
   const w2 = r2.warnings.find(w => /只黏到/.test(w)) || '';
-  ok('★★★ 上下兩個方塊只疊一個角 ⇒ 接得到主體、但「第 5、6 片之間只黏到不到 0.25 cm²（最少 0.16 cm²）…排版預覽標成黃色」；門檻改 0.1 ⇒ ⛔ 講',
-    !r2.stack.loose.length && r2.stack.weak.length === 1 && Math.abs(r2.stack.weak[0].area - 0.16) < 1e-6 && /^第 5、6 片之間只黏到不到 0\.25 cm²（最少 0\.16 cm²）/.test(w2) && /排版預覽標成黃色/.test(w2)
+  ok('★★★ 上下兩個方塊只疊一個角 ⇒ 接得到主體、但「第 5、6 片之間只黏到不到 0.25 cm²（最少 0.16 cm²）…把小的那塊塗黃、黏的那一點畫黃圈」；門檻改 0.1 ⇒ ⛔ 講',
+    !r2.stack.loose.length && r2.stack.weak.length === 1 && Math.abs(r2.stack.weak[0].area - 0.16) < 1e-6 && /^第 5、6 片之間只黏到不到 0\.25 cm²（最少 0\.16 cm²）/.test(w2) && /立體預覽和排版預覽把小的那塊塗黃、黏的那一點畫黃圈/.test(w2)
     && !r3.warnings.some(w => /只黏到/.test(w)), w2.slice(0, 60));
   // 管子中間的洞裡站一根小柱子（沒碰到管壁）：外框疊在一起、料沒有 ⇒ 柱子照樣掉下來（⛔ 因為外框疊到就算黏、⛔ 忘了扣洞）
   const tube = prim.buildPrim('tube', { r: 10, ri: 6, h: 10, seg: 32 }).transformed(T(0, 5, 0)), inner = prim.buildPrim('box', { w: 2, h: 10, d: 2 }).transformed(T(0, 5, 0));
@@ -20414,8 +20414,10 @@ if (csgOK) {
   const withMarks = sliceProgram(sl, { marks: true }).items.filter(i => i.t === 'poly'), noMarks = sliceProgram(sl, {}).items.filter(i => i.t === 'poly');
   const SH = await import('../js/out/sheet.js');
   ok('★★★ 排版預覽：掉下來的塊塗紅（marks 才塗）；⛔ marks（存 SVG、DXF、列印）⇒ 一塊都⛔ 塗', withMarks.length === 1 && withMarks[0].fill === SH.STACK_LOOSE_FILL && noMarks.length === 0);
-  const wsl = r2.slices.find(x => x.index === 5);
-  ok('★★ 只黏一點點的那一塊塗黃', sliceProgram(wsl, { marks: true }).items.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL));
+  // 5b 起：兩塊一樣大 ⇒ 只塗上面那塊（第 6 片）；第 5 片⛔ 塗、但有黏的那一點的黃圈
+  const wsl = r2.slices.find(x => x.index === 6), wlo = r2.slices.find(x => x.index === 5);
+  ok('★★ 只黏一點點的那一塊塗黃（一樣大 ⇒ 上面那塊）', sliceProgram(wsl, { marks: true }).items.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL)
+    && !sliceProgram(wlo, { marks: true }).items.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL));
   const ring = sliceProgram(sl, { marks: true }).items.find(i => i.t === 'circle' && i.style === 'markLoose');
   ok('★★★ 再圈一個紅圈、至少整片外框的 4%（很小的塊光塗色看不到 —— 本機抓到）；⛔ marks ⇒ ⛔ 圈', !!ring && ring.r >= Math.max(sl.bounds.w, sl.bounds.h) * 0.04 - 1e-9
     && !sliceProgram(sl, {}).items.some(i => i.style === 'markLoose' || i.style === 'markWeak'));
@@ -20423,6 +20425,95 @@ if (csgOK) {
   ok('★★ 讀程式守著：黏著提醒預設 0.25 跟人走、面板一格；只有排版預覽與卡片給 marks（存檔、列印的 _sheets() 不給）',
     sect.MIN_GLUE_CM2 === 0.25 && /minGlueCm2: MIN_GLUE_CM2,/.test(sp) && /id="slGlue"/.test(sp) && /minGlueCm2: this\.opt\.minGlueCm2 \}/.test(sp)
     && (sp.match(/this\._sheets\(true\)/g) || []).length === 1 && /_sheets\(marks = false\)/.test(sp) && /marks: true \};/.test(sp) && /marks: !!o\.marks/.test(nb));
+}
+
+section('剖面分切：疊板立體預覽、只黏一點點只標小的那塊（第二輪第五批 5b，2026-10-24）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md` 5b；kang 2026-10-24「方案一（視窗最上面一塊 3D 小畫面），預設＋可以調照表，只黏一點點只塗小的那塊＋在黏的那一點畫圈，5a 的卡片也一起改」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { overlapPatch } = await import('../js/build/bool.js');
+  const SM = await import('../js/view/stackModel.js');
+  const SH = await import('../js/out/sheet.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const sq = (x, y, n) => [{ x, y }, { x: x + n, y }, { x: x + n, y: y + n }, { x, y: y + n }];
+  const bands = [{ t: 1, n: '' }];
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+  const p1 = overlapPatch([sq(0, 0, 10)], [sq(5, 5, 10)]), p0 = overlapPatch([sq(0, 0, 10)], [sq(20, 0, 10)]);
+  ok('★★ 疊在一起的面積＋位置：疊一角 25、在 (7.5, 7.5)；分開 0、沒有位置', p1.area === 25 && near(p1.at.x, 7.5) && near(p1.at.y, 7.5) && p0.area === 0 && p0.at === null);
+
+  // 大方塊（10×5×10）上面站一根小柱子（1×5×1），只疊一個角 0.4 × 0.4 ⇒ 只塗小柱子那塊、大方塊⛔ 塗；兩片都記黏的那一點
+  const lo = prim.buildPrim('box', { w: 10, h: 5, d: 10 }).transformed(T(0, 2.5, 0)), tip = prim.buildPrim('box', { w: 1, h: 5, d: 1 }).transformed(T(5.1, 7.5, 5.1));
+  const r = sect.sliceMany([lo, tip], { axis: 'y', bands });
+  const s5 = r.slices.find(x => x.index === 5), s6 = r.slices.find(x => x.index === 6);
+  const g5 = (s5.glue || [])[0], g6 = (s6.glue || [])[0];
+  // 片 Y 的平面座標：x ＝ 世界 x、y ＝ −世界 z（`AXES.y.uv`）⇒ 角落 (4.6～5, 4.6～5) 的中心 ＝ (4.8, −4.8)
+  ok('★★★ 大方塊跟小柱子只黏一個角：只有小柱子那塊記「只黏一點點」，大方塊⛔ 記；第 5、6 片都記黏的那一點在 (4.8, −4.8)、0.16 cm²、跟第幾片',
+    r.stack.weak.length === 1 && s6.loops.filter(l => l.weak).length === 1 && !s5.loops.some(l => l.weak)
+    && !!g5 && !!g6 && near(g5.x, 4.8) && near(g5.y, -4.8) && near(g5.area, 0.16) && g5.with === 6 && g6.with === 5 && (s5.glue || []).length === 1, JSON.stringify(g5));
+  const pr5 = sliceProgram(s5, { marks: true }).items, pr6 = sliceProgram(s6, { marks: true }).items;
+  const ring5 = pr5.find(i => i.t === 'circle' && i.style === 'markWeak');
+  ok('★★★ 卡片：大方塊那片⛔ 塗黃、黃圈畫在黏的那一點（圈至少外框 4%）；小柱子那片塗黃也有黃圈；⛔ marks（存檔、列印）⇒ ⛔ 塗⛔ 圈',
+    !pr5.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL) && !!ring5 && ring5.r >= Math.max(s5.bounds.w, s5.bounds.h) * 0.04 - 1e-9
+    && pr6.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL) && pr6.some(i => i.t === 'circle' && i.style === 'markWeak')
+    && !sliceProgram(s5, {}).items.some(i => i.style === 'markWeak' || i.fill === SH.STACK_WEAK_FILL));
+  // 黃圈的中心在黏的那一點（卡片的座標原點是外框左下角）
+  const fr5 = s5.bounds;
+  ok('★★ 卡片上的黃圈中心 ＝ 黏的那一點（⛔ 圈在塗黃那塊的中間）', !!ring5 && near(ring5.x, 4.8 - fr5.minX) && near(ring5.y, -4.8 - fr5.minY), ring5 && `${ring5.x},${ring5.y}`);
+
+  // 立體預覽：每一塊照板厚擠出、放回模型原本的位置（三個方向都要對）
+  const box = prim.buildPrim('box', { w: 4, h: 6, d: 8 }).transformed(T(1, 3, 2));
+  const want = new THREE.Box3(new THREE.Vector3(-1, 0, -2), new THREE.Vector3(3, 6, 6));
+  const okAxes = ['x', 'y', 'z'].map(ax => {
+    const rr = sect.sliceMany([box], { axis: ax, bands });
+    const st = SM.buildStack(rr.slices, ax);
+    const n = { x: 4, y: 6, z: 8 }[ax];
+    // ⚠ 只量板子本身（⛔ 用 st.box：邊線是另外算位置的，板子放錯了邊線照樣對 —— 在複本裡改壞「沒放回位置」第一次沒抓到）
+    const ms = st.group.children.filter(o => o.isMesh), mb = new THREE.Box3();
+    for (const m of ms) mb.expandByObject(m);
+    // 每一片自己的位置：第 k 片在切片軸上是 [起點 + k − 1, 起點 + k]
+    const lo0 = { x: -1, y: 0, z: -2 }[ax];
+    const each = ms.every(m => { const b = new THREE.Box3().setFromObject(m); return near(b.min[ax], lo0 + m.userData.slice - 1) && near(b.max[ax], lo0 + m.userData.slice); });
+    return ms.length === n && each && mb.min.distanceTo(want.min) < 1e-6 && mb.max.distanceTo(want.max) < 1e-6 && st.box.min.distanceTo(want.min) < 1e-6;
+  });
+  ok('★★★ 立體預覽三個方向（X、Y、Z）：每一片一塊板、每一片在自己的位置、疊起來剛好跟原本的方塊一樣大一樣位置', okAxes.every(Boolean), okAxes.join());
+  const ry = sect.sliceMany([box], { axis: 'y', bands });
+  const ex = SM.buildStack(ry.slices, 'y', { explode: true }), rg = SM.buildStack(ry.slices, 'y', { from: 2, to: 4 });
+  ok('★★ 拉開 ⇒ 片跟片之間空 0.8 倍板厚（6 片高 6 + 5 × 0.8 ＝ 10）；只看第 2～4 片 ⇒ 3 塊、片號 2、3、4',
+    near(ex.box.max.y - ex.box.min.y, 10) && rg.group.children.filter(o => o.isMesh).map(o => o.userData.slice).join() === '2,3,4' && rg.shown === 3);
+  const fa = SM.buildStack(ry.slices, 'y', { faint: true });
+  ok('★★ 只看有問題的 ⇒ 沒問題的板變淡（透明）', fa.group.children.filter(o => o.isMesh).every(o => o.material.transparent && o.material.opacity < 0.2));
+  // 掉下來的塊紅、加紅圈；只黏一點點：小的那塊黃、黃圈在兩片交界的那一點
+  const big = prim.buildPrim('box', { w: 10, h: 10, d: 10 }).transformed(T(0, 5, 0)), post = prim.buildPrim('box', { w: 2, h: 10, d: 2 }).transformed(T(20, 5, 0));
+  const rl = sect.sliceMany([big, post], { axis: 'y', bands });
+  const sl = SM.buildStack(rl.slices, 'y');
+  const reds = sl.group.children.filter(o => o.isMesh && o.material.color.getHex() === SM.STACK3D_COLORS.loose);
+  ok('★★★ 立體預覽：掉下來的小柱子 10 塊塗紅、每塊一個紅圈；主體⛔ 塗', reds.length === 10 && sl.rings.filter(g => g.kind === 'loose').length === 10
+    && sl.group.children.filter(o => o.isMesh && o.material.color.getHex() === SM.STACK3D_COLORS.wood).length === 10);
+  const sw = SM.buildStack(r.slices, 'y');
+  const yel = sw.group.children.filter(o => o.isMesh && o.material.color.getHex() === SM.STACK3D_COLORS.weak);
+  const wr = sw.rings.filter(g => g.kind === 'weak');
+  ok('★★★ 立體預覽：只黏一點點只塗小柱子那塊（第 6 片）；黃圈一個、在世界 (4.8, 5, 4.8)（兩片交界、黏的那一點）',
+    yel.length === 1 && yel[0].userData.slice === 6 && wr.length === 1 && wr[0].pos.distanceTo(new THREE.Vector3(4.8, 5, 4.8)) < 1e-6, wr[0] && wr[0].pos.toArray().join());
+  ok('★★ 只看第 1～5 片 ⇒ 第 5、6 片的黃圈⛔ 畫（另一片不在範圍裡）', SM.buildStack(r.slices, 'y', { from: 1, to: 5 }).rings.filter(g => g.kind === 'weak').length === 0);
+  ok('★★ 原模型：三角形數、預設門檻 5 萬', SM.trisOf([big]) === 12 && SM.GHOST_MAX_TRIS === 50000 && SM.ghostOf([big]).children.length === 1);
+
+  // kang 的獅子頭：只黏一點點只記小的那 4 塊；4 處都記了黏的那一點；立體預覽 38 片
+  const lion = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T10/獅子頭.json'), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  const rlion = sect.sliceMany(lion, { axis: 'y' });
+  const weakLoops = rlion.slices.flatMap(s => s.loops.filter(l => l.weak));
+  const glueN = rlion.slices.reduce((a, s) => a + s.glue.length, 0);
+  const st = SM.buildStack(rlion.slices, 'y');
+  ok('★★★ kang 的獅子頭：只黏一點點只記小的 4 塊（每塊都比它黏的那塊小）；8 筆黏的那一點（4 處 × 上下兩片）；立體預覽 38 片、紅圈 4 個、黃圈 4 個',
+    weakLoops.length === 4 && weakLoops.every(l => Math.abs(l.area) < 0.1) && glueN === 8 && st.shown === 38
+    && st.rings.filter(g => g.kind === 'loose').length === 4 && st.rings.filter(g => g.kind === 'weak').length === 4,
+    `${weakLoops.length} ${glueN} ${st.shown} ${st.rings.map(g => g.kind).join()}`);
+
+  const sp = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), sv = readFileSync(join(here, '../js/ui/stackView.js'), 'utf8');
+  ok('★★ 讀程式守著：立體預覽只開一個（同一個元素接回去）、放在分段表上面；預設開著、拉開關、只看有問題的關、原模型開（跟人走）；新建開檔回到全部；⛔ 一直重畫',
+    (sp.match(/new StackView\(/g) || []).length === 1 && /appendChild\(this\.stack3d\.el\);\s*this\.stack3d\.refresh\(\);\s*\n\s*this\.body\.appendChild\(this\._bandTable\(\)\)/.test(sp)
+    && /stack3d = \{ open: true, explode: false, faint: false, ghost: true, \.\.\.\(this\.opt\.stack3d \|\| \{\}\) \}/.test(sp) && /this\.stack3d\.reset\(\);/.test(sp)
+    && !/requestAnimationFrame/.test(sv) && /if \(this\.r\) return true;/.test(sv) && (sp.match(/this\._sheets\(true\)/g) || []).length === 1);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -19,7 +19,7 @@
  */
 
 import * as THREE from 'three';
-import { csgReady, slabShadow, mergeLoops, rowsToLoops, overlapArea } from '../build/bool.js';
+import { csgReady, slabShadow, mergeLoops, rowsToLoops, overlapPatch } from '../build/bool.js';
 
 /**
  * 三個切片軸。
@@ -702,13 +702,13 @@ export function sliceMany(meshes, opt = {}) {
     if (stack.loose.length) {
       const at = [...new Set(stack.loose.map(p => p.slice.index))];
       warnings.push(`第 ${listNums(at)} 片有 ${stack.loose.length} 塊疊起來接不到主體（上下兩片都沒有黏到它，或只黏到其他掉下來的塊）`
-        + ' —— 切下來會變成散的小零件，排版預覽標成紅色；如果那是本來就分開的零件（例如另一個物件）就不用管。');
+        + ' —— 切下來會變成散的小零件，上面的立體預覽和排版預覽標成紅色；如果那是本來就分開的零件（例如另一個物件）就不用管。');
     }
     if (stack.weak.length) {
       const pairs = stack.weak.map(w => `${w.a.slice.index}、${w.b.slice.index}`);
       const uniq = [...new Set(pairs)];
       warnings.push(`第 ${uniq.slice(0, 6).join('；')}${uniq.length > 6 ? ` …等 ${uniq.length} 處` : ''} 片之間只黏到不到 ${r2(stack.minGlue)} cm²`
-        + `（最少 ${r2(Math.min(...stack.weak.map(w => w.area)))} cm²）—— 疊好之後容易從那裡斷，排版預覽標成黃色；門檻在上面「黏著提醒」改。`);
+        + `（最少 ${r2(Math.min(...stack.weak.map(w => w.area)))} cm²）—— 疊好之後容易從那裡斷，上面的立體預覽和排版預覽把小的那塊塗黃、黏的那一點畫黃圈；門檻在上面「黏著提醒」改。`);
     }
   }
 
@@ -771,11 +771,15 @@ export function sliceMany(meshes, opt = {}) {
  * 有疊到 ⇒ 黏得到、連起來；最大（面積加起來最多）那一群是主體，其他的 ＝ 疊起來會掉下來（`loose`）；
  * 黏到的面積比 `minGlueCm2`（預設 `MIN_GLUE_CM2`）小 ⇒ 只黏一點點（`weak`）。
  * ⭐ 只講、⛔ 刪；在那幾圈輪廓上記 `loose`／`weak`，排版預覽照著塗顏色（`out/sheet.js` `sliceProgram()` 的 `marks`）。
- * @returns {{loose: object[], weak: {a, b, area}[], groups: number, minGlue: number}}
+ * 🔴 **只黏一點點：只記小的那塊、另外記黏在哪**（2026-10-24 第五批 5b，kang「只黏一點點只塗小的那塊＋在黏的那一點畫圈，5a 的卡片也一起改」）：
+ * 以前兩塊都記 `weak` ⇒ 汽車切 Y 一整片 409 cm² 的大板跟 0.1 cm² 的小塊黏一點點，整片大板塗黃、看不出黏在哪。
+ * 現在 `weak` 只記面積小的那塊（一樣大 ⇒ 上面那塊，疊的時候是它靠下面撐著），兩片都在 `slice.glue` 記 `{x, y, area, with}`（黏的那一點、跟第幾片）。
+ * @returns {{loose: object[], weak: {a, b, area, at}[], groups: number, minGlue: number}}
  */
 export function stackCheck(slices, opt = {}) {
   const minGlue = opt.minGlueCm2 == null ? MIN_GLUE_CM2 : Math.max(0, +opt.minGlueCm2 || 0);
   const pieces = [];
+  for (const s of slices) s.glue = [];
   slices.forEach((slice, si) => {
     const own = slice.loops.filter(l => !l.isHole).map(l => ({ si, slice, loops: [l], area: Math.abs(l.area), box: loopsBounds([l]) }));
     for (const h of slice.loops.filter(l => l.isHole)) {
@@ -794,10 +798,10 @@ export function stackCheck(slices, opt = {}) {
     for (const a of bySlice[si]) {
       for (const b of bySlice[si + 1]) {
         if (a.box.maxX < b.box.minX || b.box.maxX < a.box.minX || a.box.maxY < b.box.minY || b.box.maxY < a.box.minY) continue;
-        const area = overlapArea(a.loops.map(l => l.pts), b.loops.map(l => l.pts));
+        const { area, at } = overlapPatch(a.loops.map(l => l.pts), b.loops.map(l => l.pts));
         if (!(area > 1e-9)) continue;
         up[find(pieces.indexOf(a))] = find(pieces.indexOf(b));
-        if (area < minGlue) weak.push({ a, b, area });
+        if (area < minGlue) weak.push({ a, b, area, at });
       }
     }
   }
@@ -807,7 +811,13 @@ export function stackCheck(slices, opt = {}) {
   for (const [g, a] of sum) if (main === null || a > sum.get(main)) main = g;
   const loose = pieces.filter((p, i) => find(i) !== main);
   for (const p of loose) p.loops[0].loose = true;
-  for (const w of weak) { w.a.loops[0].weak = true; w.b.loops[0].weak = true; }
+  for (const w of weak) {
+    (w.a.area < w.b.area ? w.a : w.b).loops[0].weak = true;
+    if (w.at) {
+      w.a.slice.glue.push({ ...w.at, area: w.area, with: w.b.slice.index });
+      w.b.slice.glue.push({ ...w.at, area: w.area, with: w.a.slice.index });
+    }
+  }
   return { loose, weak, groups: sum.size, minGlue };
 }
 

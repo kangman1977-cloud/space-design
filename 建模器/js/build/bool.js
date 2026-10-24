@@ -505,6 +505,15 @@ export function rowsToLoops(rects, eps) {
  * @returns {number} 面積（同單位的平方）
  */
 export function overlapArea(a, b) {
+  return overlapPatch(a, b).area;
+}
+
+/**
+ * 同 `overlapArea()`，另外給**疊在一起的那一塊在哪**（外框的中心；沒疊到 ⇒ `at` 是 null）。
+ * 2026-10-24 第二輪第五批 5b（kang「只黏一點點只塗小的那塊＋在黏的那一點畫圈」）：圈要畫在黏的那一點。
+ * @returns {{area: number, at: {x:number,y:number}|null}}
+ */
+export function overlapPatch(a, b) {
   const w = need();
   const made = [];
   try {
@@ -514,7 +523,9 @@ export function overlapArea(a, b) {
     made.push(cb);
     const ab = ca.intersect(cb);
     made.push(ab);
-    return ab.isEmpty() ? 0 : ab.area();
+    if (ab.isEmpty()) return { area: 0, at: null };
+    const bb = ab.bounds();
+    return { area: ab.area(), at: { x: (bb.min[0] + bb.max[0]) / 2, y: (bb.min[1] + bb.max[1]) / 2 } };
   } finally {
     for (const m of made) {
       try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }

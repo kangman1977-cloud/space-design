@@ -1206,7 +1206,16 @@ export function sliceProgram(slice, opt = {}) {
       const b = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
       b.w = b.maxX - b.minX; b.h = b.maxY - b.minY;
       const c = T({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
-      items.push({ t: 'circle', style: l.loose ? 'markLoose' : 'markWeak', x: c.x, y: c.y, r: Math.max(Math.hypot(b.w, b.h) / 2 + 0.2, Math.max(W, H) * 0.04) });
+      if (l.loose) items.push({ t: 'circle', style: 'markLoose', x: c.x, y: c.y, r: Math.max(Math.hypot(b.w, b.h) / 2 + 0.2, Math.max(W, H) * 0.04) });
+    }
+    /**
+     * 🔴 **只黏一點點：黃圈畫在黏的那一點**（2026-10-24 第五批 5b，kang「只塗小的那塊＋在黏的那一點畫圈，5a 的卡片也一起改」）。
+     * 以前圈在塗黃的那塊外面 —— 汽車那一整片 409 cm² 的大板也塗黃、圈成一個大圈，看不出黏在哪。
+     * 上下兩片的卡片都畫（`stackCheck()` 兩片都記在 `slice.glue`）；塗黃只塗小的那塊（`weak` 只記它）。
+     */
+    for (const g of slice.glue || []) {
+      const c = T(g);
+      items.push({ t: 'circle', style: 'markWeak', x: c.x, y: c.y, r: Math.max(W, H) * 0.04 });
     }
   }
   for (const l of slice.loops) {
