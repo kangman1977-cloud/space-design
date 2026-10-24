@@ -482,6 +482,47 @@ export function sliceDXF(slices, opt = {}) {
   return out.text_;
 }
 
+/**
+ * 🔴 **試卡片 → DXF**（2026-10-24 第二輪第六批 6b，kang「…A 互卡那一排多一顆「存試卡片」單獨一個檔…」）。
+ * 吃 `slice/fitTest.js` 的 `fitComb()`。輪廓（含槽）在板厚那一層（同零件，`cutLayer()`）、每一格的數字在 NUM（同零件編號那一層）。
+ * 單獨一個檔：先切這一片、挑好數字再切零件（Lamina、Glowforge 都這樣）。
+ * @param {object} fit `fitComb()` 的結果
+ * @param {{unit?:string, head?:object}} opt
+ */
+export function fitDXF(fit, opt = {}) {
+  const U = UNITS[opt.unit] || UNITS.mm;
+  const s = U.scale;
+  const L = cutLayer(fit.t);
+  const out = new Writer();
+  const note = [
+    `FIT TEST  t=${round(fit.t)}cm  ${fit.n} slots  step=${round(fit.step * 10)}mm  unit=${U.label}`,
+    'slot width = board thickness + the number under it (cm)',
+    'cut this first; push a scrap of the same board into each slot',
+    'pick the one that holds without forcing; type its number into Slot adj (cm)'
+  ];
+  const head = opt.head || {};
+  if (head.name) note.unshift(`job: ${ascii(head.name)}${head.date ? '  ' + head.date : ''}`);
+  out.header(0, 0, fit.W * s, (fit.H + 0.6 + note.length * 0.7) * s);
+  out.tables([[L, CUT_COLORS[0]], ['NUM', SLICE_COLOR.NUM], ['TEXT', SLICE_COLOR.TEXT]]);
+  out.blocks();
+  out.beginEntities();
+  for (const loop of fit.slice.loops) {
+    for (let i = 0; i < loop.pts.length; i++) {
+      const a = loop.pts[i], b = loop.pts[(i + 1) % loop.pts.length];
+      out.line(L, a.x * s, a.y * s, b.x * s, b.y * s);
+    }
+  }
+  for (const sl of fit.slots) {
+    const hh = Math.min(0.4, fit.pitch * 0.25) * s;
+    // R12 的 TEXT 從左下角起寫：置中的字往左挪大約半個字串寬（同 boardDXF）
+    out.text('NUM', sl.x * s - sl.text.length * hh * 0.3, fit.H * 0.22 * s - hh * 0.35, hh, sl.text);
+  }
+  // 說明字 0.4 cm：試卡片只有十幾 cm 寬，字太大會比卡片大好幾倍
+  note.forEach((n, i) => out.text('TEXT', 0, (fit.H + 0.6 + (note.length - 1 - i) * 0.7) * s, 0.4 * s, n));
+  out.end();
+  return out.text_;
+}
+
 /** 簡單的尺寸線：兩端箭頭用短斜線代替，中間放數字 */
 function dimLine(out, x1, y1, x2, y2, label, s) {
   out.line('DIM', x1, y1, x2, y2);

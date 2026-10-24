@@ -20760,6 +20760,63 @@ if (csgOK) {
     && /trisOf\(this\.meshes\);\s*this\.pickEl\.hidden = true;/.test(svs) && /this\._applyMethod\(\); this\.stack3d\.reset\(\); this\.run\(\);/.test(spn), 'shown ' + only0.shown);
 }
 
+
+section('剖面分切：試卡片（第二輪第六批 6b，2026-10-24）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md`「6b 試卡片」；kang 2026-10-24「甲 梳子一片，A 互卡那一排多一顆「存試卡片」單獨一個檔，預設照表（7 格、每格 0.1 mm、中間 ＝ 現在的槽寬加減、字寫要填的數字）」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const FT = await import('../js/slice/fitTest.js');
+  const IL = await import('../js/slice/interlock.js');
+  const DX = await import('../js/out/dxf.js');
+  const inL = (loops, x, y) => { let c = false; for (const l of loops) { const p = l.pts; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const a = p[i], b = p[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c; } } return c; };
+  // 一半深往上一點那條水平線上，料跟料之間的空隙 ＝ 每一格的槽寬
+  const gaps = (fit, y) => { const sp = IL.lineSpans(fit.slice.loops.map(l => ({ pts: l.pts.map(p => ({ x: p.y, y: p.x })) })), y); return sp.slice(1).map((s, i) => s[0] - sp[i][1]); };
+  const il = { ...IL.INTERLOCK_DEFAULTS };
+  const F = FT.fitComb(il, {});
+  const g = gaps(F, F.H * 0.75);
+  ok('★★ 預設照 kang 定的表：7 格、每格 0.1 mm', JSON.stringify(FT.FIT_DEFAULTS) === JSON.stringify({ n: 7, stepMm: 0.1 }));
+  ok('★★★ 板厚 0.5、槽寬加減 0 ⇒ 一塊 12 × 3 cm、7 個槽；字 −0.03～+0.03（要填的數字，cm）；一半深那裡實際槽寬 0.47～0.53',
+    F.n === 7 && Math.abs(F.W - 12) < 1e-9 && Math.abs(F.H - 3) < 1e-9 && F.slice.loops.filter(l => !l.isHole).length === 1
+    && F.slots.map(s => s.text).join() === '-0.03,-0.02,-0.01,0.00,+0.01,+0.02,+0.03'
+    && g.length === 7 && g.every((v, i) => Math.abs(v - (0.47 + 0.01 * i)) < 1e-6), g.map(v => v.toFixed(3)).join());
+  const F2 = FT.fitComb({ ...il, slotAdj: -0.02 }, {});
+  ok('★★★ 中間那格 ＝ 現在的槽寬加減：−0.02 ⇒ 字 −0.05～+0.01、中間 −0.02、中間那格實際寬 0.48',
+    F2.slots.map(s => s.text).join() === '-0.05,-0.04,-0.03,-0.02,-0.01,0.00,+0.01' && Math.abs(gaps(F2, F2.H * 0.75)[3] - 0.48) < 1e-6);
+  const F3 = FT.fitComb(il, { n: 12 }), F4 = FT.fitComb(il, { n: 2 }), F5 = FT.fitComb(il, { n: 5, stepMm: 0.05 });
+  ok('★★ 格數只能 3～9（12 ⇒ 9、2 ⇒ 3）；每格差 0.05 mm ⇒ 字多一位（−0.010、−0.005、0.000…）',
+    F3.n === 9 && F4.n === 3 && F5.slots.map(s => s.text).join() === '-0.010,-0.005,0.000,+0.005,+0.010', F5.slots.map(s => s.text).join());
+  const F6 = FT.fitComb({ ...il, slotAdj: -0.5 }, {});
+  ok('★★★ 加減負太多（−0.5，槽寬 0 以下）⇒ 那幾格不挖、記在 skipped；挖了的那幾格照樣在',
+    F6.skipped.join() === '-0.53,-0.52,-0.51,-0.50' && F6.slots.filter(s => s.cut).length === 3 && gaps(F6, F6.H * 0.75).length === 3, F6.skipped.join());
+  const x3 = F.slots[3].x;
+  ok('★★ 槽口張開 0.1：槽邊外 0.05、頂邊下 0.02 沒料；張開 0 ⇒ 有料',
+    !inL(F.slice.loops, x3 + 0.3, F.H - 0.02) && inL(FT.fitComb({ ...il, flare: 0 }, {}).slice.loops, x3 + 0.3, F.H - 0.02));
+  const F7 = FT.fitComb({ ...il, t: 1 }, {});
+  ok('★★ 板厚 1 ⇒ 格距 3、高 4、7 格長 24 cm（字還是要填的數字）', Math.abs(F7.pitch - 3) < 1e-9 && Math.abs(F7.H - 4) < 1e-9 && Math.abs(F7.W - 24) < 1e-9);
+  // 改壞沒抓到補的：槽寬要加「這次的」板厚（例子原本都是 0.5，寫死 0.5 也過）
+  const g7 = gaps(F7, F7.H * 0.75);
+  ok('★★★ 板厚 1 ⇒ 一半深那裡實際槽寬 0.97～1.03（槽寬 ＝ 這次的板厚 ＋ 數字）', g7.length === 7 && g7.every((v, i) => Math.abs(v - (0.97 + 0.01 * i)) < 1e-6), g7.map(v => v.toFixed(3)).join());
+
+  const dxf = DX.fitDXF(F, { unit: 'mm', head: { name: 'T10 lion', date: '2026-10-24' } });
+  const lay = [...dxf.matchAll(/\r?\n0\r?\nLINE\r?\n\s*8\r?\n([^\r\n]+)/g)].map(x => x[1].trim());
+  const nums = [...dxf.matchAll(/\r?\n0\r?\nTEXT\r?\n\s*8\r?\nNUM\r?\n[\s\S]*?\r?\n1\r?\n([^\r\n]+)/g)].map(x => x[1]);
+  const xs = [...dxf.matchAll(/\r?\n0\r?\nLINE\r?\n\s*8\r?\n[^\r\n]+\r?\n\s*10\r?\n([-\d.]+)/g)].map(x => +x[1]);
+  ok('★★★ DXF：輪廓（含槽）全在 CUT_T5、7 個數字在 NUM、寫 FIT TEST 與怎麼用、單位 mm（最寬 120）、案件名',
+    lay.length > 0 && lay.every(l => l === 'CUT_T5') && nums.join() === '-0.03,-0.02,-0.01,0.00,+0.01,+0.02,+0.03'
+    && /FIT TEST  t=0\.5cm  7 slots  step=0\.1mm  unit=mm/.test(dxf) && /type its number into Slot adj/.test(dxf) && /job: T10 lion/.test(dxf)
+    && Math.abs(Math.max(...xs) - 120) < 1e-6, [...new Set(lay)].join() + ' / ' + nums.join());
+  const svg = FT.fitSVG(F6);
+  ok('★★ 畫面預覽：7 個字、中間那格粗字、沒挖的紅字', (svg.match(/<text /g) || []).length === 7 && (svg.match(/font-weight="bold"/g) || []).length === 1 && (svg.match(/fill="#c00"/g) || []).length === 4);
+
+  const spn = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8');
+  ok('★★ 讀程式守著：互卡那一排有「存試卡片」、幾格／每格差跟人走（預設照表、填錯退回、3～9）；存成單獨一個檔（fitDXF）；互卡結果裡有試卡片預覽；跟模型無關（⛔ 先檢查切出來沒）',
+    /<button id="slFit">存試卡片<\/button>/.test(spn) && /this\.opt\.fit = \{ \.\.\.FIT_DEFAULTS, \.\.\.\(this\.opt\.fit \|\| \{\}\) \};/.test(spn)
+    && /Number\.isInteger\(v\) && v >= FIT_N_MIN && v <= FIT_N_MAX : v > 0/.test(spn) && /else fitIn\[k\]\.value = this\.opt\.fit\[k\];/.test(spn)
+    && /async _saveFit\(\) \{\s*const fit = fitComb\(this\.opt\.il, this\.opt\.fit\);[\s\S]{0,200}fitDXF\(fit,/.test(spn) && !/async _saveFit\(\) \{\s*if \(!this\._has\(\)\)/.test(spn)
+    && /this\.body\.appendChild\(this\._fitCard\(\)\);/.test(spn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -18,11 +18,12 @@ import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PI
 import { findPegs, checkPegs, pegsForSlice, pegSpans, manualPegs, holesFromAuto, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
   from '../out/sheet.js';
-import { sliceDXF, sliceBoardDXF, UNITS } from '../out/dxf.js';
+import { sliceDXF, sliceBoardDXF, fitDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
 import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { StackView } from './stackView.js';
 import { interlockMany, INTERLOCK_DEFAULTS } from '../slice/interlock.js';
+import { fitComb, fitSVG, FIT_DEFAULTS, FIT_N_MIN, FIT_N_MAX } from '../slice/fitTest.js';
 import { PegMapView } from './pegMapView.js';
 
 const LS_KEY = 'modeler_slice';
@@ -54,6 +55,8 @@ export class SlicePanel {
      */
     if (this.opt.method !== 'interlock') this.opt.method = 'stack';
     this.opt.il = { ...INTERLOCK_DEFAULTS, ...(this.opt.il || {}) };
+    /** 6b 試卡片（kang「…預設照表（7 格、每格 0.1 mm…）」）：幾格、每格差 ⇒ 跟人走（跟槽寬加減一起記著）*/
+    this.opt.fit = { ...FIT_DEFAULTS, ...(this.opt.fit || {}) };
     if (!Array.isArray(this.opt.bands) || !this.opt.bands.length) {
       this.opt.bands = [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }];
     }
@@ -137,6 +140,9 @@ export class SlicePanel {
           <span class="lbl">槽寬加減 cm</span><input type="number" id="slILAdj" step="0.01" style="width:64px">
           <span class="lbl">肋那邊佔</span><input type="number" id="slILShare" step="0.1" min="0.1" max="0.9" style="width:56px">
           <span class="lbl">槽口張開 cm</span><input type="number" id="slILFlare" step="0.05" min="0" style="width:60px">
+          <span class="sp"></span>
+          <span class="lbl">試卡片</span><input type="number" id="slFitN" step="1" min="3" max="9" style="width:44px"><span class="lbl">格　每格差 mm</span><input type="number" id="slFitStep" step="0.05" min="0.01" style="width:56px">
+          <button id="slFit">存試卡片</button>
         </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。不同板厚的片放在不同張。關掉就回到原本的存法（SVG 一片一個檔、DXF 全部一個檔）">
           <label class="uwCk"><input type="checkbox" id="slNest"> 排版到板子上</label>
@@ -266,6 +272,25 @@ export class SlicePanel {
         this.run();
       };
     }
+    /**
+     * 6b 試卡片：幾格、每格差 —— 填錯（空白、超出 3～9、0 或負的）退回上一個能用的值；改了只重畫（⛔ 重切）。
+     * 中間那格 ＝ 現在的「槽寬加減」，所以挑好填回去、再存一次就以新的數字為中間。
+     */
+    const fitIn = { n: $('slFitN'), stepMm: $('slFitStep') };
+    fitIn.n.title = `試卡片一排幾格（${FIT_N_MIN}～${FIT_N_MAX}）。預設 ${FIT_DEFAULTS.n}`;
+    fitIn.stepMm.title = `試卡片每一格的槽寬差幾 mm。預設 ${FIT_DEFAULTS.stepMm} mm`;
+    for (const k of Object.keys(fitIn)) {
+      fitIn[k].value = this.opt.fit[k];
+      fitIn[k].onchange = () => {
+        const v = parseFloat(fitIn[k].value);
+        const okv = k === 'n' ? Number.isInteger(v) && v >= FIT_N_MIN && v <= FIT_N_MAX : v > 0;
+        if (okv) this.opt.fit[k] = v; else fitIn[k].value = this.opt.fit[k];
+        save(this.opt);
+        if (this.result) this._render();
+      };
+    }
+    $('slFit').title = '先切這一片試槽的鬆緊：一排幾格、每格槽寬差一點，中間那格 ＝ 現在的槽寬加減。存成單獨一個 DXF（不跟零件放在一起 —— 先切它、挑好數字再切零件）';
+    $('slFit').onclick = () => this._saveFit();
     this._applyMethod();
 
     $('slClose').onclick = () => this.close();
@@ -511,7 +536,8 @@ export class SlicePanel {
       `互卡：側面從 ${st.spineAx.toUpperCase()} 切正中間（1 片）＋肋沿 ${st.ribAx.toUpperCase()} 每 ${f(st.spacing)} cm（${st.ribs} 片）；`
       + `槽寬 ${f(st.slotW)} cm（板厚 ${f(st.t)} ${+il.slotAdj ? (il.slotAdj > 0 ? '＋ ' : '− ') + f(Math.abs(il.slotAdj)) : '＋ 0'}）、肋那邊佔 ${f(il.share * 10)} 成、槽口每邊張開 ${f(il.flare)} cm。`
       + '槽已經挖在輪廓上，跟輪廓一起在切割層。零件編號：S ＝ 側面、R1、R2… ＝ 肋（照順序排）。'
-      + '⚠ 槽寬沒有補切口（切口由人工處理）—— 第一次切先試一下鬆緊。'));
+      + '⚠ 槽寬沒有補切口（切口由人工處理）—— 第一次切先存一片試卡片試一下鬆緊（下面那張）。'));
+    this.body.appendChild(this._fitCard());
     if (this.opt.nest.on) this._renderBoards();
     const n = Math.min(r.slices.length, PREVIEW_MAX);
     for (let i = 0; i < n; i++) this.body.appendChild(this._card(r.slices[i]));
@@ -843,6 +869,32 @@ export class SlicePanel {
       head: this.app.head
     }), 'application/dxf');
     await saveBlob(blob, `${this._base()}.dxf`, TYPES.dxf, this.opt.askPath);
+  }
+
+  /**
+   * 6b：互卡結果裡的試卡片預覽 —— 長怎樣、怎麼用（按上面一排的「存試卡片」存檔）。
+   * 中間那格（現在的設定）粗字；槽寬 ≤ 0 的那一格紅字、⛔ 挖。
+   */
+  _fitCard() {
+    const fit = fitComb(this.opt.il, this.opt.fit);
+    const d = document.createElement('div');
+    d.className = 'uwSkip slFitCard';
+    const lo = fit.slots[0].text, hi = fit.slots[fit.n - 1].text;
+    d.innerHTML = `<b>試卡片</b>（先切這一片試鬆緊，按上面一排的「存試卡片」存成單獨一個 DXF）：`
+      + `一排 ${fit.n} 格、每格槽寬差 ${f(fit.step * 10)} mm，槽寬 ＝ 板厚 ${f(fit.t)} ＋ 下面的數字（${esc(lo)} ～ ${esc(hi)} cm）；`
+      + `中間那格（粗字）＝ 現在的槽寬加減。${f(fit.W)} × ${f(fit.H)} cm。<br>`
+      + '拿同一塊板子的邊插進每一格，挑「插得進去、放手不會掉」那一格，把它下面的數字填進「槽寬加減」—— 再存一次試卡片，就以新的數字為中間再試一次。'
+      + (fit.skipped.length ? `<br>⚠ ${esc(fit.skipped.join('、'))} 那幾格槽寬變成 0 以下，沒有挖（紅字）—— 把槽寬加減調大一點。` : '')
+      + `<div style="margin-top:6px;overflow:auto">${fitSVG(fit)}</div>`;
+    return d;
+  }
+
+  /** 6b：存試卡片 —— 單獨一個 DXF（跟零件分開：先切它、挑好數字再切零件）。跟模型無關，模型切不出來也存得了 */
+  async _saveFit() {
+    const fit = fitComb(this.opt.il, this.opt.fit);
+    const head = this.app.head || {};
+    const blob = textBlob(fitDXF(fit, { unit: this.opt.unit, head }), 'application/dxf');
+    await saveBlob(blob, `${safeName(`試卡片_${head.name || '未命名'}_t${f(fit.t)}`, '試卡片')}.dxf`, TYPES.dxf, this.opt.askPath);
   }
 
   _base() {
