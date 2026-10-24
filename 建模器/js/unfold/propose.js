@@ -78,6 +78,12 @@ export const MAX_PIECE_FACES = OVERLAP_MAX_POLYS;
 /** 轉折小於這個角度的一整塊先整塊試（曲面的分格：齒輪的齒弧、圓柱 32 段約 11°）；低多邊形的臉、眼窩那種轉折⛔ 碰 */
 const PREMERGE_DEG = 15;
 export const SLIT_LABEL = { none: '不要細切口', allow: '片少一點（允許細切口）' };
+/**
+ * 🔴 **密的曲面：講清楚**（2026-10-25 第二輪第七批 ④-6／①-4，kang「甲 大功能先不做，只把為什麼切不好、可以怎麼辦講清楚」
+ * → `規格\建模器-智慧分切.md`「密的曲面：講清楚」；量表 `實驗-綜合評估-第二輪.md` 第七批）。
+ * 細切口這麼多 ⇒ 幾乎一定是密的曲面整塊併成一大片（頭盔前片 627～1,489、樹蛙 3,464；kang 自己建的 6 個實驗檔（獅子頭、狐狸頭、收納盒、法蘭、招牌、齒輪組）預設每個物件都是 0）⇒ 面板換一套講法。
+ */
+export const DENSE_NOTCH = 50;
 export const ORDER_LABEL = { feature: '凹處、尖角先切', fewest: '片數最少' };
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -926,6 +932,8 @@ function* proposeGen(obj, opt = {}) {
       bigCurved, bigFlat,
       overlap: pick.overlap,
       notch: pick.notch || 0,
+      /** 第七批 ④-6：細切口 ≥ `DENSE_NOTCH` ⇒ 密的曲面（面板講原因與怎麼辦）；faces ＝ 這個物件幾個面 */
+      dense: (pick.notch || 0) >= DENSE_NOTCH, faces: base.faces.length,
       /** 長邊小於 `minPiece` cm 的片幾片（面板講；「不要細切口」時小片併不掉就留著）*/
       small: pick.r.pieces.reduce((n, p) => n + (Math.max(p.width, p.height) < minPiece ? p.qty : 0), 0),
       minPiece,

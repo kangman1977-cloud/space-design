@@ -20942,6 +20942,39 @@ if (csgOK) {
     && /\$\('pos'\)\.value = Math\.round\(s\.c \* 100\) \/ 100;/.test(rmv));
 }
 
+
+section('智慧分切：密的曲面講清楚（第二輪第七批 ④-6，2026-10-25）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md` 第七批；kang 2026-10-25「甲 大功能先不做，只把為什麼切不好、可以怎麼辦講清楚」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const PR = await import('../js/unfold/propose.js');
+  const I3 = await import('../js/build/import3d.js');
+  const { decimate } = await import('../js/build/decimate.js');
+  const { gridEdges, markGrid } = await import('../js/build/importPlanes.js');
+  ok('★★ 細切口 50 個以上算密的曲面（DENSE_NOTCH）', PR.DENSE_NOTCH === 50);
+  // T14 頭盔前片（高 20.86 cm）照匯入視窗「減到 5000 面」那條路 ⇒ 智慧分切還是一整片＋上百細切口 ⇒ dense
+  const f = 'helmetFP.stl', buf = readFileSync(join(here, '../../輸出/匯入測試/' + f));
+  const rd = I3.cleanModel(I3.readModel(f, buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)));
+  const [hp] = I3.toParts(rd, { cmPerUnit: 20.86 / rd.size[2], up: 'z', split: false });
+  const q = decimate(hp, { target: 5000, keep: null });
+  const hm = Mesh.fromFaceList(q.points.map(v => new THREE.Vector3(v[0], v[1], v[2])), q.faces);
+  markGrid(hm, gridEdges(q, [], q.from));
+  const hpr = PR.proposeSeams(new io.ModelObject({ name: '頭盔前片', kind: io.KIND.SOLID, src: { type: 'mesh' }, mesh: hm }), {});
+  ok('★★★ T14 頭盔前片減到 5000 面 ⇒ 智慧分切一整片、細切口上百 ⇒ 判成密的曲面（dense）、記下 5000 個面',
+    hpr.total <= 2 && hpr.notch >= 50 && hpr.dense === true && hpr.faces === 5000, `${hpr.total} 片 ${hpr.notch} 細切口`);
+  // kang 自己建的：獅子頭、狐狸頭 ⇒ 不是
+  const own = ['實驗T10/獅子頭.json', '實驗T8/狐狸頭.json'].flatMap(p => io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/' + p), 'utf8'))).objects);
+  const res = own.map(o => PR.proposeSeams(o, {}));
+  ok('★★★ kang 自己建的（獅子頭、狐狸頭每一個物件）⇒ 都不算密的曲面（細切口都在 50 以下）',
+    res.length >= 2 && res.every(r => r.dense === false && r.notch < 50), res.map(r => r.notch).join(','));
+  const tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8');
+  ok('★★ 讀程式守著（面板）：密的曲面換一套講法 —— 為什麼、自己標縫、重新匯入減到 1000 面左右但片會碎、照曲率分塊還沒做',
+    /if \(p\.dense\) \{\s*fitLines\.push\(red\(`細切口 <b>\$\{p\.notch\}<\/b> 個 —— 這是密的曲面（\$\{p\.faces\} 個面），自動分切現在切不好`\)/.test(tb)
+    && /轉折小的面會整個併成一大片/.test(tb) && /① 自己標縫/.test(tb) && /② 重新匯入、在匯入視窗「減到 ___ 面」打 1000 左右 —— 細切口會沒有，但片會變成幾十片細長、鋸齒形的/.test(tb)
+    && /（照曲率自動分成幾大塊還沒做）/.test(tb));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
