@@ -15,13 +15,14 @@
 
 import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2 }
   from '../slice/section.js';
-import { findPegs, checkPegs, pegsForSlice, PEG_DEFAULTS } from '../slice/pegs.js';
+import { findPegs, checkPegs, pegsForSlice, pegSpans, manualPegs, holesFromAuto, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
   from '../out/sheet.js';
 import { sliceDXF, sliceBoardDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
 import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { StackView } from './stackView.js';
+import { PegMapView } from './pegMapView.js';
 
 const LS_KEY = 'modeler_slice';
 /** 展開圖的設定（排版那一包第一次沿用它，kang 2026-10-14）*/
@@ -71,6 +72,16 @@ export class SlicePanel {
     this.pegs = null;
     this._build();
     this.stack3d = new StackView(this.opt.stack3d, () => save(this.opt), i => this._jumpCard(i));
+    /**
+     * 🔴 **手動放孔**（2026-10-24 第二輪第五批 5c，kang「方案二孔位圖…預設＋可以調照表」）：
+     * `opt.manualPegs` ＝ `{ axis, holes }`；沒有 ＝ 自動（預設）。跟分段表一樣**跟模型走**：記在瀏覽器、
+     * 新建、開檔、換切片方向就清掉回到自動；⛔ 存進專案檔（⑤-24 說好之後再說的那件）。
+     */
+    this.pegMap = new PegMapView({
+      onManual: () => this._toManual(),
+      onAuto: () => this._toAuto(),
+      onChange: holes => this._setHoles(holes)
+    });
   }
 
   // ── 畫面骨架 ────────────────────────────────────────
@@ -222,7 +233,9 @@ export class SlicePanel {
 
     window.addEventListener('keydown', e => {
       // ⚠ 關掉之後⛔ 不再往下傳 —— 不然主畫面的 Esc 會接著清掉選取（2026-10-08 E2）
-      if (!this.el.hidden && e.key === 'Escape') { e.stopImmediatePropagation(); this.close(); }
+      if (!this.el.hidden && e.key === 'Escape') { e.stopImmediatePropagation(); this.close(); return; }
+      // 5c：孔位圖選到孔時 Delete 刪孔（⚠ 主畫面那邊視窗開著時本來就⛔ 接 Delete —— 這裡再擋一次，⛔ 往下傳）
+      if (!this.el.hidden && this.pegMap.onKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
     });
   }
 
@@ -243,6 +256,7 @@ export class SlicePanel {
     this.opt.axis = DEFAULT_AXIS;
     this.opt.bands = [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }];
     this.opt.maxOutline = false;
+    this.opt.manualPegs = null;     // 5c：手動的孔跟模型走
     const $ = id => this.el.querySelector('#' + id);
     $('slAxis').value = this.opt.axis;
     $('slMax').checked = false;
@@ -268,6 +282,8 @@ export class SlicePanel {
   }
 
   _runNow() {
+    /** 5c：換了切片方向 ⇒ 手動的孔清掉回到自動 —— ⚠ 要在存之前清（本機抓到：先存後清，重新整理又跑回來）*/
+    if (this.opt.manualPegs && this.opt.manualPegs.axis !== this.opt.axis) this.opt.manualPegs = null;
     save(this.opt);
     const picked = this.app.sel.objects;
     const objs = picked.length ? picked : this.app.doc.objects;
@@ -284,11 +300,14 @@ export class SlicePanel {
       ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 })
       : { ok: false, reason: '目前文件裡沒有物件。' };
 
+    /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
     this.pegs = (this.result.ok && this.result.slices.length)
-      ? findPegs(this.result.slices, {
-          d: this.opt.d, gap: this.opt.gap,
-          counts: this.opt.bands.map(b => b.holes)
-        })
+      ? (this.opt.manualPegs
+          ? manualPegs(this.result.slices, this.opt.manualPegs.holes, { d: this.opt.d, gap: this.opt.gap })
+          : findPegs(this.result.slices, {
+              d: this.opt.d, gap: this.opt.gap,
+              counts: this.opt.bands.map(b => b.holes)
+            }))
       : null;
 
     this.frame = (this.result.ok && this.result.slices.length)
@@ -315,6 +334,7 @@ export class SlicePanel {
       + `疊高 ${f(st.used)} / 模型 ${f(st.height)} cm`;
 
     /** 5b：立體預覽放在最上面（設定那兩排下面、提示上面）—— 同一個元素接回來，⛔ 每次開新的 WebGL */
+    this.stack3d.setRods(this._rods(), this.opt.d);     // 5c：定位孔的桿子也畫上去
     this.body.appendChild(this.stack3d.el);
     this.stack3d.refresh();
 
@@ -363,6 +383,15 @@ export class SlicePanel {
     const g = this.pegs;
     if (g && !g.ok) {
       this.body.appendChild(box('uwWarn', '⚠ 定位孔：' + g.reason));
+    } else if (g && g.manual) {
+      /** 5c：手動的孔 —— 講幾根、串起來幾片、最糟的那一片 */
+      const chk = checkPegs(r.slices, s => pegsForSlice(g, s), { d: this.opt.d, gap: this.opt.gap });
+      const solid = r.slices.filter(s => s.loops.length).length;
+      this.body.appendChild(box(g.warnings.length ? 'uwWarn' : 'uwSkip',
+        (g.warnings.length ? '⚠ ' : '') + `定位孔（手動）　${g.holes.length} 根　⌀${f(this.opt.d)} cm　`
+        + `串起來的 ${solid - g.skipped.length}／${solid} 片`
+        + (Number.isFinite(chk.worst) ? `　最糟的那一片孔邊離邊緣還剩 ${f(chk.worst - this.opt.d / 2)} cm` : '')));
+      for (const w of g.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     } else if (g) {
       const chk = checkPegs(r.slices, s => pegsForSlice(g, s),
         { d: this.opt.d, gap: this.opt.gap });
@@ -377,6 +406,13 @@ export class SlicePanel {
       // 紅色只留給「程式做不到你要求的事」；你自己選的後果用藍色說明
       for (const w of g.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
       for (const n of g.notes) this.body.appendChild(box('uwSkip', n));
+    }
+    /** 5c：孔位圖（手動放孔）—— 接在定位孔的說明後面；同一個元素接回來 */
+    if (g && g.ok) {
+      this.pegMap.setState(r.slices, g, { d: this.opt.d, gap: this.opt.gap },
+        g.manual ? this.opt.manualPegs.holes : []);
+      this.body.appendChild(this.pegMap.el);
+      this.pegMap.refresh();
     }
 
     this.body.appendChild(box('uwSkip',
@@ -538,7 +574,7 @@ export class SlicePanel {
     card.className = 'uwCard';
     card.dataset.slice = slice.index;     // 5b：立體預覽點一片 ⇒ 跳到這裡
 
-    const opt = { ...this._progOpt(), pegs: this._pegsOf(slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊
+    const opt = { ...this._progOpt(), pegs: this._pegsOf(slice), pegSpans: pegSpans(this.pegs, slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊；5c：手動的孔寫穿過第幾片
     const lines = sliceTitleLines(slice, { ...opt, head: this.app.head });
     const h = document.createElement('div');
     h.className = 'uwTitle';
@@ -580,6 +616,48 @@ export class SlicePanel {
     this._hitT = setTimeout(() => card.classList.remove('uwHit'), 1600);
   }
 
+  // ── 手動放孔（5c）────────────────────────────────────
+
+  /** 按「手動放孔」：自動找的孔先換成手動的一份（畫出來一模一樣），之後改的都是這一份 */
+  _toManual() {
+    if (!this.result || !this.result.ok || !this.pegs || !this.pegs.ok) return;
+    const holes = holesFromAuto(this.pegs, this.result.slices);
+    this._setHoles(holes);
+  }
+
+  /** 按「回到自動」：丟掉手動的，重新自動找 */
+  _toAuto() {
+    this.opt.manualPegs = null;
+    this.run();
+  }
+
+  /** 孔改了：重新排每一片的孔、重畫（⛔ 重切 —— 切的結果沒變）*/
+  _setHoles(holes) {
+    this.opt.manualPegs = { axis: this.opt.axis, holes };
+    save(this.opt);
+    this.pegs = manualPegs(this.result.slices, holes, { d: this.opt.d, gap: this.opt.gap });
+    const top = this.body.scrollTop;
+    this._render();
+    this.body.scrollTop = top;      // 重畫之後停在原本的位置（孔位圖在中間，⛔ 跳回最上面）
+  }
+
+  /** 立體預覽的桿子：每一個孔在連續有它的那幾片 ⇒ 一根；手動加的藍色 */
+  _rods() {
+    const g = this.pegs;
+    if (!g || !g.ok || !this.result || !this.result.ok) return [];
+    if (!g.manual) return holesFromAuto(g, this.result.slices).map(h => ({ ...h, manual: false }));
+    const out = [];
+    for (const h of g.holes) {
+      let run = null;
+      for (const s of this.result.slices) {
+        if (h.drilled.includes(s.index)) { if (!run) run = { x: h.x, y: h.y, from: s.index, to: s.index, manual: !h.auto }; else run.to = s.index; }
+        else if (run) { out.push(run); run = null; }
+      }
+      if (run) out.push(run);
+    }
+    return out;
+  }
+
   /** 出圖用的共同參數。預覽、SVG、DXF 三邊一定要用同一份。 */
   _progOpt() {
     const fr = this.frame || { minX: 0, minY: 0, w: 0, h: 0 };
@@ -610,7 +688,7 @@ export class SlicePanel {
       const base = { ...this._progOpt(), head: this.app.head };
       ok = printSVGs(
         this.result.slices.map(s => {
-          const opt = { ...base, pegs: this._pegsOf(s) };
+          const opt = { ...base, pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
           return progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt));
         }),
         '剖面分切');
@@ -637,7 +715,7 @@ export class SlicePanel {
     }
     const base = { ...this._progOpt(), head: this.app.head };
     const jobs = this.result.slices.map(s => {
-      const opt = { ...base, pegs: this._pegsOf(s) };
+      const opt = { ...base, pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
       return {
         name: `${this._base()}_第${String(s.index).padStart(2, '0')}片.svg`,
         blob: textBlob(progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt)), 'image/svg+xml')

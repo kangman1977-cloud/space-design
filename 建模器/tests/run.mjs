@@ -20521,6 +20521,150 @@ if (csgOK) {
     && !/\.slv[A-Z\s{]|\.uwHit/.test(ih));
 }
 
+section('剖面分切：手動放孔、孔位圖（第二輪第五批 5c，2026-10-24）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md` 5c；kang 2026-10-24「方案二孔位圖，一根手動的孔從點的位置往上下找連續放得下的片（可以再縮短），預設＋可以調照表」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const PG = await import('../js/slice/pegs.js');
+  const SM = await import('../js/view/stackModel.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const O = { d: 0.5, gap: 0.8 }, need = 0.25 + 0.8;
+  const key = ps => ps.map(p => `${p.x},${p.y}`).sort().join('|');
+  // 下面一根粗柱子（10×6×10）、上面一根細柱子（1.5×4×1.5，靠角落）：(0,0) 只串得起下面 6 片；(4,−4) 串得起全部 10 片
+  const low = prim.buildPrim('box', { w: 10, h: 6, d: 10 }).transformed(T(0, 3, 0)), top = prim.buildPrim('box', { w: 3, h: 4, d: 3 }).transformed(T(3.5, 8, 3.5));
+  const r = sect.sliceMany([low, top], { axis: 'y', bands: [{ t: 1, n: '' }] });
+  const c = PG.fitRun(r.slices, 0, 0, need), e = PG.fitRun(r.slices, 3.5, -3.5, need), s8 = PG.fitRun(r.slices, 0, 0, need, 8), s3 = PG.fitRun(r.slices, 0, 0, need, 3);
+  ok('★★★ 點一下 ⇒ 往上下找連續放得下的片：(0, 0) 第 1～6 片；角落 (3.5, −3.5) 第 1～10 片；從第 3 片找 ⇒ 1～6；從第 8 片找（那片放不下）⇒ 不行',
+    c && c.from === 1 && c.to === 6 && e && e.from === 1 && e.to === 10 && s3 && s3.from === 1 && s3.to === 6 && s8 === null, JSON.stringify([c, e, s3, s8]));
+  ok('★★ 每一片都沒料的地方 ⇒ 不行', PG.fitRun(r.slices, 30, 30, need) === null);
+
+  // 自動換成手動：畫出來一模一樣（有料的片每一片的孔一樣、第一個孔一樣 —— 層號印在它下面）
+  const own = f => io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/' + f), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  const eq = [];
+  for (const f of ['實驗T10/獅子頭.json', '實驗T8/狐狸頭.json', '實驗T3/收納盒.json', '實驗T4/法蘭.json']) {
+    const rr = sect.sliceMany(own(f), { axis: 'y' });
+    const auto = PG.findPegs(rr.slices, { ...O, counts: [2] });
+    const man = PG.manualPegs(rr.slices, PG.holesFromAuto(auto, rr.slices), O);
+    const solid = rr.slices.filter(s => s.loops.length);
+    eq.push(solid.every(s => key(PG.pegsForSlice(auto, s)) === key(PG.pegsForSlice(man, s))
+      && JSON.stringify(PG.pegsForSlice(auto, s)[0] || null) === JSON.stringify(PG.pegsForSlice(man, s)[0] || null))
+      && man.skipped.join() === auto.skipped.join());
+  }
+  ok('★★★ 按「手動放孔」：自動的孔換成手動的一份，kang 的獅子頭、狐狸頭、收納盒、法蘭每一片有料的片孔都一樣、第一個孔一樣、沒孔的片一樣', eq.every(Boolean), eq.join());
+
+  // kang 的獅子頭：補一根短桿（沙箱找到的位置）⇒ 第 35 片也串起來；36～38 窄、講要調孔徑
+  const lion = own('實驗T10/獅子頭.json');
+  const rl = sect.sliceMany(lion, { axis: 'y' });
+  const autoL = PG.findPegs(rl.slices, { ...O, counts: [2] });
+  const holesL = PG.holesFromAuto(autoL, rl.slices);
+  const run = PG.fitRun(rl.slices, -5.67, -10.28, need);
+  const mL = PG.manualPegs(rl.slices, [...holesL, { x: -5.67, y: -10.28, ...run }], O);
+  const s35 = rl.slices.find(s => s.index === 35);
+  const wL = mL.warnings.find(w => /沒有孔/.test(w)) || '';
+  ok('★★★ kang 的獅子頭補一根 (−5.67, −10.28) ⇒ 穿過第 4～35 片；第 35 片有孔；沒孔的只剩 36～38，講「窄到放不下這個孔 —— 要把孔徑或淨距調小」',
+    run.from === 4 && run.to === 35 && PG.pegsForSlice(mL, s35).length === 1 && mL.skipped.join() === '36,37,38' && mL.narrow.join() === '36,37,38'
+    && /^第 36~38 片沒有孔/.test(wL) && /窄到放不下這個孔 —— 要把孔徑或淨距調小/.test(wL), wL.slice(0, 60));
+  ok('★★ 第一個孔 ＝ 穿過最多片的那一根（層號印在它下面）：第 20 片的第一個孔是自動的孔①', JSON.stringify(PG.pegsForSlice(mL, rl.slices.find(s => s.index === 20))[0]) === JSON.stringify({ x: autoL.base.x, y: autoL.base.y }));
+  // 改了淨距 ⇒ 孔留著、重新檢查；放不下的片不打、講出來
+  const m3 = PG.manualPegs(rl.slices, holesL, { d: 0.5, gap: 2 });
+  const s1 = rl.slices.find(s => s.index === 1);
+  ok('★★★ 改了淨距（0.8 → 2）：手動的孔留著、重新檢查 ⇒「孔 1 在第 1、34 片放不下…那幾片不打這個孔」；第 1 片真的沒鑽',
+    m3.holes.length === 2 && m3.holes[0].miss.join() === '1,34' && /^手動的孔：孔 1 在第 1、34 片放不下/.test(m3.warnings[0] || '') && PG.pegsForSlice(m3, s1).length === 0, (m3.warnings[0] || '').slice(0, 60));
+  ok('★★ 片號超出現在的片數 ⇒ 縮回來（分段改少了）', (() => { const m = PG.manualPegs(r.slices, [{ x: 3.5, y: -3.5, from: 1, to: 40 }], O); return m.holes[0].to === 10 && m.holes[0].drilled.length === 10; })());
+  ok('★★ 一根都沒有 ⇒ 每一片都講沒有孔，⛔ 當掉', (() => { const m = PG.manualPegs(r.slices, [], O); return m.ok && m.skipped.length === 10 && m.base === null && PG.pegsForSlice(m, r.slices[0]).length === 0; })());
+
+  // 存檔：手動的孔照樣畫在切割層
+  const mB = PG.manualPegs(r.slices, [{ x: 3.5, y: -3.5, from: 1, to: 10 }, { x: 0, y: 0, from: 1, to: 6 }], O);
+  const fr = sect.stackBounds(r.slices);
+  const dxf = sliceDXF(r.slices, { unit: 'mm', origin: { x: fr.minX, y: fr.minY }, frame: { w: fr.w, h: fr.h }, pegsOf: s => PG.pegsForSlice(mB, s), pegD: 0.5, axis: 'y' });
+  const lay = [...dxf.matchAll(/CIRCLE\s*\r?\n\s*8\s*\r?\n([^\r\n]+)/g)].map(x => x[1].trim());
+  ok('★★★ 存 DXF：手動的孔照樣在切割層（10 片 × 角落那根 ＋ 下面 6 片 × 中間那根 ＝ 16 個孔，全部在 CUT_T10）', lay.length === 16 && lay.every(l => l === 'CUT_T10'), lay.length + ' ' + [...new Set(lay)].join());
+
+  // 孔位圖：每一格串得起幾片
+  const map = PG.holeMap(r.slices, O);
+  const at = (x, y) => map.counts[Math.floor((y - map.box.minY) / map.step) * map.xs.length + Math.floor((x - map.box.minX) / map.step)];
+  ok('★★★ 孔位圖：中間 (0, 0) 串得起 6 片、角落 (3.5, −3.5) 10 片、太靠邊 0 片', at(0, 0) === 6 && at(3.5, -3.5) === 10 && at(-4.9, 4.9) === 0, `${at(0, 0)} ${at(3.5, -3.5)} ${at(-4.9, 4.9)}`);
+  const mapL = PG.holeMap(rl.slices, O);
+  ok('★★ kang 的獅子頭的孔位圖：最多一格串得起 34 片（跟自動找到的一樣多）', Math.max(...mapL.counts) === 34 && mapL.n === 38);
+
+  // 立體預覽的桿子
+  const st = SM.buildStack(r.slices, 'y', { rods: [{ x: 3.5, y: -3.5, from: 1, to: 10, manual: true }, { x: 0, y: 0, from: 1, to: 6, manual: false }], rodD: 0.5 });
+  const rods = st.group.children.filter(o => o.userData.rod);
+  const bb = rods.map(o => new THREE.Box3().setFromObject(o));
+  ok('★★★ 立體預覽畫桿子：兩根；角落那根藍（手動）、從 y 0 到 10 穿過去、在世界 (3.5, ?, 3.5)；中間那根紫（自動）到 6',
+    rods.length === 2 && rods[0].material.color.getHex() === SM.STACK3D_COLORS.rodManual && rods[1].material.color.getHex() === SM.STACK3D_COLORS.rod
+    && bb[0].min.y < 0 && bb[0].max.y > 10 && Math.abs((bb[0].min.x + bb[0].max.x) / 2 - 3.5) < 1e-6 && Math.abs((bb[0].min.z + bb[0].max.z) / 2 - 3.5) < 1e-6
+    && bb[1].max.y > 6 && bb[1].max.y < 7, bb.map(b => b.max.y.toFixed(2)).join());
+  ok('★★ 只看第 7～10 片 ⇒ 中間那根（只到第 6 片）⛔ 畫', SM.buildStack(r.slices, 'y', { from: 7, to: 10, rods: [{ x: 0, y: 0, from: 1, to: 6 }] }).group.children.filter(o => o.userData.rod).length === 0);
+
+  const sp = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), pv = readFileSync(join(here, '../js/ui/pegMapView.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 讀程式守著：孔位圖只建一個、接在定位孔說明後面；預設自動（沒有 manualPegs）；新建、開檔清掉；換切片方向清掉；Delete 只在選到孔時刪、⛔ 往下傳；孔位圖按了才算、先講「正在算」；樣式由程式自己帶',
+    (sp.match(/new PegMapView\(/g) || []).length === 1 && /this\.body\.appendChild\(this\.pegMap\.el\);\s*this\.pegMap\.refresh\(\);/.test(sp)
+    && /this\.opt\.manualPegs = null;\s*\/\/ 5c/.test(sp) && /_runNow\(\) \{[\s\S]{0,200}if \(this\.opt\.manualPegs && this\.opt\.manualPegs\.axis !== this\.opt\.axis\) this\.opt\.manualPegs = null;\s*save\(this\.opt\);/.test(sp)
+    && /this\.pegMap\.onKey\(e\)\) \{ e\.preventDefault\(\); e\.stopImmediatePropagation\(\); \}/.test(sp)
+    && /正在算孔位圖/.test(pv) && /setTimeout\(\(\) => \{\s*this\.map = holeMap/.test(pv) && /_build\(\) \{\s*ensureStyle\(\);/.test(pv) && !/\.slm[A-Za-z\s{]/.test(ih));
+}
+
+if (csgOK) {
+  // 5c 本機看到：只有短桿的那一片，卡片標題寫「孔① 通到底，每一片都有」⇒ 手動的時候寫每一根穿過第幾片
+  const PG = await import('../js/slice/pegs.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const low = prim.buildPrim('box', { w: 10, h: 6, d: 10 }).transformed(T(0, 3, 0)), top = prim.buildPrim('box', { w: 3, h: 4, d: 3 }).transformed(T(3.5, 8, 3.5));
+  const r = sect.sliceMany([low, top], { axis: 'y', bands: [{ t: 1, n: '' }] });
+  const m = PG.manualPegs(r.slices, [{ x: 0, y: 0, from: 1, to: 6 }, { x: 3.5, y: -3.5, from: 1, to: 10 }], { d: 0.5, gap: 0.8 });
+  const s3 = r.slices.find(s => s.index === 3), s8 = r.slices.find(s => s.index === 8);
+  const sp3 = PG.pegSpans(m, s3), sp8 = PG.pegSpans(m, s8);
+  const t3 = sliceTitleLines(s3, { pegs: PG.pegsForSlice(m, s3), pegSpans: sp3, pegD: 0.5 }).find(l => /定位孔/.test(l)) || '';
+  const t8 = sliceTitleLines(s8, { pegs: PG.pegsForSlice(m, s8), pegSpans: sp8, pegD: 0.5 }).find(l => /定位孔/.test(l)) || '';
+  ok('★★★ 手動的孔：卡片、SVG、列印的標題寫每一根穿過第幾片（第 3 片「孔 1 穿過第 1～10 片、孔 2 穿過第 1～6 片」；第 8 片只有一根）、⛔ 寫「通到底」',
+    t3 === '定位孔 2 個（手動）　⌀0.5 cm　孔 1 穿過第 1～10 片、孔 2 穿過第 1～6 片' && t8 === '定位孔 1 個（手動）　⌀0.5 cm　孔 1 穿過第 1～10 片' && !/通到底/.test(t3 + t8), t3 + ' / ' + t8);
+  ok('★★ 自動的孔照舊的字（pegSpans 是 null）', PG.pegSpans(PG.findPegs(r.slices, { d: 0.5, gap: 0.8 }), s3) === null);
+  const sp = (await import('node:fs')).readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../js/ui/slicePanel.js'), 'utf8');
+  ok('★★ 讀程式守著：卡片、存 SVG、列印三個地方都給 pegSpans', (sp.match(/pegSpans: pegSpans\(this\.pegs, (s|slice)\)/g) || []).length === 3);
+}
+
+if (csgOK) {
+  // 改壞時沒抓到的三處（在複本裡改壞：取第一段不是最長、中間斷開不分開、第一個孔不是最長的）⇒ 補一個「中間一片很細的脖子」
+  const PG = await import('../js/slice/pegs.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const O = { d: 0.5, gap: 0.8 }, need = 1.05;
+  const A = prim.buildPrim('box', { w: 10, h: 2, d: 10 }).transformed(T(0, 1, 0)), neck = prim.buildPrim('box', { w: 1, h: 1, d: 1 }).transformed(T(0, 2.5, 0)), B = prim.buildPrim('box', { w: 10, h: 7, d: 10 }).transformed(T(0, 6.5, 0));
+  const r = sect.sliceMany([A, neck, B], { axis: 'y', bands: [{ t: 1, n: '' }] });
+  const run = PG.fitRun(r.slices, 0, 0, need);
+  ok('★★★ 點一下（沒給從哪一片）：(0, 0) 串得起第 1～2 片和第 4～10 片（第 3 片是很細的脖子）⇒ 取最長的那一段 4～10', run && run.from === 4 && run.to === 10, JSON.stringify(run));
+  const auto = PG.findPegs(r.slices, { ...O, counts: [2] });
+  const holes = PG.holesFromAuto(auto, r.slices);
+  const man = PG.manualPegs(r.slices, holes, O);
+  ok('★★★ 自動的孔中間斷開（第 3 片不打孔）⇒ 換成手動時一個孔位分成兩根（1～2、4～10），⛔ 一根跨過去再說第 3 片放不下',
+    auto.skipped.join() === '3' && holes.length === 2 * auto.bands[0].pegs.length && holes.every(h => (h.from === 1 && h.to === 2) || (h.from === 4 && h.to === 10))
+    && !man.warnings.some(w => /^手動的孔：/.test(w)), JSON.stringify(holes.map(h => [h.from, h.to])));
+  const m2 = PG.manualPegs(r.slices, [{ x: 0, y: 0, from: 4, to: 6 }, { x: 2, y: 2, from: 1, to: 10 }], O);
+  const s5 = r.slices.find(s => s.index === 5);
+  ok('★★ 孔照「穿過最多片」排：短的那根先給、長的後給 ⇒ 第 5 片的第一個孔還是長的那根（層號印在它下面）',
+    JSON.stringify(PG.pegsForSlice(m2, s5)[0]) === JSON.stringify({ x: 2, y: 2 }));
+}
+
+if (csgOK) {
+  // 改壞時沒抓到的兩處（孔位圖沒扣淨距、桿子沒轉成切片方向）⇒ 補管子（凹進去的形狀）與切 X 的桿子
+  const PG = await import('../js/slice/pegs.js');
+  const SM = await import('../js/view/stackModel.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const tube = prim.buildPrim('tube', { rOuter: 10, rInner: 6, h: 5, seg: 48 }).transformed(T(0, 2.5, 0));
+  const rt = sect.sliceMany([tube], { axis: 'y', bands: [{ t: 1, n: '' }] });
+  const map = PG.holeMap(rt.slices, { d: 0.5, gap: 0.8 });
+  const at = (x, y) => map.counts[Math.floor((y - map.box.minY) / map.step) * map.xs.length + Math.floor((x - map.box.minX) / map.step)];
+  ok('★★★ 孔位圖要扣淨距：管子的牆上離內圈只有 0.4 cm 的地方 ⇒ 0 片；牆正中間（離內外圈各 2 cm）⇒ 5 片；管子中間的洞 ⇒ 0 片',
+    at(6.4, 0) === 0 && at(8, 0) === 5 && at(0, 0) === 0, `${at(6.4, 0)} ${at(8, 0)} ${at(0, 0)}`);
+  const box = prim.buildPrim('box', { w: 10, h: 4, d: 6 }).transformed(T(0, 2, 0));
+  const rx = sect.sliceMany([box], { axis: 'x', bands: [{ t: 1, n: '' }] });
+  const st = SM.buildStack(rx.slices, 'x', { rods: [{ x: 0, y: 2, from: 1, to: 10 }], rodD: 0.5 });
+  const rod = st.group.children.find(o => o.userData.rod);
+  const bb = new THREE.Box3().setFromObject(rod);
+  ok('★★★ 切 X 的時候桿子躺著（沿 X 穿過 10 片）：長的那一邊在 X、從 −5 穿到 5', bb.max.x - bb.min.x > 10 && bb.max.y - bb.min.y < 1 && bb.max.z - bb.min.z < 1 && bb.min.x < -5 && bb.max.x > 5,
+    [bb.min.x, bb.max.x, bb.max.y - bb.min.y].map(v => v.toFixed(2)).join());
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

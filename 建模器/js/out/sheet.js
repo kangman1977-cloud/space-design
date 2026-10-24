@@ -1282,7 +1282,11 @@ export function sliceTitleLines(slice, opt = {}) {
      * 其餘的孔只屬於這一段 —— 這件事一定要寫出來，
      * 不然現場會拿一根長桿子想穿過全部，穿到一半才發現穿不過去。
      */
-    out.push(`定位孔 ${opt.pegs.length} 個　⌀${fmt(opt.pegD || 0)} cm`
+    /** 5c 手動放孔：每一根穿過第幾片到第幾片（`slice/pegs.js` `pegSpans()`）—— ⛔ 寫「通到底」*/
+    const spans = opt.pegSpans && opt.pegSpans.length === opt.pegs.length && opt.pegSpans.every(Boolean) ? opt.pegSpans : null;
+    if (spans) out.push(`定位孔 ${opt.pegs.length} 個（手動）　⌀${fmt(opt.pegD || 0)} cm　`
+      + spans.map((s, i) => `孔 ${i + 1} 穿過第 ${s.from}～${s.to} 片`).join('、'));
+    else out.push(`定位孔 ${opt.pegs.length} 個　⌀${fmt(opt.pegD || 0)} cm`
       + (opt.pegs.length > 1
         ? '　孔① 通到底（每一片都有），其餘只穿得過同一段的片'
         : '　孔① 通到底，每一片都有'));

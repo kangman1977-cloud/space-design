@@ -251,9 +251,181 @@ export function findPegs(slices, opt = {}) {
   };
 }
 
+// ═══════════════════════════════════════════════════════
+//  手動放孔（2026-10-24，第二輪第五批 5c）
+// ═══════════════════════════════════════════════════════
+/**
+ * 🔴 **手動放孔**（kang 2026-10-24「5c 照你的建議：方案二孔位圖，一根手動的孔從點的位置往上下找連續放得下的片
+ * （可以再縮短），預設＋可以調照表」→ `規格\建模器-剖面分切.md`「手動放孔」）。
+ * 一根手動的孔 ＝ `{ x, y, from, to }`：平面上一個位置＋穿過第 from～to 片（片號）。
+ * ⭐ 自動的照舊當預設；按「手動放孔」才把自動的孔換成手動的（`holesFromAuto()`），之後改的都是這一份。
+ * ⭐ 業界：Slicer for Fusion 360 在模型上方一塊整疊共用的平面上點、拖、刪；Lamina 在 3D 裡點、打 x、y 數字。
+ */
+
+/**
+ * 這個位置串得起哪幾片：從 `seed`（片號）往上下找「連續放得下」的片；沒給 `seed` ⇒ 最長的那一段（一樣長取前面的）。
+ * @returns {{from:number, to:number}|null} 片號；`seed` 那一片放不下、或一片都放不下 ⇒ null
+ */
+export function fitRun(slices, x, y, need, seed = null) {
+  const ok = slices.map(s => !!(s.loops && s.loops.length) && insideDepth(s.loops, x, y) >= need);
+  if (seed != null) {
+    const k = slices.findIndex(s => s.index === seed);
+    if (k < 0 || !ok[k]) return null;
+    let a = k, b = k;
+    while (a > 0 && ok[a - 1]) a--;
+    while (b < ok.length - 1 && ok[b + 1]) b++;
+    return { from: slices[a].index, to: slices[b].index };
+  }
+  let best = null, cur = -1;
+  ok.forEach((v, i) => {
+    if (!v) { cur = -1; return; }
+    if (cur < 0) cur = i;
+    if (!best || i - cur > best[1] - best[0]) best = [cur, i];
+  });
+  return best ? { from: slices[best[0]].index, to: slices[best[1]].index } : null;
+}
+
+/**
+ * 自動找的孔換成手動的一份：每一個孔位、在連續有它的那幾片 ⇒ 一根（中間斷開就分成兩根）。
+ * 換完之後畫出來跟自動的一模一樣（測試守著）。
+ */
+export function holesFromAuto(res, slices) {
+  if (!res || !res.ok) return [];
+  const holes = [];
+  const key = p => `${p.x},${p.y}`;
+  const seen = new Map();
+  for (const s of slices) for (const p of pegsForSlice(res, s)) if (!seen.has(key(p))) seen.set(key(p), p);
+  for (const p of seen.values()) {
+    let run = null;
+    for (const s of slices) {
+      const has = pegsForSlice(res, s).some(q => key(q) === key(p));
+      if (has) { if (!run) run = { x: p.x, y: p.y, from: s.index, to: s.index, auto: true }; else run.to = s.index; }
+      else if (run) { holes.push(run); run = null; }
+    }
+    if (run) holes.push(run);
+  }
+  return holes;
+}
+
+/**
+ * 用手動的孔排出每一片要鑽哪幾個孔 —— 回傳的樣子跟 `findPegs()` 一樣，存檔、列印、卡片照舊用 `pegsForSlice()`。
+ * ⭐ 改了孔徑、淨距、板厚、分段之後照樣叫它：孔**留著、重新檢查**，範圍裡放不下的片那根桿子就斷在那裡（⛔ 鑽 ——
+ * 鑽下去就切到料外）、講出來。片號超出現在的片數 ⇒ 縮回來。
+ */
+export function manualPegs(slices, holes, opt = {}) {
+  const o = { ...PEG_DEFAULTS, ...opt };
+  const need = o.d / 2 + o.gap;
+  const solid = slices.filter(s => s.loops && s.loops.length);
+  const empty = slices.filter(s => !s.loops || !s.loops.length).map(s => s.index);
+  const last = slices.length ? slices[slices.length - 1].index : 0;
+  const out = [];
+  const broken = [];
+  holes.forEach((h, k) => {
+    const from = Math.max(1, Math.min(h.from, h.to)), to = Math.min(last, Math.max(h.from, h.to));
+    const drilled = [], miss = [];
+    for (const s of slices) {
+      if (s.index < from || s.index > to || !s.loops || !s.loops.length) continue;
+      const d = insideDepth(s.loops, h.x, h.y);
+      if (d >= need) drilled.push(s.index); else miss.push(s.index);
+    }
+    out.push({ x: h.x, y: h.y, from, to, auto: !!h.auto, drilled, miss, no: k + 1 });
+    if (miss.length) broken.push(`孔 ${k + 1} 在第 ${listNums(miss)} 片放不下`);
+  });
+  /** 每一片的孔：穿過最多片的那一根排第一個（層號印在它下面 —— 它是最接近「通到底」的那根）*/
+  const order = out.slice().sort((a, b) => b.drilled.length - a.drilled.length || a.no - b.no);
+  const bySlice = new Map();
+  for (const h of order) for (const i of h.drilled) {
+    if (!bySlice.has(i)) bySlice.set(i, []);
+    bySlice.get(i).push({ x: h.x, y: h.y });
+  }
+  const skipped = solid.filter(s => !bySlice.has(s.index)).map(s => s.index);
+  const narrow = skipped.filter(i => {
+    const s = slices.find(q => q.index === i);
+    const g = makeGrid(stackBounds([s]), o.grid, need);
+    return !g.pts.some(p => insideDepth(s.loops, p.x, p.y) >= need);
+  });
+  const warnings = [], notes = [];
+  if (broken.length) warnings.push(`手動的孔：${broken.join('；')}（離料邊不到淨距 ${r2(o.gap)} cm）—— 那幾片不打這個孔，桿子斷在那裡。`);
+  if (empty.length) warnings.push(`第 ${listNums(empty)} 片是空的，串不起來。`);
+  if (skipped.length) {
+    const wide = skipped.filter(i => !narrow.includes(i));
+    warnings.push(`第 ${listNums(skipped)} 片沒有孔，疊的時候靠輪廓或層號對齊`
+      + (narrow.length ? `（第 ${listNums(narrow)} 片窄到放不下這個孔 —— 要把孔徑或淨距調小` : '（')
+      + (wide.length ? `${narrow.length ? '；' : ''}第 ${listNums(wide)} 片放得下，在孔位圖上點一下就能補一根` : '')
+      + '）。');
+  }
+  const tight = [];
+  for (const s of solid) {
+    const ps = bySlice.get(s.index);
+    if (!ps) continue;
+    const d = minDepth([s], ...ps);
+    if (d < need * 1.5) tight.push({ index: s.index, depth: d });
+  }
+  if (tight.length) {
+    warnings.push(`第 ${listNums(tight.map(t => t.index))} 片的孔邊離邊緣只剩 `
+      + `${r2(Math.min(...tight.map(t => t.depth - o.d / 2)))} cm，容易裂。`);
+  }
+  const depths = solid.filter(s => bySlice.has(s.index)).map(s => minDepth([s], ...bySlice.get(s.index)));
+  const base = order.length && order[0].drilled.length ? { x: order[0].x, y: order[0].y } : null;
+  return {
+    ok: true, manual: true,
+    holes: out, bySlice, base, bands: [],
+    need, margin: depths.length ? Math.min(...depths) : -Infinity,
+    empty, tight, warnings, notes, skipped, narrow,
+    holeCount: Math.max(0, ...[...bySlice.values()].map(v => v.length))
+  };
+}
+
+/**
+ * 孔位圖：整疊共用的格點上，每一點串得起幾片（全部片疊在一起從上面看；越多片越綠）。
+ * ⚠ 汽車那種大輪廓約 4 秒（沙箱量：90 × 90 格、12 片、3 萬個點）⇒ 按「手動放孔」才算、先講「正在算」。
+ * @returns {{box, step, xs:number[], ys:number[], counts:Int16Array, n:number}}
+ */
+export function holeMap(slices, opt = {}) {
+  const o = { ...PEG_DEFAULTS, ...opt };
+  const need = o.d / 2 + o.gap;
+  const solid = slices.filter(s => s.loops && s.loops.length);
+  const box = stackBounds(solid);
+  const n = Math.max(4, o.grid);
+  const step = Math.max(box.w, box.h) / n;
+  const xs = [], ys = [];
+  for (let x = box.minX + step / 2; x < box.maxX; x += step) xs.push(x);
+  for (let y = box.minY + step / 2; y < box.maxY; y += step) ys.push(y);
+  const boxes = solid.map(s => stackBounds([s]));
+  const counts = new Int16Array(xs.length * ys.length);
+  ys.forEach((y, j) => xs.forEach((x, i) => {
+    let c = 0;
+    for (let k = 0; k < solid.length; k++) {
+      const b = boxes[k];
+      if (x < b.minX + need || x > b.maxX - need || y < b.minY + need || y > b.maxY - need) continue;
+      if (insideDepth(solid[k].loops, x, y) >= need) c++;
+    }
+    counts[j * xs.length + i] = c;
+  }));
+  return { box, step, xs, ys, counts, n: solid.length };
+}
+
+/**
+ * 手動的時候，這一片的每一個孔穿過第幾片到第幾片（跟 `pegsForSlice()` 同一個順序）—— 卡片、SVG、列印的標題寫出來，
+ * 現場才知道每一根桿子要多長（5c 本機看到：只有短桿的那一片標題寫「孔① 通到底，每一片都有」）。自動的 ⇒ null（照舊的字）。
+ */
+export function pegSpans(res, slice) {
+  if (!res || !res.ok || !res.manual) return null;
+  return pegsForSlice(res, slice).map(p => {
+    const h = res.holes.find(q => q.x === p.x && q.y === p.y && q.drilled.includes(slice.index));
+    if (!h) return null;
+    let a = slice.index, b = slice.index;
+    while (h.drilled.includes(a - 1)) a--;
+    while (h.drilled.includes(b + 1)) b++;
+    return { from: a, to: b };
+  });
+}
+
 /** 這一片要鑽哪幾個孔 ＝ 它所屬那一段的孔。孔①永遠在第一個。 */
 export function pegsForSlice(res, slice) {
   if (!res || !res.ok) return [];
+  if (res.manual) return (res.bySlice.get(slice.index) || []).slice();     // 5c：手動的孔
+
   if (res.skipped && res.skipped.includes(slice.index)) return [];     // 串不起來、不打孔的片（②-6）
   const b = res.bands.find(q => q.band === (slice.band || 0));
   return b ? b.pegs : [{ ...res.base }];

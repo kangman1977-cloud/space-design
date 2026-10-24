@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { AXES } from '../slice/section.js';
 
 /** 跟排版預覽同一組顏色（`out/sheet.js` 的 markLoose／markWeak）*/
-export const STACK3D_COLORS = { wood: 0xc9a77a, loose: 0xe74c3c, weak: 0xef9f27, ghost: 0xa9c8f0 };
+export const STACK3D_COLORS = { wood: 0xc9a77a, loose: 0xe74c3c, weak: 0xef9f27, ghost: 0xa9c8f0, rod: 0x8e44ad, rodManual: 0x2f7fe0 };
 
 /** 淡淡的原模型：超過這麼多個三角形預設不疊（汽車 54.8 萬面要在小畫面再放一份）；勾了照樣疊 */
 export const GHOST_MAX_TRIS = 50000;
@@ -53,9 +53,10 @@ export function slicePieces(slice) {
  * 把切好的一疊建成 3D。
  * @param {object[]} slices `sliceMany()` 的 `slices`
  * @param {string} axis 'x'|'y'|'z'
- * @param {{from?:number, to?:number, explode?:boolean, faint?:boolean}} opt
+ * @param {{from?:number, to?:number, explode?:boolean, faint?:boolean, rods?:object[], rodD?:number}} opt
  *   from／to：只看第幾片到第幾片（片號，含頭尾；沒給 ＝ 全部）；
- *   explode：片跟片之間空一點（平均板厚的 0.8 倍）；faint：沒問題的片變淡（只看紅黃的）
+ *   explode：片跟片之間空一點（平均板厚的 0.8 倍）；faint：沒問題的片變淡（只看紅黃的）；
+ *   rods：定位孔的桿子 `[{x, y, from, to, manual}]`（5c，`pegs.js` `holesFromAuto()` 排好的）、rodD：孔徑
  * @returns {{group: THREE.Group, rings: {kind:'loose'|'weak', pos: THREE.Vector3, r:number}[], box: THREE.Box3, tris:number, shown:number}}
  *   group 裡的每一塊板是一個 Mesh，`userData.slice` ＝ 片號（點一片跳到它的卡片用）
  */
@@ -141,6 +142,24 @@ export function buildStack(slices, axis, opt = {}) {
       rings.push({ kind: 'weak', pos: at(g.x, g.y, s.z1 + k * gap + gap / 2), r: size * RING_MIN_FRAC });
     }
   });
+
+  /**
+   * 5c：定位孔的桿子（只看、⛔ 在 3D 裡放）—— 從那一段最下面一片的底到最上面一片的頂；自動的紫、手動的藍（跟孔位圖同色）。
+   * ⚠ 畫的粗細至少整疊的 1.2%：0.5 cm 的桿子在 38 cm 的獅子頭上細到看不見（沙箱對照圖撞過）。
+   */
+  for (const r of opt.rods || []) {
+    const ka = slices.findIndex(s => s.index === Math.max(r.from, from)), kb = slices.findIndex(s => s.index === Math.min(r.to, to));
+    if (ka < 0 || kb < 0 || ka > kb) continue;
+    const z0 = slices[ka].z0 + ka * gap, z1 = slices[kb].z1 + kb * gap;
+    const p0 = at(r.x, r.y, z0), p1 = at(r.x, r.y, z1);
+    const rad = Math.max((opt.rodD || 0.5) / 2, size * 0.006);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad, p0.distanceTo(p1) + size * 0.02, 12),
+      new THREE.MeshLambertMaterial({ color: r.manual ? STACK3D_COLORS.rodManual : STACK3D_COLORS.rod }));
+    m.position.copy(p0.clone().add(p1).multiplyScalar(0.5));
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), w.clone());
+    m.userData.rod = true;
+    group.add(m);
+  }
 
   if (line.length) {
     const lg = new THREE.BufferGeometry();

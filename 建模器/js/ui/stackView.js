@@ -69,6 +69,7 @@ export class StackView {
     this.range = { from: '', to: '' };      // 跟模型走（新建、開檔回到全部）
     this.ghostBig = false;                   // 大模型勾了原模型 —— 只記這一次
     this.slices = null; this.axis = 'y'; this.meshes = [];
+    this.rods = []; this.rodD = 0.5;          // 5c：定位孔的桿子（slicePanel 排好給）
     this.stack = null; this.ghost = null; this.sprites = [];
     this._frameKey = null;
     this._build();
@@ -163,6 +164,9 @@ export class StackView {
   }
 
   /** 切完一次就給新的結果（slicePanel._runNow）*/
+  /** 5c：定位孔的桿子 `[{x, y, from, to, manual}]`、孔徑 —— 下一次 refresh() 畫 */
+  setRods(rods, d) { this.rods = rods || []; this.rodD = d || 0.5; }
+
   setResult(slices, axis, meshes) {
     const axisChanged = axis !== this.axis;
     this.slices = slices; this.axis = axis; this.meshes = meshes || [];
@@ -197,7 +201,7 @@ export class StackView {
     for (const s of this.sprites) { this.scene.remove(s); s.material.dispose(); }
     this.sprites = [];
     const from = this.range.from || 1, to = this.range.to || n;
-    this.stack = buildStack(this.slices, this.axis, { from, to, explode: !!this.opt.explode, faint: !!this.opt.faint });
+    this.stack = buildStack(this.slices, this.axis, { from, to, explode: !!this.opt.explode, faint: !!this.opt.faint, rods: this.rods, rodD: this.rodD });
     this.scene.add(this.stack.group);
     for (const g of this.stack.rings) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.ring[g.kind], depthTest: false, transparent: true }));
