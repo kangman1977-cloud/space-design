@@ -19,7 +19,7 @@
  */
 
 import * as THREE from 'three';
-import { csgReady, slabShadow, mergeLoops, rowsToLoops } from '../build/bool.js';
+import { csgReady, slabShadow, mergeLoops, rowsToLoops, overlapArea } from '../build/bool.js';
 
 /**
  * 三個切片軸。
@@ -96,6 +96,8 @@ const SNAP = 1e6;
 export const SCAN_H = 0.01, SCAN_EPS = 0.005;
 /** 比這個還小（外框短邊，cm）的塊要提醒（第二輪 ②-7）；面板「小塊提醒」可以改 */
 export const TINY_PIECE_CM = 1;
+/** 相鄰兩片黏到的面積比這個小（cm²）就提醒「只黏一點點」（第二輪第五批 5a）；面板「黏著提醒」可以改 */
+export const MIN_GLUE_CM2 = 0.25;
 /** 斷線接頭尾：每條尾巴找最近的幾個頭來比 */
 const BRIDGE_K = 8;
 
@@ -691,6 +693,26 @@ export function sliceMany(meshes, opt = {}) {
   }
 
   /**
+   * 🔴 **疊起來接不接得到主體**（2026-10-24，第二輪第五批 5a ④-2；kang「只講不刪，只黏一點點的門檻預設 0.25 cm² 可以改，排版預覽標顏色」）。
+   * ⚠ 要布林函式庫（兩塊疊在一起的面積）；沒載入就不查。
+   */
+  let stack = null;
+  if (canMerge && slices.length > 1) {
+    stack = stackCheck(slices, { minGlueCm2: opt.minGlueCm2 });
+    if (stack.loose.length) {
+      const at = [...new Set(stack.loose.map(p => p.slice.index))];
+      warnings.push(`第 ${listNums(at)} 片有 ${stack.loose.length} 塊疊起來接不到主體（上下兩片都沒有黏到它，或只黏到其他掉下來的塊）`
+        + ' —— 切下來會變成散的小零件，排版預覽標成紅色；如果那是本來就分開的零件（例如另一個物件）就不用管。');
+    }
+    if (stack.weak.length) {
+      const pairs = stack.weak.map(w => `${w.a.slice.index}、${w.b.slice.index}`);
+      const uniq = [...new Set(pairs)];
+      warnings.push(`第 ${uniq.slice(0, 6).join('；')}${uniq.length > 6 ? ` …等 ${uniq.length} 處` : ''} 片之間只黏到不到 ${r2(stack.minGlue)} cm²`
+        + `（最少 ${r2(Math.min(...stack.weak.map(w => w.area)))} cm²）—— 疊好之後容易從那裡斷，排版預覽標成黃色；門檻在上面「黏著提醒」改。`);
+    }
+  }
+
+  /**
    * 🔴 **照中間切時，片裡面有「台階」要講出來**（2026-10-19，實驗 T2）。
    * ⚠ 一片只取中間那一刀 ⇒ 落在片**裡面**（⛔ 剛好在片與片之間）的水平面，它上下其中一邊的東西
    * 會漏掉或多出一塊 —— 帽簷 0～0.4 cm、板 0～1 cm、中間取 0.5：帽簷整個不見，⛔ 任何提示（漏報）。
@@ -728,6 +750,7 @@ export function sliceMany(meshes, opt = {}) {
     plan,
     slices,
     warnings,
+    stack,              // 疊起來接不接得到主體（5a）；沒查 ⇒ null
     stats: {
       count: slices.length,
       height,
@@ -738,6 +761,64 @@ export function sliceMany(meshes, opt = {}) {
       thickKinds: [...new Set(slices.map(s => r2(s.t)))].sort((a, b) => a - b)
     }
   };
+}
+
+/**
+ * 🔴 **疊起來接不接得到主體**（2026-10-24，第二輪第五批 5a ④-2 → `規格\建模器-剖面分切.md`「接上主體」）。
+ * 業界：Lamina 每一塊都要經由槽、鍵或黏合面接回主體，不連通的列出來、**從不刪**；Slicer for Fusion 360 浮空的片標藍色
+ * （`外部參考-3D列印與剖面分切.md` 5.4）。
+ * 做法：每一片的每一塊（外圈＋它裡面的洞）跟上下相鄰那一片的塊算疊在一起的面積（`bool.js` `overlapArea()`）；
+ * 有疊到 ⇒ 黏得到、連起來；最大（面積加起來最多）那一群是主體，其他的 ＝ 疊起來會掉下來（`loose`）；
+ * 黏到的面積比 `minGlueCm2`（預設 `MIN_GLUE_CM2`）小 ⇒ 只黏一點點（`weak`）。
+ * ⭐ 只講、⛔ 刪；在那幾圈輪廓上記 `loose`／`weak`，排版預覽照著塗顏色（`out/sheet.js` `sliceProgram()` 的 `marks`）。
+ * @returns {{loose: object[], weak: {a, b, area}[], groups: number, minGlue: number}}
+ */
+export function stackCheck(slices, opt = {}) {
+  const minGlue = opt.minGlueCm2 == null ? MIN_GLUE_CM2 : Math.max(0, +opt.minGlueCm2 || 0);
+  const pieces = [];
+  slices.forEach((slice, si) => {
+    const own = slice.loops.filter(l => !l.isHole).map(l => ({ si, slice, loops: [l], area: Math.abs(l.area), box: loopsBounds([l]) }));
+    for (const h of slice.loops.filter(l => l.isHole)) {
+      const q = h.pts[0];
+      let host = null;
+      for (const o of own) if (o.area > Math.abs(h.area) && inLoop(o.loops[0].pts, q.x, q.y) && (!host || o.area < host.area)) host = o;
+      if (host) host.loops.push(h);
+    }
+    for (const o of own) { for (const l of o.loops) { delete l.loose; delete l.weak; } pieces.push(o); }
+  });
+  const up = pieces.map((_, i) => i);
+  const find = i => (up[i] === i ? i : (up[i] = find(up[i])));
+  const weak = [];
+  const bySlice = slices.map((_, si) => pieces.filter(p => p.si === si));
+  for (let si = 0; si + 1 < slices.length; si++) {
+    for (const a of bySlice[si]) {
+      for (const b of bySlice[si + 1]) {
+        if (a.box.maxX < b.box.minX || b.box.maxX < a.box.minX || a.box.maxY < b.box.minY || b.box.maxY < a.box.minY) continue;
+        const area = overlapArea(a.loops.map(l => l.pts), b.loops.map(l => l.pts));
+        if (!(area > 1e-9)) continue;
+        up[find(pieces.indexOf(a))] = find(pieces.indexOf(b));
+        if (area < minGlue) weak.push({ a, b, area });
+      }
+    }
+  }
+  const sum = new Map();
+  pieces.forEach((p, i) => { const g = find(i); sum.set(g, (sum.get(g) || 0) + p.area); });
+  let main = null;
+  for (const [g, a] of sum) if (main === null || a > sum.get(main)) main = g;
+  const loose = pieces.filter((p, i) => find(i) !== main);
+  for (const p of loose) p.loops[0].loose = true;
+  for (const w of weak) { w.a.loops[0].weak = true; w.b.loops[0].weak = true; }
+  return { loose, weak, groups: sum.size, minGlue };
+}
+
+/** 點在不在一圈裡（奇偶）*/
+function inLoop(pts, x, y) {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c;
+  }
+  return c;
 }
 
 /** 一疊片沿切片軸的總外框（排版與定位孔都要用） */

@@ -20373,6 +20373,58 @@ section('3D 列印：列印檢查補齊（牆太薄、懸空、面互相穿過�
     && /'匯出 3MF' : '匯出 STL'/.test(ep) && /this\.opt\.unit !== 'mm' && this\.opt\.format !== '3mf'/.test(ep));
 }
 
+section('剖面分切：疊起來接不接得到主體（第二輪第五批 5a，2026-10-24）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md` 第五批；kang 2026-10-24「先做 5a 接上主體：只講不刪，只黏一點點的門檻預設 0.25 cm² 可以改，排版預覽標顏色」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { overlapArea } = await import('../js/build/bool.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const sq = (x, y, n) => [{ x, y }, { x: x + n, y }, { x: x + n, y: y + n }, { x, y: y + n }];
+  ok('★★ 兩塊疊在一起的面積：疊一角 25、分開 0、有洞的扣掉洞 84', overlapArea([sq(0, 0, 10)], [sq(5, 5, 10)]) === 25 && overlapArea([sq(0, 0, 10)], [sq(20, 0, 10)]) === 0
+    && Math.abs(overlapArea([sq(0, 0, 10), sq(2, 2, 4).reverse()], [sq(0, 0, 10)]) - 84) < 1e-9);
+  const bands = [{ t: 1, n: '' }];
+  // 主體旁邊另一根小柱子（兩個物件，沒碰到）⇒ 小柱子每一片都接不到主體
+  const big = prim.buildPrim('box', { w: 10, h: 10, d: 10 }).transformed(T(0, 5, 0)), post = prim.buildPrim('box', { w: 2, h: 10, d: 2 }).transformed(T(20, 5, 0));
+  const r1 = sect.sliceMany([big, post], { axis: 'y', bands });
+  const w1 = r1.warnings.find(w => /接不到主體/.test(w)) || '';
+  ok('★★★ 方塊旁邊另一根小柱子（沒碰到）⇒「第 1~10 片有 10 塊疊起來接不到主體…排版預覽標成紅色；如果那是本來就分開的零件…就不用管」；主體那塊⛔ 算',
+    r1.stack.loose.length === 10 && r1.stack.loose.every(p => Math.abs(p.area - 4) < 1e-6) && /^第 1~10 片有 10 塊疊起來接不到主體/.test(w1) && /排版預覽標成紅色/.test(w1) && /本來就分開的零件/.test(w1), w1.slice(0, 60));
+  // 上下兩個方塊只疊一個角 0.4 × 0.4 ＝ 0.16 cm²
+  const lo = prim.buildPrim('box', { w: 10, h: 5, d: 10 }).transformed(T(0, 2.5, 0)), hi = prim.buildPrim('box', { w: 10, h: 5, d: 10 }).transformed(T(9.6, 7.5, 9.6));
+  const r2 = sect.sliceMany([lo, hi], { axis: 'y', bands }), r3 = sect.sliceMany([lo, hi], { axis: 'y', bands, minGlueCm2: 0.1 });
+  const w2 = r2.warnings.find(w => /只黏到/.test(w)) || '';
+  ok('★★★ 上下兩個方塊只疊一個角 ⇒ 接得到主體、但「第 5、6 片之間只黏到不到 0.25 cm²（最少 0.16 cm²）…排版預覽標成黃色」；門檻改 0.1 ⇒ ⛔ 講',
+    !r2.stack.loose.length && r2.stack.weak.length === 1 && Math.abs(r2.stack.weak[0].area - 0.16) < 1e-6 && /^第 5、6 片之間只黏到不到 0\.25 cm²（最少 0\.16 cm²）/.test(w2) && /排版預覽標成黃色/.test(w2)
+    && !r3.warnings.some(w => /只黏到/.test(w)), w2.slice(0, 60));
+  // 管子中間的洞裡站一根小柱子（沒碰到管壁）：外框疊在一起、料沒有 ⇒ 柱子照樣掉下來（⛔ 因為外框疊到就算黏、⛔ 忘了扣洞）
+  const tube = prim.buildPrim('tube', { r: 10, ri: 6, h: 10, seg: 32 }).transformed(T(0, 5, 0)), inner = prim.buildPrim('box', { w: 2, h: 10, d: 2 }).transformed(T(0, 5, 0));
+  const rt = sect.sliceMany([tube, inner], { axis: 'y', bands });
+  ok('★★★ 管子的洞裡站一根小柱子（沒碰到）⇒ 柱子 10 塊都接不到主體（外框疊在一起不算、管子的洞要扣掉）', rt.stack.loose.length === 10 && rt.stack.loose.every(p => Math.abs(p.area - 4) < 1e-6), String(rt.stack.loose.length));
+  const rb = sect.sliceMany([big], { axis: 'y', bands });
+  ok('★★ 一個方塊 ⇒ 一群、⛔ 講', rb.stack.groups === 1 && !rb.warnings.some(w => /接不到主體|只黏到/.test(w)));
+  // kang 的獅子頭
+  const lion = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T10/獅子頭.json'), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  const rl = sect.sliceMany(lion, { axis: 'y' });
+  ok('★★★ kang 的獅子頭（切 Y）：第 12、13 片有 4 塊掉下來、4 處只黏一點點（最少 0.04 cm²）',
+    rl.stack.loose.length === 4 && [...new Set(rl.stack.loose.map(p => p.slice.index))].join() === '12,13' && rl.stack.weak.length === 4
+    && rl.warnings.some(w => /^第 12~13 片有 4 塊疊起來接不到主體/.test(w)) && rl.warnings.some(w => /^第 12、13；14、15 片之間只黏到不到 0\.25 cm²（最少 0\.04 cm²）/.test(w)));
+  // 預覽塗顏色：只有 marks 才塗
+  const sl = r1.slices[0];
+  const withMarks = sliceProgram(sl, { marks: true }).items.filter(i => i.t === 'poly'), noMarks = sliceProgram(sl, {}).items.filter(i => i.t === 'poly');
+  const SH = await import('../js/out/sheet.js');
+  ok('★★★ 排版預覽：掉下來的塊塗紅（marks 才塗）；⛔ marks（存 SVG、DXF、列印）⇒ 一塊都⛔ 塗', withMarks.length === 1 && withMarks[0].fill === SH.STACK_LOOSE_FILL && noMarks.length === 0);
+  const wsl = r2.slices.find(x => x.index === 5);
+  ok('★★ 只黏一點點的那一塊塗黃', sliceProgram(wsl, { marks: true }).items.some(i => i.t === 'poly' && i.fill === SH.STACK_WEAK_FILL));
+  const ring = sliceProgram(sl, { marks: true }).items.find(i => i.t === 'circle' && i.style === 'markLoose');
+  ok('★★★ 再圈一個紅圈、至少整片外框的 4%（很小的塊光塗色看不到 —— 本機抓到）；⛔ marks ⇒ ⛔ 圈', !!ring && ring.r >= Math.max(sl.bounds.w, sl.bounds.h) * 0.04 - 1e-9
+    && !sliceProgram(sl, {}).items.some(i => i.style === 'markLoose' || i.style === 'markWeak'));
+  const sp = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), nb = readFileSync(join(here, '../js/out/nest.js'), 'utf8');
+  ok('★★ 讀程式守著：黏著提醒預設 0.25 跟人走、面板一格；只有排版預覽與卡片給 marks（存檔、列印的 _sheets() 不給）',
+    sect.MIN_GLUE_CM2 === 0.25 && /minGlueCm2: MIN_GLUE_CM2,/.test(sp) && /id="slGlue"/.test(sp) && /minGlueCm2: this\.opt\.minGlueCm2 \}/.test(sp)
+    && (sp.match(/this\._sheets\(true\)/g) || []).length === 1 && /_sheets\(marks = false\)/.test(sp) && /marks: true \};/.test(sp) && /marks: !!o\.marks/.test(nb));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

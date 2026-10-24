@@ -88,6 +88,9 @@ export const STYLE = {
    * num 是層號，只給人看。
    */
   peg:  { w: 0.045, minPx: 1.4, dash: null,        color: '#8e44ad', label: '定位孔' },
+  /** 剖面疊起來掉下來的塊（紅圈）、只黏一點點的塊（黃圈）—— 第二輪第五批 5a，**只在畫面預覽**（`sliceProgram()` 的 `marks`），⛔ 進 DXF、SVG */
+  markLoose: { w: 0.06, minPx: 2, dash: null,        color: '#e74c3c', label: '掉下來的塊' },
+  markWeak:  { w: 0.06, minPx: 2, dash: null,        color: '#ef9f27', label: '只黏一點點' },
   num:  { w: 0.020, minPx: 0.9, dash: null,        color: '#b9770e', label: '層號' },
   text: { w: 0.018, minPx: 0.8, dash: null,        color: '#111',  label: '文字' },
   note: { w: 0.018, minPx: 0.8, dash: null,        color: '#888',  label: '註記' }
@@ -718,6 +721,9 @@ function loop(items, pts, style) {
 
 /** 疊在一起的面（`drawProgram()`）：半透明紅 ⇒ 底下的折線、切割線照樣看得到 */
 export const OVERLAP_FILL = 'rgba(231, 76, 60, 0.45)';
+/** 剖面疊起來掉下來的塊（紅）、只黏一點點的塊（黃）—— 第二輪第五批 5a，只在畫面預覽塗 */
+export const STACK_LOOSE_FILL = 'rgba(231, 76, 60, 0.45)';
+export const STACK_WEAK_FILL = 'rgba(239, 159, 39, 0.55)';
 
 /** 拉伸 → 顏色：紅＝拉長、藍＝壓縮、白＝幾乎沒變；5% 以上全色（跟 `樣板-省道打版-點法.html` 同一套）*/
 export function strainColor(e) {
@@ -1183,6 +1189,26 @@ export function sliceProgram(slice, opt = {}) {
    * 共用一個框的話，孔在每張圖上都落在同一個位置 —— 排開一看就知道對不對。
    */
 
+  /**
+   * 🔴 **疊起來掉下來的塊塗紅、只黏一點點的塗黃**（2026-10-24，第二輪第五批 5a；`slice/section.js` `stackCheck()` 記在輪廓上）。
+   * ⚠ 只有畫面上的預覽（`opt.marks`）才塗；存 SVG、DXF、列印⛔ 塗（`poly` 在 DXF 本來就略過，SVG、列印由呼叫端不給 `marks`）。
+   * 先塗再畫線 ⇒ 切割線照樣看得到。
+   */
+  if (opt.marks) {
+    for (const l of slice.loops) {
+      if (l.isHole || !(l.loose || l.weak)) continue;
+      items.push({ t: 'poly', style: 'overlap', pts: l.pts.map(T), fill: l.loose ? STACK_LOOSE_FILL : STACK_WEAK_FILL });
+      /**
+       * ⚠ 再圈一圈：掉下來的多半是很小的塊（獅子頭 0.28 cm，在 30 cm 寬的卡片上只有 3 個像素）—— 光塗色看不到（本機抓到）。
+       * 圈至少是整片外框的 4%。
+       */
+      const xs = l.pts.map(p => p.x), ys = l.pts.map(p => p.y);
+      const b = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+      b.w = b.maxX - b.minX; b.h = b.maxY - b.minY;
+      const c = T({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
+      items.push({ t: 'circle', style: l.loose ? 'markLoose' : 'markWeak', x: c.x, y: c.y, r: Math.max(Math.hypot(b.w, b.h) / 2 + 0.2, Math.max(W, H) * 0.04) });
+    }
+  }
   for (const l of slice.loops) {
     loop(items, l.pts.map(T), l.isHole ? 'hole' : 'cut');
   }

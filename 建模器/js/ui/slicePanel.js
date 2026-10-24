@@ -13,7 +13,7 @@
  * 算什麼在 slice/，畫什麼在 out/，這裡只收設定、排結果、接按鈕。
  */
 
-import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM }
+import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2 }
   from '../slice/section.js';
 import { findPegs, checkPegs, pegsForSlice, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
@@ -40,6 +40,7 @@ export class SlicePanel {
       d: PEG_DEFAULTS.d,
       gap: PEG_DEFAULTS.gap,
       tinyCm: TINY_PIECE_CM,
+      minGlueCm2: MIN_GLUE_CM2,
       unit: 'mm',
       askPath: true,
       ...loadOpt()
@@ -89,6 +90,8 @@ export class SlicePanel {
           <input type="number" id="slGap" step="0.1" min="0" style="width:70px">
           <span class="lbl">小塊提醒 cm</span>
           <input type="number" id="slTiny" step="0.1" min="0" style="width:60px">
+          <span class="lbl">黏著提醒 cm²</span>
+          <input type="number" id="slGlue" step="0.05" min="0" style="width:60px">
           <label class="uwCk" title="勾了：每一片取那一段厚度裡最大的外形（寧大勿小，疊好之後再磨），比板子薄的部分不會不見。沒勾：取每一片正中間的截面（曲面還原得最準）"><input type="checkbox" id="slMax"> 照最大外形切</label>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
@@ -168,6 +171,15 @@ export class SlicePanel {
     this.tinyIn.title = `外框短邊比這個還小的塊要提醒（容易斷、容易掉）。預設 ${TINY_PIECE_CM} cm；填 0 ＝ 不提醒`;
     this.tinyIn.onchange = () => {
       this.opt.tinyCm = Math.max(0, num(this.tinyIn.value, TINY_PIECE_CM));
+      this.run();
+    };
+
+    /** 第二輪第五批 5a（kang「只黏一點點的門檻預設 0.25 cm² 可以改」）：跟人走；0 ＝ 不提醒只黏一點點（掉下來的照樣講）*/
+    this.glueIn = $('slGlue');
+    this.glueIn.value = this.opt.minGlueCm2;
+    this.glueIn.title = `相鄰兩片黏到的面積比這個小就提醒「只黏一點點，容易斷」，排版預覽塗黃。預設 ${MIN_GLUE_CM2} cm²（約 5 × 5 mm）；填 0 ＝ 不提醒`;
+    this.glueIn.onchange = () => {
+      this.opt.minGlueCm2 = Math.max(0, num(this.glueIn.value, MIN_GLUE_CM2));
       this.run();
     };
 
@@ -261,7 +273,7 @@ export class SlicePanel {
 
     this.objs = objs;
     this.result = meshes.length
-      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm })
+      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 })
       : { ok: false, reason: '目前文件裡沒有物件。' };
 
     this.pegs = (this.result.ok && this.result.slices.length)
@@ -448,18 +460,18 @@ export class SlicePanel {
   }
 
   /** 排版：照目前的設定把這一疊擺進板子裡（⛔ 存結果 —— 設定一改就重排）。畫面、SVG、DXF、列印共用 */
-  _sheets() {
+  _sheets(marks = false) {
     const N = this.opt.nest;
     const sheets = sliceBoards(this.result.slices,
       { w: N.w, h: N.h, gap: N.gap, rotate: N.rotate },
-      { pegsOf: s => this._pegsOf(s), pegD: this.opt.d });
+      { pegsOf: s => this._pegsOf(s), pegD: this.opt.d, marks });     // marks：只有畫面預覽塗（5a）；存檔、列印⛔ 塗
     return sheets.map((sh, i) => ({ ...sh, title: sliceBoardTitle(sh, i, sheets.length) }));
   }
 
   /** 🔴 排版預覽：放在每片卡片的上面 —— 先看要幾張板、每張擺了哪幾片 */
   _renderBoards() {
     const N = this.opt.nest;
-    const sheets = this._sheets();
+    const sheets = this._sheets(true);
     const big = sheets.filter(x => x.board.oversize).length;
     const normal = sheets.length - big;
     /** 每種板厚各幾張 —— 上機時一種厚度鋪一次料 */
@@ -511,7 +523,7 @@ export class SlicePanel {
     const card = document.createElement('div');
     card.className = 'uwCard';
 
-    const opt = { ...this._progOpt(), pegs: this._pegsOf(slice) };
+    const opt = { ...this._progOpt(), pegs: this._pegsOf(slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊
     const lines = sliceTitleLines(slice, { ...opt, head: this.app.head });
     const h = document.createElement('div');
     h.className = 'uwTitle';

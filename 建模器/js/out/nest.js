@@ -400,7 +400,7 @@ export function sliceBoards(slices, nestOpt = {}, o = {}) {
       origin: { x: p.slice.bounds.minX, y: p.slice.bounds.minY },
       frame: { w: p.width, h: p.height },
       pegs: o.pegsOf ? (o.pegsOf(p.slice) || []) : [],
-      pegD: o.pegD, showDims: false
+      pegD: o.pegD, showDims: false, marks: !!o.marks      // 5a：只有畫面預覽塗顏色
     });
     for (const board of packBoards(pieces, nestOpt).boards) {
       sheets.push({ t: g.t, board, prog: boardProgram(board, { draw, label: () => '' }) });

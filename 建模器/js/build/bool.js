@@ -497,6 +497,32 @@ export function rowsToLoops(rects, eps) {
 }
 
 /**
+ * 🔴 **兩塊（各自是外圈＋洞）疊在一起的面積**（2026-10-24，第二輪第五批 5a → `slice/section.js` `stackCheck()`：
+ * 相鄰兩片的塊黏得到多少）。放在這裡的理由同 `mergeLoops()`：只有這個檔可以碰 Manifold（`CrossSection` 交集）。
+ * 填法同 `mergeLoops()`：Positive（外圈逆時針 +1、洞順時針 −1）。
+ * @param {Array<{x:number,y:number}[]>} a
+ * @param {Array<{x:number,y:number}[]>} b
+ * @returns {number} 面積（同單位的平方）
+ */
+export function overlapArea(a, b) {
+  const w = need();
+  const made = [];
+  try {
+    const ca = new w.CrossSection(a.map(pts => pts.map(p => [p.x, p.y])), 'Positive');
+    made.push(ca);
+    const cb = new w.CrossSection(b.map(pts => pts.map(p => [p.x, p.y])), 'Positive');
+    made.push(cb);
+    const ab = ca.intersect(cb);
+    made.push(ab);
+    return ab.isEmpty() ? 0 : ab.area();
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **一圈平面上的點往外（`delta` > 0）或往內（< 0）推一段距離**（2026-10-19，展開圖的縫份／黏合片：`out/sheet.js` `marginGeometry()`）。
  * 放在這裡的理由同 `slabShadow()`：只有這個檔可以碰 Manifold（`CrossSection.offset()`）。
  * ⭐ 轉角用「尖角」（Miter，上限 2 倍 ⇒ 很尖的角會被削平，⛔ 長出一根刺）—— 縫份、黏合片的外框都是直角接。
