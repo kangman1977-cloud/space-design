@@ -20239,6 +20239,59 @@ section('智慧分切：同一對平面之間的邊一起放開（2026-10-24）'
     && /const fj = FAST && !alongOf\(pr, ga, gb\)\.length \? fastJoin\(pr, A, B, strict\) : null;/.test(src));
 }
 
+section('剖面分切：說清楚（第二輪第三批，2026-10-24）');
+{
+  /** `實驗-綜合評估-第二輪.md` 第三批；kang 2026-10-24「②-6 用乙（卡住的片不打孔、其他照樣串），小塊門檻預設 1 cm、可以改，其他照建議」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const own = f => io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/' + f), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  // ②-6 定位孔：找不到每一片都串得起來的位置 ⇒ 卡住的片不打孔、其他照樣串
+  const fox = sect.sliceMany(own('實驗T8/狐狸頭.json'), { axis: 'y' });
+  const gf = pegsMod.findPegs(fox.slices, {});
+  ok('★★★ kang 的狐狸頭 19 片：以前一個孔都不打 ⇒ 現在 18 片照樣串、第 19 片（窄到放不下孔）不打孔、講出來',
+    gf.ok && gf.skipped.join() === '19' && gf.narrow.join() === '19' && pegsMod.pegsForSlice(gf, fox.slices[18]).length === 0 && pegsMod.pegsForSlice(gf, fox.slices[0]).length >= 1
+    && gf.warnings.some(w => /其他 18 片照樣串，第 19 片不打孔.*第 19 片窄到放不下這個孔/.test(w)), (gf.warnings || []).join(' / ').slice(0, 160));
+  const lion = sect.sliceMany(own('實驗T10/獅子頭.json'), { axis: 'y' });
+  const gl = pegsMod.findPegs(lion.slices, {});
+  const cl = pegsMod.checkPegs(lion.slices, s => pegsMod.pegsForSlice(gl, s), {});
+  ok('★★★ kang 的獅子頭 38 片：34 片照樣串、第 35～38 片不打孔（36～38 窄到放不下、35 放得下但位置對不上）；串起來的 34 片每一片都夠深',
+    gl.ok && gl.skipped.join() === '35,36,37,38' && gl.narrow.join() === '36,37,38' && cl.bad.join() === '35,36,37,38'
+    && cl.rows.filter(r => !gl.skipped.includes(r.index)).every(r => r.ok)
+    && gl.warnings.some(w => /第 36~38 片窄到放不下這個孔；第 35 片放得下，但位置跟其他片對不上/.test(w)), `${gl.skipped} / ${gl.narrow} / ${cl.bad}`);
+  const bx = sect.sliceMesh(buildPrim('box', { w: 60, h: 10, d: 40 }), { axis: 'y', bands: [{ t: 1, n: 'rest' }] });
+  const gb = pegsMod.findPegs(bx.slices, {}), gh = pegsMod.findPegs(bx.slices, { d: 36, gap: 5 });   // 料只有 40 寬 ⇒ 半徑 18＋淨距 5 一片都放不下
+  ok('★★ 方塊每一片都串得起來 ⇒ 一片都不略過（照舊）；孔大到一片都放不下 ⇒ 照舊說不行', gb.ok && !gb.skipped.length && !gh.ok && /任何一片放得下孔/.test(gh.reason), gh.reason);
+  // ②-9 前半：有空的片時「最糟的那一片」⛔ -Infinity
+  const t3 = sect.sliceMany(own('實驗T3/收納盒.json'), { axis: 'y' });
+  const g3 = pegsMod.findPegs(t3.slices, {}), c3 = pegsMod.checkPegs(t3.slices, s => pegsMod.pegsForSlice(g3, s), {});
+  ok('★★★ kang 的收納盒（第 9、10 片切到空的地方）：最糟的那一片只算有孔的片 ⇒ 是個數字（以前 -Infinity）；空的兩片照舊算串不起來',
+    Number.isFinite(c3.worst) && Math.abs(c3.worst - 2.22) < 0.01 && c3.bad.join() === '9,10', `${c3.worst} / ${c3.bad}`);
+  // ②-7 分成好幾塊、小塊
+  const wl = lion.warnings.join(' / ');
+  ok('★★★ 獅子頭：講「第 ○ 片分成好幾塊（最多 3 塊）」與「比 1 cm 還小的塊（最小 0.28 × 0.28 cm）」',
+    /片分成好幾塊（最多 3 塊）—— 切下來是分開的/.test(wl) && /片有比 1 cm 還小的塊（最小 0\.28 × 0\.28 cm），容易斷、容易掉/.test(wl), wl.slice(0, 200));
+  const l0 = sect.sliceMany(own('實驗T10/獅子頭.json'), { axis: 'y', tinyCm: 0 }), l2 = sect.sliceMany(own('實驗T10/獅子頭.json'), { axis: 'y', tinyCm: 0.2 });
+  ok('★★ 小塊門檻可以改：0 ⇒ 不講小塊；0.2 cm ⇒ 0.28 的塊不算小（分成好幾塊照講）',
+    !l0.warnings.some(w => /還小的塊/.test(w)) && !l2.warnings.some(w => /還小的塊/.test(w)) && l0.warnings.some(w => /分成好幾塊/.test(w)));
+  ok('★ 方塊 ⇒ ⛔ 講分成好幾塊、小塊', !bx.warnings.some(w => /分成好幾塊|還小的塊/.test(w)));
+  // ②-8 台階：同一個高度只寫一次、超過 3 個寫範圍
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const base = buildPrim('box', { w: 10, h: 4, d: 10 }).transformed(T(0, 2, 0));
+  const pad = (x, h) => buildPrim('box', { w: 2, h, d: 2 }).transformed(T(x, h / 2, 20));
+  const same = sect.sliceMany([base, pad(-20, 0.4), pad(-10, 0.4001), pad(10, 0.3999)],   // 差一點點、寫出來都是 0.4（汽車的 0.42、0.42 就是這樣來的）
+   { axis: 'y', bands: [{ t: 1, n: '' }] }).warnings.find(w => /台階/.test(w)) || '';
+  const many = sect.sliceMany([base, pad(-20, 0.2), pad(-10, 0.4), pad(10, 0.6), pad(20, 0.8)], { axis: 'y', bands: [{ t: 1, n: '' }] }).warnings.find(w => /台階/.test(w)) || '';
+  ok('★★★ 台階：0.4、0.4001、0.3999 寫出來都是 0.4 ⇒ 只寫一次「台階在 0.4」；四個不同的寫「0.2～0.8 之間的 4 個高度」（以前一個一個列、汽車一句 2,604 字）',
+    /第 1 片（0～1 cm，台階在 0\.4）/.test(same) && !/0\.4、0\.4/.test(same) && /第 1 片（0～1 cm，台階在 0\.2～0\.8 之間的 4 個高度）/.test(many), `${same.slice(0, 60)} / ${many.slice(0, 70)}`);
+  // 讀程式守著：②-9 後半、⑤-1、⑤-2
+  const tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8'), sp = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), ep = readFileSync(join(here, '../js/ui/exportPanel.js'), 'utf8');
+  ok('★★ 智慧分切「避不開的」講原因與怎麼辦（②-9）', /避不開的：已經照「不要細切口」盡量避開，剩下這幾個怎麼接都會出現/.test(tb) && /想再少：把「細切口：張開小於」調小/.test(tb));
+  ok('★★ 剖面分切、3D 列印先講「正在算」、下一輪才算（⑤-1）；⛔ 等 requestAnimationFrame（視窗在背景時不跑）',
+    [sp, ep].every(t => /run\(\) \{\s*clearTimeout\(this\._runT\);\s*showBusy\(this\.body, '正在/.test(t) && /this\._runT = setTimeout\(\(\) => this\._runNow\(\), BUSY_MS\);/.test(t) && /_runNow\(\) \{/.test(t)) && !/requestAnimationFrame\(/.test(sp + ep));
+  ok('★★ 疊高差一點給縮放的數字、⛔ 叫人換板厚（⑤-2）', /把模型高度縮放成 \$\{f\(st\.used\)\} cm（縮小/.test(sp) && /或 \$\{f\(st\.used \+ \+last\.t\)\} cm（放大/.test(sp) && !/'換一個整除得了的板厚/.test(sp));
+  ok('★★ 小塊門檻：預設 1 cm、跟人走（記著）、面板可以改', sect.TINY_PIECE_CM === 1 && /tinyCm: TINY_PIECE_CM,/.test(sp) && /id="slTiny"/.test(sp) && /tinyCm: this\.opt\.tinyCm/.test(sp));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

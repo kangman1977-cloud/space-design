@@ -76,11 +76,27 @@ export function findPegs(slices, opt = {}) {
   }
 
   // ── 孔①：全域。每一片都要有，因為它是通到底的那根桿子。 ──
-  const all = scan(grid.pts, solid, need);
+  let all = scan(grid.pts, solid, need);
+  /**
+   * 🔴 **找不到每一片都串得起來的位置 ⇒ 卡住的那幾片不打孔、其他照樣串**（2026-10-24，第二輪 ②-6；
+   * kang「②-6 用乙（卡住的片不打孔、其他照樣串）」→ `實驗-綜合評估-第二輪.md` 第三批）。
+   * 以前整疊一個孔都不打 —— 查下去幾乎都是頭尾 1～4 片太窄：汽車 12 片可以串 11 片、獅子頭 34／38、狐狸頭 18／19。
+   * ⭐ 孔① 放在「串得起最多片」的位置；串不起來的片（`skipped`）不打孔、講出來（靠輪廓或層號對齊）。
+   * 一片都放不下才照舊說不行。
+   */
+  let use = solid, skipped = [], narrow = [];
   if (!all.length) {
-    return fail(`找不到一個位置能讓 ${solid.length} 片都串得起來`
-      + `（孔徑 ${r2(o.d)}cm、淨距 ${r2(o.gap)}cm）。`
-      + '把孔徑或淨距調小，或把分段拆細一點。', need, empty);
+    const most = mostThreaded(grid.pts, solid, need);
+    if (!most) {
+      return fail(`找不到一個位置能讓任何一片放得下孔`
+        + `（孔徑 ${r2(o.d)}cm、淨距 ${r2(o.gap)}cm）。`
+        + '把孔徑或淨距調小。', need, empty);
+    }
+    use = solid.filter(s => most.has(s));
+    skipped = solid.filter(s => !most.has(s));
+    narrow = skipped.filter(s => !grid.pts.some(p => insideDepth(s.loops, p.x, p.y) >= need)).map(s => s.index);
+    skipped = skipped.map(s => s.index);
+    all = scan(grid.pts, use, need);
   }
 
   /**
@@ -101,7 +117,7 @@ export function findPegs(slices, opt = {}) {
   all.sort((a, b) => (b.m - a.m)
     || (Math.hypot(a.x - grid.cx, a.y - grid.cy) - Math.hypot(b.x - grid.cx, b.y - grid.cy)));
   const base = { x: snap(all[0].x), y: snap(all[0].y) };
-  base.m = minDepth(solid, base);
+  base.m = minDepth(use, base);
 
   // ── 每一段各自求它自己的額外孔 ──
   const diag = Math.hypot(box.w, box.h);
@@ -123,7 +139,7 @@ export function findPegs(slices, opt = {}) {
   const singles = [];
 
   for (const bi of bandIds) {
-    const list = solid.filter(s => (s.band || 0) === bi);
+    const list = use.filter(s => (s.band || 0) === bi);
     const want = Math.max(1, Math.floor(
       (o.counts && o.counts[bi] != null) ? o.counts[bi] : o.count) || 1);
     const nums = list.map(s => s.index);
@@ -201,12 +217,20 @@ export function findPegs(slices, opt = {}) {
   }
 
   if (empty.length) warnings.push(`第 ${listNums(empty)} 片是空的，串不起來。`);
+  if (skipped.length) {
+    const wide = skipped.filter(i => !narrow.includes(i));
+    warnings.push(`找不到一個位置能讓 ${solid.length} 片都串得起來（孔徑 ${r2(o.d)}cm、淨距 ${r2(o.gap)}cm）`
+      + ` —— 其他 ${use.length} 片照樣串，第 ${listNums(skipped)} 片不打孔，疊的時候靠輪廓或層號對齊`
+      + (narrow.length ? `（第 ${listNums(narrow)} 片窄到放不下這個孔` : '（')
+      + (wide.length ? `${narrow.length ? '；' : ''}第 ${listNums(wide)} 片放得下，但位置跟其他片對不上` : '')
+      + '）。想讓它們也串起來：把孔徑或淨距調小。');
+  }
 
   const margin = Math.min(...bands.map(b => b.margin));
 
   // 最吃緊的那幾片。「可以用」跟「剛好可以用」差很多。
   const tight = [];
-  for (const s of solid) {
+  for (const s of use) {
     const d = minDepth([s], ...pegsOfBand(bands, s.band || 0));
     if (d < need * 1.5) tight.push({ index: s.index, depth: d });
   }
@@ -221,6 +245,7 @@ export function findPegs(slices, opt = {}) {
     base: { x: base.x, y: base.y },
     bands,
     need, margin, empty, tight, warnings, notes,
+    skipped, narrow,          // 不打孔的片、其中自己就窄到放不下孔的（②-6）
     /** 全部片一共用到幾種孔位（＝ DXF 裡會出現幾個不同的圓心） */
     holeCount: bands.reduce((n, b) => Math.max(n, b.pegs.length), 0)
   };
@@ -229,6 +254,7 @@ export function findPegs(slices, opt = {}) {
 /** 這一片要鑽哪幾個孔 ＝ 它所屬那一段的孔。孔①永遠在第一個。 */
 export function pegsForSlice(res, slice) {
   if (!res || !res.ok) return [];
+  if (res.skipped && res.skipped.includes(slice.index)) return [];     // 串不起來、不打孔的片（②-6）
   const b = res.bands.find(q => q.band === (slice.band || 0));
   return b ? b.pegs : [{ ...res.base }];
 }
@@ -256,11 +282,16 @@ export function checkPegs(slices, getPegs, opt = {}) {
   }
 
   const bad = rows.filter(r => !r.ok);
+  /**
+   * 「最糟的那一片」只算有料、有孔的片（2026-10-24，第二輪 ②-9）：空的片、不打孔的片另外講（在 `bad` 裡），
+   * 算進來的話面板會寫「孔邊離邊緣還剩 -Infinity cm」（kang 的收納盒有 2 片切到空的地方）。
+   */
+  const holed = rows.filter(r => Number.isFinite(r.depth));
   return {
     ok: bad.length === 0,
     need, rows,
     bad: bad.map(r => r.index),
-    worst: rows.length ? Math.min(...rows.map(r => r.depth)) : -Infinity
+    worst: holed.length ? Math.min(...holed.map(r => r.depth)) : -Infinity
   };
 }
 
@@ -301,6 +332,28 @@ function makeGrid(box, n, need) {
  *
  * 速度靠一件事撐住：格點一旦被某一片判死就直接剔除，不再參與後面的片。
  */
+/**
+ * 每一片都串得起來的位置找不到時：哪一個格點串得起最多片（②-6）。同樣多片 ⇒ 那幾片裡最糟的剩最多的。
+ * @returns {Set|null} 那個位置串得起的片；一片都放不下 ⇒ null
+ */
+function mostThreaded(pts, slices, need) {
+  let best = null, bestN = 0, bestM = -Infinity;
+  // 離外框不到 `need` 的點不可能放得下 ⇒ 先用外框擋掉（結果一樣；汽車 3.9 秒那種大輪廓才不會每個點都量一次）
+  const boxes = slices.map(s => stackBounds([s]));
+  for (const p of pts) {
+    const ok = new Set();
+    let m = Infinity;
+    for (let i = 0; i < slices.length; i++) {
+      const s = slices[i], b = boxes[i];
+      if (p.x < b.minX + need || p.x > b.maxX - need || p.y < b.minY + need || p.y > b.maxY - need) continue;
+      const d = insideDepth(s.loops, p.x, p.y);
+      if (d >= need) { ok.add(s); if (d < m) m = d; }
+    }
+    if (ok.size > bestN || (ok.size === bestN && ok.size && m > bestM)) { best = ok; bestN = ok.size; bestM = m; }
+  }
+  return best;
+}
+
 function scan(pts, slices, need) {
   let alive = pts.map(p => ({ x: p.x, y: p.y, m: Infinity }));
   for (const s of slices) {

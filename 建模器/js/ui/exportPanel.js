@@ -144,7 +144,17 @@ export class ExportPanel {
    * **兩個互不相連的盒子**（內外各一個，實測體積 2777.79 cm³），
    * 而不是一個空心盒。封閉的東西本來就有體積，不必也不該加厚。
    */
+  /**
+   * 🔴 **先講「正在檢查」、下一輪才算**（2026-10-24，第二輪 ⑤-1；跟剖面分切同一招 → `slicePanel.js` `run()`）。
+   * 以前按「3D 列印」汽車（54 萬面）畫面停住 14 秒、什麼字都沒有。⚠ 算的時候畫面照樣停住，只是先講。
+   */
   run() {
+    clearTimeout(this._runT);
+    showBusy(this.body, '正在檢查模型…（大的模型要十幾秒，算的時候畫面會停住）');
+    this._runT = setTimeout(() => this._runNow(), BUSY_MS);
+  }
+
+  _runNow() {
     saveOpt(this.opt);
     const picked = this.app.sel.objects;
     const objs = picked.length ? picked : this.app.doc.objects;
@@ -482,6 +492,14 @@ function box(cls, msg) {
   d.className = cls;
   d.textContent = msg;
   return d;
+}
+
+/** 第二輪 ⑤-1：最上面放一行「正在算」（已經有就換字）；算完畫結果時 body 整個清掉、它就跟著不見 */
+const BUSY_MS = 30;
+function showBusy(body, msg) {
+  let b = body.querySelector('.uwBusy');
+  if (!b) { b = box('uwSkip uwBusy', msg); body.prepend(b); }
+  else b.textContent = msg;
 }
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

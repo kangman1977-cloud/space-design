@@ -13,7 +13,7 @@
  * 算什麼在 slice/，畫什麼在 out/，這裡只收設定、排結果、接按鈕。
  */
 
-import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL }
+import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM }
   from '../slice/section.js';
 import { findPegs, checkPegs, pegsForSlice, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
@@ -39,6 +39,7 @@ export class SlicePanel {
       bands: [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }],
       d: PEG_DEFAULTS.d,
       gap: PEG_DEFAULTS.gap,
+      tinyCm: TINY_PIECE_CM,
       unit: 'mm',
       askPath: true,
       ...loadOpt()
@@ -86,6 +87,8 @@ export class SlicePanel {
           <input type="number" id="slD" step="0.05" min="0" style="width:70px">
           <span class="lbl">淨距 cm</span>
           <input type="number" id="slGap" step="0.1" min="0" style="width:70px">
+          <span class="lbl">小塊提醒 cm</span>
+          <input type="number" id="slTiny" step="0.1" min="0" style="width:60px">
           <label class="uwCk" title="勾了：每一片取那一段厚度裡最大的外形（寧大勿小，疊好之後再磨），比板子薄的部分不會不見。沒勾：取每一片正中間的截面（曲面還原得最準）"><input type="checkbox" id="slMax"> 照最大外形切</label>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
@@ -159,6 +162,15 @@ export class SlicePanel {
       this.run();
     };
 
+    /** 第二輪 ②-7（kang「小塊門檻預設 1 cm、可以改」）：跟人走（跟孔徑、淨距一起記著）；0 ＝ 不提醒小塊 */
+    this.tinyIn = $('slTiny');
+    this.tinyIn.value = this.opt.tinyCm;
+    this.tinyIn.title = `外框短邊比這個還小的塊要提醒（容易斷、容易掉）。預設 ${TINY_PIECE_CM} cm；填 0 ＝ 不提醒`;
+    this.tinyIn.onchange = () => {
+      this.opt.tinyCm = Math.max(0, num(this.tinyIn.value, TINY_PIECE_CM));
+      this.run();
+    };
+
     this.askIn = $('slAsk');
     this.askIn.checked = !!this.opt.askPath;
     this.askIn.parentElement.title = canChoosePath()
@@ -223,7 +235,19 @@ export class SlicePanel {
 
   // ── 算一次並重畫 ────────────────────────────────────
 
+  /**
+   * 🔴 **先講「正在算」、下一輪才算**（2026-10-24，第二輪 ⑤-1；跟匯入視窗同一招）。
+   * 以前按「剖面分切」或改設定就直接算：汽車（54 萬面）畫面停住 6.9 秒、什麼字都沒有，看起來像當掉。
+   * ⚠ 算的時候畫面照樣停住（同一條執行緒）—— 只是先講；連續改好幾次只算最後一次。
+   * ⚠ ⛔ 用 requestAnimationFrame 等畫面：視窗在背景時它不會跑 ⇒ 永遠不算。
+   */
   run() {
+    clearTimeout(this._runT);
+    showBusy(this.body, '正在算剖面…（大的模型要幾秒，算的時候畫面會停住）');
+    this._runT = setTimeout(() => this._runNow(), BUSY_MS);
+  }
+
+  _runNow() {
     save(this.opt);
     const picked = this.app.sel.objects;
     const objs = picked.length ? picked : this.app.doc.objects;
@@ -237,7 +261,7 @@ export class SlicePanel {
 
     this.objs = objs;
     this.result = meshes.length
-      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline })
+      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm })
       : { ok: false, reason: '目前文件裡沒有物件。' };
 
     this.pegs = (this.result.ok && this.result.slices.length)
@@ -292,8 +316,13 @@ export class SlicePanel {
       const why = bands.some(b => b.bad)
         ? '有一段被擋下來了，原因看下面那一行 ⚠。'
         : lastRest
+          /**
+           * 給數字（2026-10-24，第二輪 ⑤-2）：以前只寫「換一個整除得了的板厚」—— 板子是買現成的，⛔ 建議怪板厚；
+           * 改成縮放模型：縮成「現在疊到的高度」或「再多一片的高度」就剛好疊滿（汽車 12.35 ⇒ 12 或 13 cm）。
+           */
           ? `最後一段已經是「剩下」—— 差的是不到一片（${f(last.t)} cm）的零頭：`
-            + '換一個整除得了的板厚，或接受矮一點。'
+            + `把模型高度縮放成 ${f(st.used)} cm（縮小 ${pct(1 - st.used / st.height)}%）`
+            + `或 ${f(st.used + +last.t)} cm（放大 ${pct((st.used + +last.t) / st.height - 1)}%）就剛好疊滿，或接受矮一點。`
           : '把某一段的片數加上去，或把最後一段設成「剩下」。';
       this.body.appendChild(box('uwWarn',
         st.diff > 0
@@ -628,7 +657,16 @@ function box(cls, msg) {
   return d;
 }
 
+/** 第二輪 ⑤-1：最上面放一行「正在算」（已經有就換字）；算完畫結果時 body 整個清掉、它就跟著不見 */
+const BUSY_MS = 30;
+function showBusy(body, msg) {
+  let b = body.querySelector('.uwBusy');
+  if (!b) { b = box('uwSkip uwBusy', msg); body.prepend(b); }
+  else b.textContent = msg;
+}
+
 const f = v => String(Math.round(v * 100) / 100);
+const pct = v => String(Math.round(v * 1000) / 10);     // 0.0283 ⇒ 2.8
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, dflt) => { const x = parseFloat(v); return Number.isFinite(x) ? x : dflt; };
 

@@ -94,6 +94,8 @@ export const MAX_SLABS = 2000;
 const SNAP = 1e6;
 /** 斷線補線：每一列多高（cm）＝ 精度 0.1 mm；拉直的容許值（cm）*/
 export const SCAN_H = 0.01, SCAN_EPS = 0.005;
+/** 比這個還小（外框短邊，cm）的塊要提醒（第二輪 ②-7）；面板「小塊提醒」可以改 */
+export const TINY_PIECE_CM = 1;
 /** 斷線接頭尾：每條尾巴找最近的幾個頭來比 */
 const BRIDGE_K = 8;
 
@@ -659,6 +661,36 @@ export function sliceMany(meshes, opt = {}) {
   }
 
   /**
+   * 🔴 **一片分成好幾塊、很小的塊要講**（2026-10-24，第二輪 ②-7；kang「小塊門檻預設 1 cm、可以改」）。
+   * 以前⛔ 任何提醒：汽車 3 片分成 2～9 塊、獅子頭 10 片分成 2～3 塊、10 個不到 1 cm 的小塊（最小 0.28 × 0.28）——
+   * 切下來是分開的幾塊、疊的時候要自己對位置；太小的塊容易斷、容易掉。
+   * 小塊 ＝ 外圈的外框短邊比 `opt.tinyCm`（預設 `TINY_PIECE_CM`）還小；0 ＝ 不提醒小塊。
+   */
+  const tinyCm = opt.tinyCm == null ? TINY_PIECE_CM : Math.max(0, +opt.tinyCm || 0);
+  const splitAt = [], tinyAt = [];
+  let maxParts = 0, smallest = null;
+  for (const sl of slices) {
+    const outer = sl.loops.filter(l => !l.isHole);
+    if (outer.length > 1) { splitAt.push(sl.index); maxParts = Math.max(maxParts, outer.length); }
+    if (!(tinyCm > 0)) continue;
+    let hit = false;
+    for (const l of outer) {
+      const b = loopsBounds([l]), s = Math.min(b.w, b.h);
+      if (s >= tinyCm) continue;
+      hit = true;
+      if (!smallest || s < smallest.s) smallest = { s, w: b.w, h: b.h };
+    }
+    if (hit) tinyAt.push(sl.index);
+  }
+  if (splitAt.length) {
+    warnings.push(`第 ${listNums(splitAt)} 片分成好幾塊（最多 ${maxParts} 塊）—— 切下來是分開的，疊的時候要自己對位置。`);
+  }
+  if (tinyAt.length) {
+    warnings.push(`第 ${listNums(tinyAt)} 片有比 ${r2(tinyCm)} cm 還小的塊（最小 ${r2(smallest.w)} × ${r2(smallest.h)} cm），容易斷、容易掉`
+      + ' —— 門檻在上面「小塊提醒」改。');
+  }
+
+  /**
    * 🔴 **照中間切時，片裡面有「台階」要講出來**（2026-10-19，實驗 T2）。
    * ⚠ 一片只取中間那一刀 ⇒ 落在片**裡面**（⛔ 剛好在片與片之間）的水平面，它上下其中一邊的東西
    * 會漏掉或多出一塊 —— 帽簷 0～0.4 cm、板 0～1 cm、中間取 0.5：帽簷整個不見，⛔ 任何提示（漏報）。
@@ -669,7 +701,13 @@ export function sliceMany(meshes, opt = {}) {
     const hit = [];
     for (const sl of slices) {
       const hs = steps.filter(h => h > sl.z0 + STEP_TOL && h < sl.z1 - STEP_TOL);
-      if (hs.length) hit.push(`第 ${sl.index} 片（${r2(sl.z0 - lo)}～${r2(sl.z1 - lo)} cm，台階在 ${hs.map(h => r2(h - lo)).join('、')}）`);
+      /**
+       * 同一個高度只寫一次、超過 3 個只寫範圍（2026-10-24，第二輪 ②-8）：以前每個面的高度都列，
+       * 汽車一句 2,604 字（0.42、0.42、0.49…）、頭盔前片 2.34 連寫十幾次。
+       */
+      const uniq = [...new Set(hs.map(h => r2(h - lo)))];
+      if (uniq.length) hit.push(`第 ${sl.index} 片（${r2(sl.z0 - lo)}～${r2(sl.z1 - lo)} cm，台階在 `
+        + (uniq.length <= 3 ? uniq.join('、') : `${r2(Math.min(...uniq))}～${r2(Math.max(...uniq))} 之間的 ${uniq.length} 個高度`) + '）');
     }
     if (hit.length) {
       warnings.push(`有 ${hit.length} 片裡面有台階（跟板子平行的面），照中間切會漏掉或多出一塊：`
