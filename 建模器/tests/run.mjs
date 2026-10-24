@@ -20678,7 +20678,7 @@ if (csgOK) {
   const sq = (x0, y0, x1, y1) => ({ pts: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] });
   const sp = IL.lineSpans([sq(0, 0, 10, 10), { pts: sq(3, 3, 7, 7).pts.slice().reverse() }], 5);
   ok('★★ 一條直線上的料：方塊中間挖洞 ⇒ 兩段 0～3、7～10', sp.length === 2 && sp[0][0] === 0 && sp[0][1] === 3 && sp[1][0] === 7 && sp[1][1] === 10, JSON.stringify(sp));
-  ok('★★ 預設照 kang 定的表：板厚 0.5、肋每 3 cm、槽寬加減 0、一半一半、槽口張開 0.1、側面自動', JSON.stringify(IL.INTERLOCK_DEFAULTS) === JSON.stringify({ t: 0.5, spacing: 3, slotAdj: 0, share: 0.5, flare: 0.1, spine: 'auto' }));
+  ok('★★ 預設照 kang 定的表：板厚 0.5、肋每 3 cm、槽寬加減 0、一半一半、槽口張開 0.1、側面自動', JSON.stringify(IL.INTERLOCK_DEFAULTS) === JSON.stringify({ t: 0.5, spacing: 3, slotAdj: 0, share: 0.5, flare: 0.1, spine: 'auto', spineN: 1 }));
 
   // 長方塊 20（X）× 10（高）× 6（Z）：側面從 Z 切（窄的那邊），肋沿 X 每 3 cm ⇒ 6 片
   const b = box(20, 10, 6, 0, 5, 0);
@@ -20739,7 +20739,7 @@ if (csgOK) {
   const spn = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
   ok('★★ 讀程式守著：做法「疊層／互卡」預設疊層、新建開檔回到疊層與自動；互卡走 interlockMany、⛔ 定位孔、⛔ 分段表；每塊零件用自己的外框；藏起來的樣式由程式帶',
     /<option value="stack">疊層<\/option><option value="interlock">互卡（側面＋橫肋）<\/option>/.test(spn) && /if \(this\.opt\.method !== 'interlock'\) this\.opt\.method = 'stack';/.test(spn)
-    && /this\.opt\.method = 'stack';\s*\/\/ 6a/.test(spn) && /il \? interlockMany\(meshes, this\.opt\.il\)/.test(spn) && /&& !il\)\s*\/\/ 6a：互卡沒有定位孔/.test(spn)
+    && /this\.opt\.method = 'stack';\s*\/\/ 6a/.test(spn) && /il \? interlockMany\(meshes, this\._ilOpt\(\)\)/.test(spn) && /: this\.opt\.il;\s*\}/.test(spn) && /&& !il\)\s*\/\/ 6a：互卡沒有定位孔/.test(spn)
     && /if \(r\.method === 'interlock'\) \{[\s\S]{0,300}this\._renderInterlock\(\);\s*return;/.test(spn) && (spn.match(/\.\.\.this\._ownFrame\((s|slice)\)/g) || []).length === 3
     && /getElementById\('slModeStyle'\)/.test(spn) && !/\.slMode/.test(ih));
 
@@ -20756,7 +20756,7 @@ if (csgOK) {
   const only0 = SM.buildStack(r.slices, 'z', { from: 0, to: 0 });
   const svs = readFileSync(join(here, '../js/ui/stackView.js'), 'utf8');
   ok('★★ 立體預覽：只看第 0～0 片 ⇒ 只畫側面（0 ⛔ 當成沒填）；互卡的黃圈講「卡不牢」；重切之後上一次點到的名字拿掉；換做法「只看第幾片」回到全部',
-    only0.shown === 1 && /!\(v >= 0\)/.test(svs) && /this\.range\.from === '' \? Math\.min\(\.\.\.ix\)/.test(svs) && /il \? s\.index > 0 && g\.with === 0/.test(svs) && /'卡不牢' : '只黏一點點'/.test(svs)
+    only0.shown === 1 && /!\(v >= 0\)/.test(svs) && /this\.range\.from === '' \? Math\.min\(\.\.\.ix\)/.test(svs) && /il \? g\.onRib : g\.with === s\.index \+ 1/.test(svs) && /'卡不牢' : '只黏一點點'/.test(svs)
     && /trisOf\(this\.meshes\);\s*this\.pickEl\.hidden = true;/.test(svs) && /this\._applyMethod\(\); this\.stack3d\.reset\(\); this\.run\(\);/.test(spn), 'shown ' + only0.shown);
 }
 
@@ -20815,6 +20815,83 @@ if (csgOK) {
     && /Number\.isInteger\(v\) && v >= FIT_N_MIN && v <= FIT_N_MAX : v > 0/.test(spn) && /else fitIn\[k\]\.value = this\.opt\.fit\[k\];/.test(spn)
     && /async _saveFit\(\) \{\s*const fit = fitComb\(this\.opt\.il, this\.opt\.fit\);[\s\S]{0,200}fitDXF\(fit,/.test(spn) && !/async _saveFit\(\) \{\s*if \(!this\._has\(\)\)/.test(spn)
     && /this\.body\.appendChild\(this\._fitCard\(\)\);/.test(spn));
+}
+
+
+section('剖面分切：互卡 側面幾片、肋位圖、幫我挪（第二輪第六批 6c，2026-10-25）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md`「6c」；kang 2026-10-25「甲 肋可以挪＋側面 1～3 片，一 肋位圖，要「幫我挪有問題的肋」按鈕（按了才算），預設照表」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const IL = await import('../js/slice/interlock.js');
+  const SM = await import('../js/view/stackModel.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const box = (w, h, d, x, y, z) => prim.buildPrim('box', { w, h, d }).transformed(T(x, y, z));
+  const inL = (loops, x, y) => { let c = false; for (const l of loops) { const p = l.pts; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const a = p[i], b = p[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c; } } return c; };
+  const close = (a, b) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+  ok('★★ 預設照 kang 定的表：側面 1 片、最多 3 片；自動位置 ＝ 寬的 i／(k＋1)（寬 12 ⇒ 3 片在 3、6、9）',
+    IL.INTERLOCK_DEFAULTS.spineN === 1 && IL.SPINE_N_MAX === 3 && close(IL.spineCoordsAuto(0, 12, 3), [3, 6, 9]) && close(IL.spineCoordsAuto(0, 12, 1), [6]));
+
+  // 長方塊 20（X）× 10（高）× 6（Z）：側面從 Z 切；3 片 ⇒ z −1.5、0、1.5
+  const b = box(20, 10, 6, 0, 5, 0);
+  const r3 = IL.interlockMany([b], { spineN: 3 });
+  const R1 = r3.slices.find(s => s.tag === 'R1'), S2 = r3.slices.find(s => s.tag === 'S2');
+  ok('★★★ 側面 3 片 ⇒ 零件 S1、S2、S3（片號 0～2）＋肋 R1～R6（片號 3～8）；側面在 z −1.5、0、1.5；摘要寫 3 片',
+    r3.ok && r3.slices.map(s => s.tag).join() === 'S1,S2,S3,R1,R2,R3,R4,R5,R6' && r3.slices.map(s => s.index).join() === '0,1,2,3,4,5,6,7,8'
+    && close(r3.stats.spineCoords, [-1.5, 0, 1.5]) && r3.stats.spines === 3 && r3.slices[0].label === '側面 1' && !r3.warnings.length, r3.slices.map(s => s.tag).join());
+  // 肋 1（平面座標 u ＝ −z）：三片側面都從上面挖到中間；側面 2（u ＝ x）從下面挖到中間
+  ok('★★★ 肋 1 跟三片側面各開一個槽（u ＝ 1.5、0、−1.5 的上半沒料、下半有料）；側面 2 在肋 1 那裡從下面挖',
+    [1.5, 0, -1.5].every(u => !inL(R1.loops, u, 7) && inL(R1.loops, u, 3)) && inL(R1.loops, 0.75, 7) && !inL(S2.loops, R1.coord, 3) && inL(S2.loops, R1.coord, 7));
+
+  // 肋照給的位置切；切到空的地方 ⇒ 不算進去、講出來、肋位圖還看得到
+  const rm = IL.interlockMany([b], { ribCoords: [5, -5, 0, 50] });
+  ok('★★★ 肋照給的位置切（−5、0、5，照位置排 R1～R3）；x ＝ 50 切到空的 ⇒「有 1 片肋切到空的地方」、ribInfo 記 empty',
+    close(rm.stats.ribCoords, [-5, 0, 5]) && rm.slices.filter(s => s.tag[0] === 'R').map(s => s.coord).join() === '-5,0,5'
+    && rm.notes.some(n => /有 1 片肋切到空的地方/.test(n)) && rm.ribInfo.length === 4 && rm.ribInfo[3].empty && rm.ribInfo[3].coord === 50);
+  const rs = IL.interlockMany([b], { spineCoords: [1] });
+  ok('★★ 側面照給的位置切（z ＝ 1）', close(rs.stats.spineCoords, [1]) && Math.abs(rs.slices[0].coord - 1) < 1e-9);
+
+  // 組不起來：下層板（z −3～3）＋上層板（z −3～7）＋後面一道牆；側面 A 在 z 0（C 字形）、B 在 z 5（只有上層板）
+  const Cc = [box(20, 4, 6, 0, 2, 0), box(20, 4, 10, 0, 8, 2), box(1, 10, 6, 9.5, 5, 0)];
+  const rc = IL.interlockMany(Cc, { spineCoords: [0, 5], ribCoords: [0] });
+  ok('★★★ 同一塊肋（上層板那塊）跟側面 A 反過來開、跟側面 B 照常開 ⇒「組不起來」、stats.conflicts 1',
+    rc.stats.conflicts === 1 && rc.warnings.some(w => /^肋 1 的同一塊碰到兩片側面，一片要從上面套、一片要從下面插 —— 組不起來/.test(w)), rc.warnings.join(' | ').slice(0, 80));
+  ok('★★ 側面 1 片（6a 那個 C 字形）⇒ 不會講組不起來', IL.interlockMany([box(20, 4, 6, 0, 2, 0), box(20, 4, 6, 0, 8, 0), box(1, 10, 6, 9.5, 5, 0)], {}).stats.conflicts === 0);
+
+  // 卡不牢：側面 2 片 ⇒ 每片肋 2 個黃圈（記在肋上 onRib），立體預覽畫在肋自己的位置
+  const rw = IL.interlockMany([box(20, 0.8, 6, 0, 0.4, 0)], { spineN: 2 });
+  const stw = SM.buildStack(rw.slices, 'z', {});
+  const ribsW = rw.slices.filter(s => s.tag[0] === 'R');
+  ok('★★★ 很矮的長方塊、側面 2 片 ⇒ 每片肋 2 個卡不牢（onRib）、立體預覽 12 個黃圈都在肋的 x 上；ribInfo 每片 weak 2',
+    ribsW.every(s => s.glue.length === 2 && s.glue.every(g => g.onRib)) && stw.rings.length === 12
+    && stw.rings.every(g => ribsW.some(s => Math.abs(g.pos.x - s.coord) < 1e-6)) && rw.ribInfo.every(q => q.weak === 2)
+    // 本機看到的：同一片肋好幾處卡不牢 ⇒ 合成一句（⛔「1（0.8 cm）、1（0.8 cm）」）
+    && rw.warnings.some(w => /^肋 1（2 處，最短 0\.8 cm）、2（2 處/.test(w)), String(stw.rings.length) + ' ' + rw.warnings.join('|').slice(0, 60));
+
+  // 幫我挪：kang 的獅子頭 ⇒ 肋 9 往 −1 cm、卡不牢 1 → 0；方塊沒有問題 ⇒ 不挪
+  const lion = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T10/獅子頭.json'), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  const sg = IL.suggestRibs(lion, {});
+  const after = IL.interlockMany(lion, { spineCoords: sg.spineCoords, ribCoords: sg.ribCoords });
+  ok('★★★ 幫我挪 kang 的獅子頭 ⇒ 只挪肋 9（−1 cm）、卡不牢 1 → 0、沒有掉下來；照建議的位置切 ⇒ 沒有卡不牢的提醒',
+    sg.moves.length === 1 && sg.moves[0].n === 9 && Math.abs(sg.moves[0].to - sg.moves[0].from + 1) < 0.01 && sg.before.weak === 1 && sg.after.weak === 0 && sg.after.loose === 0
+    && !after.warnings.some(w => /卡不牢/.test(w)), JSON.stringify(sg.moves));
+  ok('★★ 幫我挪：沒有問題的方塊 ⇒ 不挪；分數 掉下來 > 組不起來 ＝ 1000、卡不牢 100', IL.suggestRibs([b], {}).moves.length === 0 && IL.interlockScore(IL.interlockMany([b], {})) === 0);
+
+  const top = IL.topOutline([b]);
+  ok('★★ 肋位圖的外形：從下到上切 7 層（方塊 ⇒ 7 圈、x −10～10、z −3～3）',
+    top.length === 7 && top.every(l => Math.abs(Math.min(...l.map(p => p.x)) + 10) < 1e-6 && Math.abs(Math.max(...l.map(p => p.z)) - 3) < 1e-6));
+
+  const spn = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), rmv = readFileSync(join(here, '../js/ui/ribMapView.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 讀程式守著：側面幾片 1～3 片；換側面方向、片數、新建開檔 ⇒ 手動挪過的清掉；手動時肋間距、片數變灰；幫我挪先講正在算再算；肋位圖接在說明後面；Delete 轉給肋位圖',
+    /<select id="slILSpineN"><option value="1">1 片<\/option><option value="2">2 片<\/option><option value="3">3 片<\/option><\/select>/.test(spn)
+    && /if \(k === 'spine' \|\| k === 'spineN'\) this\.opt\.manualRibs = null;/.test(spn) && /this\.opt\.manualRibs = null;\s*\/\/ 6c：手動挪過的肋跟模型走/.test(spn)
+    && /for \(const k of \['spacing', 'spineN'\]\) \{\s*this\.ilIn\[k\]\.disabled = m;/.test(spn)
+    && /this\.ribMap\.say\('正在試挪有問題的肋…[^']*'\);\s*clearTimeout\(this\._runT\);\s*this\._runT = setTimeout\(\(\) => \{\s*const s = suggestRibs\(this\.meshes, this\._ilOpt\(\)\);/.test(spn)
+    && /this\.ribMap\.setState\(r, this\._topOutline\(\), !!this\.opt\.manualRibs, this\._ribNote\);/.test(spn) && /this\.ribMap\.onKey\(e\)/.test(spn));
+  ok('★★ 讀程式守著（肋位圖）：拖的時候放開才重切；肋跟旁邊至少隔 2 倍板厚；側面⛔ 在這裡刪；只剩一片肋⛔ 刪；樣式由程式帶',
+    /const up = \(\) => \{ if \(drag && moved\) this\._commit\(\); drag = null; \};/.test(rmv) && /get gap\(\) \{ return 2 \* \(this\.res \? this\.res\.stats\.t : 0\.5\); \}/.test(rmv)
+    && /if \(this\.sel\.kind === 'spine'\) \{ this\.msg = '側面的片數在上面那一排改/.test(rmv) && /if \(this\.ribs\.length <= 1\)/.test(rmv)
+    && /getElementById\('slrStyle'\)/.test(rmv) && !/\.slr/.test(ih));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

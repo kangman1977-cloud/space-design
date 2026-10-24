@@ -22,7 +22,8 @@ import { sliceDXF, sliceBoardDXF, fitDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
 import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { StackView } from './stackView.js';
-import { interlockMany, INTERLOCK_DEFAULTS } from '../slice/interlock.js';
+import { interlockMany, INTERLOCK_DEFAULTS, SPINE_N_MAX, suggestRibs, topOutline } from '../slice/interlock.js';
+import { RibMapView } from './ribMapView.js';
 import { fitComb, fitSVG, FIT_DEFAULTS, FIT_N_MIN, FIT_N_MAX } from '../slice/fitTest.js';
 import { PegMapView } from './pegMapView.js';
 
@@ -92,6 +93,19 @@ export class SlicePanel {
       onAuto: () => this._toAuto(),
       onChange: holes => this._setHoles(holes)
     });
+    /**
+     * 🔴 **肋位圖**（2026-10-25 第二輪第六批 6c，kang「肋可以挪＋側面 1～3 片，肋位圖，要「幫我挪有問題的肋」按鈕（按了才算），預設照表」）：
+     * `opt.manualRibs` ＝ `{ spineAx, spines, ribs }`（世界座標 cm）；沒有 ＝ 自動（預設：側面照片數放、肋等間距）。
+     * 跟 5c 手動的孔一樣**跟模型走**：記在瀏覽器、新建、開檔、換側面方向就清掉回到自動；⛔ 存進專案檔。
+     */
+    this.ribMap = new RibMapView({
+      onManual: () => this._toManualRibs(),
+      onAuto: () => this._toAutoRibs(),
+      onChange: c => this._setRibs(c),
+      onSuggest: () => this._suggestRibs()
+    });
+    this._ribNote = '';
+    this._outline = null; this._outlineKey = '';
   }
 
   // ── 畫面骨架 ────────────────────────────────────────
@@ -134,7 +148,7 @@ export class SlicePanel {
           <button id="slDxf">存 DXF</button>
         </div>
         <div class="uwBar" id="slILBar" title="互卡：正中間一片側面＋一排等間距的肋，交叉的地方各開一半的槽卡在一起（不用膠、不用串桿）">
-          <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（從窄的那邊切正中間）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select>
+          <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（從窄的那邊切正中間）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select><select id="slILSpineN"><option value="1">1 片</option><option value="2">2 片</option><option value="3">3 片</option></select>
           <span class="lbl">板厚 cm</span><input type="number" id="slILT" step="0.1" min="0.05" style="width:60px">
           <span class="lbl">肋間距 cm</span><input type="number" id="slILSp" step="0.5" min="0.2" style="width:60px">
           <span class="lbl">槽寬加減 cm</span><input type="number" id="slILAdj" step="0.01" style="width:64px">
@@ -257,8 +271,10 @@ export class SlicePanel {
     meth.title = '疊層：一片一片疊起來黏、串桿對位。互卡：正中間一片側面＋一排肋，開槽卡在一起，用料只有疊層的 2 成左右';
     meth.onchange = () => { this.opt.method = meth.value; this._applyMethod(); this.stack3d.reset(); this.run(); };     // 零件整個換掉 ⇒ 立體預覽的「只看第幾片」回到全部（本機抓到）
     const IL = this.opt.il;
-    const ilIn = { spine: $('slILSpine'), t: $('slILT'), spacing: $('slILSp'), slotAdj: $('slILAdj'), share: $('slILShare'), flare: $('slILFlare') };
+    const ilIn = { spine: $('slILSpine'), spineN: $('slILSpineN'), t: $('slILT'), spacing: $('slILSp'), slotAdj: $('slILAdj'), share: $('slILShare'), flare: $('slILFlare') };
+    this.ilIn = ilIn;
     ilIn.spine.title = '側面從哪個方向切正中間。自動 ＝ 水平方向比較窄的那一邊（袋鼠、野牛、汽車都是側面）';
+    ilIn.spineN.title = `側面幾片（1～${SPINE_N_MAX}）。預設 ${INTERLOCK_DEFAULTS.spineN} 片（正中間）；2 片 ＝ 寬的 1/3、2/3；3 片 ＝ 1/4、1/2、3/4 —— 腳張開的（樹蛙）多片比較撐得住，一般的模型 1 片就夠`;
     ilIn.t.title = `板厚（也是槽寬）。預設 ${INTERLOCK_DEFAULTS.t} cm`;
     ilIn.spacing.title = `肋每幾 cm 一片。預設 ${INTERLOCK_DEFAULTS.spacing} cm`;
     ilIn.slotAdj.title = '槽寬 ＝ 板厚 ＋ 這個數字。正的比較鬆、負的比較緊。程式不會自動補切口（切口由人工處理），第一次先試鬆緊';
@@ -268,6 +284,8 @@ export class SlicePanel {
       ilIn[k].value = IL[k];
       ilIn[k].onchange = () => {
         if (k === 'spine') IL.spine = ilIn.spine.value;
+        else if (k === 'spineN') IL.spineN = +ilIn.spineN.value;
+        if (k === 'spine' || k === 'spineN') this.opt.manualRibs = null;     // 6c：換側面方向、片數 ⇒ 手動挪過的肋清掉回到自動
         else { const v = parseFloat(ilIn[k].value); if (Number.isFinite(v)) IL[k] = v; else ilIn[k].value = IL[k]; }
         this.run();
       };
@@ -304,6 +322,8 @@ export class SlicePanel {
       if (!this.el.hidden && e.key === 'Escape') { e.stopImmediatePropagation(); this.close(); return; }
       // 5c：孔位圖選到孔時 Delete 刪孔（⚠ 主畫面那邊視窗開著時本來就⛔ 接 Delete —— 這裡再擋一次，⛔ 往下傳）
       if (!this.el.hidden && this.pegMap.onKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
+      // 6c：肋位圖選到肋時 Delete 刪肋（同上）
+      else if (!this.el.hidden && this.ribMap.onKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
     });
   }
 
@@ -334,6 +354,9 @@ export class SlicePanel {
     this.opt.manualPegs = null;     // 5c：手動的孔跟模型走
     this.opt.method = 'stack';      // 6a：做法、側面方向跟模型走
     this.opt.il.spine = 'auto';
+    this.opt.manualRibs = null;     // 6c：手動挪過的肋跟模型走
+    this._ribNote = '';
+    this._outline = null; this._outlineKey = '';
     const $ = id => this.el.querySelector('#' + id);
     $('slMethod').value = 'stack';
     $('slILSpine').value = 'auto';
@@ -376,9 +399,10 @@ export class SlicePanel {
     }).filter(Boolean);
 
     this.objs = objs;
+    this.meshes = meshes;     // 6c：幫我挪、肋位圖的外形要用
     const il = this.opt.method === 'interlock';
     this.result = !meshes.length ? { ok: false, reason: '目前文件裡沒有物件。' }
-      : il ? interlockMany(meshes, this.opt.il)     // 6a：互卡
+      : il ? interlockMany(meshes, this._ilOpt())     // 6a：互卡（6c：手動挪過的位置）
       : sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 });
 
     /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
@@ -411,7 +435,7 @@ export class SlicePanel {
 
     const st = r.stats;
     if (r.method === 'interlock') {
-      this.sum.textContent = `互卡　側面 1 片＋肋 ${st.ribs} 片　板厚 ${f(st.t)} cm　槽寬 ${f(st.slotW)} cm`;
+      this.sum.textContent = `互卡　側面 ${st.spines} 片＋肋 ${st.ribs} 片${this.opt.manualRibs ? '（手動挪過）' : ''}　板厚 ${f(st.t)} cm　槽寬 ${f(st.slotW)} cm`;
       this.stack3d.setRods([], this.opt.d);
       this.body.appendChild(this.stack3d.el);
       this.stack3d.refresh();
@@ -533,10 +557,16 @@ export class SlicePanel {
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     for (const n of r.notes || []) this.body.appendChild(box('uwSkip', n));
     this.body.appendChild(box('uwSkip',
-      `互卡：側面從 ${st.spineAx.toUpperCase()} 切正中間（1 片）＋肋沿 ${st.ribAx.toUpperCase()} 每 ${f(st.spacing)} cm（${st.ribs} 片）；`
+      `互卡：側面從 ${st.spineAx.toUpperCase()} 切${st.spines === 1 && !this.opt.manualRibs ? '正中間（1 片）' : `（${st.spines} 片）`}＋肋沿 ${st.ribAx.toUpperCase()} ${this.opt.manualRibs ? '照肋位圖手動挪過的位置' : `每 ${f(st.spacing)} cm`}（${st.ribs} 片）；`
       + `槽寬 ${f(st.slotW)} cm（板厚 ${f(st.t)} ${+il.slotAdj ? (il.slotAdj > 0 ? '＋ ' : '− ') + f(Math.abs(il.slotAdj)) : '＋ 0'}）、肋那邊佔 ${f(il.share * 10)} 成、槽口每邊張開 ${f(il.flare)} cm。`
       + '槽已經挖在輪廓上，跟輪廓一起在切割層。零件編號：S ＝ 側面、R1、R2… ＝ 肋（照順序排）。'
       + '⚠ 槽寬沒有補切口（切口由人工處理）—— 第一次切先存一片試卡片試一下鬆緊（下面那張）。'));
+    /** 6c：肋位圖 —— 接在說明後面、試卡片前面；同一個元素接回來 */
+    this.ribMap.setState(r, this._topOutline(), !!this.opt.manualRibs, this._ribNote);
+    this._ribNote = '';     // 「幫我挪」的結果講一次就好
+    this.body.appendChild(this.ribMap.el);
+    this.ribMap.refresh();
+    this._applyRibManual();
     this.body.appendChild(this._fitCard());
     if (this.opt.nest.on) this._renderBoards();
     const n = Math.min(r.slices.length, PREVIEW_MAX);
@@ -723,6 +753,87 @@ export class SlicePanel {
     card.classList.add('uwHit');
     clearTimeout(this._hitT);
     this._hitT = setTimeout(() => card.classList.remove('uwHit'), 1600);
+  }
+
+  // ── 肋位圖（6c）──────────────────────────────────────
+
+  /** 這一次切互卡要用的設定：手動挪過 ⇒ 帶上側面方向、位置 */
+  _ilOpt() {
+    const m = this.opt.manualRibs;
+    return m ? { ...this.opt.il, spine: m.spineAx, spineCoords: m.spines, ribCoords: m.ribs } : this.opt.il;
+  }
+
+  /** 手動挪肋時「肋間距」「側面幾片」變灰（要改先按「回到自動」）*/
+  _applyRibManual() {
+    const m = !!this.opt.manualRibs;
+    for (const k of ['spacing', 'spineN']) {
+      this.ilIn[k].disabled = m;
+      if (!this.ilIn[k].dataset.tip) this.ilIn[k].dataset.tip = this.ilIn[k].title;     // 原本的說明留著，回到自動時換回來
+      this.ilIn[k].title = m ? '手動挪過肋 —— 要改這一格，先按肋位圖的「回到自動」' : this.ilIn[k].dataset.tip;
+    }
+  }
+
+  /** 肋位圖的外形（從下到上切 7 層）：模型沒變就不重算（汽車要一兩秒）*/
+  _topOutline() {
+    const r = this.result, b = r.bounds;
+    const key = `${this.objs.map(o => o.id).join(',')}:${['x', 'y', 'z'].map(k => b.min[k].toFixed(3) + '/' + b.max[k].toFixed(3)).join(',')}:${r.stats.area.toFixed(1)}`;
+    if (key !== this._outlineKey || !this._outline) { this._outlineKey = key; this._outline = topOutline(this.meshes); }
+    return this._outline;
+  }
+
+  /** 按「手動挪肋」：現在的位置先放上去（畫出來一模一樣），之後改的都是這一份 */
+  _toManualRibs() {
+    const r = this.result;
+    if (!r || !r.ok || r.method !== 'interlock') return;
+    this.opt.manualRibs = { spineAx: r.axis, spines: r.stats.spineCoords.slice(), ribs: r.ribInfo.map(q => q.coord) };
+    save(this.opt);
+    this._keepScroll(() => this._render());
+  }
+
+  /** 按「回到自動」：丟掉手動挪過的，側面照片數放、肋等間距 */
+  _toAutoRibs() {
+    this.opt.manualRibs = null;
+    this._ribNote = '';
+    this._rerun();
+  }
+
+  /** 肋位圖改了（拖完、打位置、加、刪）：重切 */
+  _setRibs(c) {
+    this.opt.manualRibs = { spineAx: this.result.axis, spines: c.spines, ribs: c.ribs };
+    this._ribNote = '';
+    this._rerun();
+  }
+
+  /** 重切、停在原本的位置（肋位圖在中間，⛔ 跳回最上面）*/
+  _rerun() {
+    const top = this.body.scrollTop;
+    this.ribMap.say('正在重切…（大的模型要幾秒）');
+    clearTimeout(this._runT);
+    this._runT = setTimeout(() => { this._runNow(); this.body.scrollTop = top; }, BUSY_MS);
+  }
+
+  _keepScroll(fn) { const top = this.body.scrollTop; fn(); this.body.scrollTop = top; }
+
+  /**
+   * 「幫我挪有問題的肋」：按了才算（汽車要 20 秒左右，先講正在算）—— 結果變成手動的位置，放在圖上給人看、還可以再改。
+   */
+  _suggestRibs() {
+    if (!this.result || !this.result.ok || !this.meshes) return;
+    const top = this.body.scrollTop;
+    this.ribMap.say('正在試挪有問題的肋…（每試一次要整個重切，大的模型要十幾二十秒，算的時候畫面會停住）');
+    clearTimeout(this._runT);
+    this._runT = setTimeout(() => {
+      const s = suggestRibs(this.meshes, this._ilOpt());
+      if (!s) { this._ribNote = '幫我挪：切不出東西 —— 沒挪'; this._runNow(); return; }
+      const fmt = v => (v > 0 ? '＋' : '−') + f(Math.abs(v));
+      const sumT = o => `掉下來 ${o.loose} 塊、卡不牢 ${o.weak} 處${o.conflicts ? `、組不起來 ${o.conflicts} 片` : ''}`;
+      this._ribNote = s.moves.length
+        ? `幫我挪：挪了 ${s.moves.map(m => `肋 ${m.n}（${fmt(m.to - m.from)} cm）`).join('、')}；${sumT(s.before)} → ${sumT(s.after)} —— 這只是建議，還可以再拖或按「回到自動」`
+        : `幫我挪：每一片有問題的肋往左右試過 0.5、1 cm，沒有找到更好的位置（${sumT(s.before)}）—— 沒挪`;
+      if (s.moves.length) this.opt.manualRibs = { spineAx: this.result.axis, spines: s.spineCoords, ribs: s.ribCoords };
+      this._runNow();
+      this.body.scrollTop = top;
+    }, BUSY_MS);
   }
 
   // ── 手動放孔（5c）────────────────────────────────────

@@ -139,9 +139,9 @@ export function buildStack(slices, axis, opt = {}) {
   const seen = new Set();
   slices.forEach((s, k) => {
     for (const g of s.glue || []) {
-      /** 6a 互卡：卡不牢的交叉點記在肋上（with 0）、側面上（with ＝ 肋號）—— 從肋畫一次，畫在那一塊的正中間 */
+      /** 6a 互卡：卡不牢的交叉點記在肋上（onRib）、側面上（with ＝ 肋的片號）—— 從肋畫一次，畫在那一塊的正中間（6c 側面可能好幾片 ⇒ 看 onRib、⛔ 看 with 0）*/
       if (s.axis) {
-        if (g.with !== 0 || s.index < from || s.index > to) continue;
+        if (!g.onRib || s.index < from || s.index > to) continue;
         rings.push({ kind: 'weak', pos: atS(s, g.x, g.y, (s.z0 + s.z1) / 2), r: size * RING_MIN_FRAC });
         continue;
       }

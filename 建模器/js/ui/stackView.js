@@ -218,8 +218,8 @@ export class StackView {
     if (this.ghost) this.ghost.visible = ghostOn && !this.opt.explode;     // 拉開之後位置對不上，先藏起來
 
     const loose = this.slices.reduce((a, s) => a + s.loops.filter(l => l.loose).length, 0);
-    const il = this.slices.some(s => s.tag);     // 6a 互卡：黃圈是「卡不牢」（記在肋上 with 0）
-    const glue = this.slices.reduce((a, s) => a + (s.glue || []).filter(g => il ? s.index > 0 && g.with === 0 : g.with === s.index + 1).length, 0);
+    const il = this.slices.some(s => s.tag);     // 6a 互卡：黃圈是「卡不牢」（記在肋上 onRib；6c 側面可能好幾片）
+    const glue = this.slices.reduce((a, s) => a + (s.glue || []).filter(g => il ? g.onRib : g.with === s.index + 1).length, 0);
     $('info').textContent = `畫了 ${this.stack.shown} 片`
       + (loose ? `　🔴 掉下來 ${loose} 塊` : '') + (glue ? `　🟡 ${il ? '卡不牢' : '只黏一點點'} ${glue} 處` : '')
       + (this.opt.explode && ghostOn ? '　（拉開時原模型先藏起來）' : '');
