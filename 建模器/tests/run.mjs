@@ -20923,7 +20923,16 @@ if (csgOK) {
   ok('★★★ 紅框那一句教人怎麼救（側面改 2～3 片、拖到紅點上、按幫我挪）、⛔ 再講「之後會做小脊」',
     r.warnings.some(w => /^肋 .*有插不到側面的塊（掉下來）.*肋位圖上的紅點就是掉下來的塊：把「側面」改成 2～3 片、按「手動挪肋」把側面拖到紅點上，再按「幫我挪有問題的肋」/.test(w))
     && !r.warnings.some(w => /小脊/.test(w)));
-  const rmv = readFileSync(join(here, '../js/ui/ribMapView.js'), 'utf8');
+  // 線上先驗抓到的：側面改 2 片、第二片落在空的地方（z 5）被略掉 ⇒ 手動時要留著它，人才拖得到紅點上
+  const r2s = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], { spineN: 2 });
+  const fixd = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], { spineCoords: [1, 8] });
+  ok('★★★ 側面 2 片、第二片在 z 5（空的）⇒ 只切出 1 片、stats.spineCoordsWanted 留著 1、5、講「肋位圖上畫成虛線…可以把它拖到…紅點上」；把它放到紅點 z 8 ⇒ 旁邊那塊接上了、沒有紅點',
+    r2s.stats.spines === 1 && JSON.stringify(r2s.stats.spineCoordsWanted) === '[1,5]' && r2s.notes.some(n => /有 1 片側面切到空的地方，沒有算進去 —— 肋位圖上畫成虛線；按「手動挪肋」可以把它拖到有料的地方（或紅點上）/.test(n))
+    && fixd.stats.spines === 2 && fixd.looseDots.length === 0 && r2s.looseDots.length >= 1, `${r2s.stats.spines} ${JSON.stringify(r2s.stats.spineCoordsWanted)} → ${fixd.stats.spines} ${fixd.looseDots.length}`);
+  const rmv = readFileSync(join(here, '../js/ui/ribMapView.js'), 'utf8'), spn6d = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8');
+  ok('★★ 讀程式守著：手動挪肋時切到空的側面也留著（slicePanel、肋位圖都用 spineCoordsWanted）、肋位圖畫虛線標「空的」、選到時叫「側面（空的）」',
+    /spines: \(r\.stats\.spineCoordsWanted \|\| r\.stats\.spineCoords\)\.slice\(\)/.test(spn6d) && /this\.spines = \(res\.stats\.spineCoordsWanted \|\| res\.stats\.spineCoords\)\.slice\(\);/.test(rmv)
+    && /if \(!part\) g\.setLineDash\(\[6, 4\]\);/.test(rmv) && /label\('spine', c, part \? part\.tag : '（空的）'/.test(rmv) && /'側面（空的）'/.test(rmv));
   ok('★★ 讀程式守著（肋位圖）：紅點平常就畫（⛔ 只在手動時）、大小照面積 3～8 px、下面那一行教人怎麼救',
     /\/\/ 6d：紅點 ＝ 掉下來的塊在哪（平常就畫）[^\n]*\n\s*g\.fillStyle = 'rgba\(221,34,34,\.75\)';\s*for \(const d of this\.res\.looseDots \|\| \[\]\) \{\s*g\.beginPath\(\); g\.arc\(V\.X\(d\.x\), V\.Z\(d\.z\), Math\.max\(3, Math\.min\(8, Math\.sqrt\(d\.area\) \* 2\)\)/.test(rmv)
     && !/if \(!this\.manual\)[^\n]*looseDots/.test(rmv)

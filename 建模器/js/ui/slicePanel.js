@@ -785,7 +785,8 @@ export class SlicePanel {
   _toManualRibs() {
     const r = this.result;
     if (!r || !r.ok || r.method !== 'interlock') return;
-    this.opt.manualRibs = { spineAx: r.axis, spines: r.stats.spineCoords.slice(), ribs: r.ribInfo.map(q => q.coord) };
+    // 6d：切到空的那片側面也留著（肋位圖畫虛線）—— ⛔ 留的話手動時就再也拖不到紅點上（線上先驗抓到）
+    this.opt.manualRibs = { spineAx: r.axis, spines: (r.stats.spineCoordsWanted || r.stats.spineCoords).slice(), ribs: r.ribInfo.map(q => q.coord) };
     save(this.opt);
     this._keepScroll(() => this._render());
   }

@@ -324,7 +324,7 @@ export function interlockMany(meshes, opt = {}) {
   if (conflict.length) warnings.push(`肋 ${listNums([...new Set(conflict)])} 的同一塊碰到兩片側面，一片要從上面套、一片要從下面插 —— 組不起來；在肋位圖上挪一下那片肋，或改側面的片數。`);
   if (flipped.length) notes.push(`肋 ${listNums([...new Set(flipped)])} 跟側面在同一條線上交叉上下兩段 —— 上面那段的槽反過來開（肋從下面、側面從上面），兩段都卡得住；組的時候那幾片從上面放下來。`);
   if (emptyRibs) notes.push(`有 ${emptyRibs} 片肋切到空的地方，沒有算進去。`);
-  if (spines.length < sCoords.length) notes.push(`有 ${sCoords.length - spines.length} 片側面切到空的地方，沒有算進去。`);
+  if (spines.length < sCoords.length) notes.push(`有 ${sCoords.length - spines.length} 片側面切到空的地方，沒有算進去 —— 肋位圖上畫成虛線；按「手動挪肋」可以把它拖到有料的地方（或紅點上）。`);
   // 開放曲面、沒有布林函式庫那幾句（照 6a：看側面那一刀講的）
   for (const wmsg of spines[0].warns || []) if (/封閉|布林/.test(wmsg)) { warnings.push(wmsg); break; }
 
@@ -337,6 +337,8 @@ export function interlockMany(meshes, opt = {}) {
       count: slices.length, spines: K, ribs: ribParts.length, spineAx, ribAx, t, slotW: w, spacing,
       crossings: ribParts.length - noCross.length, conflicts: new Set(conflict).size,
       spineCoords: spines.map(s => s.coord), ribCoords: ribs.map(s => s.coord),
+      /** 6d 線上先驗抓到：側面改 2 片、第二片落在空的地方被略掉 ⇒ 手動時要留著它，人才拖得到紅點上 */
+      spineCoordsWanted: sCoords.slice(),
       area: slices.reduce((a, s) => a + s.area, 0),
       thickKinds: [r2(t)], used: 0, height: 0, diff: 0
     }

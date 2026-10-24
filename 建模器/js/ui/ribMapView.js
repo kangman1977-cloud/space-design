@@ -120,7 +120,7 @@ export class RibMapView {
   setState(res, outline, manual, note) {
     const keep = this.sel && this._coordOf(this.sel);
     this.res = res; this.outline = outline || []; this.manual = !!manual;
-    this.spines = res.stats.spineCoords.slice();
+    this.spines = (res.stats.spineCoordsWanted || res.stats.spineCoords).slice();     // 6d：切到空的那片也留著（虛線）
     this.ribs = res.ribInfo.map(q => q.coord);
     this.note = note || '';
     // 重切之後線的順序可能變了 ⇒ 用位置找回選到的那一條
@@ -285,10 +285,15 @@ export class RibMapView {
     for (const d of this.res.looseDots || []) {
       g.beginPath(); g.arc(V.X(d.x), V.Z(d.z), Math.max(3, Math.min(8, Math.sqrt(d.area) * 2)), 0, Math.PI * 2); g.fill();
     }
+    // 側面：標籤用切出來的零件編號（S、S1…）；切到空的地方 ⇒ 虛線、標「空的」（6d：人才知道它在哪、可以拖到紅點上）
+    const kept = this.res.slices.filter(s => s.index < this.res.stats.spines);
     this.spines.forEach((c, i) => {
       const isSel = this.sel && this.sel.kind === 'spine' && this.sel.i === i;
-      line('spine', c, isSel ? COLORS.sel : COLORS.spine, 3);
-      label('spine', c, this.spines.length === 1 ? 'S' : `S${i + 1}`, isSel ? COLORS.sel : COLORS.spine);
+      const part = kept.find(s => Math.abs(s.coord - c) < 1e-6);
+      if (!part) g.setLineDash([6, 4]);
+      line('spine', c, isSel ? COLORS.sel : COLORS.spine, part ? 3 : 2);
+      g.setLineDash([]);
+      label('spine', c, part ? part.tag : '（空的）', isSel ? COLORS.sel : COLORS.spine);
     });
   }
 
@@ -300,7 +305,10 @@ export class RibMapView {
     const ax = this._lineAxis(this.sel.kind);
     const q = this.sel.kind === 'rib' && this.res.ribInfo.find(r => Math.abs(r.coord - s.c) < 1e-6);
     $('selName').textContent = this.sel.kind === 'spine'
-      ? `選到的${this.spines.length === 1 ? '側面' : '側面 ' + (this.sel.i + 1)}　${ax} ＝`
+      ? (() => {     // 6d：照切出來的零件叫（側面、側面 2…）；切到空的 ⇒「側面（空的）」
+          const part = this.res.slices.find(q => q.index < this.res.stats.spines && Math.abs(q.coord - s.c) < 1e-6);
+          return `選到的${part ? part.label : '側面（空的）'}　${ax} ＝`;
+        })()
       : `選到的肋${q && q.n ? ' ' + q.n : ''}　${ax} ＝`;
     $('pos').value = Math.round(s.c * 100) / 100;     // 6d 本機看到：切出來的座標有浮點尾數（8.599999999999998）⇒ 顯示到 0.01
     $('del').hidden = this.sel.kind === 'spine';
@@ -318,7 +326,8 @@ export class RibMapView {
     const lines = [];
     if (this.msg) lines.push(`<span class="bad">${esc(this.msg)}</span>`);
     if (this.note) lines.push(esc(this.note));
-    lines.push(`側面 ${this.spines.length} 片、肋 ${info.length} 片${this.manual ? '（手動挪過）' : '（等間距）'}`
+    const emptyS = this.spines.length - this.res.stats.spines;
+    lines.push(`側面 ${this.res.stats.spines} 片${emptyS > 0 ? `（另有 ${emptyS} 片切到空的地方，畫成虛線${this.manual ? '，拖到有料的地方或紅點上' : '，按「手動挪肋」可以拖'}）` : ''}、肋 ${info.length} 片${this.manual ? '（手動挪過）' : '（等間距）'}`
       + (bad.length ? `；<span class="bad">有掉下來的：肋 ${bad.map(q => q.n).join('、')}</span>` : '')
       + (weak.length ? `；卡不牢：肋 ${weak.map(q => q.n).join('、')}` : '')
       + (!bad.length && !weak.length ? '；每一片肋都沒有掉下來、沒有卡不牢' : ''));
