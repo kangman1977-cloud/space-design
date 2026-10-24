@@ -22,6 +22,7 @@ import { sliceDXF, sliceBoardDXF, UNITS } from '../out/dxf.js';
 import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES } from '../out/save.js';
 import { sliceBoards, sliceBoardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { StackView } from './stackView.js';
+import { interlockMany, INTERLOCK_DEFAULTS } from '../slice/interlock.js';
 import { PegMapView } from './pegMapView.js';
 
 const LS_KEY = 'modeler_slice';
@@ -47,6 +48,12 @@ export class SlicePanel {
       askPath: true,
       ...loadOpt()
     };
+    /**
+     * 🔴 **做法：疊層／互卡**（2026-10-24 第二輪第六批 6a，kang「放在剖面分切視窗「做法：疊層／互卡」…預設照表」）。
+     * 做法、側面方向跟模型走（新建、開檔回到疊層、自動）；板厚、肋間距、槽寬加減、槽各佔幾成、槽口張開跟人走。
+     */
+    if (this.opt.method !== 'interlock') this.opt.method = 'stack';
+    this.opt.il = { ...INTERLOCK_DEFAULTS, ...(this.opt.il || {}) };
     if (!Array.isArray(this.opt.bands) || !this.opt.bands.length) {
       this.opt.bands = [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }];
     }
@@ -100,6 +107,9 @@ export class SlicePanel {
           <button class="mini" id="slClose">關閉</button>
         </div>
         <div class="uwBar">
+          <span class="lbl">做法</span><select id="slMethod"><option value="stack">疊層</option><option value="interlock">互卡（側面＋橫肋）</option></select>
+          <span class="sp"></span>
+          <span class="slMode" id="slStackOnly">
           <span class="lbl">切片軸</span><select id="slAxis"></select>
           <span class="sp"></span>
           <span class="lbl">孔徑 cm</span>
@@ -111,6 +121,7 @@ export class SlicePanel {
           <span class="lbl">黏著提醒 cm²</span>
           <input type="number" id="slGlue" step="0.05" min="0" style="width:60px">
           <label class="uwCk" title="勾了：每一片取那一段厚度裡最大的外形（寧大勿小，疊好之後再磨），比板子薄的部分不會不見。沒勾：取每一片正中間的截面（曲面還原得最準）"><input type="checkbox" id="slMax"> 照最大外形切</label>
+          </span>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
           <label class="uwCk"><input type="checkbox" id="slAsk"> 指定存放位置</label>
@@ -118,6 +129,14 @@ export class SlicePanel {
           <button id="slPrint">列印</button>
           <button id="slSvg">存 SVG</button>
           <button id="slDxf">存 DXF</button>
+        </div>
+        <div class="uwBar" id="slILBar" title="互卡：正中間一片側面＋一排等間距的肋，交叉的地方各開一半的槽卡在一起（不用膠、不用串桿）">
+          <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（從窄的那邊切正中間）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select>
+          <span class="lbl">板厚 cm</span><input type="number" id="slILT" step="0.1" min="0.05" style="width:60px">
+          <span class="lbl">肋間距 cm</span><input type="number" id="slILSp" step="0.5" min="0.2" style="width:60px">
+          <span class="lbl">槽寬加減 cm</span><input type="number" id="slILAdj" step="0.01" style="width:64px">
+          <span class="lbl">肋那邊佔</span><input type="number" id="slILShare" step="0.1" min="0.1" max="0.9" style="width:56px">
+          <span class="lbl">槽口張開 cm</span><input type="number" id="slILFlare" step="0.05" min="0" style="width:60px">
         </div>
         <div class="uwBar" title="排版：把很多片自動擺進一張一張板子裡，存 SVG／DXF 時一張板一個檔。不同板厚的片放在不同張。關掉就回到原本的存法（SVG 一片一個檔、DXF 全部一個檔）">
           <label class="uwCk"><input type="checkbox" id="slNest"> 排版到板子上</label>
@@ -225,6 +244,30 @@ export class SlicePanel {
     };
     for (const k of Object.keys(nestIn)) nestIn[k].onchange = nestChanged;
 
+    /** 6a：做法、互卡那一排 */
+    ensureModeStyle();
+    const meth = $('slMethod');
+    meth.value = this.opt.method;
+    meth.title = '疊層：一片一片疊起來黏、串桿對位。互卡：正中間一片側面＋一排肋，開槽卡在一起，用料只有疊層的 2 成左右';
+    meth.onchange = () => { this.opt.method = meth.value; this._applyMethod(); this.stack3d.reset(); this.run(); };     // 零件整個換掉 ⇒ 立體預覽的「只看第幾片」回到全部（本機抓到）
+    const IL = this.opt.il;
+    const ilIn = { spine: $('slILSpine'), t: $('slILT'), spacing: $('slILSp'), slotAdj: $('slILAdj'), share: $('slILShare'), flare: $('slILFlare') };
+    ilIn.spine.title = '側面從哪個方向切正中間。自動 ＝ 水平方向比較窄的那一邊（袋鼠、野牛、汽車都是側面）';
+    ilIn.t.title = `板厚（也是槽寬）。預設 ${INTERLOCK_DEFAULTS.t} cm`;
+    ilIn.spacing.title = `肋每幾 cm 一片。預設 ${INTERLOCK_DEFAULTS.spacing} cm`;
+    ilIn.slotAdj.title = '槽寬 ＝ 板厚 ＋ 這個數字。正的比較鬆、負的比較緊。程式不會自動補切口（切口由人工處理），第一次先試鬆緊';
+    ilIn.share.title = '交叉的地方，肋那邊的槽佔幾成（0.5 ＝ 一半一半）';
+    ilIn.flare.title = `槽口每邊張開多少（45°），比較好插。預設 ${INTERLOCK_DEFAULTS.flare} cm；0 ＝ 不張開`;
+    for (const k of Object.keys(ilIn)) {
+      ilIn[k].value = IL[k];
+      ilIn[k].onchange = () => {
+        if (k === 'spine') IL.spine = ilIn.spine.value;
+        else { const v = parseFloat(ilIn[k].value); if (Number.isFinite(v)) IL[k] = v; else ilIn[k].value = IL[k]; }
+        this.run();
+      };
+    }
+    this._applyMethod();
+
     $('slClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
     $('slPrint').onclick = () => this._print();
@@ -237,6 +280,13 @@ export class SlicePanel {
       // 5c：孔位圖選到孔時 Delete 刪孔（⚠ 主畫面那邊視窗開著時本來就⛔ 接 Delete —— 這裡再擋一次，⛔ 往下傳）
       if (!this.el.hidden && this.pegMap.onKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
     });
+  }
+
+  /** 6a：疊層才有的那幾格（切片軸、孔徑…）、互卡才有的那一排，照做法藏起來 */
+  _applyMethod() {
+    const il = this.opt.method === 'interlock';
+    this.el.querySelector('#slStackOnly').hidden = il;
+    this.el.querySelector('#slILBar').hidden = !il;
   }
 
   open() { this.el.hidden = false; this.run(); }
@@ -257,7 +307,12 @@ export class SlicePanel {
     this.opt.bands = [{ t: 1.0, n: '', holes: PEG_DEFAULTS.count }];
     this.opt.maxOutline = false;
     this.opt.manualPegs = null;     // 5c：手動的孔跟模型走
+    this.opt.method = 'stack';      // 6a：做法、側面方向跟模型走
+    this.opt.il.spine = 'auto';
     const $ = id => this.el.querySelector('#' + id);
+    $('slMethod').value = 'stack';
+    $('slILSpine').value = 'auto';
+    this._applyMethod();
     $('slAxis').value = this.opt.axis;
     $('slMax').checked = false;
     this.result = null;
@@ -296,12 +351,13 @@ export class SlicePanel {
     }).filter(Boolean);
 
     this.objs = objs;
-    this.result = meshes.length
-      ? sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 })
-      : { ok: false, reason: '目前文件裡沒有物件。' };
+    const il = this.opt.method === 'interlock';
+    this.result = !meshes.length ? { ok: false, reason: '目前文件裡沒有物件。' }
+      : il ? interlockMany(meshes, this.opt.il)     // 6a：互卡
+      : sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 });
 
     /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
-    this.pegs = (this.result.ok && this.result.slices.length)
+    this.pegs = (this.result.ok && this.result.slices.length && !il)     // 6a：互卡沒有定位孔
       ? (this.opt.manualPegs
           ? manualPegs(this.result.slices, this.opt.manualPegs.holes, { d: this.opt.d, gap: this.opt.gap })
           : findPegs(this.result.slices, {
@@ -312,7 +368,7 @@ export class SlicePanel {
 
     this.frame = (this.result.ok && this.result.slices.length)
       ? stackBounds(this.result.slices) : null;
-    if (this.result.ok) this.stack3d.setResult(this.result.slices, this.opt.axis, meshes);
+    if (this.result.ok) this.stack3d.setResult(this.result.slices, il ? this.result.axis : this.opt.axis, meshes);
 
     this._render();
   }
@@ -329,6 +385,14 @@ export class SlicePanel {
     }
 
     const st = r.stats;
+    if (r.method === 'interlock') {
+      this.sum.textContent = `互卡　側面 1 片＋肋 ${st.ribs} 片　板厚 ${f(st.t)} cm　槽寬 ${f(st.slotW)} cm`;
+      this.stack3d.setRods([], this.opt.d);
+      this.body.appendChild(this.stack3d.el);
+      this.stack3d.refresh();
+      this._renderInterlock();
+      return;
+    }
     this.sum.textContent = `${st.count} 片　`
       + `板厚 ${st.thickKinds.map(t => f(t) + 'cm').join('、')}　`
       + `疊高 ${f(st.used)} / 模型 ${f(st.height)} cm`;
@@ -433,6 +497,25 @@ export class SlicePanel {
         `預覽只畫前 ${n} 片（共 ${r.slices.length} 片），匯出不受影響。`));
     }
     this.stack3d.draw();     // 卡片排上去之後可能多了捲軸、變窄 ⇒ 照新的寬再畫一次
+  }
+
+  /**
+   * 🔴 **互卡的結果**（6a）：提醒（紅框）、說明（藍框）、怎麼切怎麼組（藍框）、排版、每塊零件一張卡片。
+   * ⛔ 分段表、⛔ 定位孔（互卡靠槽卡住）。
+   */
+  _renderInterlock() {
+    const r = this.result, st = r.stats, il = this.opt.il;
+    for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
+    for (const n of r.notes || []) this.body.appendChild(box('uwSkip', n));
+    this.body.appendChild(box('uwSkip',
+      `互卡：側面從 ${st.spineAx.toUpperCase()} 切正中間（1 片）＋肋沿 ${st.ribAx.toUpperCase()} 每 ${f(st.spacing)} cm（${st.ribs} 片）；`
+      + `槽寬 ${f(st.slotW)} cm（板厚 ${f(st.t)} ${+il.slotAdj ? (il.slotAdj > 0 ? '＋ ' : '− ') + f(Math.abs(il.slotAdj)) : '＋ 0'}）、肋那邊佔 ${f(il.share * 10)} 成、槽口每邊張開 ${f(il.flare)} cm。`
+      + '槽已經挖在輪廓上，跟輪廓一起在切割層。零件編號：S ＝ 側面、R1、R2… ＝ 肋（照順序排）。'
+      + '⚠ 槽寬沒有補切口（切口由人工處理）—— 第一次切先試一下鬆緊。'));
+    if (this.opt.nest.on) this._renderBoards();
+    const n = Math.min(r.slices.length, PREVIEW_MAX);
+    for (let i = 0; i < n; i++) this.body.appendChild(this._card(r.slices[i]));
+    this.stack3d.draw();
   }
 
   /** 分段表：一行一段，「板厚 × 片數」。片數留空 ＝ 剩下的填滿。 */
@@ -574,7 +657,7 @@ export class SlicePanel {
     card.className = 'uwCard';
     card.dataset.slice = slice.index;     // 5b：立體預覽點一片 ⇒ 跳到這裡
 
-    const opt = { ...this._progOpt(), pegs: this._pegsOf(slice), pegSpans: pegSpans(this.pegs, slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊；5c：手動的孔寫穿過第幾片
+    const opt = { ...this._progOpt(), ...this._ownFrame(slice), pegs: this._pegsOf(slice), pegSpans: pegSpans(this.pegs, slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊；5c：手動的孔寫穿過第幾片
     const lines = sliceTitleLines(slice, { ...opt, head: this.app.head });
     const h = document.createElement('div');
     h.className = 'uwTitle';
@@ -658,6 +741,12 @@ export class SlicePanel {
     return out;
   }
 
+  /** 6a 互卡：每塊零件用自己的外框（側面、肋大小差很多，⛔ 共用一個框）；疊層 ⇒ 空的（照共用的框）*/
+  _ownFrame(s) {
+    if (!s.axis) return {};
+    return { origin: { x: s.bounds.minX, y: s.bounds.minY }, frame: { w: s.bounds.w, h: s.bounds.h } };
+  }
+
   /** 出圖用的共同參數。預覽、SVG、DXF 三邊一定要用同一份。 */
   _progOpt() {
     const fr = this.frame || { minX: 0, minY: 0, w: 0, h: 0 };
@@ -688,7 +777,7 @@ export class SlicePanel {
       const base = { ...this._progOpt(), head: this.app.head };
       ok = printSVGs(
         this.result.slices.map(s => {
-          const opt = { ...base, pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
+          const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
           return progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt));
         }),
         '剖面分切');
@@ -715,7 +804,7 @@ export class SlicePanel {
     }
     const base = { ...this._progOpt(), head: this.app.head };
     const jobs = this.result.slices.map(s => {
-      const opt = { ...base, pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
+      const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
       return {
         name: `${this._base()}_第${String(s.index).padStart(2, '0')}片.svg`,
         blob: textBlob(progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt)), 'image/svg+xml')
@@ -766,6 +855,15 @@ export class SlicePanel {
   }
 
   _say(msg) { this.sum.textContent = msg + '　' + this.sum.textContent; }
+}
+
+/** 6a：疊層才有、互卡才有的那幾格照做法藏起來 —— 樣式由程式自己帶（⛔ 寫在 index.html，同 5b 那一課）*/
+function ensureModeStyle() {
+  if (document.getElementById('slModeStyle')) return;
+  const st = document.createElement('style');
+  st.id = 'slModeStyle';
+  st.textContent = '.slMode { display: contents; }\n.slMode[hidden] { display: none; }';
+  document.head.appendChild(st);
 }
 
 function box(cls, msg) {

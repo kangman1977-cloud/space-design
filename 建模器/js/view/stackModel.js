@@ -63,10 +63,13 @@ export function slicePieces(slice) {
 export function buildStack(slices, axis, opt = {}) {
   const A = AXES[axis] || AXES.y;
   const u = new THREE.Vector3(...A.uv[0]), v = new THREE.Vector3(...A.uv[1]), w = new THREE.Vector3(...A.dir);
-  const from = opt.from || 1, to = opt.to || Infinity;
+  const from = opt.from == null || opt.from === '' ? -Infinity : opt.from, to = opt.to == null || opt.to === '' ? Infinity : opt.to;     // 6a 互卡：側面是第 0 塊
   const all = slices.filter(s => s.loops.length);
   const meanT = all.length ? all.reduce((a, s) => a + s.t, 0) / all.length : 1;
-  const gap = opt.explode ? meanT * 0.8 : 0;
+  /** 6a 互卡：每一塊零件自己帶方向（側面、肋不同方向）⇒ 放在自己的平面上、⛔ 拉開（拉開只對疊層有意義）*/
+  const mixed = slices.some(s => s.axis);
+  const gap = opt.explode && !mixed ? meanT * 0.8 : 0;
+  const basisOf = s => { const B = AXES[s.axis] || A; return [new THREE.Vector3(...B.uv[0]), new THREE.Vector3(...B.uv[1]), new THREE.Vector3(...B.dir)]; };
 
   // 整疊的大小（圈的大小照它）—— 用全部的片，⛔ 只看選到的那幾片（不然圈的大小會跟著範圍跳）
   let size = 0;
@@ -90,12 +93,14 @@ export function buildStack(slices, axis, opt = {}) {
   const line = [];
   let tris = 0, shown = 0;
   const at = (x, y, z) => u.clone().multiplyScalar(x).add(v.clone().multiplyScalar(y)).add(w.clone().multiplyScalar(z));
+  const atS = (s, x, y, z) => { if (!s.axis) return at(x, y, z); const [su, sv, sw] = basisOf(s); return su.multiplyScalar(x).add(sv.multiplyScalar(y)).add(sw.multiplyScalar(z)); };
 
   slices.forEach((s, k) => {
     if (!s.loops.length || s.index < from || s.index > to) return;
     shown++;
     const off = s.z0 + k * gap, t = s.z1 - s.z0;
-    const basis = new THREE.Matrix4().makeBasis(u, v, w).setPosition(w.clone().multiplyScalar(off));
+    const [bu, bv, bw] = s.axis ? basisOf(s) : [u, v, w];
+    const basis = new THREE.Matrix4().makeBasis(bu, bv, bw).setPosition(bw.clone().multiplyScalar(off));
     for (const pc of slicePieces(s)) {
       const kind = pc.outer.loose ? 'loose' : (pc.outer.weak ? 'weak' : 'wood');
       const faint = !!opt.faint && kind === 'wood';
@@ -113,7 +118,7 @@ export function buildStack(slices, axis, opt = {}) {
           for (const z of [off, off + t]) {
             for (let i = 0; i < l.pts.length; i++) {
               const a = l.pts[i], b = l.pts[(i + 1) % l.pts.length];
-              const p = at(a.x, a.y, z), q = at(b.x, b.y, z);
+              const p = atS(s, a.x, a.y, z), q = atS(s, b.x, b.y, z);
               line.push(p.x, p.y, p.z, q.x, q.y, q.z);
             }
           }
@@ -123,7 +128,7 @@ export function buildStack(slices, axis, opt = {}) {
       if (kind === 'loose') {
         const bb = boxOf(pc.outer.pts);
         if (Math.max(bb.w, bb.h) < size * RING_MAX_FRAC) {
-          rings.push({ kind, pos: at((bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2, off + t / 2),
+          rings.push({ kind, pos: atS(s, (bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2, off + t / 2),
             r: Math.max(Math.hypot(bb.w, bb.h, t) * 0.8, size * RING_MIN_FRAC) });
         }
       }
@@ -134,6 +139,12 @@ export function buildStack(slices, axis, opt = {}) {
   const seen = new Set();
   slices.forEach((s, k) => {
     for (const g of s.glue || []) {
+      /** 6a 互卡：卡不牢的交叉點記在肋上（with 0）、側面上（with ＝ 肋號）—— 從肋畫一次，畫在那一塊的正中間 */
+      if (s.axis) {
+        if (g.with !== 0 || s.index < from || s.index > to) continue;
+        rings.push({ kind: 'weak', pos: atS(s, g.x, g.y, (s.z0 + s.z1) / 2), r: size * RING_MIN_FRAC });
+        continue;
+      }
       if (g.with !== s.index + 1) continue;                 // 每一對只畫一次（從下面那片畫）
       if (s.index < from || g.with > to) continue;
       const key = `${s.index}:${g.x.toFixed(4)}:${g.y.toFixed(4)}`;

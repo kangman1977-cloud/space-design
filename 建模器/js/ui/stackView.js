@@ -106,7 +106,7 @@ export class StackView {
     $('fold').onclick = () => { this.opt.open = !this.opt.open; this.onSave(); this._applyFold(); if (this.opt.open) this.refresh(); };
     for (const k of ['from', 'to']) $(k).onchange = () => {
       const v = Math.floor(+$(k).value);
-      this.range[k] = $(k).value.trim() === '' || !(v > 0) ? '' : v;
+      this.range[k] = $(k).value.trim() === '' || !(v >= 0) ? '' : v;     // 6a 互卡：側面是第 0 塊
       $(k).value = this.range[k];
       this.refresh();
     };
@@ -171,6 +171,7 @@ export class StackView {
     const axisChanged = axis !== this.axis;
     this.slices = slices; this.axis = axis; this.meshes = meshes || [];
     this._ghostTris = trisOf(this.meshes);
+    this.pickEl.hidden = true;     // 6a：重切之後零件換了，上一次點到的名字拿掉（本機抓到）
     if (axisChanged) this._frameKey = null;
     if (this.ghost) { this.scene.remove(this.ghost); disposeGroup(this.ghost); this.ghost = null; }
     // ⛔ 在這裡畫：slicePanel._render() 把元素接回視窗之後才叫 refresh()（沒接上量不到寬度）
@@ -187,7 +188,7 @@ export class StackView {
     const $ = this.$;
     const n = this.slices ? this.slices.length : 0;
     $('from').value = this.range.from; $('to').value = this.range.to;
-    $('from').placeholder = '1'; $('to').placeholder = String(n || '');
+    $('from').placeholder = n ? String(Math.min(...this.slices.map(s => s.index))) : '1'; $('to').placeholder = n ? String(Math.max(...this.slices.map(s => s.index))) : '';
     const big = this._ghostTris > GHOST_MAX_TRIS;
     const ghostOn = !!this.opt.ghost && (!big || this.ghostBig);
     $('ghost').checked = ghostOn;
@@ -200,7 +201,8 @@ export class StackView {
     if (this.stack) { this.scene.remove(this.stack.group); disposeGroup(this.stack.group); }
     for (const s of this.sprites) { this.scene.remove(s); s.material.dispose(); }
     this.sprites = [];
-    const from = this.range.from || 1, to = this.range.to || n;
+    const ix = this.slices.map(s => s.index);     // 6a 互卡：側面是第 0 塊（打 0 ⛔ 當成沒填）
+    const from = this.range.from === '' ? Math.min(...ix) : this.range.from, to = this.range.to === '' ? Math.max(...ix) : this.range.to;
     this.stack = buildStack(this.slices, this.axis, { from, to, explode: !!this.opt.explode, faint: !!this.opt.faint, rods: this.rods, rodD: this.rodD });
     this.scene.add(this.stack.group);
     for (const g of this.stack.rings) {
@@ -216,9 +218,10 @@ export class StackView {
     if (this.ghost) this.ghost.visible = ghostOn && !this.opt.explode;     // 拉開之後位置對不上，先藏起來
 
     const loose = this.slices.reduce((a, s) => a + s.loops.filter(l => l.loose).length, 0);
-    const glue = this.slices.reduce((a, s) => a + (s.glue || []).filter(g => g.with === s.index + 1).length, 0);
+    const il = this.slices.some(s => s.tag);     // 6a 互卡：黃圈是「卡不牢」（記在肋上 with 0）
+    const glue = this.slices.reduce((a, s) => a + (s.glue || []).filter(g => il ? s.index > 0 && g.with === 0 : g.with === s.index + 1).length, 0);
     $('info').textContent = `畫了 ${this.stack.shown} 片`
-      + (loose ? `　🔴 掉下來 ${loose} 塊` : '') + (glue ? `　🟡 只黏一點點 ${glue} 處` : '')
+      + (loose ? `　🔴 掉下來 ${loose} 塊` : '') + (glue ? `　🟡 ${il ? '卡不牢' : '只黏一點點'} ${glue} 處` : '')
       + (this.opt.explode && ghostOn ? '　（拉開時原模型先藏起來）' : '');
 
     // 換了模型、換了方向、拉開／收回、按「視角重來」才重新取景；改範圍、只看有問題的都留著人轉好的角度
@@ -255,11 +258,12 @@ export class StackView {
     const b = this.r.domElement.getBoundingClientRect();
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((e.clientX - b.left) / b.width * 2 - 1, -(e.clientY - b.top) / b.height * 2 + 1), this.cam);
-    const meshes = this.stack.group.children.filter(o => o.isMesh && o.userData.slice && !o.material.transparent);
+    const meshes = this.stack.group.children.filter(o => o.isMesh && o.userData.slice != null && !o.material.transparent);     // 6a：側面是 0
     const hit = ray.intersectObjects(meshes, false)[0];
     this.pickEl.hidden = !hit;
     if (!hit) return;
-    this.pickEl.textContent = `第 ${hit.object.userData.slice} 片`;
+    const ps = this.slices.find(q => q.index === hit.object.userData.slice);
+    this.pickEl.textContent = ps && ps.label ? ps.label : `第 ${hit.object.userData.slice} 片`;     // 6a 互卡：側面、肋 3
     this.onPick(hit.object.userData.slice);
   }
 }

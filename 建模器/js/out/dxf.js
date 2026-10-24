@@ -456,12 +456,18 @@ export function sliceDXF(slices, opt = {}) {
       { x: ox + frame.w * s / 2, y: oy + shift + frame.h * s / 2 };
     const size = Math.max(0.9 * s, Math.min(2.4 * s, Math.min(frame.w, frame.h) * s * 0.08));
     out.text('NUM', a0.x, a0.y - Math.max(pr * 2.4, size * 1.4), size,
-      `#${String(sl.index).padStart(2, '0')} t${round(t)}`);
+      `${sl.tag || '#' + String(sl.index).padStart(2, '0')} t${round(t)}`);     // 6a 互卡：S、R1…
   }
 
   // 檔頭說明：這張圖怎麼用。ASCII 才不會在別人的軟體變亂碼。
   const head = opt.head || {};
-  const note = [
+  /** 6a 互卡：側面 S＋肋 R1…，槽已經挖在輪廓上、沒有定位孔 —— 說明換一套（ASCII）*/
+  const note = slices.some(sl => sl.axis) ? [
+    `INTERLOCK (SPINE S + RIBS R1..)  ${slices.length} pcs  unit=${U.label}`,
+    'slots are already in the outlines (slot width = board thickness, no kerf compensation)',
+    'ribs slide onto the spine; a flipped slot means that rib drops in from above',
+    'cut one thickness at a time: enable only that CUT_T** layer'
+  ] : [
     `SLICE STACK  ${slices.length} pcs  unit=${U.label}`,
     `axis=${opt.axis || 'y'}  peg dia=${round((opt.pegD || 0) * s)}${U.label}`,
     'peg #1 (same spot on every piece) is the through rod;',

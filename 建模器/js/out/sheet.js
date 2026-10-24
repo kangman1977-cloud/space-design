@@ -1246,7 +1246,7 @@ export function sliceProgram(slice, opt = {}) {
     items.push({
       t: 'text', style: 'num',
       x: anchor.x, y: anchor.y - Math.max(pr * 2.4, size * 1.4),
-      s: `#${pad2(slice.index)} t${fmt(slice.t)}`,
+      s: `${slice.tag || '#' + pad2(slice.index)} t${fmt(slice.t)}`,     // 6a 互卡：側面 S、肋 R1、R2…
       size, anchor: 'middle'
     });
   }
@@ -1269,7 +1269,7 @@ export function sliceTitleLines(slice, opt = {}) {
   const out = [];
   const holes = slice.loops.filter(l => l.isHole).length;
 
-  out.push(`第 ${slice.index} 片${opt.total ? ` / 共 ${opt.total} 片` : ''}`
+  out.push((slice.label ? `${slice.label}（${slice.tag}）${opt.total ? `　互卡共 ${opt.total} 塊零件` : ''}` : `第 ${slice.index} 片${opt.total ? ` / 共 ${opt.total} 片` : ''}`)
     + `　板厚 ${fmt(slice.t)} cm`);
   out.push(`輪廓 ${slice.loops.length - holes} 圈`
     + (holes ? `（另有內孔 ${holes} 個）` : '')

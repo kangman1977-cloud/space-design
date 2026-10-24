@@ -394,7 +394,7 @@ export function sliceBoards(slices, nestOpt = {}, o = {}) {
     g.list.sort((a, b) => a.index - b.index);
     const pieces = g.list.map(sl => ({
       slice: sl, width: sl.bounds.w, height: sl.bounds.h, qty: 1,
-      no: '#' + String(sl.index).padStart(2, '0')
+      no: sl.tag || '#' + String(sl.index).padStart(2, '0')     // 6a 互卡：S、R1…
     }));
     const draw = p => sliceProgram(p.slice, {
       origin: { x: p.slice.bounds.minX, y: p.slice.bounds.minY },

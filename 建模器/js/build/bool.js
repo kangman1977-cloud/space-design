@@ -472,6 +472,38 @@ export function mergeLoops(polys) {
 }
 
 /**
+ * 🔴 **互卡開槽：一片的料扣掉幾個槽，分成一塊一塊**（2026-10-24，第二輪第六批 6a → `slice/interlock.js`）。
+ * 放在這裡的理由同 `mergeLoops()`：只有這個檔可以碰 Manifold（`CrossSection` 相減＋`decompose()`）。
+ * 填法同 `mergeLoops()`：Positive。
+ * @param {Array<{x:number,y:number}[]>} polys 這一片的輪廓（外圈逆時針、洞順時針）
+ * @param {Array<{x:number,y:number}[]>} slots 要挖掉的槽（任何方向都可以）
+ * @returns {Array<Array<{x:number,y:number}[]>>} 挖完之後的每一塊（每塊的輪廓：外圈逆時針、洞順時針）
+ */
+export function cutSlots(polys, slots) {
+  const w = need();
+  const made = [];
+  try {
+    const cs = new w.CrossSection(polys.map(pts => pts.map(p => [p.x, p.y])), 'Positive');
+    made.push(cs);
+    let res = cs;
+    if (slots.length) {
+      const cut = new w.CrossSection(slots.map(pts => pts.map(p => [p.x, p.y])), 'NonZero');
+      made.push(cut);
+      res = cs.subtract(cut);
+      made.push(res);
+    }
+    if (res.isEmpty()) return [];
+    const parts = res.decompose();
+    for (const q of parts) made.push(q);
+    return parts.map(q => q.toPolygons().map(poly => poly.map(p => ({ x: p[0], y: p[1] }))));
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
+/**
  * 🔴 **剖面斷線那一片：一堆掃描線的細長方塊合成輪廓、把階梯拉直**（網格核心第五批 b ⑥ → `slice/section.js` `scanFill()`）。
  * 放在這裡的理由同 `mergeLoops()`：只有這個檔可以碰 Manifold（`CrossSection` NonZero 聯集＋`simplify()`）。
  * @param {Array<[number,number][]>} rects 每個是一列裡實心的那一段（四個角）

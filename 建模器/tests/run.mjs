@@ -20665,6 +20665,101 @@ if (csgOK) {
     [bb.min.x, bb.max.x, bb.max.y - bb.min.y].map(v => v.toFixed(2)).join());
 }
 
+section('剖面分切：互卡 側面＋橫肋（第二輪第六批 6a，2026-10-24）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md` 第六批；kang 2026-10-24「放在剖面分切視窗「做法：疊層／互卡」，拆 6a～6d，先做 6a，預設照表」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const IL = await import('../js/slice/interlock.js');
+  const SM = await import('../js/view/stackModel.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const box = (w, h, d, x, y, z) => prim.buildPrim('box', { w, h, d }).transformed(T(x, y, z));
+  const inL = (loops, x, y) => { let c = false; for (const l of loops) { const p = l.pts; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const a = p[i], b = p[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c; } } return c; };
+  const sq = (x0, y0, x1, y1) => ({ pts: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] });
+  const sp = IL.lineSpans([sq(0, 0, 10, 10), { pts: sq(3, 3, 7, 7).pts.slice().reverse() }], 5);
+  ok('★★ 一條直線上的料：方塊中間挖洞 ⇒ 兩段 0～3、7～10', sp.length === 2 && sp[0][0] === 0 && sp[0][1] === 3 && sp[1][0] === 7 && sp[1][1] === 10, JSON.stringify(sp));
+  ok('★★ 預設照 kang 定的表：板厚 0.5、肋每 3 cm、槽寬加減 0、一半一半、槽口張開 0.1、側面自動', JSON.stringify(IL.INTERLOCK_DEFAULTS) === JSON.stringify({ t: 0.5, spacing: 3, slotAdj: 0, share: 0.5, flare: 0.1, spine: 'auto' }));
+
+  // 長方塊 20（X）× 10（高）× 6（Z）：側面從 Z 切（窄的那邊），肋沿 X 每 3 cm ⇒ 6 片
+  const b = box(20, 10, 6, 0, 5, 0);
+  const r = IL.interlockMany([b], {});
+  const S = r.slices[0], R1 = r.slices[1];
+  ok('★★★ 長方塊：側面從 Z 切（窄的那邊）、肋沿 X 6 片；零件 S、R1～R6；沒有掉下來的、沒有提醒', r.ok && r.axis === 'z' && r.ribAxis === 'x' && r.slices.length === 7
+    && r.slices.map(s => s.tag).join() === 'S,R1,R2,R3,R4,R5,R6' && !r.warnings.length && !r.slices.some(s => s.loops.some(l => l.loose)), r.slices.map(s => s.tag).join());
+  // 肋（平面座標 u ＝ −z、v ＝ y）：側面在 z ＝ 0 ⇒ u ＝ 0；交叉 0～10、中間 5 ⇒ 肋從 5 挖到頂、側面從底挖到 5
+  const xR1 = R1.coord;
+  ok('★★★ 槽：肋從上面挖到中間（(0, 7) 沒料、(0, 3) 有料）；側面從下面挖到中間（肋那裡 (x, 3) 沒料、(x, 7) 有料）；槽寬 ＝ 板厚（離槽中心 0.2 沒料、0.3 有料）',
+    !inL(R1.loops, 0, 7) && inL(R1.loops, 0, 3) && !inL(S.loops, xR1, 3) && inL(S.loops, xR1, 7) && !inL(R1.loops, 0.2, 7) && inL(R1.loops, 0.3, 7));
+  ok('★★ 槽口張開 0.1：肋的頂邊附近 (0.3, 9.95) 也挖掉了；張開 0 ⇒ 有料', !inL(R1.loops, 0.3, 9.95) && inL(IL.interlockMany([b], { flare: 0 }).slices[1].loops, 0.3, 9.95));
+  ok('★★ 槽寬加減 +0.1 ⇒ 槽寬 0.6（離中心 0.28 沒料）；肋那邊佔 0.3 ⇒ 肋從 7 挖到頂（(0, 6) 有料）',
+    !inL(IL.interlockMany([b], { slotAdj: 0.1 }).slices[1].loops, 0.28, 5.5) && inL(IL.interlockMany([b], { share: 0.3 }).slices[1].loops, 0, 6.5) && !inL(IL.interlockMany([b], { share: 0.3 }).slices[1].loops, 0, 7.5));
+  ok('★★ 側面可以指定從 X 切 ⇒ 肋沿 Z', IL.interlockMany([b], { spine: 'x' }).ribAxis === 'z');
+
+  // 旁邊另一塊（不碰側面）⇒ 那幾片肋上的塊掉下來
+  const r2 = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], {});
+  const w2 = r2.warnings.find(w => /插不到側面/.test(w)) || '';
+  ok('★★★ 旁邊另一塊（不碰側面）⇒ 那幾片肋上多一塊掉下來、標紅（loose）、講「插不到側面的塊（掉下來）」', /^肋 .*有插不到側面的塊（掉下來）/.test(w2) && r2.slices.some(s => s.loops.some(l => l.loose)), w2.slice(0, 40));
+  // 很矮（0.8 cm，不到兩倍板厚）⇒ 卡不牢、黃圈
+  const r3 = IL.interlockMany([box(20, 0.8, 6, 0, 0.4, 0)], {});
+  ok('★★★ 很矮的長方塊（交叉 0.8 cm，不到兩倍板厚 1 cm）⇒「卡不牢」、肋和側面都記黃圈（glue）', r3.warnings.some(w => /卡不牢/.test(w)) && r3.slices[1].glue.length === 1 && r3.slices[0].glue.length === 6);
+  // 上下兩層板＋後面一道牆（側面是 C 字形一塊；肋上上下兩塊分開）⇒ 上面那段反過來開，兩段都卡得住
+  const C = [box(20, 4, 6, 0, 2, 0), box(20, 4, 6, 0, 8, 0), box(1, 10, 6, 9.5, 5, 0)];
+  const rc = IL.interlockMany(C, {});
+  const Sc = rc.slices[0], Rc = rc.slices[2];
+  ok('★★★ 上下兩層板接著後面一道牆：上面那段反過來開（肋從下面挖：(0, 7) 沒料、(0, 9) 有料；側面從上面挖：(x, 9) 沒料、(x, 7) 有料），下面那段照常；沒有掉下來；說明「上面那段的槽反過來開」',
+    !inL(Rc.loops, 0, 7) && inL(Rc.loops, 0, 9) && !inL(Sc.loops, Rc.coord, 9) && inL(Sc.loops, Rc.coord, 7) && !inL(Rc.loops, 0, 3) && inL(Rc.loops, 0, 1)
+    && !rc.slices.some(s => s.loops.some(l => l.loose)) && rc.notes.some(n => /上面那段的槽反過來開/.test(n)));
+
+  // kang 的獅子頭
+  const lion = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T10/獅子頭.json'), 'utf8'))).objects.map(o => o.mesh().transformed(o.matrix()));
+  const rl = IL.interlockMany(lion, {});
+  ok('★★★ kang 的獅子頭：側面從 X 切＋肋 10 片、沒有掉下來的；肋 7～9 上面那段反過來開；肋 9 卡不牢', rl.ok && rl.axis === 'x' && rl.slices.length === 11 && !rl.slices.some(s => s.loops.some(l => l.loose))
+    && rl.notes.some(n => /^肋 7~9 跟側面在同一條線上交叉上下兩段/.test(n)) && rl.warnings.some(w => /^肋 9（0\.65 cm）/.test(w)), rl.warnings.concat(rl.notes).map(w => w.slice(0, 20)).join(' | '));
+
+  // 出圖：卡片標題、層號、排版編號、DXF
+  const tl = sliceTitleLines(S, { total: 7 });
+  const num = sliceProgram(R1, {}).items.find(i => i.t === 'text' && i.style === 'num');
+  const NB = await import('../js/out/nest.js');
+  const sheets = NB.sliceBoards(r.slices, { w: 120, h: 60, gap: 1, rotate: false }, {});
+  const dxf = sliceDXF(r.slices, { unit: 'mm', origin: { x: -15, y: -1 }, frame: { w: 30, h: 12 }, axis: 'z' });
+  const lay = [...dxf.matchAll(/\r?\n0\r?\nLINE\r?\n\s*8\r?\n([^\r\n]+)/g)].map(x => x[1].trim());
+  ok('★★★ 出圖：卡片標題「側面（S）　互卡共 7 塊零件」；層號「R1 t0.5」；排版的編號 S、R1…；DXF 寫 INTERLOCK、層號 R1、輪廓（含槽）都在 CUT_T5',
+    /^側面（S）　互卡共 7 塊零件　板厚 0\.5 cm/.test(tl[0]) && num && num.s === 'R1 t0.5' && sheets[0].board.items.some(it => it.piece.no === 'R1')
+    && /INTERLOCK/.test(dxf) && /R1 t0\.5/.test(dxf) && lay.length > 0 && lay.every(l => l === 'CUT_T5'), tl[0] + ' / ' + (num && num.s) + ' / ' + [...new Set(lay)].join());
+
+  // 立體預覽：每塊零件放在自己的平面上
+  const st = SM.buildStack(r.slices, 'z', { explode: true });
+  const meshes = st.group.children.filter(o => o.isMesh);
+  const bS = new THREE.Box3().setFromObject(meshes.find(m => m.userData.slice === 0)), bR = new THREE.Box3().setFromObject(meshes.find(m => m.userData.slice === 1));
+  ok('★★★ 立體預覽：側面立在 z ＝ 0（厚 0.5）、肋 1 立在自己的 x（厚 0.5、z 從 −3 到 3）；互卡⛔ 拉開',
+    Math.abs(bS.min.z + 0.25) < 1e-6 && Math.abs(bS.max.z - 0.25) < 1e-6 && Math.abs(bS.max.x - bS.min.x - 20) < 1e-6
+    && Math.abs(bR.max.x - bR.min.x - 0.5) < 1e-6 && Math.abs((bR.min.x + bR.max.x) / 2 - xR1) < 1e-6 && Math.abs(bR.min.z + 3) < 1e-6 && Math.abs(bR.max.y - 10) < 1e-6,
+    [bS.min.z, bS.max.z, bR.min.x, bR.max.x, bR.min.z].map(v => v.toFixed(2)).join());
+
+  const spn = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 讀程式守著：做法「疊層／互卡」預設疊層、新建開檔回到疊層與自動；互卡走 interlockMany、⛔ 定位孔、⛔ 分段表；每塊零件用自己的外框；藏起來的樣式由程式帶',
+    /<option value="stack">疊層<\/option><option value="interlock">互卡（側面＋橫肋）<\/option>/.test(spn) && /if \(this\.opt\.method !== 'interlock'\) this\.opt\.method = 'stack';/.test(spn)
+    && /this\.opt\.method = 'stack';\s*\/\/ 6a/.test(spn) && /il \? interlockMany\(meshes, this\.opt\.il\)/.test(spn) && /&& !il\)\s*\/\/ 6a：互卡沒有定位孔/.test(spn)
+    && /if \(r\.method === 'interlock'\) \{[\s\S]{0,300}this\._renderInterlock\(\);\s*return;/.test(spn) && (spn.match(/\.\.\.this\._ownFrame\((s|slice)\)/g) || []).length === 3
+    && /getElementById\('slModeStyle'\)/.test(spn) && !/\.slMode/.test(ih));
+
+  // 改壞沒抓到的兩處補的：側面掉下來的塊；黃圈畫在每一片肋自己的平面上
+  const rs = IL.interlockMany([b, box(0.5, 2, 6, 10.75, 1, 0)], {});
+  ok('★★★ 側面旁邊多一小塊（x 10.5～11，肋都沒經過）⇒ 側面那一小塊標紅、講「側面有 1 塊沒有任何一片肋卡到」；大的那塊沒標',
+    rs.warnings.some(w => /^側面有 1 塊沒有任何一片肋卡到/.test(w)) && rs.slices[0].loops.filter(l => l.loose).length === 1 && Math.abs(rs.slices[0].loops.find(l => l.loose).area - 1) < 1e-6);
+  const st3 = SM.buildStack(r3.slices, 'z', {});
+  ok('★★★ 立體預覽的黃圈（很矮的長方塊）：6 個、各在自己那片肋的位置（x ＝ 肋的位置、z ＝ 0、高 0.4）',
+    st3.rings.length === 6 && st3.rings.every((g, i) => g.kind === 'weak' && Math.abs(g.pos.x - r3.slices[i + 1].coord) < 1e-6 && Math.abs(g.pos.z) < 1e-6 && Math.abs(g.pos.y - 0.4) < 1e-6),
+    st3.rings.map(g => g.pos.x.toFixed(2) + '/' + g.pos.z.toFixed(2)).join(' '));
+
+  // 本機抓到的四件：只看第 0～0 片 ⇒ 只畫側面；資訊列講「卡不牢」；重切之後舊名字拿掉；換做法範圍回到全部
+  const only0 = SM.buildStack(r.slices, 'z', { from: 0, to: 0 });
+  const svs = readFileSync(join(here, '../js/ui/stackView.js'), 'utf8');
+  ok('★★ 立體預覽：只看第 0～0 片 ⇒ 只畫側面（0 ⛔ 當成沒填）；互卡的黃圈講「卡不牢」；重切之後上一次點到的名字拿掉；換做法「只看第幾片」回到全部',
+    only0.shown === 1 && /!\(v >= 0\)/.test(svs) && /this\.range\.from === '' \? Math\.min\(\.\.\.ix\)/.test(svs) && /il \? s\.index > 0 && g\.with === 0/.test(svs) && /'卡不牢' : '只黏一點點'/.test(svs)
+    && /trisOf\(this\.meshes\);\s*this\.pickEl\.hidden = true;/.test(svs) && /this\._applyMethod\(\); this\.stack3d\.reset\(\); this\.run\(\);/.test(spn), 'shown ' + only0.shown);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
