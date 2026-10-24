@@ -22,6 +22,37 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildStack, ghostOf, trisOf, disposeGroup, GHOST_MAX_TRIS } from '../view/stackModel.js';
 
 const HEIGHT = 260;
+
+/**
+ * 🔴 **樣式由程式自己帶，⛔ 寫在 `index.html`**（2026-10-24，5b 線上先驗撞到）：
+ * 剛上傳時瀏覽器可能拿暫存的舊主頁面配新程式 —— 舊頁面上沒有這幾行，立體預覽整排直著排、說明字疊到分段表上
+ * （同 10-14 `規格\建模器-版本對不上.md`「提示條用程式做出來」那一條）。第一次用到才放進頁面，只放一次。
+ */
+const CSS = [
+  '.uwCard.uwHit { border-color: #4a90e2; box-shadow: 0 0 0 2px rgba(74,144,226,.55); }',
+  '.slv { margin: 0 0 14px; border: 1px solid #333944; border-radius: 8px; background: #1c1f25; overflow: hidden; }',
+  '.slvBar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; font-size: 12px; }',
+  '.slvBar b { font-size: 12.5px; }',
+  '.slvTools { display: contents; }',
+  '.slvTools[hidden] { display: none; }',
+  '.slvBar .lbl { font-size: 11px; color: #8b93a1; }',
+  '.slvBar input[type=number] { padding: 4px 6px; border-radius: 5px; border: 1px solid #3f4550; background: #191c21; color: #e8eaed; }',
+  '.slvView { position: relative; border-top: 1px solid #2c313a; }',
+  '.slvView[hidden] { display: none; }',
+  '.slvView canvas { display: block; width: 100%; height: ' + HEIGHT + 'px; }',
+  '.slvTip { position: absolute; right: 8px; bottom: 6px; font-size: 11px; color: #8b93a1; pointer-events: none; }',
+  '.slvPick { position: absolute; right: 8px; top: 6px; font-size: 12px; color: #e8eaed; background: rgba(20,24,32,.82); padding: 2px 8px; border-radius: 5px; pointer-events: none; }',
+  '.slvPick[hidden] { display: none; }',
+].join('\n');
+
+function ensureStyle() {
+  if (document.getElementById('slvStyle')) return;
+  const st = document.createElement('style');
+  st.id = 'slvStyle';
+  st.textContent = CSS;
+  document.head.appendChild(st);
+}
+
 /** 一開始從右前上方斜著看整疊 */
 const VIEW_DIR = new THREE.Vector3(0.9, 0.7, 1.1).normalize();
 
@@ -44,6 +75,7 @@ export class StackView {
   }
 
   _build() {
+    ensureStyle();
     const el = document.createElement('div');
     el.className = 'slv';
     el.innerHTML = `

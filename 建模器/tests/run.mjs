@@ -20514,6 +20514,11 @@ if (csgOK) {
     (sp.match(/new StackView\(/g) || []).length === 1 && /appendChild\(this\.stack3d\.el\);\s*this\.stack3d\.refresh\(\);\s*\n\s*this\.body\.appendChild\(this\._bandTable\(\)\)/.test(sp)
     && /stack3d = \{ open: true, explode: false, faint: false, ghost: true, \.\.\.\(this\.opt\.stack3d \|\| \{\}\) \}/.test(sp) && /this\.stack3d\.reset\(\);/.test(sp)
     && !/requestAnimationFrame/.test(sv) && /if \(this\.r\) return true;/.test(sv) && (sp.match(/this\._sheets\(true\)/g) || []).length === 1);
+  // 線上先驗撞到：剛上傳時拿到暫存的舊主頁面 ⇒ 寫在 index.html 的樣式不在、立體預覽整排亂掉（同 10-14「版本對不上」）
+  const ih = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 讀程式守著：立體預覽的樣式由程式自己帶（建畫面時放進頁面、只放一次），⛔ 寫在 index.html（舊頁面上不會有）',
+    /_build\(\) \{\s*ensureStyle\(\);/.test(sv) && /'\.slvBar \{ display: flex;/.test(sv) && /'\.uwCard\.uwHit \{/.test(sv) && /getElementById\('slvStyle'\)\) return;/.test(sv)
+    && !/\.slv[A-Z\s{]|\.uwHit/.test(ih));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
