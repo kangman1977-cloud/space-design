@@ -15,9 +15,13 @@
  *
  * ⚠ **凹的多邊形先拆三角形再磨**（⑥）：面的中心會落到面外面 ⇒ 小面翻過來（獅子頭布林留下的 12～15 邊形 21 → 2 個）。
  * ⚠ **翻過來的小面照實講**（⑥）：窄長條接大面那種（狐狸頭）規則救不完全 —— 磨完跟粗網格那一面比方向，反過來的記下來。
+ *
+ * 🔴 **8b（2026-10-25，kang「① 丙 勾平滑那一刻判一次、新長出來的邊照轉折 ④ 改角度自己標的不動、另一顆全部重新判斷」）**：
+ * 保持尖不再每次照轉折重判（8a 那樣拉高一個點，那一圈會突然變尖）—— 判一次就記在邊上（`HalfEdge.crease`，`decideCreases()`），
+ * 之後照記的；還沒判過的（新長出來的邊）第一次算的時候照轉折判、記下來。自己標的（3／4）蓋過照轉折判的。
  */
 import * as THREE from 'three';
-import { Mesh } from '../core/mesh.js';
+import { Mesh, CREASE } from '../core/mesh.js';
 import { earClip } from '../core/triangulate.js';
 
 /** 預設磨幾次（② kang 定：預設 2、可以選 0～3）*/
@@ -44,7 +48,15 @@ export function subdivide(mesh, { levels = SUBD_DEFAULT, deg = CREASE_DEG } = {}
   const wanted = Math.max(0, Math.min(SUBD_MAX, Math.round(levels)));
   const base = toLists(mesh);
   const sp = splitConcave(base);
-  let X = { P: sp.P, F: sp.F, C: creaseKeys(sp, deg), O: sp.F.map((_, i) => i) };
+  let X = { P: sp.P, F: sp.F, C: creaseKeys(sp, deg, base.marks), O: sp.F.map((_, i) => i) };
+  /** 8b ③：保持尖的邊（粗網格上、網格座標，每兩點一段）—— 拉點線面時畫紫色 */
+  const creaseSegs = [];
+  for (const key of X.C) {
+    const a = Math.floor(key / BIG), b = key % BIG;
+    if (a >= base.P.length || b >= base.P.length) continue;
+    const p = base.P[a], q = base.P[b];
+    creaseSegs.push(new THREE.Vector3(p[0], p[1], p[2]), new THREE.Vector3(q[0], q[1], q[2]));
+  }
   const creases = X.C.size;
 
   let n = 0, faces = X.F.reduce((s, f) => s + f.length, 0);
@@ -74,12 +86,13 @@ export function subdivide(mesh, { levels = SUBD_DEFAULT, deg = CREASE_DEG } = {}
     const p = X.P[f[k]], q = X.P[f[(k + 1) % f.length]];
     flipSegs.push(new THREE.Vector3(p[0], p[1], p[2]), new THREE.Vector3(q[0], q[1], q[2]));
   }
-  return { mesh: out, levels: n, wanted, capped, creases, split: sp.split, flipped: flipF.length, flipOrigins: origins.size, flipSegs };
+  return { mesh: out, levels: n, wanted, capped, creases, split: sp.split, flipped: flipF.length, flipOrigins: origins.size, flipSegs, creaseSegs };
 }
 
 /**
  * 粗網格的指紋：點數、面數、半邊數，加上每個點座標乘不同權重的加總 —— 拉一個點、加一個面都會變。
- * `ModelObject.smoothMesh()` 拿它判斷快取還能不能用（粗網格是就地改的，網格本人沒換）。O(點數)。
+ * 8b 起連「保持尖／磨圓」的標記一起算（標一條邊就重算）。
+ * `ModelObject.smoothMesh()` 拿它判斷快取還能不能用（粗網格是就地改的，網格本人沒換）。O(點數＋半邊數)。
  */
 export function subdSig(mesh) {
   let s = 0;
@@ -88,7 +101,51 @@ export function subdSig(mesh) {
     const p = vs[i].p, w = 1 + (i % 97) * 0.013;
     s += (p.x * 1.000003 + p.y * 1.7 + p.z * 2.3) * w;
   }
-  return `${vs.length}|${mesh.faces.length}|${mesh.halfEdges.length}|${s}`;
+  let c = 0;
+  const hs = mesh.halfEdges;
+  for (let i = 0; i < hs.length; i++) if (hs[i].crease) c += hs[i].crease * (1 + (i % 89));
+  return `${vs.length}|${mesh.faces.length}|${hs.length}|${s}|${c}`;
+}
+
+/**
+ * 🔴 **判斷哪些邊保持尖、記在邊上**（8b ① 丙 ④）。
+ * @param {Mesh} mesh 粗網格（⚠ 會改它的 `crease` 標記，形狀不動）
+ * @param {number} deg 轉折幾度以上算尖
+ * @param {'new'|'auto'|'all'} scope
+ *   `new` 只判還沒判過的（勾平滑那一刻、新長出來的邊）；
+ *   `auto` 照轉折判的那些也重判（改角度時；自己標的不動）；
+ *   `all` 全部重判（「全部照轉折重新判斷」，自己標的也蓋掉）
+ * @returns {number} 改了幾條邊
+ * ⚠ 破洞的邊、三個面以上共用的邊⛔ 記（磨的時候本來就當尖邊）。
+ */
+export function decideCreases(mesh, deg = CREASE_DEG, scope = 'new') {
+  const cosLim = Math.cos(deg * Math.PI / 180);
+  let normalsReady = false, n = 0;
+  for (const he of mesh.edges()) {
+    const c = he.crease | 0;
+    if (scope === 'new' && c) continue;
+    if (scope === 'auto' && (c === CREASE.SHARP || c === CREASE.SMOOTH)) continue;
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    if (!normalsReady) { mesh.computeNormals(); normalsReady = true; }
+    const a = he.face.normal, b = he.twin.face.normal;
+    const v = a.dot(b) <= cosLim + 1e-12 ? CREASE.AUTO_SHARP : CREASE.AUTO_SMOOTH;
+    if (v !== c) { mesh.setCrease(he, v); n++; }
+  }
+  return n;
+}
+
+/**
+ * 自己標選到的邊（8b ②）：保持尖（`true`）或磨圓（`false`）。
+ * @returns {number} 改了幾條（本來就是那樣的不算）
+ */
+export function markCreases(mesh, hes, sharp) {
+  const v = sharp ? CREASE.SHARP : CREASE.SMOOTH;
+  let n = 0;
+  for (const he of hes) {
+    if (!he || !he.face || !he.twin || !he.twin.face) continue;      // 破洞的邊本來就是尖的
+    if ((he.crease | 0) !== v) { mesh.setCrease(he, v); n++; }
+  }
+  return n;
 }
 
 // ── 內部 ─────────────────────────────────────────────
@@ -100,9 +157,13 @@ function ekey(a, b) { return a < b ? a * BIG + b : b * BIG + a; }
 /** 半邊網格 → 純陣列（點照 `mesh.verts` 的順序，⛔ 重排 —— `fromFaceList()` 建回來編號一樣）*/
 function toLists(mesh) {
   const vi = new Map(mesh.verts.map((v, i) => [v, i]));
+  /** 8b：邊上記的保持尖／磨圓（邊的鍵 → `CREASE` 值；沒記的不放）*/
+  const marks = new Map();
+  for (const he of mesh.edges()) if (he.crease) marks.set(ekey(vi.get(he.v), vi.get(he.to)), he.crease);
   return {
     P: mesh.verts.map(v => [v.p.x, v.p.y, v.p.z]),
-    F: mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v)))
+    F: mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v))),
+    marks
   };
 }
 
@@ -147,8 +208,11 @@ function isConcave(P, f, n) {
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
-/** 轉折 ≥ `deg` 的邊（兩個面的法向夾角）；破洞與三面共用的邊在 `ccStep()` 裡另外當尖 */
-function creaseKeys({ P, F }, deg) {
+/**
+ * 保持尖的邊：邊上記了的照記的（8b：1／3 尖、2／4 磨圓），沒記的照轉折 ≥ `deg`（兩個面的法向夾角）；
+ * 破洞與三面共用的邊在 `ccStep()` 裡另外當尖
+ */
+function creaseKeys({ P, F }, deg, marks = new Map()) {
   const C = new Set();
   const N = F.map(f => newell(P, f));
   const E = new Map();
@@ -160,6 +224,9 @@ function creaseKeys({ P, F }, deg) {
   const cosLim = Math.cos(deg * Math.PI / 180);
   for (const [key, fs] of E) {
     if (fs.length !== 2) continue;
+    const m = marks.get(key);
+    if (m === CREASE.AUTO_SHARP || m === CREASE.SHARP) { C.add(key); continue; }
+    if (m === CREASE.AUTO_SMOOTH || m === CREASE.SMOOTH) continue;
     const a = N[fs[0]], b = N[fs[1]];
     if (!a || !b) continue;
     if (dot(a, b) <= cosLim + 1e-12) C.add(key);

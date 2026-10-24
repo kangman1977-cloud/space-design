@@ -7793,7 +7793,7 @@ function marksSurvive(name, src, dst, remap) {
 }
 
 {
-  /** 準備一個每樣標記都有的網格：baked 圓柱 → 環切 3 刀（hard）→ 手動標 CUT、smooth、不准切（keep，2026-10-13 加的第四樣）*/
+  /** 準備一個每樣標記都有的網格：baked 圓柱 → 環切 3 刀（hard）→ 手動標 CUT、smooth、不准切（keep，2026-10-13 加的第四樣）、平滑細分保持尖（crease，2026-10-25 8b 加的第五樣）*/
   const base = (() => {
     const b = edit.mergeCoplanarFaces(buildPrim('cylinder', { r: 25, h: 60, seg: 16 }));
     const m0 = b.ok ? b.mesh : buildPrim('cylinder', { r: 25, h: 60, seg: 16 });
@@ -7809,6 +7809,7 @@ function marksSurvive(name, src, dst, remap) {
     m.setRole(pick[1], EDGE_ROLE.CUT);
     m.setSmooth(pick[2], true);
     m.setKeep(pick[3], true);
+    m.setCrease(pick[4], 3);            // CREASE.SHARP（自己標的尖）
     return m;
   })();
 
@@ -21054,9 +21055,10 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
   ok('★★★ 粗網格就地拉一個點 ⇒ 平滑後的重算（外框跟著變）', m2 !== m1 && size(m2)[0] > 60, `${size(m2)}`);
   o.mesh().verts[0].p.x -= 10;
   o.smoothMesh();                    // 先讓快取停在 30°、點已經拉回去 ⇒ 下面只改角度（改壞時「快取不看角度」抓得到）
-  o.subdDeg = 180;
-  ok('★★ 改保持尖的角度 ⇒ 重算（180° ⇒ 全部磨圓，每邊變小）', size(o.smoothMesh())[0] < 59);
-  o.subdDeg = 30;
+  /** 8b 起改角度 ＝ 面板做兩件事：換角度、照轉折判的邊重判（`decideCreases(…, 'auto')`）—— 這裡照面板的做法 */
+  o.subdDeg = 180; S.decideCreases(o.mesh(), 180, 'auto');
+  ok('★★ 改保持尖的角度（面板：換角度＋重判）⇒ 重算（180° ⇒ 全部磨圓，每邊變小）', size(o.smoothMesh())[0] < 59);
+  o.subdDeg = 30; S.decideCreases(o.mesh(), 30, 'auto');
   const par = new io.ModelObject({ name: 'p', src: { type: 'box', w: 60, h: 45, d: 40 } });
   par.subd = 2;
   ok('★★★ ⑦ 參數物件（還沒轉網格）設了也不磨 ⇒ smoothMesh() 是 mesh() 本人', !par.smoothed && par.smoothMesh() === par.mesh());
@@ -21100,6 +21102,103 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
     && /有 \$\{info\.flipped\} 個小面翻過來了/.test(tb) && /setFacePreview\(info\.flipSegs\.map/.test(tb));
   ok('★ 讀程式守著：複製、切穿、分開、切成實心拆出來的照樣平滑',
     (mn.match(/subd: obj\.subd, subdDeg: obj\.subdDeg/g) || []).length === 3 && /subd: o\.subd, subdDeg: o\.subdDeg/.test(mn));
+}
+
+
+section('平滑細分 8b 保持尖／磨圓（第二輪第八批，2026-10-25）');
+{
+  /**
+   * `規格\建模器-平滑細分.md`「8b」；kang 2026-10-25「8b 照你的建議：① 丙 勾平滑那一刻判一次、新長出來的邊照轉折
+   * ② 選邊＋面板兩顆 ③ 保持尖的邊畫紫色 ④ 改角度自己標的不動、另一顆全部重新判斷 ⑤ 教人用影響半徑」
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const S = await import('../js/build/subd.js');
+  const { CREASE } = await import('../js/core/mesh.js');
+  const P8 = await import('../js/build/prim.js');
+  const ed = await import('../js/core/edit.js');
+  const mk = t => { const o = new io.ModelObject({ name: t, src: P8.defaultSrc(t) }); o.bake(); o.subd = 2; return o; };
+  const cnt = (m, ...vs) => [...m.edges()].filter(he => vs.includes(he.crease)).length;
+  const size = m => { const b = m.bounds(); return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z].map(x => +x.toFixed(4)); };
+  ok('★ 標記的值：0 還沒判、1／2 照轉折、3／4 自己標', CREASE.NONE === 0 && CREASE.AUTO_SHARP === 1 && CREASE.AUTO_SMOOTH === 2 && CREASE.SHARP === 3 && CREASE.SMOOTH === 4);
+
+  // ① 丙：勾平滑那一刻判一次（第一次 smoothMesh），之後拉點不重判
+  const dome = mk('dome');
+  ok('★ 還沒平滑過 ⇒ 邊上沒有標記', cnt(dome.mesh(), 1, 2, 3, 4) === 0);
+  dome.smoothMesh();
+  ok('★★★ 勾平滑那一刻照轉折判一次、記在邊上：半球底下那圈 32 條尖、其他磨圓（破洞的邊⛔ 記）',
+    cnt(dome.mesh(), CREASE.AUTO_SHARP) === 32 && cnt(dome.mesh(), CREASE.AUTO_SMOOTH) > 400 && dome.smoothInfo().creases === 32,
+    `${cnt(dome.mesh(), 1)} ${cnt(dome.mesh(), 2)}`);
+  let top = dome.mesh().verts[0];
+  for (const v of dome.mesh().verts) if (v.p.y > top.p.y) top = v;
+  top.p.y += 10;
+  const after = dome.smoothMesh();
+  ok('★★★ 拉高頂點 10 cm ⇒ 那一圈不會突然變尖（保持尖的邊還是 32 條；8a 每次重判會變 64）',
+    dome.smoothInfo().creases === 32 && cnt(dome.mesh(), CREASE.AUTO_SHARP) === 32, `${dome.smoothInfo().creases}`);
+  ok('★ 拉了之後平滑後的照樣重算（外框跟著高）', size(after)[1] > 35);
+  ok('★★ ③ 紫色要畫的線段：保持尖的 32 條、每條兩個點（粗網格的座標）', dome.smoothInfo().creaseSegs.length === 64);
+
+  // ① 丙：新長出來的邊照轉折判（方塊頂面擠出 ⇒ 還是方的）
+  const box = mk('box');
+  box.smoothMesh();
+  const bm = box.mesh(); bm.computeNormals();
+  let topF = bm.faces[0];
+  for (const f of bm.faces) if (f.normal.y > topF.normal.y) topF = f;
+  const ex = ed.extrudeFace(bm, topF, 20);
+  box.setMesh(ex.mesh);
+  ok('★ （前置）擠出長出來的邊還沒判', ex.ok && cnt(box.mesh(), 0) > 0);
+  const bs = box.smoothMesh();
+  ok('★★★ 方塊頂面擠出 20 cm ⇒ 新長出來的直角邊照轉折判成尖 ⇒ 還是方的（60 × 65 × 40）',
+    JSON.stringify(size(bs)) === JSON.stringify([60, 65, 40]) && box.smoothInfo().creases === 20, `${size(bs)} ${box.smoothInfo().creases}`);
+
+  // ② 自己標：選邊保持尖／磨圓；④ 改角度自己標的不動、全部重新判斷才蓋掉
+  const topHes = [...box.mesh().edges()].filter(h => h.face && h.twin && h.twin.face && h.v.p.y > 40 && h.to.p.y > 40);
+  const m1 = box.smoothMesh();
+  ok('★★★ 頂上那圈 4 條自己標磨圓 ⇒ 標成 4（自己標的）、保持尖的 20 → 16、平滑後的重算（標記算進指紋）',
+    topHes.length === 4 && S.markCreases(box.mesh(), topHes, false) === 4 && topHes.every(h => h.crease === CREASE.SMOOTH)
+    && box.smoothMesh() !== m1 && box.smoothInfo().creases === 16);
+  ok('★ 再標一次一樣的 ⇒ 改了 0 條', S.markCreases(box.mesh(), topHes, false) === 0);
+  {
+    const plate = new io.ModelObject({ name: 'pl', src: P8.defaultSrc('plate') }); plate.bake();
+    const rim = [...plate.mesh().edges()].filter(h => !h.face || !h.twin || !h.twin.face);
+    ok('★★ 破洞的邊（板子外圈）⛔ 標、也⛔ 判（磨的時候本來就是尖的）',
+      rim.length > 0 && S.markCreases(plate.mesh(), rim, true) === 0 && S.decideCreases(plate.mesh(), 30, 'all') === 0 && rim.every(h => !h.crease));
+  }
+  S.decideCreases(box.mesh(), 30, 'auto');
+  ok('★★★ ④ 改角度（重判照轉折判的）⇒ 自己標的 4 條不動', topHes.every(h => h.crease === CREASE.SMOOTH));
+  const nAll = S.decideCreases(box.mesh(), 30, 'all');
+  ok('★★★ ④ 全部照轉折重新判斷 ⇒ 自己標的也蓋掉（那 4 條回到照轉折判的尖）',
+    nAll >= 4 && topHes.every(h => h.crease === CREASE.AUTO_SHARP));
+  S.markCreases(box.mesh(), topHes.slice(0, 1), true);
+  ok('★ 自己標保持尖 ⇒ 3', topHes[0].crease === CREASE.SHARP);
+
+  // 存檔：從來沒平滑過的⛔ 多 crease 欄；有判過的存、讀回一樣
+  const plain = new io.ModelObject({ name: 'p', src: P8.defaultSrc('box') }); plain.bake();
+  const jb = JSON.parse(JSON.stringify(box.toJSON()));
+  const back = io.ModelObject.fromJSON(jb);
+  const same = [...back.mesh().edges()].map(h => h.crease).sort().join() === [...box.mesh().edges()].map(h => h.crease).sort().join();
+  ok('★★★ 存檔：沒平滑過的網格沒有 crease 這一欄（舊檔一個字都不變）；判過的存下來、讀回一樣',
+    !('crease' in plain.toJSON().mesh) && Array.isArray(jb.mesh.crease) && jb.mesh.crease.length > 0 && same);
+  // 8a 的舊檔（有 subd、沒有標記）⇒ 開檔第一次算時照轉折判一次（跟 8a 一樣）
+  const old = mk('box').toJSON(); delete old.mesh.crease;
+  const ob = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(old)));
+  ok('★★ 8a 存的舊檔（有 subd、沒有標記）⇒ 開檔照轉折判一次：方塊 12 條尖、96 面、一模一樣',
+    ob.smoothMesh().faces.length === 96 && ob.smoothInfo().creases === 12 && cnt(ob.mesh(), CREASE.AUTO_SHARP) === 12);
+
+  // 讀程式守著
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const tb = src('ui/toolbar.js'), sc = src('view/scene.js'), iom = src('core/io.js');
+  ok('★★ 讀程式守著（物件）：算平滑之前先判還沒判的邊，而且在算指紋之前',
+    /decideCreases\(m, this\.subdDeg, 'new'\);\s*const c = this\._smooth, sig = subdSig\(m\);/.test(iom));
+  ok('★★ 讀程式守著（面板）：改角度只重判照轉折判的；「全部照轉折重新判斷」有自己標的先問；拉點線面選邊兩顆；拉一個點教人用影響半徑',
+    /obj\.subdDeg = v;\s*decideCreases\(obj\.mesh\(\), v, 'auto'\);/.test(tb)
+    && /this\._rowBtn\('全部照轉折重新判斷'/.test(tb) && /if \(manual && !\(await ask\(/.test(tb) && /decideCreases\(obj\.mesh\(\), obj\.subdDeg, 'all'\)/.test(tb)
+    && /if \(el\.obj\.smoothed\) this\._subdEditBox\(el\.obj\);/.test(tb)
+    && /this\._rowBtn\('選到的邊保持尖'/.test(tb) && /this\._rowBtn\('選到的邊磨圓'/.test(tb)
+    && /sel\.editSel\.kind === 'vertex' && !\(sel\.propRadius > 0\)/.test(tb) && /「影響半徑」填一個數字/.test(tb));
+  ok('★★ 讀程式守著（畫面）：拉點線面時保持尖的邊畫紫色（只在畫粗網格時）',
+    /const cs = ghostSrc \? obj\.smoothInfo\(\)\.creaseSegs : \[\];/.test(sc) && /creases\.raycast = \(\) => \{\};/.test(sc)
+    && /SUBD_CREASE_COLOR = 0xb455ff/.test(sc));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

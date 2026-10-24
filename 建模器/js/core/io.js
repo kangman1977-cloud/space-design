@@ -30,7 +30,7 @@ import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 import { saveBlob, textBlob, safeName, TYPES } from '../out/save.js';
 import { penPlaneFrame } from './penSnap.js';
-import { subdivide, subdSig, CREASE_DEG, SUBD_MAX } from '../build/subd.js';
+import { subdivide, subdSig, decideCreases, CREASE_DEG, SUBD_MAX } from '../build/subd.js';
 
 export const DOC_TYPE = 'model-doc';
 export const DOC_VERSION = 4;
@@ -396,6 +396,11 @@ export class ModelObject {
   smoothMesh() {
     const m = this.mesh();
     if (!this.smoothed) return m;
+    /**
+     * 8b ① 丙：還沒判過的邊（勾平滑那一刻的全部、之後新長出來的）照轉折判一次、記在邊上 —— 之後拉點不重判。
+     * 判過的跳過，所以平常是 O(邊數) 掃一遍、什麼都不改。⚠ 要在算指紋之前（指紋含標記）。
+     */
+    decideCreases(m, this.subdDeg, 'new');
     const c = this._smooth, sig = subdSig(m);
     if (c && c.base === m && c.sig === sig && c.levels === this.subd && c.deg === this.subdDeg) return c.info.mesh;
     const info = subdivide(m, { levels: this.subd, deg: this.subdDeg });

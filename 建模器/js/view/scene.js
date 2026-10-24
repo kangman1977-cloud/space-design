@@ -30,6 +30,8 @@ export const DART_COLOR = 0x9be22d;
  */
 export const KEEP_COLOR = 0x2f6fd6;
 export const PROPOSAL_COLOR = 0x2ad4d4;
+/** 平滑細分保持尖的邊（第八批 8b，kang「保持尖的邊畫紫色」）—— 拉點線面時畫在粗網格上 */
+export const SUBD_CREASE_COLOR = 0xb455ff;
 
 /**
  * 🔴 **不平的面：琥珀色加斜線**（網格核心第三批 b，kang 2026-10-23 → `規格\建模器-網格核心.md` 第 6 節）。
@@ -449,6 +451,14 @@ export class SceneView {
     ghost.visible = false;
     node.add(ghost);
 
+    /** 8b ③（kang「保持尖的邊畫紫色」）：拉點線面時粗網格上保持尖的邊（`smoothInfo().creaseSegs`）*/
+    const creases = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: SUBD_CREASE_COLOR }));
+    creases.name = 'subdCreases';
+    creases.raycast = () => {};
+    creases.renderOrder = 2;
+    creases.visible = false;
+    node.add(creases);
+
     /** 第三批 b：不平的面（琥珀色斜線）—— 內容在 `_updateNode()` 跟著網格重建 */
     const unflat = new THREE.Mesh(new THREE.BufferGeometry(), unflatMaterial());
     unflat.name = 'unflat';
@@ -780,6 +790,12 @@ export class SceneView {
       ghost.geometry.dispose();
       ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
       ghost.visible = !!ghostSrc;
+      const cr = node.getObjectByName('subdCreases');
+      cr.geometry.dispose();
+      const cs = ghostSrc ? obj.smoothInfo().creaseSegs : [];
+      cr.geometry = new THREE.BufferGeometry();
+      cr.geometry.setAttribute('position', new THREE.Float32BufferAttribute(cs.flatMap(p => [p.x, p.y, p.z]), 3));
+      cr.visible = cs.length > 0;
 
       node.userData.geomKey = base;
       node.userData.ghostKey = ghostSrc;

@@ -63,7 +63,8 @@ import { alignPositions, distributePositions, spacePositions, currentGaps,
 import { fetchLatest } from '../core/appver.js';
 import { meshGearPair, gearClash } from '../core/gearPair.js';
 import { ask } from './askBox.js';
-import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP } from '../build/subd.js';
+import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP, decideCreases, markCreases } from '../build/subd.js';
+import { CREASE } from '../core/mesh.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -1006,6 +1007,35 @@ export class Panel {
   }
 
   /**
+   * 🔴 **拉點線面時的平滑細分**（第二輪第八批 8b，2026-10-25 kang「② 選邊＋面板兩顆 ⑤ 教人用影響半徑」→ `規格\建模器-平滑細分.md`「8b」）。
+   * 選到邊 ⇒「保持尖」「磨圓」兩顆（Rhino 的 Crease／RemoveCrease）；選到點、影響半徑是 0 ⇒ 教人拉之前先填影響半徑
+   * （只拉一個點，磨出來是尖尖的一撮 —— 沙箱三種判法都一樣，要圓圓鼓起來得讓旁邊的點跟著動）。
+   */
+  _subdEditBox(obj) {
+    const sel = this.app.sel;
+    this.form.appendChild(head('平滑細分'));
+    const hes = (sel.editSels || []).filter(e => e.kind === 'edge' && e.obj === obj).map(e => e.he);
+    if (hes.length) {
+      const sharp = hes.filter(he => he.crease === CREASE.SHARP || he.crease === CREASE.AUTO_SHARP).length;
+      this.form.appendChild(note(`選到的 ${hes.length} 條邊：${sharp} 條保持尖、${hes.length - sharp} 條磨圓（拉點線面時保持尖的邊畫成紫色）`));
+      const mark = (on, label) => {
+        const n = markCreases(obj.mesh(), hes, on);
+        if (!n) { this.app.toast(`選到的邊本來就都${on ? '保持尖' : '磨圓'}了（或是破洞的邊 —— 那裡一定是尖的）`); return; }
+        this.analysisCache.delete(obj.id);
+        this._edit(label);
+        this.app.toast(`${n} 條邊改成${on ? '保持尖' : '磨圓'}（自己標的 —— 改角度不會動它，「全部照轉折重新判斷」才會）`);
+      };
+      this._rowBtn('選到的邊保持尖', '選到的邊磨的時候不磨圓（紫色）。自己標的，改「保持尖的轉折」角度不會動它', () => mark(true, '平滑細分保持尖'));
+      this._rowBtn('選到的邊磨圓', '選到的邊磨的時候磨圓。自己標的，改「保持尖的轉折」角度不會動它', () => mark(false, '平滑細分磨圓'));
+    } else {
+      this.form.appendChild(note('要改哪幾條邊保持尖：選邊（上面「邊」那一顆、「選轉角」「整圈」都可以），這裡會出現「保持尖」「磨圓」兩顆'));
+    }
+    if (sel.editSel && sel.editSel.kind === 'vertex' && !(sel.propRadius > 0)) {
+      this.form.appendChild(note('只拉一個點，磨出來會是尖尖的一撮；要圓圓鼓起來，拉之前在上面「影響半徑」填一個數字（例如 15），旁邊的點會跟著動'));
+    }
+  }
+
+  /**
    * 🔴 **平滑細分**（第二輪第八批 8a，2026-10-25 kang「① 甲 疊一層 ② 預設 2 次可選 0～3 ③ a 照縮寫前後尺寸
    * ④ 甲 轉折 ≥30° 自動保持尖 ⑤ 量測列印剖面看平滑後、展開用粗網格 ⑥ 翻過來要檢查講在哪 ⑦ 只有網格物件」
    * → `規格\建模器-平滑細分.md`）。只在網格物件的面板出現（⑦）。
@@ -1030,11 +1060,29 @@ export class Panel {
         this.analysisCache.delete(obj.id);
         this._edit('平滑細分磨 ' + obj.subd + ' 次');
       }, '磨越多次越圓、面越多（每次 ×4）。半球殼 544 面：1 次 2 千面、2 次 8 千面、3 次 3.4 萬面');
+    /**
+     * 8b ④：改角度 ⇒ 照轉折判的邊照新角度重判一次；**自己標的不動**（`decideCreases(…, 'auto')`）。
+     * 之後拉點不重判（① 丙）；新長出來的邊照這個角度判。
+     */
     this._rowNum('保持尖的轉折（°）', obj.subdDeg, { min: 1, max: 179, step: 5 }, v => {
       obj.subdDeg = v;
+      decideCreases(obj.mesh(), v, 'auto');
       this.analysisCache.delete(obj.id);
       this._edit('平滑細分保持尖的轉折');
-    }, '兩個面的夾角大於這個角度的邊保持尖（不磨圓）。調大 ⇒ 磨圓的邊變多；方塊的直角是 90°、球的格子不到 20°');
+    }, '兩個面的夾角大於這個角度的邊保持尖（不磨圓）。改了 ⇒ 照轉折判的邊重新判一次（自己標的不動）；'
+      + '之後拉點不重判，新長出來的邊照這個角度判。調大 ⇒ 磨圓的邊變多；方塊的直角是 90°、球的格子不到 20°');
+    /** 8b ④：另一顆 —— 全部照轉折重新判斷（自己標的也蓋掉；有自己標的先問一句）*/
+    const manual = [...obj.mesh().edges()].filter(he => he.crease === CREASE.SHARP || he.crease === CREASE.SMOOTH).length;
+    this._rowBtn('全部照轉折重新判斷',
+      '每一條邊都照現在的形狀與上面的角度重新判斷要不要保持尖'
+      + '（拉過點之後想回到「照轉折」時用）。⚠ 自己標的「保持尖／磨圓」也會被蓋掉', async () => {
+        if (manual && !(await ask(`有 ${manual} 條邊是自己標的「保持尖／磨圓」，全部重新判斷會把它們也蓋掉`
+          + '（要反悔可以馬上按 Ctrl+Z），確定嗎？'))) return;
+        const n = decideCreases(obj.mesh(), obj.subdDeg, 'all');
+        this.analysisCache.delete(obj.id);
+        this._edit('平滑細分全部照轉折重新判斷');
+        this.app.toast(`已經照轉折 ${obj.subdDeg}° 重新判斷：改了 ${n} 條邊`);
+      });
 
     const info = obj.smoothInfo();
     if (!info) return;
@@ -1049,6 +1097,8 @@ export class Panel {
       + `　面 ${obj.mesh().faces.length.toLocaleString()} → ${info.mesh.faces.length.toLocaleString()}`
       + `　保持尖的邊 ${info.creases} 條`));
     this.form.appendChild(note('磨圓會往裡縮一點（業界都一樣）：量測、3D 列印、剖面分切、匯出照平滑後的尺寸；展開照粗網格'));
+    this.form.appendChild(note(`保持尖的邊是勾平滑那一刻照轉折判的${manual ? `（另有 ${manual} 條自己標的）` : ''}，`
+      + '之後拉點不會重判；新長出來的邊照轉折判。要改哪幾條：按「拉點線面」選邊，這裡會出現「保持尖」「磨圓」兩顆'));
     if (info.capped) {
       this.form.appendChild(bad(`磨 ${info.wanted} 次會超過 ${SUBD_FACE_CAP.toLocaleString()} 個面（畫面會卡住），先只磨 ${info.levels} 次`
         + '—— 要磨更多次，先把粗網格減面'));
@@ -1444,6 +1494,7 @@ export class Panel {
         + '資料沒壞，把那些點拉開或按 Ctrl+Z 就恢復。'
       ));
     }
+    if (el.obj.smoothed) this._subdEditBox(el.obj);
     const np = nonPlanarFaces(mesh);
     if (np.length) {
       const worst = np.reduce((a, b) => (a.dev > b.dev ? a : b));

@@ -36,6 +36,12 @@ export const EDGE_ROLE = {
   CUT:  'cut'     // 切割線 —— 展開時從這裡分開
 };
 
+/**
+ * 平滑細分保持尖／磨圓（`HalfEdge.crease`，第二輪第八批 8b）。
+ * 照轉折判的（1／2）改角度時會重判；自己標的（3／4）只有「全部照轉折重新判斷」才會蓋掉。
+ */
+export const CREASE = { NONE: 0, AUTO_SHARP: 1, AUTO_SMOOTH: 2, SHARP: 3, SMOOTH: 4 };
+
 let _uid = 1;
 const nextUid = () => _uid++;
 
@@ -120,6 +126,13 @@ export class HalfEdge {
      * 是第四個標記：搬移走 `marksOf()`／`applyMarks()`，存檔走 `toJSON()` 的 `keep`。
      */
     this.keep = false;
+    /**
+     * 🔴 **平滑細分：這條邊保持尖還是磨圓**（第五個標記；2026-10-25 第二輪第八批 8b，kang「① 丙 勾平滑那一刻判一次、
+     * 新長出來的邊照轉折 ② 選邊＋面板兩顆 ④ 改角度自己標的不動、另一顆全部重新判斷」→ `規格\建模器-平滑細分.md`「8b」）。
+     * 值見 `CREASE`：0 還沒判斷（新長出來的邊、從來沒平滑過）、1／2 照轉折判的尖／磨圓、3／4 自己標的尖／磨圓。
+     * 判斷在 `build/subd.js` `decideCreases()`；搬移走 `marksOf()`、存檔走 `toJSON()` 的 `crease`（有才存）。
+     */
+    this.crease = 0;
   }
   /** 終點 ＝ 反向半邊的起點 */
   get to() { return this.twin ? this.twin.v : this.next.v; }
@@ -456,6 +469,13 @@ export class Mesh {
     return this;
   }
 
+  /** 平滑細分保持尖／磨圓（第五個標記，見 `HalfEdge.crease`、`CREASE`）。兩條半邊一起設 */
+  setCrease(he, v) {
+    he.crease = v | 0;
+    if (he.twin) he.twin.crease = v | 0;
+    return this;
+  }
+
   /**
    * 🔴 **一條邊身上「要跟著它走」的全部標記，一次讀完／一次寫回。**
    *
@@ -478,7 +498,7 @@ export class Mesh {
    * 那一組回歸測試會自己把它涵蓋進去。
    */
   marksOf(he) {
-    return { role: he.role, smooth: he.smooth, hard: he.hard, keep: he.keep };
+    return { role: he.role, smooth: he.smooth, hard: he.hard, keep: he.keep, crease: he.crease };
   }
 
   /** 把 `marksOf()` 讀出來的那一包寫回另一條邊。空的（預設值）不寫。 */
@@ -488,12 +508,13 @@ export class Mesh {
     if (m.smooth) this.setSmooth(he, true);
     if (m.hard) this.setHard(he, true);
     if (m.keep) this.setKeep(he, true);
+    if (m.crease) this.setCrease(he, m.crease);
     return this;
   }
 
   /** 這一包標記是不是全空（全空就不必搬，省一趟走訪） */
   static marksEmpty(m) {
-    return !m || (m.role === EDGE_ROLE.FREE && !m.smooth && !m.hard && !m.keep);
+    return !m || (m.role === EDGE_ROLE.FREE && !m.smooth && !m.hard && !m.keep && !m.crease);
   }
 
   /** 設定邊的角色。一定要兩條半邊一起設，不然走另一邊會讀到舊值。 */
@@ -1156,7 +1177,11 @@ export class Mesh {
       /** 不准切（2026-10-13）—— 同一種寫法；舊檔沒有這一欄 ＝ 全部沒標 */
       keep: [...this.edges()]
         .filter(he => he.keep)
-        .map(he => [vi.get(he.v.id), vi.get(he.to.id)])
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id)]),
+      /** 平滑細分保持尖／磨圓（8b）—— ⚠ **有才存**：從來沒平滑過的網格存檔一個字都不變 */
+      ...(this.halfEdges.some(he => he.crease) ? { crease: [...this.edges()]
+        .filter(he => he.crease)
+        .map(he => [vi.get(he.v.id), vi.get(he.to.id), he.crease]) } : {})
     };
   }
 
@@ -1168,7 +1193,7 @@ export class Mesh {
     const m = Mesh.fromFaceList(points, d.faces);
 
     if ((d.roles && d.roles.length) || (d.smooth && d.smooth.length)
-        || (d.hard && d.hard.length) || (d.keep && d.keep.length)) {
+        || (d.hard && d.hard.length) || (d.keep && d.keep.length) || (d.crease && d.crease.length)) {
       const idx = new Map(m.verts.map((v, i) => [v.id, i]));
       const byPair = new Map();
       for (const he of m.edges()) {
@@ -1190,6 +1215,10 @@ export class Mesh {
       for (const [a, b] of (d.keep || [])) {
         const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
         if (he) m.setKeep(he, true);
+      }
+      for (const [a, b, v] of (d.crease || [])) {
+        const he = byPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+        if (he && v >= 1 && v <= 4) m.setCrease(he, v);
       }
     }
     return m;
