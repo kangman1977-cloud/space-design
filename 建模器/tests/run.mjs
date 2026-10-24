@@ -20200,6 +20200,45 @@ section('網格核心第五批 b ⑥：剖面斷線的片用掃描線補（2026-
     && /if \(op > 0 && canMerge && segs\.length\) \{\s*for \(const e of ends\) for \(const g of bridgeEnds\(e\)\) segs\.push\(g\);\s*const filled = scanFill\(segs\);/.test(ss) && /const BRIDGE_K = 8;/.test(ss) && /if \(canMerge && loops\.length > 1 && \(!patched \|\| shadows\.length\)\) \{/.test(ss) && /export function rowsToLoops\(rects, eps\)/.test(bs) && !/CrossSection/.test(ss));
 }
 
+section('智慧分切：同一對平面之間的邊一起放開（2026-10-24）');
+{
+  /** `網格核心-研究.md` 第 11 節；kang 2026-10-24「照你的建議用乙改：同一對平面之間的邊一起放開」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { proposeSeams } = await import('../js/unfold/propose.js');
+  const box = (w, h, d) => edit.mergeCoplanarFaces(prim.buildPrim('box', { w, h, d })).mesh;
+  const sub = (m, pick, n) => { m.computeNormals(); const s = edit.subdivideFaces(m, m.faces.filter(pick), n).mesh; s.computeNormals(); return s; };
+  const obj = (m, kind = 'solid') => new io.ModelObject({ name: 'x', kind, src: { type: 'mesh' }, mesh: m });
+  const pr = m => proposeSeams(obj(m), { material: 'paper' });
+  const p0 = pr(box(60, 45, 40)), p2 = pr(sub(box(60, 45, 40), () => true, 2)), p4 = pr(sub(box(60, 45, 40), () => true, 4));
+  ok('★★★ 60×45×40 方塊每面細分 2、4 ⇒ 跟沒細分一樣 3 片、縫 400 cm（以前 6 片 580：格線把每條邊切成兩段、接一段剩一段 ⇒ 細切口 ⇒ 每次接都被擋）',
+    p0.total === 3 && Math.abs(p0.cutLen - 400) < 1e-6 && [p2, p4].every(p => p.total === 3 && Math.abs(p.cutLen - 400) < 1e-6), `${p2.total} 片 ${p2.cutLen}、${p4.total} 片 ${p4.cutLen}`);
+  const pt = pr(sub(box(60, 45, 40), f => f.normal.y > 0.9, 2));
+  ok('★★ 只有頂面細分 2 ⇒ 3 片 400（以前 4 片 460）', pt.total === 3 && Math.abs(pt.cutLen - 400) < 1e-6, `${pt.total} 片 ${pt.cutLen}`);
+  const pl = pr(sub(box(150, 60, 50), () => true, 3));
+  ok('★★ 150×60×50 每面細分 3 ⇒ 跟沒細分一樣 2 片 620（以前 6 片 1040）', pl.total === 2 && Math.abs(pl.cutLen - 620) < 1e-6, `${pl.total} 片 ${pl.cutLen}`);
+  // 平面裡的線照樣可以剪：一片 300×100（板子 240×120 放不進）中間畫一條線
+  const V3 = (x, z) => new THREE.Vector3(x, 0, z);
+  const sheet = n => { let m = Mesh.fromFaceList([V3(0, 0), V3(0, 100), V3(300, 100), V3(300, 0)], [[0, 1, 2, 3]]); m.computeNormals(); if (n > 1) { m = edit.subdivideFaces(m, m.faces.slice(), n).mesh; m.computeNormals(); } return proposeSeams(obj(m, 'sheet'), { material: 'paper' }); };
+  const s1 = sheet(1), s2 = sheet(2), s3 = sheet(3);
+  ok('★★★ 一片 300×100 比板子大：沒有線 1 片放不進；中間畫一條線 ⇒ 沿著線切成 2 片、放得進；格子 3×3 ⇒ 3 片（另一個改法「同一平面先併成一塊」會讓這件事失效）',
+    s1.total === 1 && s1.big === 1 && s2.total === 2 && s2.big === 0 && Math.abs(s2.cutLen - 100) < 1e-6 && s3.total === 3 && s3.big === 0, `${s1.total}/${s1.big}、${s2.total}/${s2.big}、${s3.total}/${s3.big}`);
+  // kang 的狐狸頭（T8）：平面裡有 14 條看得見的線（下巴的階梯、眼睛）
+  const fox = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T8/狐狸頭.json'), 'utf8'))).objects[0];
+  const pf = proposeSeams(fox, { material: 'paper' });
+  ok('★★★ kang 的狐狸頭 ⇒ 11 片、縫 37.27 cm（以前 14 片、49.05：頭側邊挨著平面的 6 條邊被擋住）', pf.total === 11 && Math.abs(pf.cutLen - 37.27) < 0.01, `${pf.total} 片 ${pf.cutLen.toFixed(2)}`);
+  const flange = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T4/法蘭.json'), 'utf8'))).objects[0];
+  const pfl = proposeSeams(flange, { material: 'paper' });
+  ok('★★ kang 的法蘭照舊 15 片、縫 210.51 cm（圓柱側面那種曲面⛔ 算同一平面 —— 改壞成 30° 以內都算 ⇒ 16 片）', pfl.total === 15 && Math.abs(pfl.cutLen - 210.51) < 0.01, `${pfl.total} 片 ${pfl.cutLen.toFixed(2)}`);
+  const slab = (() => { const b = box(300, 1, 100); b.computeNormals(); return pr(sub(b, f => Math.abs(f.normal.y) > 0.9, 2)); })();
+  ok('★★ 300×1×100 厚板、上下面中間一條線（放不進）⇒ 1 片、縫 904 cm（只放開已經在這兩組裡的塊對 —— 改壞成不看 ⇒ 1003）', slab.total === 1 && Math.abs(slab.cutLen - 904) < 0.01, `${slab.total} 片 ${slab.cutLen.toFixed(2)}`);
+  const src = readFileSync(join(here, '../js/unfold/propose.js'), 'utf8');
+  ok('★★ 讀程式守著：同一平面 ＝ 每一條邊 ≤ FLAT_TOL_DEG；照舊整片攤時一起放開；有一起放開的⛔ 走快的接法',
+    /for \(const pr of list\) if \(pr\.hs\.every\(h => deg\(h\) <= FLAT_TOL_DEG\)\) PL\.union\(pr\.a, pr\.b\);/.test(src)
+    && /for \(const q of alongOf\(pr, ga, gb\)\) open\.add\(pk\(q\.a, q\.b\)\);/.test(src)
+    && /const fj = FAST && !alongOf\(pr, ga, gb\)\.length \? fastJoin\(pr, A, B, strict\) : null;/.test(src));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

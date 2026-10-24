@@ -771,6 +771,28 @@ function* proposeGen(obj, opt = {}) {
       };
       return { ok, sc, apply };
     };
+    /**
+     * 🔴 **同一對平面之間的邊一起放開**（2026-10-24，`網格核心-研究.md` 第 11 節，kang「照你的建議用乙改：同一對平面之間的邊一起放開」）。
+     * 平面裡看得見的線（自己細分的格子、匯入的平面格子、畫的線）把一個面切成好幾塊 ⇒ 兩個面之間那條邊被切成好幾段、分屬好幾對塊；
+     * 以前接一對只放開那一段 ⇒ 其他段照樣剪開、盡頭算細切口 ⇒「不要細切口」把每一次接都擋掉
+     * （60×45×40 方塊每面細分 ⇒ 3 片變 6 片；kang 的狐狸頭 11 片變 14 片）。
+     * ⭐ 接的時候，**兩組裡面、同一對平面之間的其他塊對一起放開**；平面裡的線本身照樣可以剪（板子太大時沿著畫的線切開 ——
+     * 另一個改法「同一平面先併成一塊」會讓這件事失效，沒選）。
+     * 同一平面 ＝ 兩塊之間每一條邊都 ≤ `FLAT_TOL_DEG`（曲面上的格子⛔ 碰）。⚠ 有一起放開的 ⇒ 照舊整片攤（快的接法只認一對）。
+     */
+    const PL = unionFind();
+    for (const pr of list) if (pr.hs.every(h => deg(h) <= FLAT_TOL_DEG)) PL.union(pr.a, pr.b);
+    const byPlanes = new Map();
+    for (const pr of list) {
+      const k = pk(PL.find(pr.a), PL.find(pr.b));
+      if (!byPlanes.has(k)) byPlanes.set(k, []);
+      byPlanes.get(k).push(pr);
+    }
+    const alongOf = (pr, ga, gb) => {
+      if (PL.find(pr.a) === PL.find(pr.b)) return [];           // 同一平面裡的線 ⇒ 只放開這一對
+      return byPlanes.get(pk(PL.find(pr.a), PL.find(pr.b))).filter(q => q !== pr
+        && ((P.find(q.a) === ga && P.find(q.b) === gb) || (P.find(q.a) === gb && P.find(q.b) === ga)));
+    };
     /** 照舊：把兩組合起來整片攤一次（`local()`）。`strict`：true ＝ 補剪、細切口都不准多；'notch' ＝ 只有細切口不准多（小片那一步、不要細切口時）；false ＝ 都放寬 */
     const tryJoinExact = (pr, strict) => {
       const ga = P.find(pr.a), gb = P.find(pr.b);
@@ -779,6 +801,7 @@ function* proposeGen(obj, opt = {}) {
       if (A.faces.length + B.faces.length > maxFaces) return false;   // 每一片最多幾個面（2026-10-21）
       const faces = A.faces.concat(B.faces);
       const open = new Set([...A.open, ...B.open, pk(pr.a, pr.b)]);
+      for (const q of alongOf(pr, ga, gb)) open.add(pk(q.a, q.b));
       const sc = local(faces, open, !A.sc.auto && !B.sc.auto ? new Set(A.faces.map(f => f.id)) : null);
       if (!(sc.n < A.sc.n + B.sc.n && !sc.overlap && sc.misfit <= A.sc.misfit + B.sc.misfit)) return false;
       if (strict === true && sc.auto > A.sc.auto + B.sc.auto) return false;
@@ -796,7 +819,7 @@ function* proposeGen(obj, opt = {}) {
       if (ga === gb) return false;                 // 已經同一片（再接會繞成一圈）
       const A = G.get(ga), B = G.get(gb);          // pr.a 在 A、pr.b 在 B
       if (A.faces.length + B.faces.length > maxFaces) return false;   // 每一片最多幾個面（10.5）
-      const fj = FAST ? fastJoin(pr, A, B, strict) : null;
+      const fj = FAST && !alongOf(pr, ga, gb).length ? fastJoin(pr, A, B, strict) : null;
       if (!fj) { joinCheck.exact++; return tryJoinExact(pr, strict); }
       joinCheck.fast++;
       if (VERIFY) {
