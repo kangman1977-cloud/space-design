@@ -6,6 +6,8 @@
  * 四種做法的對照在 `實驗-綜合評估-第二輪.md` 6c）。
  *
  * 從上面看：模型的外形（從下到上切 7 層疊在一起）、藍粗線 ＝ 側面、灰線 ＝ 肋；紅 ＝ 那片肋有掉下來的塊、橘 ＝ 卡不牢、紫 ＝ 選到的。
+ * 🔴 6d（2026-10-25，kang「小脊先不做，肋位圖加紅點（平常就畫），紅框那一句改成教人怎麼救」）：**紅點 ＝ 掉下來的塊在哪**
+ * （`interlockMany()` 的 `looseDots`）—— 把側面拖到紅點上、再按幫我挪，腳張開的模型多半救得回來。
  * | 動作 | 做法（手動挪肋時）|
  * |---|---|
  * | 選 | 點一條線（側面或肋）|
@@ -139,7 +141,7 @@ export class RibMapView {
       : '自己挪肋：拖、打位置、點空白處加、刪（現在的位置會先放上去）';
     $('hint').textContent = this.manual
       ? '點一條線選起來再拖（放開才重切）、點空白處加一片肋、選到的可以打位置或刪'
-      : '藍 ＝ 側面、灰 ＝ 肋、紅 ＝ 有掉下來、橘 ＝ 卡不牢';
+      : '藍 ＝ 側面、灰 ＝ 肋、紅 ＝ 有掉下來（紅點 ＝ 掉下來的塊在哪）、橘 ＝ 卡不牢';
     this.el.querySelector('.slrView').classList.toggle('edit', this.manual);
     this._fields();
     this.draw();
@@ -278,6 +280,11 @@ export class RibMapView {
       line('rib', c, color, isSel ? 3 : (q && (q.loose || q.weak) ? 2.2 : 1.2));
       if (q && q.n) label('rib', c, String(q.n), color);
     });
+    // 6d：紅點 ＝ 掉下來的塊在哪（平常就畫）；大小照面積、至少看得到（3～8 px）
+    g.fillStyle = 'rgba(221,34,34,.75)';
+    for (const d of this.res.looseDots || []) {
+      g.beginPath(); g.arc(V.X(d.x), V.Z(d.z), Math.max(3, Math.min(8, Math.sqrt(d.area) * 2)), 0, Math.PI * 2); g.fill();
+    }
     this.spines.forEach((c, i) => {
       const isSel = this.sel && this.sel.kind === 'spine' && this.sel.i === i;
       line('spine', c, isSel ? COLORS.sel : COLORS.spine, 3);
@@ -295,7 +302,7 @@ export class RibMapView {
     $('selName').textContent = this.sel.kind === 'spine'
       ? `選到的${this.spines.length === 1 ? '側面' : '側面 ' + (this.sel.i + 1)}　${ax} ＝`
       : `選到的肋${q && q.n ? ' ' + q.n : ''}　${ax} ＝`;
-    $('pos').value = s.c;
+    $('pos').value = Math.round(s.c * 100) / 100;     // 6d 本機看到：切出來的座標有浮點尾數（8.599999999999998）⇒ 顯示到 0.01
     $('del').hidden = this.sel.kind === 'spine';
   }
 
@@ -315,6 +322,10 @@ export class RibMapView {
       + (bad.length ? `；<span class="bad">有掉下來的：肋 ${bad.map(q => q.n).join('、')}</span>` : '')
       + (weak.length ? `；卡不牢：肋 ${weak.map(q => q.n).join('、')}` : '')
       + (!bad.length && !weak.length ? '；每一片肋都沒有掉下來、沒有卡不牢' : ''));
+    /** 6d：有掉下來的塊 ⇒ 教人怎麼救（紅框那一句一樣的意思）*/
+    if ((this.res.looseDots || []).length) {
+      lines.push(`紅點 ＝ 掉下來的塊（${this.res.looseDots.length} 塊）—— 把「側面」改成 2～3 片、按「手動挪肋」把側面拖到紅點上，再按「幫我挪有問題的肋」`);
+    }
     el.innerHTML = lines.join('<br>');
   }
 }

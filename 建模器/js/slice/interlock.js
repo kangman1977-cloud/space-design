@@ -113,6 +113,17 @@ function cutAt(list, ax, c, lo) {
   return r.slices[0];
 }
 
+/**
+ * 6d：掉下來的那一塊在哪（從上面看的世界座標 x、z ＋ 面積）—— 肋位圖畫紅點，人才知道側面要拖去哪
+ * （kang 2026-10-25「小脊先不做，肋位圖加紅點（平常就畫），紅框那一句改成教人怎麼救」）。
+ * 那一片的平面：沿 `ax` 在 coord；平面上的 u 照 `AXES[ax].uv[0]` 換回世界座標；取外框的正中間。
+ */
+function dotOf(ax, coord, loop) {
+  const xs = loop.pts.map(p => p.x), u = (Math.min(...xs) + Math.max(...xs)) / 2, U = AXES[ax].uv[0];
+  const P = [0, 0, 0]; P[IDX[ax]] = coord;
+  return { x: P[0] + U[0] * u, z: P[2] + U[2] * u, area: Math.abs(loop.area) };
+}
+
 /** 側面 k 片的自動位置：寬的 i／(k＋1)（1 片 ＝ 正中間；3 片 ＝ 1/4、1/2、3/4）*/
 export function spineCoordsAuto(lo, width, k) {
   const out = [];
@@ -129,7 +140,7 @@ export function spineCoordsAuto(lo, width, k) {
  *   warnings：要注意的（紅框）；notes：說明（藍框，例如上面那段槽反過來開）
  *   slices：每一塊零件一份（樣子跟疊層的片一樣：loops、area、bounds、t，另外帶 axis、coord、tag、label）；
  *     index：側面 0～k−1、肋接著往下排（側面 1 片時肋從 1 開始，跟 6a 一樣）
- *   ribInfo／spineInfo：給 6c 肋位圖畫紅黃（照位置排）
+ *   ribInfo／spineInfo：給 6c 肋位圖畫紅黃（照位置排）；looseDots：6d 掉下來的塊在哪（{x, z, area}，肋位圖的紅點）
  */
 export function interlockMany(meshes, opt = {}) {
   const o = { ...INTERLOCK_DEFAULTS, ...opt };
@@ -180,6 +191,7 @@ export function interlockMany(meshes, opt = {}) {
   const engage = spines.map(() => []);      // 每一片肋卡在側面的那一點（側面那邊算「有沒有被卡到」用）
   const loose = [], noCross = [], weak = [], multi = [], cutApart = [], flipped = [], conflict = [];
   const ribParts = [];
+  const looseDots = [];     // 6d：掉下來的塊在哪（肋位圖的紅點）
   const spLabel = i => K === 1 ? '側面' : `側面 ${i + 1}`;
 
   ribs.forEach((rib, k) => {
@@ -270,7 +282,7 @@ export function interlockMany(meshes, opt = {}) {
     let looseHere = 0;
     for (const pc of pieces) {
       const ls = toLoops(pc);
-      if (!pc.attached) { looseHere++; const outer = ls.filter(l => !l.isHole).sort((a, b) => b.area - a.area)[0]; if (outer) outer.loose = true; }
+      if (!pc.attached) { looseHere++; const outer = ls.filter(l => !l.isHole).sort((a, b) => b.area - a.area)[0]; if (outer) { outer.loose = true; looseDots.push(dotOf(ribAx, rib.coord, outer)); } }
       loopsAll.push(...ls);
     }
     if (looseHere) loose.push(`${n}（${looseHere} 塊）`);
@@ -291,7 +303,7 @@ export function interlockMany(meshes, opt = {}) {
     let sLoose = 0;
     for (const pc of sPieces) {
       const ls = toLoops(pc);
-      if (!engage[si].some(e => inside(pc, e.x, e.y))) { sLoose++; const outer = ls.filter(l => !l.isHole).sort((a, b) => b.area - a.area)[0]; if (outer) outer.loose = true; }
+      if (!engage[si].some(e => inside(pc, e.x, e.y))) { sLoose++; const outer = ls.filter(l => !l.isHole).sort((a, b) => b.area - a.area)[0]; if (outer) { outer.loose = true; looseDots.push(dotOf(spineAx, spine.coord, outer)); } }
       sLoops.push(...ls);
     }
     if (sLoose) spineLoose.push(`${spLabel(si)}有 ${sLoose} 塊沒有任何一片肋卡到（掉下來）—— 卡片標成紅色。`);
@@ -303,7 +315,7 @@ export function interlockMany(meshes, opt = {}) {
     };
   });
 
-  if (loose.length) warnings.push(`肋 ${loose.join('、')} 有插不到側面的塊（掉下來）—— 切下來會變成散的零件，卡片標成紅色；腳、耳朵那種伸出去的地方常這樣（之後會做「腳自己一條小脊插回身體」）。`);
+  if (loose.length) warnings.push(`肋 ${loose.join('、')} 有插不到側面的塊（掉下來）—— 切下來會變成散的零件，卡片標成紅色；腳、耳朵那種伸出去的地方常這樣 —— 肋位圖上的紅點就是掉下來的塊：把「側面」改成 2～3 片、按「手動挪肋」把側面拖到紅點上，再按「幫我挪有問題的肋」（腳張開的模型這樣多半救得回來）。`);
   if (noCross.length) warnings.push(`肋 ${listNums(noCross)} 整片跟側面沒有交叉（側面在那裡沒有料）—— 整片都會掉下來；換側面方向，或改肋的間距。`);
   warnings.push(...spineLoose);
   if (cutApart.length) warnings.push(`肋 ${listNums(cutApart)} 被槽切成兩塊以上（槽要一路開到料的邊上才插得進去）—— 切開的那一塊多半會掉下來。`);
@@ -319,7 +331,7 @@ export function interlockMany(meshes, opt = {}) {
   ribInfo.sort((a, b) => a.coord - b.coord);
   const slices = [...spineParts, ...ribParts];
   return {
-    ok: true, method: 'interlock', axis: spineAx, ribAxis: ribAx, slices, warnings, notes, bounds, ribInfo, spineInfo,
+    ok: true, method: 'interlock', axis: spineAx, ribAxis: ribAx, slices, warnings, notes, bounds, ribInfo, spineInfo, looseDots,
     plan: { bands: [] },
     stats: {
       count: slices.length, spines: K, ribs: ribParts.length, spineAx, ribAx, t, slotW: w, spacing,

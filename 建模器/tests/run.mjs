@@ -20894,6 +20894,45 @@ if (csgOK) {
     && /getElementById\('slrStyle'\)/.test(rmv) && !/\.slr/.test(ih));
 }
 
+
+section('剖面分切：互卡 掉下來的塊在哪（肋位圖紅點，第二輪第六批 6d，2026-10-25）');
+if (csgOK) {
+  /** `實驗-綜合評估-第二輪.md`「6d」；kang 2026-10-25「小脊先不做，肋位圖加紅點（平常就畫），紅框那一句改成教人怎麼救」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const IL = await import('../js/slice/interlock.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const box = (w, h, d, x, y, z) => prim.buildPrim('box', { w, h, d }).transformed(T(x, y, z));
+  const b = box(20, 10, 6, 0, 5, 0);
+  // 旁邊一塊（x −2～2、z 7～9，不碰側面）⇒ 肋上的塊掉下來；紅點在 z 8、x 落在那幾片肋上、面積 8（2 × 4）
+  const r = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], {});
+  const ribX = r.slices.filter(s => s.tag[0] === 'R').map(s => s.coord);
+  ok('★★★ 肋上掉下來的塊 ⇒ 紅點在世界座標 z 8、x ＝ 那片肋的位置、面積 8；每一塊一個點',
+    r.looseDots.length === r.slices.reduce((a, s) => a + s.loops.filter(l => l.loose).length, 0) && r.looseDots.length >= 1
+    && r.looseDots.every(d => Math.abs(d.z - 8) < 1e-6 && ribX.some(x => Math.abs(d.x - x) < 1e-6) && Math.abs(d.x) <= 2 && Math.abs(d.area - 8) < 1e-6),
+    JSON.stringify(r.looseDots));
+  // 側面旁邊多一小塊（x 10.5～11、肋都沒經過）⇒ 紅點在 x 10.75、z 0（側面的位置）、面積 1
+  const rs = IL.interlockMany([b, box(0.5, 2, 6, 10.75, 1, 0)], {});
+  ok('★★ 側面上掉下來的塊 ⇒ 紅點在 x 10.75、z 0、面積 1；沒有掉下來 ⇒ 沒有紅點',
+    rs.looseDots.length === 1 && Math.abs(rs.looseDots[0].x - 10.75) < 1e-6 && Math.abs(rs.looseDots[0].z) < 1e-6 && Math.abs(rs.looseDots[0].area - 1) < 1e-6
+    && IL.interlockMany([b], {}).looseDots.length === 0, JSON.stringify(rs.looseDots));
+  // 側面切 X（肋切 Z）：平面座標 u ＝ −z ⇒ 換回世界座標要反過來
+  const rx = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], { spine: 'x', spineCoords: [-5] });     // ⚠ 側面在正中間 x 0 會穿過旁邊那一塊（就接上了）⇒ 放在 x −5
+  ok('★★ 側面切 X（放在 x −5）時一樣換得回世界座標（紅點的 z 都在 7～9 之間、x 落在 −2～2）',
+    rx.looseDots.length >= 1 && rx.looseDots.every(d => d.z > 7 - 1e-6 && d.z < 9 + 1e-6 && Math.abs(d.x) <= 2 + 1e-6), JSON.stringify(rx.looseDots).slice(0, 80));
+  ok('★★★ 紅框那一句教人怎麼救（側面改 2～3 片、拖到紅點上、按幫我挪）、⛔ 再講「之後會做小脊」',
+    r.warnings.some(w => /^肋 .*有插不到側面的塊（掉下來）.*肋位圖上的紅點就是掉下來的塊：把「側面」改成 2～3 片、按「手動挪肋」把側面拖到紅點上，再按「幫我挪有問題的肋」/.test(w))
+    && !r.warnings.some(w => /小脊/.test(w)));
+  const rmv = readFileSync(join(here, '../js/ui/ribMapView.js'), 'utf8');
+  ok('★★ 讀程式守著（肋位圖）：紅點平常就畫（⛔ 只在手動時）、大小照面積 3～8 px、下面那一行教人怎麼救',
+    /\/\/ 6d：紅點 ＝ 掉下來的塊在哪（平常就畫）[^\n]*\n\s*g\.fillStyle = 'rgba\(221,34,34,\.75\)';\s*for \(const d of this\.res\.looseDots \|\| \[\]\) \{\s*g\.beginPath\(\); g\.arc\(V\.X\(d\.x\), V\.Z\(d\.z\), Math\.max\(3, Math\.min\(8, Math\.sqrt\(d\.area\) \* 2\)\)/.test(rmv)
+    && !/if \(!this\.manual\)[^\n]*looseDots/.test(rmv)
+    // 改壞沒抓到補的：只看字在不夠，要看「有紅點就印」那個條件
+    && /if \(\(this\.res\.looseDots \|\| \[\]\)\.length\) \{\s*lines\.push\(`紅點 ＝ 掉下來的塊（\$\{this\.res\.looseDots\.length\} 塊）—— 把「側面」改成 2～3 片/.test(rmv)
+    // 本機看到的：位置格顯示 8.599999999999998 ⇒ 只顯示到 0.01
+    && /\$\('pos'\)\.value = Math\.round\(s\.c \* 100\) \/ 100;/.test(rmv));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
