@@ -20975,6 +20975,133 @@ if (csgOK) {
     && /（照曲率自動分成幾大塊還沒做）/.test(tb));
 }
 
+
+section('平滑細分 8a（第二輪第八批，2026-10-25）');
+{
+  /**
+   * `規格\建模器-平滑細分.md`；kang 2026-10-25「① 甲 疊一層 ② 預設 2 次可選 0～3 ③ a 照縮寫前後尺寸
+   * ④ 甲 轉折 ≥30° 自動保持尖 ⑤ 量測列印剖面看平滑後、展開用粗網格 ⑥ 翻過來要檢查講在哪 ⑦ 只有網格物件」
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const S = await import('../js/build/subd.js');
+  const { solidForClash } = await import('../js/core/interfere.js');
+  ok('★★ 預設磨 2 次、最多 3 次、轉折 30° 以上保持尖', S.SUBD_DEFAULT === 2 && S.SUBD_MAX === 3 && S.CREASE_DEG === 30);
+
+  const baked = src => { const o = new io.ModelObject({ name: 't', src }); o.bake(); return o; };
+  const size = m => { const b = m.bounds(); return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z]; };
+  const rel = (a, b) => b / a - 1;
+
+  // 方塊 60×45×40（kang 的預設）：12 條直角邊都保持尖 ⇒ 一模一樣
+  const box = baked({ type: 'box', w: 60, h: 45, d: 40 });
+  const before = JSON.stringify(box.mesh().verts.map(v => v.p.toArray()));
+  const rb = S.subdivide(box.mesh(), { levels: 2 });
+  const sb = size(rb.mesh);
+  ok('★★★ 方塊磨 2 次：96 面、12 條尖邊、外框與體積一模一樣、封閉',
+    rb.mesh.faces.length === 96 && rb.creases === 12 && rb.levels === 2 && !rb.capped
+    && Math.abs(sb[0] - 60) < 1e-9 && Math.abs(sb[1] - 45) < 1e-9 && Math.abs(sb[2] - 40) < 1e-9
+    && Math.abs(rb.mesh.volume() - 108000) < 1e-6 && rb.mesh.isClosed(), `${rb.mesh.faces.length} ${sb}`);
+  ok('★★★ 粗網格一個點都沒動（疊一層）', JSON.stringify(box.mesh().verts.map(v => v.p.toArray())) === before);
+  // 全部磨圓（角度調到 180 ⇒ 沒有尖邊）⇒ 方塊變成蛋：每邊 −12.2%、體積 −65%（業界預設會壞掉的那一種）
+  const rr = S.subdivide(box.mesh(), { levels: 2, deg: 180 });
+  const sr = size(rr.mesh);
+  ok('★★ 保持尖的角度調到 180° ⇒ 全部磨圓：方塊每邊 −12.2%、體積 −65%',
+    rr.creases === 0 && Math.abs(rel(60, sr[0]) + 0.122) < 0.002 && Math.abs(rel(108000, rr.mesh.volume()) + 0.65) < 0.01, `${sr} ${rr.mesh.volume()}`);
+  // 磨出來的邊標 smooth、尖邊不標（畫面只畫尖邊、OBJ 寫平滑群組）
+  const sm = rb.mesh.halfEdges.filter(h => h.smooth).length;
+  ok('★★ 方塊磨 2 次：尖邊上的半邊（12 條 × 4 段 × 2）沒標 smooth、其他都標', sm === 384 - 96, `${sm}`);
+
+  // 圓柱：側面磨圓、上下蓋的邊保持尖 ⇒ 寬 −0.6%、高不變
+  const cyl = baked({ type: 'cylinder' });
+  const rc = S.subdivide(cyl.mesh(), { levels: 2 }), s0 = size(cyl.mesh()), s1 = size(rc.mesh);
+  ok('★★ 圓柱磨 2 次：768 面、64 條尖邊、寬 −0.6%、高不變',
+    rc.mesh.faces.length === 768 && rc.creases === 64 && Math.abs(rel(s0[0], s1[0]) + 0.006) < 0.001 && Math.abs(s1[1] - s0[1]) < 1e-9, `${s1}`);
+  // 1、3 次的面數（n 邊形第一次變 n 個四邊形，之後 ×4）
+  ok('★ 圓柱磨 1 次 192 面、3 次 3072 面',
+    S.subdivide(cyl.mesh(), { levels: 1 }).mesh.faces.length === 192 && S.subdivide(cyl.mesh(), { levels: 3 }).mesh.faces.length === 3072);
+
+  // ⑥ 凹的面先拆三角形、翻過來的小面照實講（kang 的狐狸頭、獅子頭）
+  const kang = p => io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/' + p), 'utf8'))).objects[0];
+  const fox = S.subdivide(kang('實驗T8/狐狸頭.json').mesh(), { levels: 2 });
+  const lion = S.subdivide(kang('實驗T10/獅子頭.json').mesh(), { levels: 2 });
+  ok('★★★ 狐狸頭：窄長條旁邊接大面 ⇒ 翻過來的小面記下來（16 個、出在粗網格 8 個面上）、有標出來用的線段',
+    fox.flipped === 16 && fox.flipOrigins === 8 && fox.flipSegs.length === 16 * 4 * 2, `${fox.flipped} ${fox.flipOrigins}`);
+  ok('★★★ 獅子頭（布林的結果）：凹的面先拆三角形（20 個）⇒ 翻過來的只剩 3 個',
+    lion.split === 20 && lion.flipped === 3, `${lion.split} ${lion.flipped}`);
+  ok('★ 方塊、圓柱沒有翻過來的、沒有拆', rb.flipped === 0 && rc.flipped === 0 && rb.split === 0);
+
+  // 面太多就少磨一次（照實講）
+  {
+    const pts = [], fs = [], N = 151;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) pts.push(new THREE.Vector3(i, 0, j));
+    for (let i = 0; i + 1 < N; i++) for (let j = 0; j + 1 < N; j++) fs.push([i * N + j, i * N + j + 1, (i + 1) * N + j + 1, (i + 1) * N + j]);
+    const r = S.subdivide(Mesh.fromFaceList(pts, fs), { levels: 2 });
+    ok('★★ 2 萬 2 千面磨 2 次會超過 30 萬面 ⇒ 只磨 1 次、記下來（capped）',
+      r.levels === 1 && r.wanted === 2 && r.capped === true && r.mesh.faces.length === 90000, `${r.levels} ${r.mesh.faces.length}`);
+  }
+
+  // ── 物件：疊一層 ──
+  const o = baked({ type: 'box', w: 60, h: 45, d: 40 });
+  ok('★★★ 沒有平滑 ⇒ smoothMesh() 就是 mesh() 本人（所有出口改叫它，沒平滑的物件一模一樣）',
+    o.subd === 0 && o.smoothMesh() === o.mesh() && o.smoothInfo() === null && !o.smoothed);
+  o.subd = 2;
+  const m1 = o.smoothMesh();
+  ok('★★★ 磨 2 次 ⇒ smoothMesh() 是另一個網格（96 面），粗網格照舊 6 面；再叫一次是同一份（快取）',
+    m1 !== o.mesh() && m1.faces.length === 96 && o.mesh().faces.length === 6 && o.smoothMesh() === m1 && o.smoothed);
+  // 拉一個點（就地改）⇒ 平滑後的跟著變
+  o.mesh().verts[0].p.x += 10;      // 那個點在 x ＝ +30（最右邊）⇒ 往外拉
+  const m2 = o.smoothMesh();
+  ok('★★★ 粗網格就地拉一個點 ⇒ 平滑後的重算（外框跟著變）', m2 !== m1 && size(m2)[0] > 60, `${size(m2)}`);
+  o.mesh().verts[0].p.x -= 10;
+  o.smoothMesh();                    // 先讓快取停在 30°、點已經拉回去 ⇒ 下面只改角度（改壞時「快取不看角度」抓得到）
+  o.subdDeg = 180;
+  ok('★★ 改保持尖的角度 ⇒ 重算（180° ⇒ 全部磨圓，每邊變小）', size(o.smoothMesh())[0] < 59);
+  o.subdDeg = 30;
+  const par = new io.ModelObject({ name: 'p', src: { type: 'box', w: 60, h: 45, d: 40 } });
+  par.subd = 2;
+  ok('★★★ ⑦ 參數物件（還沒轉網格）設了也不磨 ⇒ smoothMesh() 是 mesh() 本人', !par.smoothed && par.smoothMesh() === par.mesh());
+
+  // 存檔：沒平滑的一個字都不變；有平滑存次數（角度照預設就不存）
+  const j0 = baked({ type: 'box', w: 60, h: 45, d: 40 }).toJSON();
+  const j2 = o.toJSON();
+  o.subdDeg = 45; const j3 = o.toJSON(); o.subdDeg = 30;
+  const back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(j3)));
+  ok('★★★ 存檔：沒平滑的沒有 subd 這一欄；有平滑存 subd: 2（角度 30 不存、45 才存）；讀回來一樣',
+    !('subd' in j0) && j2.subd === 2 && !('subdDeg' in j2) && j3.subdDeg === 45
+    && back.subd === 2 && back.subdDeg === 45 && back.smoothMesh().faces.length === 96);
+  const bad = io.ModelObject.fromJSON({ ...JSON.parse(JSON.stringify(j2)), subd: 9 });
+  ok('★ 讀到超過 3 次的 ⇒ 當 3 次', bad.subd === 3);
+
+  // ⑤ 出口照平滑後的：干涉檢查拿到的就是平滑後的（96 面）
+  const cl = solidForClash(o);
+  ok('★★ 干涉檢查拿平滑後的實體（96 面）', cl.ok && cl.mesh.faces.length === 96, `${cl.ok} ${cl.mesh && cl.mesh.faces.length}`);
+
+  // ⑤ 讀程式守著：哪些出口換成平滑後的、哪些照粗網格
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const sc = src('view/scene.js'), mn = src('main.js'), ex = src('ui/exportPanel.js'), ob = src('ui/objPanel.js'), sl = src('ui/slicePanel.js'), tb = src('ui/toolbar.js');
+  ok('★★ 讀程式守著（出口）：3D 列印與它的破洞／非流形標示、匯出 OBJ、剖面分切、結構分析、狀態列三角形數照平滑後的',
+    /this\.items = objs\.map\(o => \{\s*let mesh = o\.smoothMesh\(\);/.test(ex) && /_showNonManifold\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex)
+    && /_showHoles\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex) && /let mesh = o\.smoothMesh\(\), shelled = false;/.test(ob)
+    && /return o\.smoothMesh\(\)\.transformed\(o\.matrix\(\)\)/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)
+    && /const m = o\.smoothMesh \? o\.smoothMesh\(\) : o\.mesh && o\.mesh\(\);/.test(mn));
+  ok('★★ 讀程式守著（展開照粗網格）：展開、智慧分切⛔ 叫 smoothMesh',
+    !/smoothMesh/.test(src('unfold/part.js')) && !/smoothMesh/.test(src('unfold/propose.js')) && !/smoothMesh/.test(src('unfold/flatten.js')));
+  ok('★★ 讀程式守著（畫面）：挑點線面的模式畫粗網格＋淡淡的平滑結果；平常畫平滑後的、只畫尖邊、不標琥珀色、收起縫線',
+    /view\.cageWhen = \(\) => sel\.editMode \|\| sel\.inPickMode;/.test(mn)
+    && /const smooth = obj\.smoothed && !this\._cageOn;/.test(sc) && /const base = smooth \? obj\.smoothMesh\(\) : mesh;/.test(sc)
+    && /const ghostSrc = obj\.smoothed && this\._cageOn \? obj\.smoothMesh\(\) : null;/.test(sc)
+    && /if \(this\.cageWhen && this\._lastDoc && !!this\.cageWhen\(\) !== this\._cageOn\) this\.sync\(this\._lastDoc\);/.test(sc)
+    && /: he\.smooth\)\) continue;/.test(sc) && /if \(!smooth\) for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
+    && /const onCage = !\(obj\.smoothed && !this\._cageOn\);/.test(sc) && /ghost\.raycast = \(\) => \{\};/.test(sc));
+  ok('★★ 讀程式守著（面板）：網格物件才有、勾起來預設 2 次、磨幾次 1～3、保持尖的角度、平滑前後尺寸、面太多少磨、翻過來的講出來＋標出來',
+    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._subdBox\(obj\);/.test(tb)
+    && /obj\.subd = v \? SUBD_DEFAULT : 0;/.test(tb) && /\['3', '3 次（面 ×64）'\]/.test(tb) && /this\._rowNum\('保持尖的轉折（°）'/.test(tb)
+    && /平滑前 \$\{a\.map\(f2\)\.join\(' × '\)\}　→　平滑後/.test(tb) && /if \(info\.capped\)/.test(tb)
+    && /有 \$\{info\.flipped\} 個小面翻過來了/.test(tb) && /setFacePreview\(info\.flipSegs\.map/.test(tb));
+  ok('★ 讀程式守著：複製、切穿、分開、切成實心拆出來的照樣平滑',
+    (mn.match(/subd: obj\.subd, subdDeg: obj\.subdDeg/g) || []).length === 3 && /subd: o\.subd, subdDeg: o\.subdDeg/.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -420,6 +420,12 @@ const sel = new Selection(view, {
   }
 });
 sel.bindDoc(doc);
+/**
+ * 🔴 **平滑細分：什麼時候畫粗網格**（第八批 8a，kang「① 甲 疊一層」）—— 拉點線面，或任何「點畫面挑點線面」的模式
+ * （分片、貼合、量孔、刀具、鋼筆、參考線、原點）。點選是找**粗網格**上最近的點線面，那時畫平滑後的會點不準。
+ * 畫面每一幀問一次（`scene.js` `render()`），變了才重畫。
+ */
+view.cageWhen = () => sel.editMode || sel.inPickMode;
 
 // 場景換相機（透視 ↔ 正交）時，gizmo 也要跟著換，否則拖曳方向會對不上畫面
 view.onCameraChange = cam => sel.setCamera(cam);
@@ -643,7 +649,8 @@ function duplicateSelected() {
       scale: o.scale.clone(),
       color: o.color,
       thickness: o.thickness,
-      lockScale: o.lockScale
+      lockScale: o.lockScale,
+      subd: o.subd, subdDeg: o.subdDeg      // 第八批 8a
     });
     // 已烘成網格的物件沒有參數可以重建，直接共用同一份網格資料
     if (!o.isParametric) fresh._mesh = o.mesh();
@@ -3338,7 +3345,8 @@ function curveThroughApply(holeOnly = false) {
     src: { type: 'mesh' },
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
-    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
+    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -4956,7 +4964,8 @@ function separateSelected() {
     src: { type: 'mesh' },
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
-    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
+    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -5027,7 +5036,8 @@ function solidCutSelected() {
     src: { type: 'mesh' },
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
-    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
+    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -7626,7 +7636,8 @@ window.addEventListener('keydown', e => {
 function modelTriangles() {
   let n = 0;
   for (const o of doc.objects) {
-    const m = o.mesh && o.mesh();
+    /** 第八批 8a：有平滑的算平滑後的（畫面上、匯出去的是那一份）*/
+    const m = o.smoothMesh ? o.smoothMesh() : o.mesh && o.mesh();
     if (m) n += m.triangleCount();
   }
   return n;

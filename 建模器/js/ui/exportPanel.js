@@ -190,7 +190,7 @@ export class ExportPanel {
 
     if (!this.fix) this.fix = new Map();
     this.items = objs.map(o => {
-      let mesh = o.mesh();
+      let mesh = o.smoothMesh();          // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       let shelled = false;
       let holes = null;                       // 實體有真的洞 ⇒ { holes, ratio, choice, suggest, filled, fillErr }
       if (!mesh.isClosed() && o.thickness > 0) {
@@ -432,7 +432,7 @@ export class ExportPanel {
    * 換成另一個網格，那上面的邊在畫面上不存在）。
    */
   _showNonManifold(obj) {
-    const mesh = obj.mesh();
+    const mesh = obj.smoothMesh();      // 第八批 8a：跟檢查表同一份（平滑後的）
     const r = nonManifoldEdges(mesh);
     if (!r.hes.length) {
       this.app.toast('這個物件本身沒有非流形的邊 —— '
@@ -466,7 +466,7 @@ export class ExportPanel {
    * 不關的話標了也看不到（那就等於沒標）。
    */
   _showHoles(obj) {
-    const mesh = obj.mesh();
+    const mesh = obj.smoothMesh();      // 第八批 8a：跟檢查表同一份（平滑後的）
     const r = boundaryEdges(mesh);
     const view = this.app.view;
 

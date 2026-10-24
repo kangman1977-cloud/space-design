@@ -28,7 +28,7 @@ const SHELL_MAX_FACES = 20000;
  */
 export function solidForClash(obj) {
   let m;
-  try { m = obj.mesh(); }
+  try { m = obj.smoothMesh ? obj.smoothMesh() : obj.mesh(); }     // 第八批 8a：有平滑細分的照平滑後的
   catch (e) { return { ok: false, reason: '形狀算不出來：' + (e.message || String(e)) }; }
   if (!m || !m.faces || !m.faces.length) return { ok: false, reason: '沒有形狀' };
   let local = m, shelled = false;

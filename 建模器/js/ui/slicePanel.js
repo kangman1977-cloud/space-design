@@ -394,7 +394,7 @@ export class SlicePanel {
     // 切的是世界座標下的樣子 —— 物件被搬過、轉過、縮放過都要吃進去，
     // 否則圖跟畫面上看到的東西不一樣大也不一樣位置。
     const meshes = objs.map(o => {
-      try { return o.mesh().transformed(o.matrix()); }
+      try { return o.smoothMesh().transformed(o.matrix()); }     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       catch (e) { return null; }
     }).filter(Boolean);
 

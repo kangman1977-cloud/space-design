@@ -63,6 +63,7 @@ import { alignPositions, distributePositions, spacePositions, currentGaps,
 import { fetchLatest } from '../core/appver.js';
 import { meshGearPair, gearClash } from '../core/gearPair.js';
 import { ask } from './askBox.js';
+import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP } from '../build/subd.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -535,6 +536,7 @@ export class Panel {
       }
     } else {
       this.form.appendChild(note('這個物件已經是網格，沒有參數可以改'));
+      this._subdBox(obj);
     }
 
     /**
@@ -1001,6 +1003,67 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  /**
+   * 🔴 **平滑細分**（第二輪第八批 8a，2026-10-25 kang「① 甲 疊一層 ② 預設 2 次可選 0～3 ③ a 照縮寫前後尺寸
+   * ④ 甲 轉折 ≥30° 自動保持尖 ⑤ 量測列印剖面看平滑後、展開用粗網格 ⑥ 翻過來要檢查講在哪 ⑦ 只有網格物件」
+   * → `規格\建模器-平滑細分.md`）。只在網格物件的面板出現（⑦）。
+   * 粗網格照樣能拉點線面（拉的時候畫粗網格＋淡淡的平滑結果）；這裡改的只是「疊上去的那一層」，改回不平滑就回到原本的樣子。
+   */
+  _subdBox(obj) {
+    this.form.appendChild(head('平滑細分'));
+    this._rowCheck('平滑細分', obj.subd > 0, v => {
+      obj.subd = v ? SUBD_DEFAULT : 0;
+      this.analysisCache.delete(obj.id);
+      this._edit(v ? '平滑細分' : '取消平滑細分');
+    }, '把這個網格磨圓（Catmull-Clark，跟 Blender、Rhino 的平滑細分一樣）。粗網格不會被改：'
+      + '拉點線面時看得到粗網格，其他時候看到、量到、列印、剖面、匯出的都是磨圓之後的；展開照用粗網格。'
+      + '轉折大的邊（下面那個角度以上）保持尖');
+    if (!(obj.subd > 0)) {
+      this.form.appendChild(note('勾起來就磨圓（預設磨 2 次、轉折 30° 以上的邊保持尖）—— 粗網格不會被改，取消勾選就回到原本的樣子'));
+      return;
+    }
+    this._rowSelect('磨幾次', String(obj.subd),
+      [['1', '1 次（面 ×4）'], ['2', '2 次（面 ×16，預設）'], ['3', '3 次（面 ×64）']], v => {
+        obj.subd = Math.max(1, Math.min(SUBD_MAX, parseInt(v, 10) || SUBD_DEFAULT));
+        this.analysisCache.delete(obj.id);
+        this._edit('平滑細分磨 ' + obj.subd + ' 次');
+      }, '磨越多次越圓、面越多（每次 ×4）。半球殼 544 面：1 次 2 千面、2 次 8 千面、3 次 3.4 萬面');
+    this._rowNum('保持尖的轉折（°）', obj.subdDeg, { min: 1, max: 179, step: 5 }, v => {
+      obj.subdDeg = v;
+      this.analysisCache.delete(obj.id);
+      this._edit('平滑細分保持尖的轉折');
+    }, '兩個面的夾角大於這個角度的邊保持尖（不磨圓）。調大 ⇒ 磨圓的邊變多；方塊的直角是 90°、球的格子不到 20°');
+
+    const info = obj.smoothInfo();
+    if (!info) return;
+    /** ③ a：照縮、寫出平滑前後的尺寸（乘物件的縮放 —— 跟畫面上量的同一個數字）*/
+    const sc = obj.scale;
+    const size = m => { const b = m.bounds(); return [(b.max.x - b.min.x) * Math.abs(sc.x), (b.max.y - b.min.y) * Math.abs(sc.y), (b.max.z - b.min.z) * Math.abs(sc.z)]; };
+    const a = size(obj.mesh()), b = size(info.mesh);
+    const f2 = x => (Math.round(x * 100) / 100).toString();
+    const pct = (x, y) => { const p = Math.round((y / x - 1) * 1000) / 10; return x > 1e-9 && p !== 0 ? ` ${p > 0 ? '+' : '−'}${Math.abs(p)}%` : ''; };
+    this.form.appendChild(note(`平滑前 ${a.map(f2).join(' × ')}　→　平滑後 ${b.map(f2).join(' × ')} cm`
+      + `　寬${pct(a[0], b[0]) || '一樣'}、高${pct(a[1], b[1]) || '一樣'}、深${pct(a[2], b[2]) || '一樣'}`
+      + `　面 ${obj.mesh().faces.length.toLocaleString()} → ${info.mesh.faces.length.toLocaleString()}`
+      + `　保持尖的邊 ${info.creases} 條`));
+    this.form.appendChild(note('磨圓會往裡縮一點（業界都一樣）：量測、3D 列印、剖面分切、匯出照平滑後的尺寸；展開照粗網格'));
+    if (info.capped) {
+      this.form.appendChild(bad(`磨 ${info.wanted} 次會超過 ${SUBD_FACE_CAP.toLocaleString()} 個面（畫面會卡住），先只磨 ${info.levels} 次`
+        + '—— 要磨更多次，先把粗網格減面'));
+    }
+    /** ⑥ 翻過來的小面：照實講、可以在畫面上標出來 */
+    if (info.flipped) {
+      this.form.appendChild(bad(`有 ${info.flipped} 個小面翻過來了（出在粗網格的 ${info.flipOrigins} 個面上）—— `
+        + '通常是很窄的長條旁邊接大面、或凹進去的面；列印、剖面在那裡會出錯。'
+        + '可以把那幾個面附近的點拉開一點、或把「保持尖的轉折」調大或調小試試'));
+      this._rowBtn('在畫面上標出翻過來的小面', '用紅框在畫面上標出翻過來的那幾個小面', () => {
+        const M = obj.matrix();
+        this.app.view.setFacePreview(info.flipSegs.map(p => p.clone().applyMatrix4(M)), 0xe53935);
+        this.app.toast(`已用紅框標出 ${info.flipped} 個翻過來的小面`);
+      });
+    }
   }
 
   /**
@@ -2480,7 +2543,7 @@ export class Panel {
 
     // 讓「計算中」有機會畫出來
     setTimeout(() => {
-      const mesh = obj.mesh();
+      const mesh = obj.smoothMesh();      // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       const t0 = performance.now();
       const v = mesh.validate();
       const s = summarize(mesh);

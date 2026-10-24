@@ -30,6 +30,7 @@ import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 import { saveBlob, textBlob, safeName, TYPES } from '../out/save.js';
 import { penPlaneFrame } from './penSnap.js';
+import { subdivide, subdSig, CREASE_DEG, SUBD_MAX } from '../build/subd.js';
 
 export const DOC_TYPE = 'model-doc';
 export const DOC_VERSION = 4;
@@ -370,6 +371,43 @@ export class ModelObject {
     this.lockScale = opts.lockScale ?? false;
 
     this._mesh = opts.mesh ?? null;   // 快取；參數物件是算出來的
+
+    /**
+     * 🔴 **平滑細分磨幾次（0 ＝ 不平滑）**（2026-10-25 第二輪第八批 8a，kang「① 甲 疊一層 ② 預設 2 次可選 0～3
+     * ④ 甲 轉折 ≥30° 自動保持尖 ⑦ 只有網格物件」→ `規格\建模器-平滑細分.md`）。
+     * 物件身上留的**照舊是粗網格**（`mesh()`，編輯、分片、展開都用它）；平滑後的由 `smoothMesh()` 照粗網格算。
+     * ⚠ 只有網格物件才有作用（⑦）—— 參數物件 `smoothMesh()` 回粗網格本人。
+     */
+    this.subd = opts.subd ?? 0;
+    /** 轉折幾度以上的邊保持尖（④；預設 `CREASE_DEG` 30）*/
+    this.subdDeg = opts.subdDeg ?? CREASE_DEG;
+    this._smooth = null;              // 平滑後的快取：{ base, sig, levels, deg, info }
+  }
+
+  /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
+  get smoothed() { return this.subd > 0 && !this.isParametric; }
+
+  /**
+   * 🔴 **平滑後的網格**（疊一層，① 甲）：畫面（平常）、3D 列印、匯出、剖面分切、干涉、結構分析用這一支（⑤）；
+   * 編輯點線面、分片、智慧分切、展開照用 `mesh()`（粗網格）。
+   * 沒有平滑 ⇒ 回 `mesh()` 本人（⛔ 複製）—— 所以出口全部改叫這一支，沒平滑的物件結果一模一樣。
+   * ⚠ 粗網格是**就地改**的（拉點不換網格）⇒ 快取除了比網格本人，還比一個「點的位置指紋」（`subdSig()`，O(點數)）。
+   */
+  smoothMesh() {
+    const m = this.mesh();
+    if (!this.smoothed) return m;
+    const c = this._smooth, sig = subdSig(m);
+    if (c && c.base === m && c.sig === sig && c.levels === this.subd && c.deg === this.subdDeg) return c.info.mesh;
+    const info = subdivide(m, { levels: this.subd, deg: this.subdDeg });
+    this._smooth = { base: m, sig, levels: this.subd, deg: this.subdDeg, info };
+    return info.mesh;
+  }
+
+  /** 平滑算出來的附帶資料（真的磨了幾次、翻過來的小面…，`subd.js` `subdivide()`）；沒平滑 ⇒ null */
+  smoothInfo() {
+    if (!this.smoothed) return null;
+    this.smoothMesh();
+    return this._smooth.info;
   }
 
   get isParametric() { return this.src.type !== 'mesh'; }
@@ -587,6 +625,11 @@ export class ModelObject {
      * 而**復原／重做走的也是這一支**。
      */
     o.thickness = this.thickness;
+    /** 第八批 8a：有平滑才存（沒平滑的檔一個字都不變）；角度照預設就不存 */
+    if (this.subd > 0) {
+      o.subd = this.subd;
+      if (this.subdDeg !== CREASE_DEG) o.subdDeg = this.subdDeg;
+    }
     // 只有回不去參數的物件才需要把網格整包存下來
     if (!this.isParametric) o.mesh = this.mesh().toJSON();
     return o;
@@ -603,7 +646,9 @@ export class ModelObject {
       scale: new THREE.Vector3(...(d.scale || [1, 1, 1])),
       color: d.color,
       thickness: d.thickness,
-      lockScale: d.lockScale
+      lockScale: d.lockScale,
+      subd: Number(d.subd) > 0 ? Math.min(SUBD_MAX, Math.round(d.subd)) : 0,
+      subdDeg: Number.isFinite(d.subdDeg) ? d.subdDeg : CREASE_DEG
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;

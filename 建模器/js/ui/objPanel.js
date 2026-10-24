@@ -78,7 +78,7 @@ export class ObjPanel {
     const picked = this.app.sel.objects;
     const objs = picked.length ? picked : this.app.doc.objects;
     return objs.map(o => {
-      let mesh = o.mesh(), shelled = false;
+      let mesh = o.smoothMesh(), shelled = false;     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       const t = this.app.view.shellThickness(o);
       if (t > 0) { try { mesh = mesh.shell(t); shelled = true; } catch (e) { /* 加厚失敗就照原樣寫 */ } }
       return { name: o.name, mesh, matrix: o.matrix(), shelled, obj: o };

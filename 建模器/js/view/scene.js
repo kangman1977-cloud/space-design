@@ -321,6 +321,12 @@ export class SceneView {
    */
   sync(doc) {
     const alive = new Set();
+    /**
+     * 平滑細分（第八批 8a）：這一輪畫粗網格還是平滑後的 —— `cageWhen()` 由 `main.js` 給
+     * （拉點線面、分片、貼合、刀具…這些「挑點線面」的模式 ⇒ 粗網格，因為點選是找粗網格上最近的點線面）。
+     */
+    this._lastDoc = doc;
+    this._cageOn = this.cageWhen ? !!this.cageWhen() : false;
 
     for (const obj of doc.objects) {
       alive.add(obj.id);
@@ -430,6 +436,18 @@ export class SceneView {
     line.name = 'edges';
     line.raycast = () => {};      // 線不要參與點選
     node.add(line);
+
+    /**
+     * 🔴 **平滑細分：編輯粗網格時疊一層淡淡的平滑結果**（第八批 8a，kang「① 甲 疊一層」）。
+     * 只在「挑點線面」的模式、而且這個物件有平滑時看得到；拉一下就跟著重算（`_updateNode()`）。
+     */
+    const ghost = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({
+      color: obj.color, roughness: 0.62, metalness: 0.04, transparent: true, opacity: 0.35, depthWrite: false
+    }));
+    ghost.name = 'subdGhost';
+    ghost.raycast = () => {};
+    ghost.visible = false;
+    node.add(ghost);
 
     /** 第三批 b：不平的面（琥珀色斜線）—— 內容在 `_updateNode()` 跟著網格重建 */
     const unflat = new THREE.Mesh(new THREE.BufferGeometry(), unflatMaterial());
@@ -542,9 +560,14 @@ export class SceneView {
       node.userData.dartCount = kinds.darts.length;
       node.userData.keepCount = ks.length;
     }
-    seams.visible = (node.userData.seamCount || 0) > 0 && !this.wireframe;
-    darts.visible = (node.userData.dartCount || 0) > 0 && !this.wireframe;
-    node.getObjectByName('keeps').visible = (node.userData.keepCount || 0) > 0 && !this.wireframe;
+    /**
+     * 平滑細分（第八批 8a）：縫、開口、不准切標在**粗網格**上（展開用粗網格，⑤）⇒ 畫平滑後的時候收起來
+     * （畫出來會浮在曲面外面、一段一段埋進去）；進分片模式就畫粗網格，線也回來。
+     */
+    const onCage = !(obj.smoothed && !this._cageOn);
+    seams.visible = onCage && (node.userData.seamCount || 0) > 0 && !this.wireframe;
+    darts.visible = onCage && (node.userData.dartCount || 0) > 0 && !this.wireframe;
+    node.getObjectByName('keeps').visible = onCage && (node.userData.keepCount || 0) > 0 && !this.wireframe;
 
     /**
      * 提案：⚠ 換了網格（Undo、改參數）就不畫 —— 提案的邊是舊網格的半邊，畫出來是騙人的。
@@ -690,13 +713,21 @@ export class SceneView {
     // 板厚也要一起比對，不然改了板厚畫面不會更新。
     const mesh = obj.mesh();
     const shellT = this._shellThickness(obj);
+    /**
+     * 🔴 **平滑細分（第八批 8a，kang「① 甲 疊一層」）**：平常畫平滑後的（`smoothMesh()`）；
+     * 「挑點線面」的模式（`_cageOn`）畫粗網格、再疊淡淡的平滑結果（`subdGhost`）—— 點選是找粗網格上最近的點線面，
+     * 畫平滑後的話點到的位置跟畫面對不上。
+     */
+    const smooth = obj.smoothed && !this._cageOn;
+    const base = smooth ? obj.smoothMesh() : mesh;
+    const ghostSrc = obj.smoothed && this._cageOn ? obj.smoothMesh() : null;
 
     // _geomDirty ＝ 編輯就地改了頂點座標。mesh 物件沒換，所以前兩個條件
     // 都察覺不到 —— 少了它，拉點之後畫面不會更新（見 markGeomDirty）。
-    if (node.userData.geomKey !== mesh || node.userData.shellT !== shellT
-        || this._geomDirty) {
+    if (node.userData.geomKey !== base || node.userData.shellT !== shellT
+        || node.userData.ghostKey !== ghostSrc || this._geomDirty) {
       node.geometry.dispose();
-      const shown = shellT > 0 ? mesh.shell(shellT) : mesh;
+      const shown = shellT > 0 ? base.shell(shellT) : base;
       node.geometry = shown.toGeometry();
 
       /**
@@ -707,8 +738,15 @@ export class SceneView {
        */
       shown.computeNormals();
       const segs = [];
+      /**
+       * 平滑後只畫保持尖的邊（磨出來的小邊都標了 `smooth`，`subd.js`）—— 不然整片曲面是密密的網。
+       * ⚠ 加厚過的（`shell()` 不帶標記）照轉折判斷：大於保持尖角度的一半才畫。
+       */
+      const cosHalf = Math.cos((obj.subdDeg || 30) * Math.PI / 360);
       for (const he of shown.edges()) {
         if (shown.isHiddenEdge(he)) continue;
+        if (smooth && he.face && he.twin && he.twin.face
+            && (shellT > 0 ? he.face.normal.dot(he.twin.face.normal) > cosHalf : he.smooth)) continue;
         segs.push(he.v.p.x, he.v.p.y, he.v.p.z, he.to.p.x, he.to.p.y, he.to.p.z);
       }
       const edges = node.getObjectByName('edges');
@@ -722,7 +760,8 @@ export class SceneView {
        * 三角形直接跳過，所以匯入的三角形大模型幾乎不花時間。
        */
       const tri = [];
-      for (const { face } of nonPlanarFaces(shown)) {
+      /** 平滑後的小面本來就不平（曲面）⇒ ⛔ 標琥珀色 */
+      if (!smooth) for (const { face } of nonPlanarFaces(shown)) {
         for (const t of shown.faceTriangles(face)) for (const v of t) tri.push(v.p.x, v.p.y, v.p.z);
       }
       const unflat = node.getObjectByName('unflat');
@@ -737,9 +776,16 @@ export class SceneView {
        * **顏色跟一般稜線一樣**（kang 2026-08-24 決定）。
        */
 
-      node.userData.geomKey = mesh;
+      const ghost = node.getObjectByName('subdGhost');
+      ghost.geometry.dispose();
+      ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
+      ghost.visible = !!ghostSrc;
+
+      node.userData.geomKey = base;
+      node.userData.ghostKey = ghostSrc;
       node.userData.shellT = shellT;
     }
+    node.getObjectByName('subdGhost').material.color.setHex(obj.color);
 
     node.position.copy(obj.pos);
     node.rotation.copy(obj.rot);
@@ -2548,6 +2594,12 @@ export class SceneView {
      * ⛔ 不必再開第二條同步鏈（坑第 31 條）。
      */
     this._syncMeasureLabelScale();
+    /**
+     * 🔴 **平滑細分：進出「挑點線面」的模式時換畫粗網格／平滑後**（第八批 8a）。
+     * ⭐ 掛在每一幀必經的這裡，⛔ 去每一顆模式按鈕各補一行（理由同上：模式有十幾條進出的路）。
+     * 只比一個布林，沒變就什麼都不做。
+     */
+    if (this.cageWhen && this._lastDoc && !!this.cageWhen() !== this._cageOn) this.sync(this._lastDoc);
     this.renderer.render(this.scene, this.camera);
     this._renderAxisGizmo();
   }
