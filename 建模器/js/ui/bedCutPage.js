@@ -10,6 +10,7 @@
  * | 切法 | 挑位置（插銷放得下、斷面分成的塊最少；面多要算一陣子、有進度、可以先停）| 平均切（快）|
  * | 刀的位置 | 照切法 | 每一刀打數字（mm，從外框的左邊／底下／後面算起）|
  * | 銷 | ⌀6、孔深 8、孔比銷每邊大 0.2、每個接面最多 2 根、放不下換小一號 | 都可以改（跟人走）|
+ * | 試片（9b）| 7 格、每格 0.05 mm、中間 ＝ 現在的「孔比銷每邊大」、只試現在的 ⌀ | 格數 3～9、每格差、小一號也試（跟人走）；「存試片」單獨一個檔 |
  *
  * 算的東西在 `out/bedCut.js`、`build/bool.js` `cutBody()`；這裡只管畫面。
  * ⚠ 實體轉成 Manifold 一次就留著（大模型轉一次好幾秒），離開這一頁、關視窗一定要 `close()`。
@@ -17,8 +18,13 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { openCut, planCuts, placeDowels, dowelSpecs, segments, fitBed, AXIS_NAME, DOWEL, SMALLER }
-  from '../out/bedCut.js';
+import { openCut, planCuts, placeDowels, dowelSpecs, segments, fitBed, AXIS_NAME, DOWEL, SMALLER,
+  COUPON, COUPON_N_MIN, COUPON_N_MAX, couponPlan } from '../out/bedCut.js';
+import { couponSolids } from '../build/bool.js';
+import { triangles, bedLayout, toSTLBinary, toSTLAscii, STL_UNITS } from '../out/stl.js';
+import { to3MF } from '../out/threemf.js';
+import { saveBlob, binaryBlob, textBlob, TYPES } from '../out/save.js';
+import { today } from '../core/io.js';
 
 const HEIGHT = 300;
 const COLORS = [0xe68c46, 0x5aa0dc, 0x78be6e, 0xdc6e96, 0xc8be5a, 0x9678d2, 0x5ac8be, 0xd2966e, 0xa0a0a0, 0xf07864, 0x6e8cc8, 0xb4d278];
@@ -60,6 +66,7 @@ export class BedCutPage {
     const o = this.panel.opt;
     if (!o.dowel) o.dowel = { ...DOWEL };
     if (!o.cutMode) o.cutMode = 'smart';
+    if (!o.coupon) o.coupon = { ...COUPON };
     return o;
   }
 
@@ -88,6 +95,12 @@ export class BedCutPage {
         <span class="lbl">每個接面最多</span><input type="number" data-k="per" step="1" min="1" max="6" style="width:48px"><span class="lbl">根</span>
         <label class="uwCk" title="⌀${DOWEL.dMM} 放不下的地方換 ${SMALLER.map(s => '⌀' + s.dMM).join(' → ')}（⌀1.75 可以剪一段耗材當銷）"><input type="checkbox" data-k="smaller"> 放不下換小一號</label>
       </div>
+      <div class="uwBar" title="先印這個：一排孔、每格孔比銷每邊大一點點，旁邊刻著數字；插插看挑剛好的那一格，把數字填進上面「孔比銷每邊大」">
+        <span class="lbl">試片（先印這個挑鬆緊）格數</span><input type="number" data-k="cn" step="1" min="${COUPON_N_MIN}" max="${COUPON_N_MAX}" style="width:48px">
+        <span class="lbl">每格差 mm</span><input type="number" data-k="cstep" step="0.01" min="0.01" style="width:60px">
+        <label class="uwCk" title="⌀${DOWEL.dMM} 放不下時會換的 ${SMALLER.map(s => '⌀' + s.dMM).join('、')} 也各印一排（小的縮得比較多，要分開試）"><input type="checkbox" data-k="csmall"> 小一號也試</label>
+        <button class="mini" data-k="coupon">存試片</button>
+      </div>
       <div class="uwBar" data-k="cuts"></div>
       <div class="bcpView" style="height:${HEIGHT}px;position:relative;border:1px solid #333944;border-radius:8px;overflow:hidden;background:#15181d">
         <span style="position:absolute;right:8px;bottom:6px;font-size:11px;color:#8b93a1;pointer-events:none">拉開來畫，每塊一個顏色　左鍵拖：轉　滾輪：拉近</span>
@@ -109,6 +122,14 @@ export class BedCutPage {
     $('smaller').checked = !!d.smaller;
     $('smaller').onchange = () => { d.smaller = $('smaller').checked; p.saveOpt(); this._compute(); };
     $('go').onclick = () => this._apply();
+    const cp = o.coupon;
+    $('cn').value = cp.n;
+    $('cn').onchange = () => { const v = Math.round(parseFloat($('cn').value)); if (v >= COUPON_N_MIN && v <= COUPON_N_MAX) cp.n = v; $('cn').value = cp.n; p.saveOpt(); };
+    $('cstep').value = cp.stepMM;
+    $('cstep').onchange = () => { const v = parseFloat($('cstep').value); if (Number.isFinite(v) && v > 0) cp.stepMM = v; $('cstep').value = cp.stepMM; p.saveOpt(); };
+    $('csmall').checked = !!cp.smaller;
+    $('csmall').onchange = () => { cp.smaller = $('csmall').checked; p.saveOpt(); };
+    $('coupon').onclick = () => this._saveCoupon();
   }
 
   _busy(msg, canStop) {
@@ -302,6 +323,37 @@ export class BedCutPage {
     const sz = this.gl.r.getSize(new THREE.Vector2());
     if (sz.x !== w || sz.y !== h) { this.gl.r.setSize(w, h, false); this.gl.r.domElement.style.width = '100%'; this.gl.r.domElement.style.height = h + 'px'; this.gl.cam.aspect = w / h; this.gl.cam.updateProjectionMatrix(); }
     this.gl.r.render(this.gl.scene, this.gl.cam);
+  }
+
+  // ── 9b 試片 ─────────────────────────────────────────
+  /**
+   * 試片的檔案內容（照上面選的格式、單位）。⚠ 一律同步做好再 await 存檔（`showSaveFilePicker()` 要在按的那一下呼叫）。
+   * @returns {{blob:Blob, name:string, type:object, plan:object}}
+   */
+  couponFile() {
+    const p = this.panel, o = this._opt;
+    const plan = couponPlan(o.dowel, o.coupon);
+    const parts = couponSolids(plan).map(x => ({ name: x.name, tris: triangles(x.mesh, { zUp: false, scale: STL_UNITS[o.unit].scale / 10 }) }));
+    const u = STL_UNITS[o.unit].label;
+    const name = `${p._base()}_試片_⌀${o.dowel.dMM}_${u}`;
+    if (o.format === '3mf') return { blob: binaryBlob(to3MF(parts, { unit: o.unit }), 'model/3mf'), name: name + '.3mf', type: TYPES['3mf'], plan };
+    const tris = bedLayout(parts.map(x => x.tris), true)[0];
+    const blob = o.format === 'binary'
+      ? binaryBlob(toSTLBinary(tris, { header: `modeler unit=${u} ${today()} fit coupon` }), 'model/stl')
+      : textBlob(toSTLAscii(tris, { name: 'fit_coupon', fallback: 'coupon' }), 'model/stl');
+    return { blob, name: name + '.stl', type: TYPES.stl, plan };
+  }
+
+  async _saveCoupon() {
+    let f;
+    try { f = this.couponFile(); }
+    catch (e) { this.panel.app.toast('試片做不出來：' + e.message, true); return; }
+    await saveBlob(f.blob, f.name, f.type, this.panel.opt.askPath);
+    const rows = f.plan.rows;
+    this.panel.app.toast(`已存試片：${rows.map(r => `⌀${r.dMM} 孔每邊大 ${r.clears[0].toFixed(2)}～${r.clears[r.clears.length - 1].toFixed(2)} mm（${r.clears.length} 格）`).join('、')}＋${rows.length === 1 ? '一根銷' : '每排一根銷'}`
+      + '　印出來插插看，把剛好那一格刻的數字填進「孔比銷每邊大」（.15 ＝ 0.15）'
+      + (f.plan.skipped ? `　⚠ 每邊大算出來小於 0 的 ${f.plan.skipped} 格沒有挖（把中間的數字調大或每格差調小）` : '')
+      + (rows.some(r => r.dMM < 2) ? '　⌀1.75 那一排也可以直接剪一段耗材插' : ''));
   }
 
   // ── 切開 ─────────────────────────────────────────────

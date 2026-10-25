@@ -114,7 +114,8 @@ export class ExportPanel {
     this.goBtn = $('exGo');
     const label = () => { this.goBtn.textContent = this.opt.format === '3mf' ? '匯出 3MF' : '匯出 STL'; };
     label();
-    fmt.onchange = () => { this.opt.format = fmt.value; label(); saveOpt(this.opt); this._render(); };
+    /** 第九批 9b：切塊頁開著時改格式⛔ 重畫（不然切塊頁被換掉、卻還開著）—— 存試片照新的格式存；回到檢查表時才重畫 */
+    fmt.onchange = () => { this.opt.format = fmt.value; label(); saveOpt(this.opt); if (!(this.cutPage && this.cutPage.active)) this._render(); };
 
     const grp = $('exGroup');
     grp.value = this.opt.group;

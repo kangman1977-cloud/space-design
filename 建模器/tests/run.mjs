@@ -21422,6 +21422,75 @@ if (csgOK) {
   ok('（略過：CSG 沒載入）', true);
 }
 
+
+section('3D 列印 試片 9b（第二輪第九批，2026-10-25）');
+if (csgOK) {
+  /**
+   * `規格\建模器-STL匯出.md`「試片」；kang 2026-10-25「依照你的建議」：① 一排孔、刻要填回去的數字＋一根銷 ② 切塊頁「存試片」單獨一個檔
+   * ③ 7 格、每格 0.05、中間 ＝ 現在的「孔比銷每邊大」；格數 3～9、每格差可以改 ④「小一號也試」多兩排 ⌀3、⌀1.75
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const BL = await import('../js/build/bool.js');
+  ok('★ 預設：7 格、每格 0.05 mm、只試現在的 ⌀；格數 3～9；字高 5、筆畫 0.8、刻 0.6 mm、數字之間至少空 3.5',
+    B.COUPON.n === 7 && B.COUPON.stepMM === 0.05 && B.COUPON.smaller === false && B.COUPON_N_MIN === 3 && B.COUPON_N_MAX === 9
+    && B.COUPON_TEXT.hMM === 5 && B.COUPON_TEXT.strokeMM === 0.8 && B.COUPON_TEXT.deepMM === 0.6 && B.COUPON_TEXT.spaceMM === 3.5);
+  ok('★★ 刻的字：0.15 ⇒「.15」、0 ⇒「.00」、1.2 ⇒「1.20」；七段數字 8 是 7 條、1 是 2 條、小數點 1 條',
+    B.couponLabel(0.15) === '.15' && B.couponLabel(0) === '.00' && B.couponLabel(1.2) === '1.20'
+    && B.sevenSeg('8').rects.length === 7 && B.sevenSeg('1').rects.length === 2 && B.sevenSeg('.').rects.length === 1);
+
+  const p0 = B.couponPlan(B.DOWEL, B.COUPON), r0 = p0.rows[0];
+  ok('★★★ ③ 預設試片：一排 ⌀6、孔每邊大 0.05～0.35（中間 0.2 ＝ 現在的設定）、孔的半徑 ＝ 3 ＋ 每邊大、孔深 8、板厚 9.2（底下留 1.2）',
+    p0.rows.length === 1 && r0.dMM === 6 && r0.clears.join() === '0.05,0.1,0.15,0.2,0.25,0.3,0.35' && r0.holes.every(h => Math.abs(h.r - 3 - h.clear) < 1e-9)
+    && r0.depthMM === 8 && Math.abs(r0.T - 9.2) < 1e-9 && p0.skipped === 0, JSON.stringify(r0.clears));
+  // 數字不黏在一起：每一格的字在自己那一格裡、相鄰兩格的字至少空 3.5 mm
+  const spans = r0.holes.map(h => { const xs = r0.text.filter(t => Math.abs(t[0] + t[2] / 2 - h.x) < r0.W / 7 / 2); return [Math.min(...xs.map(t => t[0])), Math.max(...xs.map(t => t[0] + t[2]))]; });
+  ok('★★ 數字不黏在一起：相鄰兩格的數字之間至少空 3.5 mm（沙箱第二版黏成「.05.10.15」）；數字在孔前面那一條、不碰到孔',
+    spans.every((s, i) => i === 0 || s[0] - spans[i - 1][1] >= 3.5 - 1e-6) && r0.text.every(t => t[1] + t[3] < r0.holes[0].y - r0.holes[6].r), JSON.stringify(spans.map(s => s.map(x => +x.toFixed(1)))));
+  const want = r0.holes.map(h => B.sevenSeg(B.couponLabel(h.clear)).rects.length);
+  ok('★★ 刻的數字就是每邊大（.05、.10 … .35；⛔ 直徑差）：每一格刻的長條數 ＝ 那個數字的七段數字', r0.text.length === want.reduce((a, b) => a + b, 0) && want.join() === '12,9,8,12,11,12,11', want.join());
+  const p1 = B.couponPlan({ ...B.DOWEL, clearMM: 0.3 }, B.COUPON);
+  ok('★★ 中間那格跟著「孔比銷每邊大」走：改成 0.3 ⇒ 0.15～0.45', p1.rows[0].clears.join() === '0.15,0.2,0.25,0.3,0.35,0.4,0.45');
+  const p2 = B.couponPlan(B.DOWEL, { n: 5, stepMM: 0.1, smaller: false });
+  const p3 = B.couponPlan(B.DOWEL, { n: 7, stepMM: 0.1, smaller: false });
+  ok('★★ 格數、每格差可以改：5 格 0.1 ⇒ 0～0.4；7 格 0.1 ⇒ −0.1 那一格不挖、記下來（6 個孔）',
+    p2.rows[0].clears.join() === '0,0.1,0.2,0.3,0.4' && p3.skipped === 1 && p3.rows[0].holes.length === 6 && p3.rows[0].skipped.join() === '-0.1');
+  ok('★ 格數超出 3～9 ⇒ 夾回來', B.couponPlan(B.DOWEL, { n: 20, stepMM: 0.05 }).rows[0].holes.length === 9 && B.couponPlan(B.DOWEL, { n: 1, stepMM: 0.05 }).rows[0].holes.length === 3);
+  const p4 = B.couponPlan(B.DOWEL, { ...B.COUPON, smaller: true });
+  ok('★★★ ④ 小一號也試 ⇒ 三排 ⌀6、⌀3、⌀1.75（小的中間 0.15、孔深 6），一排一排往後排、不重疊；每排各一根銷',
+    p4.rows.map(r => r.dMM).join() === '6,3,1.75' && p4.rows[1].clears[3] === 0.15 && p4.rows[2].depthMM === 6
+    && p4.rows.every((r, i) => i === 0 || r.y0 >= p4.rows[i - 1].y0 + p4.rows[i - 1].D) && p4.rows.every(r => r.pin.at[0] > r.W));
+
+  // 實體
+  const sol = BL.couponSolids(p0);
+  const plate = sol[0].mesh, pin = sol[1].mesh;
+  const bx = r0.W * r0.D * r0.T, poly = r => 24 * r * r * Math.sin(2 * Math.PI / 48);
+  const holes = r0.holes.reduce((a, h) => a + poly(h.r) * r0.depthMM, 0), text = r0.text.reduce((a, t) => a + t[2] * t[3] * 0.6, 0);
+  const triFull = 3 * Math.sqrt(3) / 4 * 1.6 * 1.6 * r0.T;
+  const pv = plate.volume();
+  ok('★★★ 試片實體：封閉的一塊；體積 ＝ 板子 − 7 個孔 − 刻的字 − 後面的三角缺口（差不到缺口那麼多）',
+    plate.isClosed() && pv <= bx - holes - text + 0.5 && pv >= bx - holes - text - triFull - 0.5, `${pv.toFixed(1)} ${(bx - holes - text).toFixed(1)}`);
+  const pb = new THREE.Box3(); for (const v of pin.verts) pb.expandByPoint(v.p);
+  const topR = Math.max(...pin.verts.filter(v => Math.abs(v.p.z - pb.max.z) < 1e-6).map(v => Math.hypot(v.p.x - r0.pin.at[0], v.p.y - r0.pin.at[1])));
+  const botR = Math.max(...pin.verts.filter(v => Math.abs(v.p.z - pb.min.z) < 1e-6).map(v => Math.hypot(v.p.x - r0.pin.at[0], v.p.y - r0.pin.at[1])));
+  ok('★★ 銷：站在平台上（z 0～15.4）、⌀6、兩頭倒角 0.5（頂面、底面半徑都是 2.5）、封閉', pin.isClosed() && Math.abs(pb.min.z) < 1e-9 && Math.abs(pb.max.z - 15.4) < 1e-6 && Math.abs(topR - 2.5) < 1e-4 && Math.abs(botR - 2.5) < 1e-4 && Math.abs(pb.max.x - pb.min.x - 6) < 0.02, `${topR} ${botR}`);
+  const sol4 = BL.couponSolids(p4);
+  ok('★★ 三排都做得出來：6 個（板子＋銷 × 3）都封閉、名字「試片 ⌀6」「銷 ⌀6」…', sol4.length === 6 && sol4.every(s => s.mesh.isClosed()) && sol4.map(s => s.name).join() === '試片 ⌀6,銷 ⌀6,試片 ⌀3,銷 ⌀3,試片 ⌀1.75,銷 ⌀1.75');
+
+  // 讀程式守著：切塊頁
+  const cp = readFileSync(join(here, '../js/ui/bedCutPage.js'), 'utf8');
+  ok('★★ 讀程式守著（切塊頁）：試片那一排（格數、每格差、小一號也試、存試片）、跟人走；照上面選的格式（3MF／STL）與單位存一個檔；講要填回「孔比銷每邊大」',
+    /data-k="cn"/.test(cp) && /data-k="cstep"/.test(cp) && /data-k="csmall"/.test(cp) && /data-k="coupon">存試片</.test(cp) && /if \(!o\.coupon\) o\.coupon = \{ \.\.\.COUPON \};/.test(cp)
+    && /scale: STL_UNITS\[o\.unit\]\.scale \/ 10/.test(cp) && /if \(o\.format === '3mf'\) return \{ blob: binaryBlob\(to3MF\(parts, \{ unit: o\.unit \}\)/.test(cp)
+    && /把剛好那一格刻的數字填進「孔比銷每邊大」/.test(cp) && /沒有挖/.test(cp));
+  const ep9 = readFileSync(join(here, '../js/ui/exportPanel.js'), 'utf8');
+  ok('★★ 讀程式守著（列印視窗）：切塊頁開著時改「格式」⛔ 重畫（本機抓到：不然切塊頁被換掉、卻還開著）',
+    /saveOpt\(this\.opt\); if \(!\(this\.cutPage && this\.cutPage\.active\)\) this\._render\(\); \};/.test(ep9));
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

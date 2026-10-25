@@ -317,3 +317,83 @@ export function openCut(mesh, label) {
   for (const v of mesh.verts) { const p = [v.p.x, v.p.y, v.p.z]; for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; } }
   return { body, bb: { min: lo, max: hi } };
 }
+
+// ═══════════════════════════════════════════════════════
+//  9b 試片：一排孔（每格孔比銷每邊大一點點）＋一根銷，旁邊刻要填回去的數字
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 第二輪第九批 9b（2026-10-25，kang「依照你的建議」→ 規格 `規格\建模器-STL匯出.md`「試片」；查到的 → `實驗-綜合評估-第二輪.md`「9b 試片」）：
+ * ① 一塊板子一排孔、每格旁邊刻「要填進『孔比銷每邊大』的數字」＋一根銷 ② 切塊頁「存試片」單獨一個檔
+ * ③ 7 格、每格 0.05 mm、中間 ＝ 現在的「孔比銷每邊大」；格數 3～9、每格差可以改 ④「小一號也試」勾了多兩排 ⌀3、⌀1.75
+ * 跟雷射的試卡片（`slice/fitTest.js`）同一個想法；程式⛔ 自己改數字（挑好由人填回去）。
+ *
+ * | 項目 | 值 | 為什麼 |
+ * |---|---|---|
+ * | 孔 | 跟真的一樣：⌀、孔深照設定、從頂面往下挖（底下留 1.2 mm）| 「小的東西縮得比較多」⇒ 要用真的大小試（MakerWorld）|
+ * | 格距 | max(最大的孔 ＋ 4, 10, 數字長 ＋ 3.5) mm | 沙箱：數字之間空太少會黏成「.05.10.15」|
+ * | 數字 | 七段數字（電子錶那種）刻 0.6 mm 深、字高 5、筆畫 0.8（兩條噴嘴寬）；0.15 寫「.15」| 建模器沒有立體文字 |
+ * | 記號 | 中間那格（現在的設定）後面邊上一個小三角缺口 | 刻不刻數字都看得出哪一格是現在的 |
+ * | 每邊大 < 0 | 那一格不挖、講出來 | 欄位最小 0（跟試卡片「槽寬 ≤ 0 不挖」一樣）|
+ */
+export const COUPON = { n: 7, stepMM: 0.05, smaller: false };
+export const COUPON_N_MIN = 3, COUPON_N_MAX = 9;
+export const COUPON_TEXT = { hMM: 5, strokeMM: 0.8, deepMM: 0.6, spaceMM: 3.5 };
+export const COUPON_FLOOR_MM = 1.2, COUPON_WALL_MM = 4, COUPON_ROW_GAP_MM = 6;
+
+const SEG7 = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg' };
+/**
+ * 七段數字的小長條（mm）：字往 +x 排、字的底在 y ＝ 0；回傳每一條 [x, y, 寬, 高] 和總長。只認 0～9 和小數點。
+ */
+export function sevenSeg(str, h = COUPON_TEXT.hMM, s = COUPON_TEXT.strokeMM) {
+  const w = h * 0.55, gap = s * 1.2;
+  const R = { a: [0, h - s, w, s], b: [w - s, h / 2, s, h / 2], c: [w - s, 0, s, h / 2], d: [0, 0, w, s], e: [0, 0, s, h / 2], f: [0, h / 2, s, h / 2], g: [0, h / 2 - s / 2, w, s] };
+  const rects = [];
+  let x = 0;
+  for (const ch of str) {
+    if (ch === '.') { rects.push([x, 0, s, s]); x += s + gap; continue; }
+    for (const k of SEG7[ch] || '') { const [rx, ry, rw, rh] = R[k]; rects.push([x + rx, ry, rw, rh]); }
+    x += w + gap;
+  }
+  return { rects, len: Math.max(0, x - gap) };
+}
+
+/** 刻在孔旁邊的字：0.15 ⇒ ".15"、1.2 ⇒ "1.20" */
+export function couponLabel(c) { return c.toFixed(2).replace(/^0(?=\.)/, ''); }
+
+/**
+ * 試片排版（mm、Z 朝上、都在 z ≥ 0）：每一種銷一排板子＋一根銷。
+ * @param {object} d 銷的設定（DOWEL 那一組）
+ * @param {{n:number, stepMM:number, smaller:boolean}} c
+ * @returns {{rows:{dMM, depthMM, clears:number[], skipped:number[], W, D, T, y0, holes:{x,y,r,clear}[], text:number[][], mark:number[], pin:{r, len, ch, at:number[]}}[], skipped:number}}
+ */
+export function couponPlan(d, c) {
+  const n = Math.min(COUPON_N_MAX, Math.max(COUPON_N_MIN, Math.round(c.n)));
+  const sizes = c.smaller ? dowelTries({ ...d, smaller: true }) : dowelTries({ ...d, smaller: false });
+  const rows = [];
+  let y0 = 0;
+  for (const s of sizes) {
+    const mid = (n - 1) / 2;
+    const all = Array.from({ length: n }, (_, i) => +(s.clearMM + (i - mid) * c.stepMM).toFixed(4));
+    const clears = all.filter(x => x >= -1e-9).map(x => Math.max(0, x));
+    const skipped = all.filter(x => x < -1e-9);
+    const maxD = s.dMM + 2 * Math.max(...all.map(x => Math.max(0, x)));
+    const labLen = Math.max(...all.map(x => sevenSeg(couponLabel(Math.max(0, x))).len));
+    const pitch = Math.max(maxD + COUPON_WALL_MM, 10, labLen + COUPON_TEXT.spaceMM);
+    const strip = COUPON_TEXT.hMM + 3;
+    const W = pitch * n, D = maxD + 2 * COUPON_WALL_MM + strip, T = s.depthMM + COUPON_FLOOR_MM;
+    const holes = [], text = [];
+    all.forEach((x, i) => {
+      if (x < -1e-9) return;
+      const cx = pitch * (i + 0.5), cy = y0 + strip + COUPON_WALL_MM + maxD / 2;
+      holes.push({ x: cx, y: cy, r: s.dMM / 2 + x, clear: x });
+      const t = sevenSeg(couponLabel(x));
+      for (const [rx, ry, rw, rh] of t.rects) text.push([cx - t.len / 2 + rx, y0 + 1.5 + ry, rw, rh]);
+    });
+    const len = 2 * s.depthMM - DOWEL_GAP_MM;
+    rows.push({ dMM: s.dMM, depthMM: s.depthMM, clears, skipped, W, D, T, y0, holes, text, mark: [pitch * (mid + 0.5), y0 + D],
+      pin: { r: s.dMM / 2, len, ch: DOWEL_CHAMFER_MM, at: [W + 4 + s.dMM / 2, y0 + D / 2] } });
+    y0 += D + COUPON_ROW_GAP_MM;
+  }
+  return { rows, skipped: rows.reduce((a, r) => a + r.skipped.length, 0), deepMM: COUPON_TEXT.deepMM };
+}

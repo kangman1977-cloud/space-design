@@ -739,6 +739,40 @@ export function dowelMesh(r, len, at, ch = 0) {
 }
 
 /**
+ * 🔴 **9b 試片的實體**（第二輪第九批 9b，2026-10-25；排版在 `out/bedCut.js` `couponPlan()`）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ * ⚠ 單位 mm、Z 朝上（直接給列印用；⛔ 是建模器的 cm、Y 朝上）。
+ * 每一排：板子挖孔（從頂面往下挖孔深）、刻數字（頂面往下）、後面邊上的三角缺口；旁邊一根銷（兩頭倒角、站著）。
+ * @returns {{name:string, mesh:Mesh}[]} 每一排兩個：板子、銷
+ */
+export function couponSolids(plan) {
+  const { Manifold } = need();
+  const made = [];
+  const keep = x => { made.push(x); return x; };
+  const out = [];
+  try {
+    for (const r of plan.rows) {
+      const cut = [];
+      for (const h of r.holes) cut.push(keep(keep(Manifold.cylinder(r.depthMM + 1, h.r, h.r, 48)).translate([h.x, h.y, r.T - r.depthMM])));
+      for (const [x, y, w, hh] of r.text) cut.push(keep(keep(Manifold.cube([w, hh, plan.deepMM + 0.5])).translate([x, y, r.T - plan.deepMM])));
+      cut.push(keep(keep(keep(Manifold.cylinder(r.T + 2, 1.6, 1.6, 3)).rotate([0, 0, 90])).translate([r.mark[0], r.mark[1], -1])));
+      const box = keep(keep(Manifold.cube([r.W, r.D, r.T])).translate([0, r.y0, 0]));
+      const plate = keep(Manifold.difference(box, keep(Manifold.union(cut))));
+      const { r: pr, len, ch, at } = r.pin;
+      const pin = keep(Manifold.union([
+        keep(keep(Manifold.cylinder(len - 2 * ch, pr, pr, 48)).translate([0, 0, ch])),
+        keep(Manifold.cylinder(ch, pr - ch, pr, 48)),
+        keep(keep(Manifold.cylinder(ch, pr, pr - ch, 48)).translate([0, 0, len - ch]))]));
+      const pinAt = keep(pin.translate([at[0], at[1], 0]));
+      out.push({ name: `試片 ⌀${r.dMM}`, mesh: fromManifold(plate) }, { name: `銷 ⌀${r.dMM}`, mesh: fromManifold(pinAt) });
+    }
+    return out;
+  } finally {
+    for (const m of made) { try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ } }
+  }
+}
+
+/**
  * 🔴 **干涉檢查：兩個實體重疊的那一塊**（綜合評估 ④-20，2026-10-20，kang「照建議」）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。⚠ 兩個都要是**世界座標、封閉**的網格
  * （板件先照板厚加厚 —— `core/interfere.js` `solidForClash()`）。
