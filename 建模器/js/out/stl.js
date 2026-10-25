@@ -35,6 +35,7 @@
 import * as THREE from 'three';
 import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/selectops.js';
 import { shapeCheck } from './printShape.js';
+import { fitBed, turnWords } from './bedCut.js';
 
 /** 輸出單位。STL 沒有單位欄位，這裡只是換算倍率。 */
 export const STL_UNITS = {
@@ -159,6 +160,24 @@ function largestPartMM(tris) {
   let best = 0;
   for (const b of boxes.values()) { const s = b.getSize(new THREE.Vector3()); best = Math.max(best, s.x, s.y, s.z); }
   return best;
+}
+
+/** 互不相連的每一塊各自的三角形（同 `largestPartMM()` 的判法）—— 給「每一塊放不放得下平台」用（第九批 9a）*/
+function partGroups(tris) {
+  const key = p => `${Math.round(p.x * 1e6)},${Math.round(p.y * 1e6)},${Math.round(p.z * 1e6)}`;
+  const parent = tris.map((_, i) => i);
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const seen = new Map();
+  tris.forEach((t, i) => {
+    for (const p of [t.a, t.b, t.c]) {
+      const k = key(p);
+      if (seen.has(k)) { const a = find(i), b = find(seen.get(k)); if (a !== b) parent[a] = b; }
+      else seen.set(k, i);
+    }
+  });
+  const g = new Map();
+  tris.forEach((t, i) => { const r = find(i); if (!g.has(r)) g.set(r, []); g.get(r).push(t); });
+  return [...g.values()];
 }
 
 export function trisBounds(tris) {
@@ -462,20 +481,48 @@ export function printCheck(mesh, tris, opt = {}) {
   }
 
   const big = Math.max(size.x, size.y, size.z);
-  if (big > build) {
+  /**
+   * 🔴 **放不放得下平台：照寬、深、高，先試轉方向**（2026-10-25，第二輪第九批 9a；kang「同意你的建議」③ 平台寬深高三格、
+   * ① 先試轉方向 → `out/bedCut.js` `fitBed()`）。以前只比最長邊跟 250（一個數字）：頭盔左片 250.3 mm 被叫去分件，
+   * 其實側著立起來、轉 11° 就放得下；一條 300 × 20 × 20 mm 斜著放也放得下。
+   * ⚠ 單位：三角形是 `opt.mmPerUnit` mm 一單位（預設 1 ＝ 已經是 mm）；平台 `opt.bedMM`（舊的 `buildMM` 一個數字 ＝ 三邊一樣）。
+   */
+  const mpu = opt.mmPerUnit ?? 1;
+  const bedMM = opt.bedMM || [build, build, build];
+  const bedU = bedMM.map(b => b / mpu);
+  const ptsOf = list => { const out = []; for (const t of list) out.push([t.a.x, t.a.y, t.a.z], [t.b.x, t.b.y, t.b.z], [t.c.x, t.c.y, t.c.z]); return out; };
+  const fit = tris.length ? fitBed(ptsOf(tris), bedU) : { asIs: true };
+  const mm = x => (x * mpu).toFixed(1);
+  const bedTxt = `${bedMM.map(b => +(+b).toFixed(1)).join(' × ')} mm`;
+  if (!fit.asIs) {
     /**
-     * 🔴 **分開的好幾塊：看最大的那一塊**（2026-10-19，實驗 T2：`實驗-綜合評估.md` ②-5）。
+     * 🔴 **分開的好幾塊：看每一塊**（2026-10-19，實驗 T2：`實驗-綜合評估.md` ②-5）。
      * ⚠ 以前量的是整組的外框 —— 鏡射出來的兩塊 1 × 2.5 × 4 cm 側塊隔 25 cm 放，被報「最長邊 256mm 超過 250」，
      * 叫人去分件或縮小；其實每一塊都小得很，在切片軟體裡排一下就放得下。
      */
-    const part = v.components > 1 ? largestPartMM(tris) : big;
-    issues.push({
-      level: 'warn',
-      text: part > build
-        ? `最長邊 ${big.toFixed(1)}mm 超過常見成型範圍 ${build}mm，可能要分件或縮小`
-        : `整件最長 ${big.toFixed(1)}mm 超過常見成型範圍 ${build}mm，但它是 ${v.components} 塊分開的、`
-          + `最大一塊 ${part.toFixed(1)}mm —— 在切片軟體裡把它們排近一點就放得下`
-    });
+    const parts = v.components > 1 ? partGroups(tris) : null;
+    const partFits = parts && parts.every(g => { const f = fitBed(ptsOf(g), bedU); return f.asIs || f.turn; });
+    const sz = `${mm(size.x)} × ${mm(size.y)} × ${mm(size.z)} mm`;
+    if (partFits) {
+      issues.push({
+        level: 'warn', kind: 'parts',
+        text: `整件 ${sz} 放不下平台（成型範圍 ${bedTxt}），但它是 ${v.components} 塊分開的、`
+          + `最大一塊 ${mm(largestPartMM(tris))}mm —— 在切片軟體裡把它們排近一點就放得下`
+      });
+    } else if (fit.turn) {
+      const s = fit.turn.size;
+      issues.push({
+        level: 'warn', kind: 'turn',
+        text: `外框 ${sz} 照原樣放不下平台（成型範圍 ${bedTxt}），但${turnWords(fit.turn)}就放得下`
+          + `（${mm(s[0])} × ${mm(s[1])} × ${mm(s[2])} mm）—— 在切片軟體裡轉，不用切`
+      });
+    } else {
+      issues.push({
+        level: 'warn', kind: 'toobig',
+        text: `外框 ${sz} 放不下平台（成型範圍 ${bedTxt}），轉方向也不行 —— `
+          + '按「切成放得下的塊」切開、接面加定位銷，或把模型縮小'
+      });
+    }
   }
 
   /**

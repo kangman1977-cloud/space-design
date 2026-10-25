@@ -616,6 +616,128 @@ export function splitByCutter(mesh, cutter, label = '物件') {
   }
 }
 
+/** 切成放得下的塊：每個軸的刀面上 (u, v) 是世界的哪兩軸（見 `cutBody()`）*/
+export const CUT_UV = [[2, 1], [0, 2], [0, 1]];
+const CUT_ROT = [[0, 90, 0], [-90, 0, 0], null];     // 把軸 a 轉到 Z（轉完 Z ＝ −x、−y、z）
+const CUT_W = [-1, -1, 1];
+
+/**
+ * 🔴 **切成放得下的塊（第二輪第九批 9a，2026-10-25）—— Manifold 的那一半**（規劃、挑插銷的位置在 `out/bedCut.js`）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ * 實體轉一次就留著（大模型轉一次要好幾秒），挑刀的位置時一個位置切好幾次斷面；用完一定要 `close()`。
+ *
+ * 座標：傳進來的網格是**世界座標**（cm、Y 朝上）；刀都跟世界的 x／y／z 軸垂直（列印的 X ＝ x、Y ＝ −z、Z ＝ y，軸一樣只是換名字）。
+ * 斷面上的平面座標 (u, v)：照 `CUT_UV` —— 軸 0（x）的刀面 u ＝ z、v ＝ y；軸 1（y）u ＝ x、v ＝ z；軸 2（z）u ＝ x、v ＝ y。
+ *
+ * @param {Mesh} mesh 封閉的實體（世界座標）
+ * @returns {{volume:number, room:Function, split:Function, close:Function}}
+ */
+export function cutBody(mesh, label = '物件') {
+  const w = need();
+  const body = toManifold(mesh, label);
+  const turned = CUT_ROT.map(r => (r ? body.rotate(r) : body));
+  const free = list => { for (const m of list) { try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ } } };
+  const slice = (a, c) => turned[a].slice(c * CUT_W[a]);
+  return {
+    volume: body.volume(),
+    /**
+     * 刀面（軸 a、位置 c）在格子 `cell`（[u0, v0, u1, v1]）裡切到的每一塊，各自「放得下插銷的地方」：
+     * 往內縮 `keep`（孔半徑 ＋ 孔外的料）還剩的地方，而且往兩邊各 `depth` 的斷面也要剩（孔⛔ 打穿到外面）。
+     * @returns {{area:number, room:number, polys:[number,number][][]}[]}
+     */
+    room(a, c, cell, keep, depth) {
+      const made = [];
+      try {
+        const s0 = slice(a, c); made.push(s0);
+        const box = w.CrossSection.square([cell[2] - cell[0], cell[3] - cell[1]]); made.push(box);
+        const boxT = box.translate([cell[0], cell[1]]); made.push(boxT);
+        const face = s0.intersect(boxT); made.push(face);
+        if (face.isEmpty()) return [];
+        const inner = [cell[0] + keep, cell[1] + keep, cell[2] - keep, cell[3] - keep];
+        let limit = null;
+        if (inner[2] > inner[0] && inner[3] > inner[1]) {
+          const ib = w.CrossSection.square([inner[2] - inner[0], inner[3] - inner[1]]); made.push(ib);
+          limit = ib.translate([inner[0], inner[1]]); made.push(limit);
+          for (const d of [-depth, depth]) {
+            const s = slice(a, c + d); made.push(s);
+            const o = s.offset(-keep, 'Round', 2, 32); made.push(o);
+            const nx = limit.intersect(o); made.push(nx);
+            limit = nx;
+          }
+        }
+        const out = [];
+        const isl = face.decompose(); for (const q of isl) made.push(q);
+        for (const I of isl) {
+          const area = I.area();
+          if (area < 1e-9) continue;
+          let room = null;
+          if (limit) { const o = I.offset(-keep, 'Round', 2, 32); made.push(o); room = o.intersect(limit); made.push(room); }
+          const ra = room ? room.area() : 0;
+          out.push({ area, room: ra, polys: ra > 1e-12 ? room.toPolygons().map(p => p.map(q => [q[0], q[1]])) : [] });
+        }
+        return out;
+      } finally { free(made); }
+    },
+    /**
+     * 先挖插銷孔（以刀面為中心、往兩邊各 `depth`），再照刀切開；每一格裡分開的也拆開。
+     * @param {{a:number, p:number[], r:number, depth:number}[]} socks 孔（世界座標、半徑已含間隙）
+     * @param {number[][]} cuts 三個軸各自的刀的位置
+     * @returns {{pieces:Mesh[], socketVol:number}}
+     */
+    split(socks, cuts) {
+      const made = [];
+      try {
+        let cur = body;
+        if (socks.length) {
+          const cyl = socks.map(s => {
+            const c0 = w.Manifold.cylinder(2 * s.depth, s.r, s.r, 32, true); made.push(c0);
+            const c1 = s.a === 0 ? c0.rotate([0, 90, 0]) : s.a === 1 ? c0.rotate([90, 0, 0]) : c0; if (c1 !== c0) made.push(c1);
+            const c2 = c1.translate(s.p); made.push(c2);
+            return c2;
+          });
+          const all = w.Manifold.union(cyl); made.push(all);
+          cur = w.Manifold.difference(body, all); made.push(cur);
+        }
+        const socketVol = body.volume() - cur.volume();
+        let parts = [cur];
+        for (let a = 0; a < 3; a++) for (const c of cuts[a] || []) {
+          const nrm = [0, 0, 0]; nrm[a] = 1;
+          const next = [];
+          for (const p of parts) for (const q of p.splitByPlane(nrm, c)) { made.push(q); if (!q.isEmpty()) next.push(q); }
+          parts = next;
+        }
+        const pieces = [];
+        for (const p of parts) for (const q of p.decompose()) { made.push(q); if (!q.isEmpty()) pieces.push(fromManifold(q)); }
+        return { pieces, socketVol };
+      } finally { free(made); }
+    },
+    close() { free([...new Set([...turned, body])]); }
+  };
+}
+
+/** 插銷本身（另外印）：⌀ 2r、長 len 的圓柱，軸朝 Y（世界座標）、中心在 `at`；兩頭倒角 `ch`（好插進去） */
+export function dowelMesh(r, len, at, ch = 0) {
+  const w = need();
+  const made = [];
+  try {
+    const seg = 32;
+    let m;
+    if (ch > 0 && len > 2 * ch && r > ch) {
+      const mid = w.Manifold.cylinder(len - 2 * ch, r, r, seg, true); made.push(mid);
+      const top = w.Manifold.cylinder(ch, r, r - ch, seg, false); made.push(top);
+      const topT = top.translate([0, 0, (len - 2 * ch) / 2]); made.push(topT);
+      const bot = w.Manifold.cylinder(ch, r - ch, r, seg, false); made.push(bot);
+      const botT = bot.translate([0, 0, -len / 2]); made.push(botT);
+      m = w.Manifold.union([mid, topT, botT]); made.push(m);
+    } else { m = w.Manifold.cylinder(len, r, r, seg, true); made.push(m); }
+    const up = m.rotate([-90, 0, 0]); made.push(up);
+    const at2 = up.translate(at); made.push(at2);
+    return fromManifold(at2);
+  } finally {
+    for (const x of made) { try { x.delete(); } catch (e) { /* 已釋放過，忽略 */ } }
+  }
+}
+
 /**
  * 🔴 **干涉檢查：兩個實體重疊的那一塊**（綜合評估 ④-20，2026-10-20，kang「照建議」）。
  * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。⚠ 兩個都要是**世界座標、封閉**的網格

@@ -17929,7 +17929,8 @@ if (csgOK) {
     !!w2 && w2.text.includes('2 塊分開的') && w2.text.includes('最大一塊 20.0mm') && !w2.text.includes('分件'), w2 && w2.text);
   const one = io.buildSrc({ type: 'box', w: 30, h: 2, d: 2 });
   const w1 = printCheck(one, triangles(one, { scale: 10 })).issues.find(i => i.text.includes('成型範圍'));
-  ok('★★ 　 一整塊 300 mm 照舊「可能要分件或縮小」', !!w1 && w1.text.includes('可能要分件或縮小'), w1 && w1.text);
+  /** 第九批 9a（2026-10-25，kang「同意你的建議」① 先試轉方向）：300 × 20 × 20 mm 斜著放平台就放得下 ⇒ 講怎麼轉、⛔ 叫人切（以前「可能要分件或縮小」）*/
+  ok('★★ 　 一整塊 300 × 20 × 20 mm：斜著放就放得下 ⇒「在平台上轉 ○° 就放得下 …不用切」', !!w1 && w1.kind === 'turn' && /在平台上轉 \d+°就放得下/.test(w1.text) && w1.text.includes('不用切'), w1 && w1.text);
 } else {
   ok('（略過：CSG 沒載入）', true);
 }
@@ -21274,6 +21275,151 @@ section('平滑細分 8c 尺寸照原本的點（第二輪第八批，2026-10-25
     && /obj\.smoothInfo\(\{ fast: true \}\)\.creaseSegs/.test(sc) && /o\.smoothMesh \? o\.smoothMesh\(\{ fast: true \}\)/.test(mn));
   ok('★ 讀程式守著：複製、切穿、分開、切成實心拆出來的帶著「尺寸照原本的點」',
     (mn.match(/subdKeep: obj\.subdKeep/g) || []).length === 3 && /subdKeep: o\.subdKeep/.test(mn));
+}
+
+
+section('3D 列印 切成放得下的塊 9a（第二輪第九批，2026-10-25）');
+if (csgOK) {
+  /**
+   * `規格\建模器-STL匯出.md`「切成放得下的塊」；kang 2026-10-25「同意你的建議」：① 先試轉方向、放不下才切、預覽後切開變成物件
+   * ② 預設挑位置、平均切當快速、每一刀可以改 ③ 平台寬深高三格、留邊 ④ 先只做定位銷、放不下換小一號、還放不下講只能黏
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const BL = await import('../js/build/bool.js');
+  const IM = await import('../js/build/import3d.js');
+  const stlRaw = f => { const b = readFileSync(join(here, '../../輸出/匯入測試/' + f)); return IM.cleanModel(IM.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))); };
+  const worldOf = o => o.mesh().transformed(o.matrix());
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+
+  ok('★ 預設：平台 250 × 250 × 250 mm、留邊 2 mm；銷 ⌀6、孔深 8、每邊大 0.2、孔外 1.5 mm、每個接面最多 2 根、放不下換小一號（⌀3 → ⌀1.75）；銷比兩個孔短 0.6',
+    B.BED_MM.join() === '250,250,250' && B.MARGIN_MM === 2 && B.DOWEL.dMM === 6 && B.DOWEL.depthMM === 8 && B.DOWEL.clearMM === 0.2
+    && B.DOWEL.wallMM === 1.5 && B.DOWEL.per === 2 && B.DOWEL.smaller === true && B.SMALLER.map(s => s.dMM).join() === '3,1.75' && B.DOWEL_GAP_MM === 0.6);
+
+  // ① 放不放得下：照原樣、轉 90°、斜著放
+  const boxPts = (w, d, h) => { const p = []; for (const x of [0, w]) for (const y of [0, d]) for (const z of [0, h]) p.push([x, y, z]); return p; };
+  const f1 = B.fitBed(boxPts(600, 400, 450), [250, 250, 250]);
+  const f2 = B.fitBed(boxPts(300, 20, 20), [250, 250, 250]);
+  const f3 = B.fitBed(boxPts(100, 100, 240), [250, 250, 250]);
+  const f4 = B.fitBed(boxPts(20, 20, 260), [250, 250, 250]);
+  ok('★★★ 放得下嗎：600 × 400 × 450 怎麼轉都不行；300 × 20 × 20 斜著放就行（照原本朝上、轉幾度）；照原樣放得下的不用轉；260 高的細柱倒下來就行',
+    !f1.asIs && !f1.turn && !f2.asIs && f2.turn && f2.turn.up === 2 && f2.turn.deg > 0 && f2.turn.size[0] <= 250 && f2.turn.size[1] <= 250
+    && f3.asIs && !f3.turn && !f4.asIs && f4.turn && f4.turn.up !== 2, JSON.stringify([f2.turn, f4.turn]));
+  const hl = stlRaw('helmetHLP.stl');
+  const hp = hl.points.map(p => p.map(v => v * 2));     // 實驗 T14：最長 250.3 mm
+  const fh = B.fitBed(hp, [250, 250, 250]);
+  ok('★★★ 頭盔左片（T14，250.3 mm）：照原樣放不下；照原本朝上、在平台上轉 29° 就放得下（先試照原本朝上的；沙箱那時列的「側著轉 11°」是 138 種擺法的中間那一種）⇒ 不用切',
+    !fh.asIs && fh.turn && fh.turn.up === 2 && fh.turn.deg === 29 && fh.turn.size.every((s, k) => s <= 250 + 1e-9), JSON.stringify(fh.turn));
+  ok('★ 怎麼轉講成人話：「往左或往右倒下來…、在平台上轉 ○°」', /倒下來/.test(B.turnWords({ up: 0, deg: 11 })) && /在平台上轉 11°/.test(B.turnWords({ up: 0, deg: 11 })) && B.turnWords({ up: 2, deg: 0 }) === '照原本朝上');
+
+  // 列印檢查的三則
+  const big = io.buildSrc({ type: 'box', w: 60, h: 45, d: 40 });
+  const cb = printCheck(big, triangles(big, { scale: 10 }));
+  const tb = cb.issues.find(i => i.kind === 'toobig');
+  ok('★★★ 列印檢查：60 × 45 × 40 cm ⇒「放不下平台（成型範圍 250 × 250 × 250 mm），轉方向也不行 —— 按「切成放得下的塊」…」、黃字不擋（照樣可以列印）',
+    !!tb && tb.level === 'warn' && tb.text.includes('外框 600.0 × 400.0 × 450.0 mm 放不下平台（成型範圍 250 × 250 × 250 mm），轉方向也不行') && tb.text.includes('切成放得下的塊') && cb.ok, tb && tb.text);
+  const cb2 = printCheck(big, triangles(big, { scale: 10 }), { bedMM: [610, 410, 460] });
+  ok('★★ 平台改大（610 × 410 × 460）⇒ 放得下、沒有這一則', !cb2.issues.some(i => /平台/.test(i.text)));
+  const cb3 = printCheck(big, triangles(big, { scale: 1 }), { mmPerUnit: 10 });
+  ok('★★ 匯出單位選 cm（三角形 1 單位 ＝ 10 mm）一樣照 mm 比、寫 mm', (cb3.issues.find(i => i.kind === 'toobig') || {}).text === tb.text);
+  const stick = io.buildSrc({ type: 'box', w: 30, h: 2, d: 2 });
+  const ts = printCheck(stick, triangles(stick, { scale: 10 }), { bedMM: [250, 250, 250] }).issues.find(i => i.kind === 'turn');
+  ok('★★ 300 × 20 × 20 mm ⇒「…但照原本朝上、在平台上轉 ○°就放得下（…）—— 在切片軟體裡轉，不用切」', !!ts && /照原本朝上、在平台上轉 \d+°就放得下/.test(ts.text) && ts.text.endsWith('不用切'), ts && ts.text);
+
+  // ② 切幾刀
+  const g1 = B.gridPlan([60, 45, 40], [25, 25, 25], 0.2), g2 = B.gridPlan([60, 30, 60], [25, 25, 25], 0.2);
+  ok('★★ 切幾刀：方塊 60 × 45 × 40 cm ⇒ 3 × 2 × 2 ＝ 12 格；半球 60 × 30 × 60 ⇒ 18 格（沙箱一樣）', g1.tot === 12 && g2.tot === 18 && g1.n.join() === '3,2,2', JSON.stringify([g1.n, g2.n]));
+  const g3 = B.gridPlan([26, 60, 10], [25, 25, 30], 0.2);
+  ok('★★ 切幾刀三個方向怎麼對平台都試：26 × 60 × 10 cm、平台 25 × 25 × 30 ⇒ 照原本的擺法 6 格，把 60 那一邊立起來放高 3 格 ⇒ 3 格', g3.tot === 3 && g3.n.join() === '1,3,1', JSON.stringify(g3));
+  ok('★ 平均切的刀位置：0～60 切 3 塊 ⇒ 20、40；每一段長', B.evenCuts(0, 60, 3).join() === '20,40' && B.segments([40, 20], 0, 60).join() === '20,20,20');
+
+  // 方塊：挑位置、插銷、切開；體積一點都不差
+  const bw = worldOf((() => { const o = new io.ModelObject({ name: 'box', src: prim.defaultSrc('box') }); o.bake(); return o; })());
+  const { body: bb1, bb: box1 } = B.openCut(bw, '方塊');
+  const p1 = await B.planCuts(bb1, box1, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL });
+  const d1 = B.placeDowels(bb1, box1, p1.cuts, B.DOWEL);
+  const s1 = bb1.split(d1.dowels, p1.cuts);
+  const v1 = s1.pieces.reduce((s, m) => s + m.volume(), 0);
+  ok('★★★ 方塊 60 × 45 × 40（kang 預設）挑位置：12 塊、插銷 40 根 ⌀6、只能黏 0 個；切出來的加上挖掉的孔 ＝ 原本（差 0.01 cm³ 以內）',
+    s1.pieces.length === 12 && d1.dowels.length === 40 && d1.joints.every(j => !j.noRoom) && B.dowelSpecs(d1.dowels).length === 1 && Math.abs(v1 + s1.socketVol - bb1.volume) < 0.01 && s1.socketVol > 0,
+    `${s1.pieces.length} ${d1.dowels.length} ${v1 + s1.socketVol} ${bb1.volume}`);
+  ok('★★ 每一塊都照原樣放得下平台（列印座標 mm）', s1.pieces.every(m => B.fitBed(m.verts.map(v => [v.p.x * 10, -v.p.z * 10, v.p.y * 10]), B.BED_MM).asIs));
+  ok('★★ 要另外印的銷：⌀6 × 15.4 mm（兩個孔深 − 0.6）40 根', JSON.stringify(B.dowelSpecs(d1.dowels)) === JSON.stringify([{ dMM: 6, lenMM: 15.4, n: 40 }]));
+  ok('★ 每個接面最多 2 根（兩根才不會轉）：20 個接面剛好 40 根', d1.joints.length === 20 && d1.joints.every(j => j.dowels === 2));
+  bb1.close();
+
+  // 挑位置 vs 平均切：兩大塊中間一根 4 mm 細桿（全長 400 mm）—— 平均切剛好切在細桿上
+  const bell = io.buildSrc({ type: 'bool', op: BOOL_OPS.UNION, items: [it({ type: 'box', w: 18, h: 10, d: 10 }, [9, 5, 0]), it({ type: 'box', w: 4.2, h: 0.4, d: 0.4 }, [20, 5, 0]), it({ type: 'box', w: 18, h: 10, d: 10 }, [31, 5, 0])] });
+  const res = {};
+  for (const mode of ['even', 'smart']) {
+    const { body, bb } = B.openCut(bell, '啞鈴');
+    const pl = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode, dowel: B.DOWEL });
+    res[mode] = { cut: pl.cuts[0][0], d: B.placeDowels(body, bb, pl.cuts, B.DOWEL), n: pl.grid.n.join() };
+    body.close();
+  }
+  ok('★★★ ② 挑位置：平均切切在 4 mm 細桿上（連 ⌀1.75 都放不下 ⇒ 只能黏 1 個）；挑位置挪到大塊上（每一段還是 ≤ 248 mm）⇒ 0 個、⌀6 兩根',
+    res.even.n === '2,1,1' && Math.abs(res.even.cut - 20) < 1e-9 && res.even.d.joints[0].noRoom === 1
+    && res.smart.d.joints.every(j => !j.noRoom) && (res.smart.cut < 18 || res.smart.cut > 22) && res.smart.cut >= 40 - 24.8 - 1e-9 && res.smart.cut <= 24.8 + 1e-9
+    && res.smart.d.dowels.length === 2 && res.smart.d.dowels.every(x => x.dMM === 6), JSON.stringify({ e: res.even.cut, s: res.smart.cut }));
+  // 斷面分成的塊越少越好（沙箱第一次寫成「插銷越多越好」⇒ 柱頭切到凹槽、多出 2 塊）：一端實心、一端分成三根（每根 2 × 2 cm，銷都放得下）
+  const fork = io.buildSrc({ type: 'bool', op: BOOL_OPS.UNION, items: [it({ type: 'box', w: 20.5, h: 10, d: 10 }, [10.25, 5, 0]),
+    it({ type: 'box', w: 20, h: 2, d: 2 }, [30, 1, -4]), it({ type: 'box', w: 20, h: 2, d: 2 }, [30, 5, 0]), it({ type: 'box', w: 20, h: 2, d: 2 }, [30, 9, 4])] });
+  {
+    const { body, bb } = B.openCut(fork, '叉子');
+    const pl = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL });
+    const pd = B.placeDowels(body, bb, pl.cuts, B.DOWEL);
+    body.close();
+    ok('★★★ ② 挑位置：斷面分成的塊越少越好 —— 一端實心、一端三根 ⇒ 刀切在實心那段（斷面 1 塊）、⛔ 切在三根那段（插銷雖然多、零碎）',
+      pl.grid.n.join() === '2,1,1' && pl.cuts[0][0] <= 20.5 && pd.joints.length === 1 && pd.joints[0].islands === 1 && pd.joints[0].noRoom === 0, JSON.stringify({ c: pl.cuts[0], j: pd.joints }));
+  }
+  // 挑到一半先停 ⇒ 用平均的
+  {
+    const { body, bb } = B.openCut(bell, '啞鈴');
+    let k = 0;
+    const pl = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL }, { stopped: () => ++k > 3 });
+    body.close();
+    ok('★★ 挑位置挑到一半按「先停」⇒ 用平均切、記下停過', pl.stopped === true && Math.abs(pl.cuts[0][0] - 20) < 1e-9);
+  }
+
+  // ④ 殼：工地帽（T12）⌀6 放不下 ⇒ 換小一號
+  const hat = stlRaw('T12_帽子_平滑細分.stl');
+  const [hp2] = IM.toParts(hat, { cmPerUnit: 0.1, up: 'z', split: false });
+  const hatM = Mesh.fromFaceList(hp2.points.map(q => new THREE.Vector3(...q)), hp2.faces);
+  const { body: hb, bb: hbb } = B.openCut(hatM, '工地帽');
+  const hpl = await B.planCuts(hb, hbb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'even', dowel: B.DOWEL });
+  const only6 = B.placeDowels(hb, hbb, hpl.cuts, { ...B.DOWEL, smaller: false });
+  const fb = B.placeDowels(hb, hbb, hpl.cuts, B.DOWEL);
+  const hs = hb.split(fb.dowels, hpl.cuts);
+  hb.close();
+  ok('★★★ ④ 工地帽（殼，T12）切 4 塊：只用 ⌀6 ⇒ 4 個接面 3 個放不下；放不下換小一號 ⇒ 0 個（⌀3 × 6 根＋⌀6 × 1 根，沙箱一樣）',
+    hpl.grid.tot === 4 && hs.pieces.length === 4 && only6.joints.filter(j => j.noRoom).length === 3 && fb.joints.every(j => !j.noRoom)
+    && JSON.stringify(B.dowelSpecs(fb.dowels)) === JSON.stringify([{ dMM: 6, lenMM: 15.4, n: 1 }, { dMM: 3, lenMM: 11.4, n: 6 }]) && fb.joints.reduce((s, j) => s + j.smaller, 0) === 6,
+    JSON.stringify(B.dowelSpecs(fb.dowels)));
+
+  // 插銷本身
+  const pin = BL.dowelMesh(0.3, 1.54, [1, 2, 3], 0.05);
+  const pb = new THREE.Box3(); for (const v of pin.verts) pb.expandByPoint(v.p);
+  const pv = pin.volume(), full = Math.PI * 0.3 * 0.3 * 1.54;
+  const endR = Math.max(...pin.verts.filter(v => Math.abs(v.p.y - pb.max.y) < 1e-6).map(v => Math.hypot(v.p.x - 1, v.p.z - 3)));
+  ok('★★ 插銷：⌀6 × 15.4 mm 站著（Y 朝上）、中心在指定的點、封閉；兩頭倒角 0.5 mm ⇒ 頂面半徑 2.5 mm（好插進去）',
+    pin.isClosed() && Math.abs(pb.max.y - pb.min.y - 1.54) < 1e-6 && Math.abs(pb.max.x - pb.min.x - 0.6) < 0.01 && Math.abs((pb.max.y + pb.min.y) / 2 - 2) < 1e-6
+    && Math.abs(endR - 0.25) < 1e-4 && pv < full && pv > full * 0.95, `${endR} ${pv} ${full}`);
+
+  // 讀程式守著：列印視窗、切塊頁、切開
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const ep = src('ui/exportPanel.js'), cp = src('ui/bedCutPage.js'), mn = src('main.js');
+  ok('★★ 讀程式守著（列印視窗）：平台寬深高、留邊四格、跟人走；「放不下、轉方向也不行」那一則旁邊一顆「切成放得下的塊」（紅色的問題沒修好不給按）',
+    /id="exBedW"/.test(ep) && /id="exBedD"/.test(ep) && /id="exBedH"/.test(ep) && /id="exMargin"/.test(ep) && /bedMM: \[\.\.\.BED_MM\], marginMM: MARGIN_MM,/.test(ep)
+    && /if \(i\.kind === 'toobig'\) \{/.test(ep) && /btn\.textContent = '切成放得下的塊';/.test(ep) && /if \(!c\.ok\) \{ btn\.disabled = true;/.test(ep) && /bedMM: this\.opt\.bedMM \}\) \};/.test(ep));
+  ok('★★ 讀程式守著（切塊頁）：切法兩種（預設挑位置）、每一刀一格、銷四格＋放不下換小一號、先停、切開',
+    /<option value="smart">挑位置/.test(cp) && /<option value="even">平均切（快）/.test(cp) && /if \(!o\.cutMode\) o\.cutMode = 'smart';/.test(cp) && /data-k="smaller"/.test(cp)
+    && /先停，改用平均切/.test(cp) && /p\.app\.applyBedCut\(s\.obj, s\.res\.pieces, s\.res\.specs, s\.bb\)/.test(cp) && /只能黏/.test(cp));
+  ok('★★ 讀程式守著（切開）：名字「－1、－2…」、插銷另一個物件、原物件換掉、記一步、平滑⛔ 帶過去（已經磨在形狀裡）',
+    /name: `\$\{obj\.name\}－\$\{i \+ 1\}`/.test(mn) && /插銷 ⌀\$\{s\.dMM\} × /.test(mn) && /commit\(`切成放得下的塊 \$\{made\.length\} 塊`\)/.test(mn)
+    && /function applyBedCut\(obj, pieces, specs, bb\) \{[\s\S]*?doc\.remove\(obj\);/.test(mn) && !/function applyBedCut[\s\S]{0,1500}subd: obj\.subd/.test(mn));
+} else {
+  ok('（略過：CSG 沒載入）', true);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

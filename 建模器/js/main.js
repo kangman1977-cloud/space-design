@@ -18,8 +18,9 @@ import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
          revRecenterBound }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
-import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter }
+import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter, unionMeshes, dowelMesh }
   from './build/bool.js';
+import { DOWEL_CHAMFER_MM } from './out/bedCut.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
@@ -499,6 +500,8 @@ const app = {
   unflatPick: (obj, face) => unflatPick(obj, face),
   getClash: () => clashResult,
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
+  /** 第九批 9a：3D 列印「切成放得下的塊」→「切開」（`applyBedCut()` 在下面才定義，⛔ 在建構時呼叫）*/
+  applyBedCut: (obj, pieces, specs, bb) => applyBedCut(obj, pieces, specs, bb),
   toast: (msg, bad) => toast(msg, bad)
 };
 
@@ -3371,6 +3374,57 @@ function curveThroughApply(holeOnly = false) {
       + curveSegWords(info)
       + '　⚠ 平滑與分片線的標記會消失');
   return true;
+}
+
+/**
+ * 🔴 **3D 列印「切成放得下的塊」→「切開」**（第二輪第九批 9a，2026-10-25，kang「同意你的建議」① 切開變成畫面上的物件、插銷另一個物件、可以復原）。
+ * 切好的塊是世界座標（列印視窗量的那一份：平滑後的、補過洞的）⇒ 物件放回原位（位置 0、不轉、不縮放），原點置中；
+ * 建物件照「切穿」（名字「－1、－2…」、原物件換掉、記一步）。⚠ 平滑已經磨在形狀裡了 ⇒ 切出來的塊⛔ 再平滑（不然會磨兩次）。
+ * 插銷：每一種大小一個物件，站著排在模型前面（另外印）。
+ * @param {ModelObject} obj
+ * @param {Mesh[]} pieces 世界座標
+ * @param {{dMM:number, lenMM:number, n:number}[]} specs
+ * @param {{min:number[], max:number[]}} bb 原本的外框（世界 cm）—— 插銷排在它前面
+ */
+function applyBedCut(obj, pieces, specs, bb) {
+  if (!doc.objects.includes(obj)) { toast('原本的物件已經不在了（被刪掉或換掉）—— 重新開「3D 列印」再切一次', true); return null; }
+  for (const m of pieces) refreshAfterEdit(m);
+  const made = pieces.map((m, i) => new ModelObject({
+    name: `${obj.name}－${i + 1}`,
+    kind: obj.kind,
+    src: { type: 'mesh' },
+    mesh: m,                          // 位置、角度、縮放用預設（原點、不轉、1 倍）：形狀已經是世界座標
+    color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
+  }));
+  const pins = [];
+  let x = bb.min[0], z = bb.max[2] + 2;
+  for (const s of specs) {
+    const r = s.dMM / 20, len = s.lenMM / 10, gap = Math.max(0.6, 2 * r);
+    const ms = [];
+    for (let i = 0; i < s.n; i++) { ms.push(dowelMesh(r, len, [x + r, bb.min[1] + len / 2, z + r], DOWEL_CHAMFER_MM / 10)); x += 2 * r + gap; }
+    x += 1;
+    const m = unionMeshes(ms);
+    refreshAfterEdit(m);
+    pins.push(new ModelObject({
+      name: `${obj.name} 插銷 ⌀${s.dMM} × ${+s.lenMM.toFixed(1)} mm（${s.n} 根）`,
+      kind: 'solid', src: { type: 'mesh' }, mesh: m, color: 0xe2483d, thickness: obj.thickness
+    }));
+  }
+  for (const o of [...made, ...pins]) recenterOrigin(o);
+  sel.clearEditSel();
+  doc.remove(obj);
+  for (const o of [...made, ...pins]) doc.add(o);
+  view.sync(doc);
+  sel.set([...made, ...pins].map(o => o.id));
+  panel.analysisCache.clear();
+  commit(`切成放得下的塊 ${made.length} 塊`);
+  syncModeButtons();
+  panel.refresh();
+  updateBar();
+  toast(`已切成 ${made.length} 塊（「${made[0].name}」…「${made[made.length - 1].name}」）`
+    + (pins.length ? `，插銷 ${pins.map(p => p.name.replace(`${obj.name} 插銷 `, '')).join('、')} 另外一個物件` : '')
+    + '　按 Ctrl+Z 收得回來' + (obj.smoothed ? '　⚠ 平滑後的形狀直接切，切出來的塊不再勾平滑細分' : ''));
+  return [...made, ...pins];
 }
 
 /** 切下去：照 `knifeApply()` 那一段（換網格、重標折線、記一步、新的線選起來）*/

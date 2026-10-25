@@ -23,6 +23,7 @@ import { saveBlob, saveMany, textBlob, binaryBlob, safeName, canChoosePath, TYPE
 import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/selectops.js';
 import { fillHoles, holeInfo } from '../core/edit.js';
 import { today } from '../core/io.js';
+import { BED_MM, MARGIN_MM } from '../out/bedCut.js';
 
 /**
  * 🔴 **洞小於表面的幾 % 算「小洞」⇒ 預設建議補洞；大於 ⇒ 預設建議加厚成殼**（2026-10-22，kang「實體有洞時照你的建議：
@@ -41,8 +42,10 @@ export class ExportPanel {
     this.opt = {
       unit: 'mm', format: 'binary', group: 'one', askPath: true,
       minWallMM: DEFAULT_MIN_WALL_MM, overhangDeg: DEFAULT_OVERHANG_DEG,     // 第二輪第四批：跟人走（換噴嘴、換機器才改）
+      bedMM: [...BED_MM], marginMM: MARGIN_MM,                                 // 第九批 9a：平台寬深高、留邊（跟人走）
       ...loadOpt()
     };
+    this.cutPage = null;      // 第九批 9a：第一次按「切成放得下的塊」才載入（它帶 3D 小畫面，node 的測試載不到）
     this.items = [];
     this._build();
   }
@@ -80,6 +83,10 @@ export class ExportPanel {
           <input type="number" id="exWall" step="0.1" min="0" style="width:60px">
           <span class="lbl">懸空角度 °</span>
           <input type="number" id="exOver" step="5" min="0" max="89" style="width:60px">
+          <span class="lbl">平台 寬</span><input type="number" id="exBedW" step="1" min="10" style="width:60px">
+          <span class="lbl">深</span><input type="number" id="exBedD" step="1" min="10" style="width:60px">
+          <span class="lbl">高</span><input type="number" id="exBedH" step="1" min="10" style="width:60px"><span class="lbl">mm</span>
+          <span class="lbl">切塊留邊</span><input type="number" id="exMargin" step="1" min="0" style="width:48px"><span class="lbl">mm</span>
         </div>
         <div class="uwBody" id="exBody"></div>
       </div>`;
@@ -133,6 +140,20 @@ export class ExportPanel {
     over.value = this.opt.overhangDeg;
     over.title = `朝下、離垂直超過這個角度的面算懸空（藍色說明，切片軟體會加支撐）。預設 ${DEFAULT_OVERHANG_DEG}°；散熱好的機器可以到 60°`;
     over.onchange = () => { this.opt.overhangDeg = Math.min(89, Math.max(0, num(over.value, DEFAULT_OVERHANG_DEG))); this.run(); };
+    /**
+     * 🔴 **平台寬、深、高、切塊留邊：可以改、跟人走**（2026-10-25，第二輪第九批 9a；kang「同意你的建議」③ —— 以前寫死 250）。
+     * 放不放得下照這三個（先試轉方向）；切塊時每一段不超過平台減留邊。
+     */
+    ['exBedW', 'exBedD', 'exBedH'].forEach((id, k) => {
+      const inp = $(id);
+      inp.value = this.opt.bedMM[k];
+      inp.title = `列印機能印的${['寬', '深', '高'][k]}（mm）。預設 ${BED_MM[k]}；看你的機器規格（例如 220、256、300）`;
+      inp.onchange = () => { const v = num(inp.value, BED_MM[k]); this.opt.bedMM[k] = v >= 10 ? v : BED_MM[k]; inp.value = this.opt.bedMM[k]; this.run(); };
+    });
+    const mg = $('exMargin');
+    mg.value = this.opt.marginMM;
+    mg.title = `切成放得下的塊時，每一塊比平台再小多少（mm）。預設 ${MARGIN_MM}`;
+    mg.onchange = () => { this.opt.marginMM = Math.max(0, num(mg.value, MARGIN_MM)); mg.value = this.opt.marginMM; this.run(); };
 
     $('exClose').onclick = () => this.close();
     el.querySelector('.uwBack').onclick = () => this.close();
@@ -150,7 +171,17 @@ export class ExportPanel {
    * 〔另一條清除路徑在 `scene.js` 的 `markGeomDirty()`：幾何一變就清〕
    */
   open() { this.app.view.clearIssuePreview(); this.fix = new Map(); this.el.hidden = false; this.run(); }
-  close() { this.el.hidden = true; }
+  close() { if (this.cutPage) this.cutPage.close(); this.el.hidden = true; }
+  /** 第九批 9a：「切成放得下的塊」那一頁（第一次用到才載入）*/
+  async _openCut(it) {
+    if (!this.cutPage) {
+      try { const { BedCutPage } = await import('./bedCutPage.js'); this.cutPage = new BedCutPage(this); }
+      catch (e) { this.app.toast('切塊那一頁載入不了：' + e.message, true); return; }
+    }
+    this.cutPage.open(it);
+  }
+  /** 給「切成放得下的塊」那一頁存設定 */
+  saveOpt() { saveOpt(this.opt); }
   get isOpen() { return !this.el.hidden; }
 
   // ── 準備資料 ────────────────────────────────────────
@@ -179,6 +210,7 @@ export class ExportPanel {
   run() {
     clearTimeout(this._runT);
     showBusy(this.body, '正在檢查模型…（大的模型要十幾秒，算的時候畫面會停住）');
+    if (this.cutPage) this.cutPage.close();       // 第九批 9a：改了上面的設定 ⇒ 回到檢查表
     this._runT = setTimeout(() => this._runNow(), BUSY_MS);
   }
 
@@ -230,7 +262,7 @@ export class ExportPanel {
        */
       const tris = triangles(mesh, { matrix: o.matrix(), scale: s });
       return { obj: o, mesh, tris, shelled, holes, scale: s,
-        check: printCheck(mesh, tris, { mmPerUnit: 10 / s, minWallMM: this.opt.minWallMM, overhangDeg: this.opt.overhangDeg }) };
+        check: printCheck(mesh, tris, { mmPerUnit: 10 / s, minWallMM: this.opt.minWallMM, overhangDeg: this.opt.overhangDeg, bedMM: this.opt.bedMM }) };
     });
 
     this._render();
@@ -359,6 +391,17 @@ export class ExportPanel {
         b.appendChild(document.createTextNode(' '));
         b.appendChild(this._pointBtn(`把${k.what}的地方在畫面上用${k.colorName}框起來，並關掉這個視窗`,
           () => this._showFaces(it, i.kind)));
+      }
+      /** 第九批 9a：放不下平台、轉方向也不行 ⇒ 切成放得下的塊（封閉、方向對的才切得了）*/
+      if (i.kind === 'toobig') {
+        const btn = document.createElement('button');
+        btn.className = 'mini';
+        btn.textContent = '切成放得下的塊';
+        btn.title = '照平台大小切開、接面加定位銷；先看拉開的圖和數字，按「切開」才會改模型';
+        if (!c.ok) { btn.disabled = true; btn.title = '先把上面紅色的問題修好（封閉、方向對的實體才切得了）'; }
+        btn.onclick = () => this._openCut(it);
+        b.appendChild(document.createTextNode(' '));
+        b.appendChild(btn);
       }
       if (i.kind === 'nonmanifold') {
         b.appendChild(document.createTextNode(' '));
