@@ -231,16 +231,19 @@ function insidePolys(pp, x, y) {
 /**
  * 在一塊「放得下的地方」裡挑 per 個點：第一個離這塊的中心最遠，之後離已經挑的最遠（而且至少隔 minSep）。
  * 格點每隔一點取（最多約 60 × 60 個）。
+ * `ok(x, y)`（第三輪第一批 ①）：只挑它說可以的點 —— 一個都不行就回空陣列（⛔ 硬塞）。
  */
-export function pickPoints(polys, area, per, minSep) {
+export function pickPoints(polys, area, per, minSep, ok = null) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of polys) for (const [x, y] of p) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
   const step = Math.max(0.05, Math.min(x1 - x0, y1 - y0) / 40, Math.sqrt(area) / 60);
   const pts = [];
-  for (let x = x0; x <= x1 + 1e-9; x += step) for (let y = y0; y <= y1 + 1e-9; y += step) if (insidePolys(polys, x, y)) pts.push([x, y]);
+  for (let x = x0; x <= x1 + 1e-9; x += step) for (let y = y0; y <= y1 + 1e-9; y += step) if (insidePolys(polys, x, y) && (!ok || ok(x, y))) pts.push([x, y]);
   if (!pts.length) {      // 很窄的一條：取第一圈的中點
     const p = polys[0]; let sx = 0, sy = 0; for (const [x, y] of p) { sx += x; sy += y; }
-    pts.push([sx / p.length, sy / p.length]);
+    const c = [sx / p.length, sy / p.length];
+    if (ok && !ok(c[0], c[1])) return [];
+    pts.push(c);
   }
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
   const chosen = [];
@@ -256,6 +259,11 @@ export function pickPoints(polys, area, per, minSep) {
   return chosen;
 }
 
+/** 這一號的銷離別的刀面至少多遠（cm）：最大的孔深 ＋ 孔半徑 ＋ 孔外的料（第三輪第一批 ①）*/
+export function crossBand(tries, s) {
+  return (Math.max(...tries.map(x => x.depthMM)) + s.dMM / 2 + s.clearMM + s.wallMM) / 10;
+}
+
 /** 銷的設定（mm）：照 o.dowel，加上放不下換的小一號 */
 export function dowelTries(d) {
   return [{ dMM: d.dMM, clearMM: d.clearMM, wallMM: d.wallMM, depthMM: d.depthMM },
@@ -264,6 +272,11 @@ export function dowelTries(d) {
 
 /**
  * 每一刀、每一格的接面放插銷。
+ * 🔴 **離別的刀面要夠遠**（第三輪第一批 ①，kang 2026-10-26「① 甲 挑位置就避開別的刀」→ `實驗-綜合評估-第三輪.md`「第一批」）：
+ * 以前每一刀、每一格各自挑（第一根離中心最遠）⇒ 銷都跑到接面的角落，剛好是別的刀經過的地方 ——
+ * 沙箱：預設方塊 40 根撞 22 對、預設半球 66 根撞 46 對、T16 頭盔頭頂 4 對（兩根銷整根交叉，插不進去）。
+ * 現在挑點時離每一把別的刀至少 `crossBand()`（最大的孔深 ＋ 這一號的孔半徑 ＋ 孔外的料）：別的刀的銷最深伸進來一個孔深，
+ * 這一根的孔就碰不到它、也打不穿別的接面。這一號一個點都挑不到 ⇒ 換小一號；都不行 ⇒ 只能黏（照舊講）。
  * @returns {{joints:{a,c,area,islands,noRoom,dowels,smaller}[], dowels:{a,p:number[],dMM,r,depth}[]}}
  *   dowels 的 r ＝ 孔的半徑（含間隙，cm）、depth ＝ 孔深（cm）；joints 只列真的切到料的
  */
@@ -279,10 +292,16 @@ export function placeDowels(body, bb, cuts, d) {
       const got = isl.map(() => null);
       for (let t = 0; t < tries.length; t++) {
         const s = tries[t];
+        const band = crossBand(tries, s);
+        const ok = (u, v) => {
+          for (const [b, w] of [[ua, u], [va, v]]) for (const cb of cuts[b]) if (Math.abs(w - cb) < band) return false;
+          return true;
+        };
         per[t].forEach((I, i) => {
           if (got[i] || !(I.room > 1e-12)) return;
           const minSep = (2 * (s.dMM / 2 + s.clearMM) + s.wallMM) / 10;
-          got[i] = { s, pts: pickPoints(I.polys, I.room, Math.max(1, d.per), minSep) };
+          const pts = pickPoints(I.polys, I.room, Math.max(1, d.per), minSep, ok);
+          if (pts.length) got[i] = { s, pts };
         });
       }
       const area = isl.reduce((x, I) => x + I.area, 0);

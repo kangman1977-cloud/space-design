@@ -81,6 +81,8 @@ export function penKind(src) {
  */
 export const REV_GUIDE_AX = { z: 'x', x: 'z' };
 const BIND_TOL = 1e-3;
+/** 第三輪第一批 ③：板件「平躺在地板上」的判斷 —— 世界高度最高最低差、離地板都在這個以內（cm）*/
+export const FLOOR_FLAT_TOL = 1e-4;
 
 /** 這支鋼筆的中心線跟哪一種參考線（'x' ＝ 前後線 X、'z' ＝ 左右線 Z） */
 export function revGuideAx(src) {
@@ -563,6 +565,32 @@ export class ModelObject {
   }
 
   /**
+   * 🔴 **板件加厚的唯一入口**（第三輪第一批 ③，kang 2026-10-26「③ 乙 平躺的板件往上長」→ `實驗-綜合評估-第三輪.md`「第一批」）：
+   * 畫面（`scene.js`）、3D 列印（`exportPanel.js`）、剖面分切（`slicePanel.js`）、OBJ（`objPanel.js`）、干涉檢查、加厚後轉成網格都叫這一支。
+   * 中性面往兩邊各長一半（照舊）；⭐ **平躺在地板上的**（整張在世界高度 0、水平）⇒ 往上長：整個往上平移半個板厚。
+   * ⚠ 以前往上下各長一半 ⇒ 地上的板件有一半鑽到地板底下；3D 列印「整組落到平台 Z=0」照它抬 ⇒ T19 牌面浮 1 mm。
+   * ⛔ 動立著的、斜的、浮在空中的板件（燈罩照舊往兩邊長）。
+   * @param {Mesh} mesh 本地座標的網格（通常是 `smoothMesh()`）
+   */
+  sheetShell(mesh, t = Number(this.thickness) || 0) {
+    return mesh.shell(t, { offset: this.floorLift(mesh, t) });
+  }
+
+  /** 平躺在地板上 ⇒ 本地座標裡「往上半個板厚」的平移；不是 ⇒ null */
+  floorLift(mesh, t = Number(this.thickness) || 0) {
+    if (!(Math.abs(t) > 1e-9) || !mesh.verts.length) return null;
+    const M = this.matrix(), q = new THREE.Vector3();
+    let lo = Infinity, hi = -Infinity;
+    for (const v of mesh.verts) { q.copy(v.p).applyMatrix4(M); if (q.y < lo) lo = q.y; if (q.y > hi) hi = q.y; }
+    if (!(hi - lo < FLOOR_FLAT_TOL && Math.abs(lo) < FLOOR_FLAT_TOL)) return null;
+    // 世界的「往上」換回本地方向（物件轉過、縮放過也對），長度 ＝ 半個板厚（跟 shell() 往法向推的量同一個單位）
+    const inv = M.clone().invert();
+    const o = new THREE.Vector3(0, 0, 0).applyMatrix4(inv);
+    const dir = new THREE.Vector3(0, 1, 0).applyMatrix4(inv).sub(o).normalize();
+    return dir.multiplyScalar(Math.abs(t) / 2);
+  }
+
+  /**
    * 🔴🔴 **把板厚【烤進網格】，再變成網格物件**（2026-08-30，kang 問出來的）。
    *
    * > **他的原話：「平板與折板確實也可以轉成網格…但鈑件厚度並不受網格的控制」**
@@ -608,7 +636,7 @@ export class ModelObject {
         reason: '這個物件本來就是封閉的實體，不必加厚 —— 直接按「轉成可編輯網格」' };
     }
     let s;
-    try { s = m.shell(t); }
+    try { s = this.sheetShell(m, t); }
     catch (e) { return { ok: false, reason: '加厚失敗：' + (e.message || String(e)) }; }
     this.src = { type: 'mesh' };
     const r = mergeCoplanarFaces(s);

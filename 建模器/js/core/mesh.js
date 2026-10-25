@@ -738,9 +738,11 @@ export class Mesh {
    * @param {number} t 板厚，單位 cm
    * @returns {Mesh} 封閉的實體網格
    */
-  shell(t) {
+  shell(t, opt = {}) {
     const half = Math.abs(t) / 2;
     if (half < 1e-9) return this.clone();
+    /** 第三輪第一批 ③：`opt.offset`（本地座標的 Vector3）⇒ 加厚完整個平移（平躺在地板上的板件往上長，`ModelObject.sheetShell()` 算）*/
+    const off = opt.offset || null;
 
     const vi = this._vertIndex();
     const vn = this.vertexNormals();
@@ -783,6 +785,7 @@ export class Mesh {
     for (const v of this.verts) {
       points.push(v.p.clone().addScaledVector(vn.get(v.id), -push.get(v.id)));
     }
+    if (off) for (const p of points) p.add(off);
 
     const faces = [];
     for (const f of this.faces) {

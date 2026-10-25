@@ -36,7 +36,7 @@ export function solidForClash(obj) {
     const t = Number(obj.thickness) || 0;
     if (t <= 1e-6) return { ok: false, reason: '開放的面、板厚是 0 —— 沒有厚度算不出重疊' };
     if (m.faces.length > SHELL_MAX_FACES) return { ok: false, reason: `面太多（${m.faces.length}），加厚不了` };
-    try { local = m.shell(t); shelled = true; }
+    try { local = obj.sheetShell ? obj.sheetShell(m, t) : m.shell(t); shelled = true; }   // 第三輪第一批 ③：跟畫面同一支
     catch (e) { return { ok: false, reason: '照板厚加厚失敗：' + (e.message || String(e)) }; }
   }
   return { ok: true, mesh: local.transformed(obj.matrix()), shelled };

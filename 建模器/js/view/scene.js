@@ -733,12 +733,16 @@ export class SceneView {
     /** 8c ②（kang「拉點線面時淡淡那層照縮的」）：淡淡那層一律照縮 —— 它只是預覽，拉一下就要重算 */
     const ghostSrc = obj.smoothed && this._cageOn ? obj.smoothMesh({ fast: true }) : null;
 
+    /** 第三輪第一批 ③：平躺在地板上的板件往上長（`sheetShell()`）—— 搬上搬下會變 ⇒ 也算進「要不要重畫」*/
+    const lift = shellT > 0 && obj.floorLift ? obj.floorLift(base, shellT) : null;
+    const liftKey = lift ? lift.toArray().map(x => x.toFixed(6)).join(',') : '';
+
     // _geomDirty ＝ 編輯就地改了頂點座標。mesh 物件沒換，所以前兩個條件
     // 都察覺不到 —— 少了它，拉點之後畫面不會更新（見 markGeomDirty）。
     if (node.userData.geomKey !== base || node.userData.shellT !== shellT
-        || node.userData.ghostKey !== ghostSrc || this._geomDirty) {
+        || node.userData.ghostKey !== ghostSrc || node.userData.liftKey !== liftKey || this._geomDirty) {
       node.geometry.dispose();
-      const shown = shellT > 0 ? base.shell(shellT) : base;
+      const shown = shellT > 0 ? base.shell(shellT, { offset: lift }) : base;
       node.geometry = shown.toGeometry();
 
       /**
@@ -789,7 +793,7 @@ export class SceneView {
 
       const ghost = node.getObjectByName('subdGhost');
       ghost.geometry.dispose();
-      ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
+      ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT, { offset: lift }) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
       ghost.visible = !!ghostSrc;
       const cr = node.getObjectByName('subdCreases');
       cr.geometry.dispose();
@@ -801,6 +805,7 @@ export class SceneView {
       node.userData.geomKey = base;
       node.userData.ghostKey = ghostSrc;
       node.userData.shellT = shellT;
+      node.userData.liftKey = liftKey;
     }
     node.getObjectByName('subdGhost').material.color.setHex(obj.color);
 

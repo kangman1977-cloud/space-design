@@ -13,7 +13,7 @@
  * 算什麼在 slice/，畫什麼在 out/，這裡只收設定、排結果、接按鈕。
  */
 
-import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2 }
+import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2, isHollowSheet, sheetNotes }
   from '../slice/section.js';
 import { findPegs, checkPegs, pegsForSlice, pegSpans, manualPegs, holesFromAuto, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
@@ -140,6 +140,8 @@ export class SlicePanel {
           <label class="uwCk" title="勾了：每一片取那一段厚度裡最大的外形（寧大勿小，疊好之後再磨），比板子薄的部分不會不見。沒勾：取每一片正中間的截面（曲面還原得最準）"><input type="checkbox" id="slMax"> 照最大外形切</label>
           </span>
           <span class="sp"></span>
+          <span class="lbl">板件</span><select id="slSheet" title="板件（種類是「板件」的開放曲面，例如旋轉成形的燈罩）怎麼切：空心 ＝ 照它的板厚切成一圈一圈的環（跟 3D 列印一樣）；實心 ＝ 被那一圈包住的地方都算料（以前的做法）"><option value="hollow">空心（照板厚）</option><option value="solid">實心</option></select>
+          <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
           <label class="uwCk"><input type="checkbox" id="slAsk"> 指定存放位置</label>
           <span class="sp"></span>
@@ -194,6 +196,15 @@ export class SlicePanel {
     const mx = $('slMax');
     mx.checked = !!this.opt.maxOutline;
     mx.onchange = () => { this.opt.maxOutline = mx.checked; this.run(); };
+
+    /**
+     * 🔴 **板件：空心（照板厚）／實心**（第三輪第一批 ②，kang 2026-10-26「② 丙 板件空心／實心一格、預設空心」）。
+     * 以前板件（開放曲面）照「被一圈包住就是料」切 ⇒ T18 燈罩 60 片切成實心圓片（約 3 萬 cm³），同一個物件 3D 列印卻是 2 mm 空心殼。
+     * 預設空心：板件先照板厚加厚（跟 3D 列印、畫面同一支 `sheetShell()`）再切 ⇒ 一圈一圈的環；疊層、互卡都照這一格。跟人走。
+     */
+    const sh = $('slSheet');
+    sh.value = this.opt.sheet === 'solid' ? 'solid' : 'hollow';
+    sh.onchange = () => { this.opt.sheet = sh.value; this.run(); };
 
     const unit = $('slUnit');
     for (const k of Object.keys(UNITS)) {
@@ -393,8 +404,14 @@ export class SlicePanel {
 
     // 切的是世界座標下的樣子 —— 物件被搬過、轉過、縮放過都要吃進去，
     // 否則圖跟畫面上看到的東西不一樣大也不一樣位置。
+    const hollow = this.opt.sheet !== 'solid';      // 第三輪第一批 ②：板件預設照板厚切成空心
+    const shelledT = [];
     const meshes = objs.map(o => {
-      try { return o.smoothMesh().transformed(o.matrix()); }     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
+      try {
+        let m = o.smoothMesh();     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
+        if (hollow && isHollowSheet(o, m)) { m = o.sheetShell(m, o.thickness); shelledT.push(+o.thickness); }
+        return m.transformed(o.matrix());
+      }
       catch (e) { return null; }
     }).filter(Boolean);
 
@@ -404,6 +421,7 @@ export class SlicePanel {
     this.result = !meshes.length ? { ok: false, reason: '目前文件裡沒有物件。' }
       : il ? interlockMany(meshes, this._ilOpt())     // 6a：互卡（6c：手動挪過的位置）
       : sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 });
+    this._sheetNotes = sheetNotes(this.result, shelledT, il);
 
     /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
     this.pegs = (this.result.ok && this.result.slices.length && !il)     // 6a：互卡沒有定位孔
@@ -491,6 +509,7 @@ export class SlicePanel {
     }
 
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
+    for (const n of this._sheetNotes || []) this.body.appendChild(box('uwSkip', n));     // 第三輪第一批 ②
 
     // 定位孔
     const g = this.pegs;
@@ -556,6 +575,7 @@ export class SlicePanel {
     const r = this.result, st = r.stats, il = this.opt.il;
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     for (const n of r.notes || []) this.body.appendChild(box('uwSkip', n));
+    for (const n of this._sheetNotes || []) this.body.appendChild(box('uwSkip', n));     // 第三輪第一批 ②
     this.body.appendChild(box('uwSkip',
       `互卡：側面從 ${st.spineAx.toUpperCase()} 切${st.spines === 1 && !this.opt.manualRibs ? '正中間（1 片）' : `（${st.spines} 片）`}＋肋沿 ${st.ribAx.toUpperCase()} ${this.opt.manualRibs ? '照肋位圖手動挪過的位置' : `每 ${f(st.spacing)} cm`}（${st.ribs} 片）；`
       + `槽寬 ${f(st.slotW)} cm（板厚 ${f(st.t)} ${+il.slotAdj ? (il.slotAdj > 0 ? '＋ ' : '− ') + f(Math.abs(il.slotAdj)) : '＋ 0'}）、肋那邊佔 ${f(il.share * 10)} 成、槽口每邊張開 ${f(il.flare)} cm。`

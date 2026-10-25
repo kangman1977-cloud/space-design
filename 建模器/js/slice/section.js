@@ -98,6 +98,29 @@ export const SCAN_H = 0.01, SCAN_EPS = 0.005;
 export const TINY_PIECE_CM = 1;
 /** 相鄰兩片黏到的面積比這個小（cm²）就提醒「只黏一點點」（第二輪第五批 5a）；面板「黏著提醒」可以改 */
 export const MIN_GLUE_CM2 = 0.25;
+
+/**
+ * 🔴 **板件切成空心**（第三輪第一批 ②，kang 2026-10-26「② 丙 板件空心／實心一格、預設空心」）：
+ * 要照板厚切成環的 ＝ 種類是「板件」、有板厚、網格是開的（跟 3D 列印 `exportPanel.js` 加厚板件的條件一樣）。
+ * ⚠ 實體有破洞的⛔ 算 —— 照舊當實心切（斷線補線那一套）。
+ */
+export function isHollowSheet(o, mesh) {
+  return !!o && o.kind === 'sheet' && Number(o.thickness) > 0 && !!mesh && !mesh.isClosed();
+}
+
+/**
+ * 板件照板厚切成空心時的藍框說明（`shelledT` ＝ 每個切成空心的板件的板厚）；疊層有掉下來的塊 ⇒ 多一句牆太薄怎麼調
+ * （沙箱 `輸出\第三輪第一批研究\sheet_stack_t.mjs`：燈罩牆 0.2、板厚 1 ⇒ 往內收的地方每片收 2.8 mm，第 22～60 片掉；牆 0.5 或板厚 0.3 ⇒ 接得上）。
+ */
+export function sheetNotes(result, shelledT, interlock = false) {
+  if (!result || !result.ok || !shelledT || !shelledT.length) return [];
+  const ts = [...new Set(shelledT.map(t => +(+t).toFixed(3)))].join('、');
+  const out = [`有 ${shelledT.length} 個板件照板厚 ${ts} cm 切成空心（一圈一圈的環，跟 3D 列印一樣）—— 要切成實心，把上面「板件」改成「實心」。`];
+  if (!interlock && (result.warnings || []).some(w => /接不到主體/.test(String(w)))) {
+    out.push(`掉下來的塊如果是板件的環：多半是牆（板厚 ${ts} cm）比斜的地方每一片收進去的還薄，上下兩片碰不到 —— 把板件的板厚調大，或把疊層的板厚調小。`);
+  }
+  return out;
+}
 /** 斷線接頭尾：每條尾巴找最近的幾個頭來比 */
 const BRIDGE_K = 8;
 

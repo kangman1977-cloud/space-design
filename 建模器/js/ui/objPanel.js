@@ -80,7 +80,7 @@ export class ObjPanel {
     return objs.map(o => {
       let mesh = o.smoothMesh(), shelled = false;     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       const t = this.app.view.shellThickness(o);
-      if (t > 0) { try { mesh = mesh.shell(t); shelled = true; } catch (e) { /* 加厚失敗就照原樣寫 */ } }
+      if (t > 0) { try { mesh = o.sheetShell(mesh, t); shelled = true; } catch (e) { /* 加厚失敗就照原樣寫 */ } }   // 第三輪第一批 ③：跟畫面同一支
       return { name: o.name, mesh, matrix: o.matrix(), shelled, obj: o };
     });
   }

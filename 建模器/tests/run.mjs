@@ -19381,7 +19381,7 @@ section('第二輪第一批（一）：封閉的判斷、補洞、3D 列印先�
   // ④ 3D 列印面板讀程式守著：實體⛔ 一律先加厚；板件照舊加厚
   const { readFileSync } = await import('node:fs');
   const ep = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../js/ui/exportPanel.js'), 'utf8');
-  ok('★★★ 列印面板：板件照舊加厚；實體先看面翻過來、真的洞，再照比例建議', /if \(o\.kind === 'sheet'\) \{\s*try \{ mesh = mesh\.shell/.test(ep) && /reversedFaceEdges\(mesh\)\.edges > 0/.test(ep) && /info\.ratio < SMALL_HOLE_RATIO \? 'fill' : 'shell'/.test(ep));
+  ok('★★★ 列印面板：板件照舊加厚；實體先看面翻過來、真的洞，再照比例建議', /if \(o\.kind === 'sheet'\) \{\s*try \{ mesh = o\.sheetShell\(mesh, o\.thickness\)/.test(ep) && /reversedFaceEdges\(mesh\)\.edges > 0/.test(ep) && /info\.ratio < SMALL_HOLE_RATIO \? 'fill' : 'shell'/.test(ep));
   ok('★★ 　 卡片上可以換（改成補洞／改成加厚成殼）', /'改成補洞' : '改成加厚成殼'/.test(ep));
 }
 
@@ -21085,7 +21085,7 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
   ok('★★ 讀程式守著（出口）：3D 列印與它的破洞／非流形標示、匯出 OBJ、剖面分切、結構分析、狀態列三角形數照平滑後的',
     /this\.items = objs\.map\(o => \{\s*let mesh = o\.smoothMesh\(\);/.test(ex) && /_showNonManifold\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex)
     && /_showHoles\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex) && /let mesh = o\.smoothMesh\(\), shelled = false;/.test(ob)
-    && /return o\.smoothMesh\(\)\.transformed\(o\.matrix\(\)\)/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)
+    && /let m = o\.smoothMesh\(\);[\s\S]{0,300}return m\.transformed\(o\.matrix\(\)\)/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)   // 第三輪第一批 ②：剖面先看板件要不要加厚再換世界座標
     && /const m = o\.smoothMesh \? o\.smoothMesh\(\{ fast: true \}\) : o\.mesh && o\.mesh\(\);/.test(mn));
   ok('★★ 讀程式守著（展開照粗網格）：展開、智慧分切⛔ 叫 smoothMesh',
     !/smoothMesh/.test(src('unfold/part.js')) && !/smoothMesh/.test(src('unfold/propose.js')) && !/smoothMesh/.test(src('unfold/flatten.js')));
@@ -21583,6 +21583,115 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
     && /onClick = \(\) => \{ pressed = \{ 按了: q, 時間:[^}]*\}; unpoint\(\); \};/.test(src) && !/setTimeout\(/.test(src));
   ok('★★ 讀程式守著：⛔ 改模型、⛔ 改選取（assist.js 裡沒有 commit、sel.set、doc.add、doc.remove）', !/commit\(|\.sel\.set\(|sel\.set\(|doc\.add\(|doc\.remove\(/.test(src));
   ok('★ 指物件：橘色外框借 setFacePreview（同 3D 列印「指出來」）、收掉時 clearIssuePreview', /app\.view\.setFacePreview\(E\.flatMap/.test(src) && /app\.view\.clearIssuePreview\(\)/.test(src) && AI.POINT_COLOR === 0xff9d2e);
+}
+
+section('第三輪第一批 出口做錯：銷互相避開、板件切成空心、平躺的板件往上長（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第一批 出口做錯」；kang 2026-10-26「① 甲 挑位置就避開別的刀 ② 丙 板件空心／實心一格、預設空心 ③ 乙 平躺的板件往上長」。
+   * 沙箱 `輸出\第三輪第一批研究\`（dowel_cross.mjs、sheet_stack*.mjs）的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const SB = await import('../js/build/subd.js');
+  const SEC = await import('../js/slice/section.js');
+  const { revolve } = await import('../js/build/revolve.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+  const worldOf = o => o.mesh().transformed(o.matrix());
+  const primObj = type => { const o = new io.ModelObject({ name: type, src: prim.defaultSrc(type) }); o.bake(); return o; };
+
+  // ── ① 銷互撞：孔（半徑 r、沿 a 軸 ±depth）兩兩比，不同刀的有沒有重疊；孔有沒有穿過別的刀面 ──
+  const inCyl = (q, d) => { if (Math.abs(q[d.a] - d.p[d.a]) > d.depth) return false; let s = 0; for (let k = 0; k < 3; k++) if (k !== d.a) s += (q[k] - d.p[k]) ** 2; return s <= d.r * d.r; };
+  const hits = dw => {
+    let n = 0;
+    for (let i = 0; i < dw.length; i++) for (let j = i + 1; j < dw.length; j++) {
+      const p = dw[i], q = dw[j]; if (p.a === q.a) continue;
+      const lo = [0, 1, 2].map(k => Math.max(p.p[k] - (k === p.a ? p.depth : p.r), q.p[k] - (k === q.a ? q.depth : q.r)));
+      const hi = [0, 1, 2].map(k => Math.min(p.p[k] + (k === p.a ? p.depth : p.r), q.p[k] + (k === q.a ? q.depth : q.r)));
+      if (lo.some((x, k) => x >= hi[k])) continue;
+      let hit = false; const st = 0.02;
+      for (let x = lo[0]; x < hi[0] && !hit; x += st) for (let y = lo[1]; y < hi[1] && !hit; y += st) for (let z = lo[2]; z < hi[2] && !hit; z += st) if (inCyl([x, y, z], p) && inCyl([x, y, z], q)) hit = true;
+      if (hit) n++;
+    }
+    return n;
+  };
+  const crosses = (dw, cuts) => dw.filter(d => [0, 1, 2].some(b => b !== d.a && cuts[b].some(c => Math.abs(d.p[b] - c) < d.r))).length;
+  const near = (dw, cuts, tries) => dw.filter(d => { const s = tries.find(t => t.dMM === d.dMM); const band = B.crossBand(tries, s); return [0, 1, 2].some(b => b !== d.a && cuts[b].some(c => Math.abs(d.p[b] - c) < band - 1e-9)); }).length;
+  const tries = B.dowelTries(B.DOWEL);
+  ok('★ 離別的刀面至少：最大孔深＋孔半徑＋孔外的料 ⇒ ⌀6 1.27 cm、⌀3 1.085 cm、⌀1.75 1.0025 cm（孔深一律拿最大的 8 mm —— 別的刀的銷可能是 ⌀6）', Math.abs(B.crossBand(tries, tries[0]) - 1.27) < 1e-9 && Math.abs(B.crossBand(tries, tries[1]) - 1.085) < 1e-9 && Math.abs(B.crossBand(tries, tries[2]) - 1.0025) < 1e-9, tries.map(s => B.crossBand(tries, s)).join());
+  const sq = [[[0, 0], [10, 0], [10, 10], [0, 10]]];
+  ok('★★ 挑點多一個「可不可以」：一個都不行 ⇒ 空的（⛔ 硬塞中點）；沒給 ⇒ 照舊', B.pickPoints(sq, 100, 2, 1, () => false).length === 0 && B.pickPoints(sq, 100, 2, 1).length === 2
+    && B.pickPoints(sq, 100, 2, 1, (x) => x > 5).every(([x]) => x > 5));
+  const runCut = async mesh => { const { body, bb } = B.openCut(mesh, 't'); const p = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL }); const d = B.placeDowels(body, bb, p.cuts, B.DOWEL); return { body, bb, p, d }; };
+  const cbx = await runCut(worldOf(primObj('box')));
+  ok('★★★ 預設方塊（9a 的樣本）：還是 40 根 ⌀6、每個接面 2 根、0 個只能黏；**不同刀的銷 0 對撞到**（以前 22 對）、孔⛔ 穿過別的刀面、都離別的刀面至少 1.27 cm',
+    cbx.d.dowels.length === 40 && cbx.d.joints.every(j => j.dowels === 2 && !j.noRoom) && hits(cbx.d.dowels) === 0 && crosses(cbx.d.dowels, cbx.p.cuts) === 0 && near(cbx.d.dowels, cbx.p.cuts, tries) === 0,
+    `${cbx.d.dowels.length} ${hits(cbx.d.dowels)}`);
+  const s1 = cbx.body.split(cbx.d.dowels, cbx.p.cuts);
+  ok('★★ 方塊切開：12 塊、切出來的＋挖掉的孔 ＝ 原本（照舊）', s1.pieces.length === 12 && Math.abs(s1.pieces.reduce((s, m) => s + m.volume(), 0) + s1.socketVol - cbx.body.volume) < 0.01);
+  cbx.body.close();
+  const cdm = await runCut(worldOf(primObj('dome')));
+  ok('★★★ 預設半球：還是 66 根 ⌀6；不同刀的銷 0 對撞到（以前 46 對）', cdm.d.dowels.length === 66 && hits(cdm.d.dowels) === 0 && crosses(cdm.d.dowels, cdm.p.cuts) === 0, `${cdm.d.dowels.length} ${hits(cdm.d.dowels)}`);
+  cdm.body.close();
+  // T16 頭盔第三版（半球殼 10.3−10、帽簷減 10.15、稜線減 10.15；聯集、平滑照縮）
+  const dome = r => ({ type: 'dome', r, seg: 32, segH: 8 });
+  const shellSrc = { type: 'bool', op: 'subtract', items: [it(dome(10.3), [0, 5.15, 0]), it(dome(10), [0, 5, 0])] };
+  const brimSrc = { type: 'bool', op: 'subtract', items: [it({ type: 'cylinder', r: 13.5, h: 0.4, seg: 32, openEnded: false }, [0, 0.2, 0]), it(dome(10.15), [0, 5.075, 0])] };
+  const ridgeSrc = { type: 'bool', op: 'subtract', items: [it({ type: 'bool', op: 'intersect', items: [it(dome(10.9), [0, 5.45, 0]), it({ type: 'box', w: 2.5, h: 11, d: 30 }, [0, 5.5, 0])] }), it(dome(10.15), [0, 5.075, 0])] };
+  const hO = new io.ModelObject({ name: '頭盔', src: { type: 'bool', op: 'union', items: [it(shellSrc), it(brimSrc), it(ridgeSrc)] } }); hO.bake();
+  ok('★ 頭盔第三版建得出來：334.97 cm³（T16 線上一樣）', Math.abs(hO.mesh().volume() - 334.97) < 0.01, hO.mesh().volume().toFixed(2));
+  const chm = await runCut(SB.subdivide(hO.mesh(), { levels: 2, deg: 30 }).mesh.transformed(hO.matrix()));
+  ok('★★★ T16 頭盔：左右、前後各 1 刀；頭頂那個角⛔ 再撞（以前 4 對）；5 根（⌀3／⌀1.75）、1 個接面變只能黏（照舊講）',
+    chm.p.cuts.map(c => c.length).join() === '1,0,1' && hits(chm.d.dowels) === 0 && crosses(chm.d.dowels, chm.p.cuts) === 0 && chm.d.dowels.length === 5 && chm.d.joints.filter(j => j.dowels === 0).length === 1,
+    `${chm.d.dowels.length} ${hits(chm.d.dowels)} ${chm.d.joints.map(j => j.dowels).join()}`);
+  chm.body.close();
+
+  // ── ② 板件切成空心 ──
+  const lamp = revolve([V3(12, 0, 0), V3(16, 20, 0), V3(9, 45, 0), V3(7, 60, 0)], { axis: 'y', a: 0, b: 0, seg: 32 }).mesh;
+  ok('★★ 要切成空心的 ＝ 種類板件、有板厚、網格是開的（實體有破洞的、封閉的、板厚 0 都⛔ 算）',
+    SEC.isHollowSheet({ kind: 'sheet', thickness: 0.2 }, lamp) && !SEC.isHollowSheet({ kind: 'solid', thickness: 0.2 }, lamp)
+    && !SEC.isHollowSheet({ kind: 'sheet', thickness: 0 }, lamp) && !SEC.isHollowSheet({ kind: 'sheet', thickness: 0.2 }, lamp.shell(0.2)));
+  const area = s => (s.loops || []).reduce((a, l) => a + (l.isHole ? -1 : 1) * Math.abs(l.area || 0), 0);
+  const solidR = SEC.sliceMany([lamp], { axis: 'y' }), hol = SEC.sliceMany([lamp.shell(0.2)], { axis: 'y' });
+  const s20 = solidR.slices[19], h20 = hol.slices[19];
+  ok('★★★ 燈罩（T18）第 20 片：實心 ＝ 1 圈 789 cm²；照板厚 0.2 加厚再切 ＝ 環（1 圈外框＋1 個洞）20.3 cm²',
+    s20.loops.length === 1 && Math.abs(area(s20) - 789.13) < 0.05 && h20.loops.length === 2 && h20.loops.filter(l => l.isHole).length === 1 && Math.abs(area(h20) - 20.33) < 0.05,
+    `${area(s20).toFixed(2)} ${area(h20).toFixed(2)}`);
+  ok('★★ 牆 0.2、板厚 1 ⇒ 往內收的地方接不到主體（第 22～60 片）；牆 0.5 ⇒ 都接得上（沙箱一樣）',
+    hol.warnings.some(w => /第 22~60 片有 39 塊疊起來接不到主體/.test(w)) && !SEC.sliceMany([lamp.shell(0.5)], { axis: 'y' }).warnings.some(w => /接不到主體/.test(w)), hol.warnings.join(' | ').slice(0, 200));
+  const n1 = SEC.sheetNotes(SEC.sliceMany([lamp.shell(0.5)], { axis: 'y' }), [0.5]), n2 = SEC.sheetNotes(hol, [0.2]), n3 = SEC.sheetNotes(hol, [0.2], true);
+  ok('★★ 藍框：「有 1 個板件照板厚 0.5 cm 切成空心…要切成實心，把上面「板件」改成「實心」」；有掉下來的多一句「牆…比斜的地方每一片收進去的還薄…板厚調大，或疊層的板厚調小」；互卡⛔ 加那一句；沒切成空心 ⇒ 沒有',
+    n1.length === 1 && n1[0].startsWith('有 1 個板件照板厚 0.5 cm 切成空心') && n1[0].includes('改成「實心」') && n2.length === 2 && /比斜的地方每一片收進去的還薄/.test(n2[1])
+    && n3.length === 1 && SEC.sheetNotes(hol, []).length === 0 && SEC.sheetNotes({ ok: false }, [0.2]).length === 0);
+
+  // ── ③ 平躺在地板上的板件往上長 ──
+  const stripSrc = { type: 'pen', h: 0.5, open: true, up: false, paths: [{ closed: true, a: [-9, 0, 11.033926781936911, 0], hi: [0, 0, 0, 0], ho: [0, 0, 0, 0] }] };
+  const mkStrip = (pos, rot = [0, 0, 0], scl = [1, 1, 1]) => { const o = new io.ModelObject({ name: '底線', kind: 'sheet', thickness: 0.2, src: stripSrc }); o.pos.set(...pos); o.rot.set(...rot); o.scale.set(...scl); o.bake(); return o; };
+  const strip = mkStrip([-4, 0, 8.25]);
+  const ys = m => { let lo = Infinity, hi = -Infinity; for (const v of m.verts) { if (v.p.y < lo) lo = v.p.y; if (v.p.y > hi) hi = v.p.y; } return [lo, hi]; };
+  const wy = m => ys(m.transformed(strip.matrix()));
+  const sm = strip.mesh();
+  const [l0, h0] = wy(sm.shell(0.2)), [l1, h1] = wy(strip.sheetShell(sm));
+  ok('★★★ T19 底線（平躺在地上）：以前往上下各長一半（−0.1～0.1）；現在往上長（0～0.2）', Math.abs(l0 + 0.1) < 1e-6 && Math.abs(h0 - 0.1) < 1e-6 && Math.abs(l1) < 1e-6 && Math.abs(h1 - 0.2) < 1e-6, `${l0} ${h0} ${l1} ${h1}`);
+  ok('★★ 體積照舊 ＝ 面積 × 板厚（只是平移）', Math.abs(strip.sheetShell(sm).volume() - sm.shell(0.2).volume()) < 1e-9);
+  const up5 = mkStrip([-4, 5, 8.25]);
+  const [l2, h2] = ys(up5.sheetShell(up5.mesh()).transformed(up5.matrix()));
+  ok('★★ 浮在空中的（高 5）照舊往兩邊長（4.9～5.1）；立著的燈罩⛔ 算平躺', Math.abs(l2 - 4.9) < 1e-6 && Math.abs(h2 - 5.1) < 1e-6 && primObj('box').floorLift(lamp, 0.2) === null);
+  const rotS = mkStrip([0, 0, 0], [0, 0, Math.PI], [1, 2, 1]);
+  const [l3, h3] = ys(rotS.sheetShell(rotS.mesh()).transformed(rotS.matrix()));
+  ok('★★ 物件轉過 180°、縮放過也是往世界的上面長（0～0.2 × 縮放）', Math.abs(l3) < 1e-6 && h3 > 0.19 && h3 < 0.41, `${l3} ${h3}`);
+  // 讀程式守著：加厚都走 sheetShell（畫面、3D 列印、剖面、OBJ、干涉檢查、加厚後轉成網格）；畫面的快取看往上長了沒
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const sc = src('view/scene.js'), ex = src('ui/exportPanel.js'), sl = src('ui/slicePanel.js'), ob = src('ui/objPanel.js'), itf = src('core/interfere.js'), ioS = src('core/io.js');
+  ok('★★ 讀程式守著（③）：畫面照 floorLift 平移、快取多看 liftKey；3D 列印板件、OBJ、干涉檢查、加厚後轉成網格都叫 sheetShell',
+    /const lift = shellT > 0 && obj\.floorLift \? obj\.floorLift\(base, shellT\) : null;/.test(sc) && /node\.userData\.liftKey !== liftKey/.test(sc) && /base\.shell\(shellT, \{ offset: lift \}\)/.test(sc)
+    && /mesh = o\.sheetShell\(mesh, o\.thickness\)/.test(ex) && /mesh = o\.sheetShell\(mesh, t\)/.test(ob) && /obj\.sheetShell\(m, t\)/.test(itf) && /s = this\.sheetShell\(m, t\)/.test(ioS));
+  ok('★★ 讀程式守著（②）：剖面視窗「板件 空心（照板厚）／實心」、預設空心、跟人走；板件先 sheetShell 再切；藍框疊層、互卡都放',
+    /<select id="slSheet"[^>]*><option value="hollow">空心（照板厚）<\/option><option value="solid">實心<\/option>/.test(sl) && /const hollow = this\.opt\.sheet !== 'solid';/.test(sl)
+    && /if \(hollow && isHollowSheet\(o, m\)\) \{ m = o\.sheetShell\(m, o\.thickness\);/.test(sl) && /sh\.onchange = \(\) => \{ this\.opt\.sheet = sh\.value; this\.run\(\); \};/.test(sl)
+    && (sl.match(/for \(const n of this\._sheetNotes \|\| \[\]\)/g) || []).length === 2);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

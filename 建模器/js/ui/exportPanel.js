@@ -228,7 +228,7 @@ export class ExportPanel {
       let holes = null;                       // 實體有真的洞 ⇒ { holes, ratio, choice, suggest, filled, fillErr }
       if (!mesh.isClosed() && o.thickness > 0) {
         if (o.kind === 'sheet') {
-          try { mesh = mesh.shell(o.thickness); shelled = true; }
+          try { mesh = o.sheetShell(mesh, o.thickness); shelled = true; }     // 第三輪第一批 ③：平躺在地板上的往上長（跟畫面同一支）
           catch (e) { /* 加厚失敗就照原樣，檢查表會報「不封閉」 */ }
         } else {
           /**
