@@ -20698,7 +20698,7 @@ if (csgOK) {
   ok('★★ 側面可以指定從 X 切 ⇒ 肋沿 Z', IL.interlockMany([b], { spine: 'x' }).ribAxis === 'z');
 
   // 旁邊另一塊（不碰側面）⇒ 那幾片肋上的塊掉下來
-  const r2 = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], {});
+  const r2 = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], { spine: 'z' })     /* 第三輪第四批：自動會挑掉下來少的 X ⇒ 這裡要看掉下來的塊，指定窄的 Z */;
   const w2 = r2.warnings.find(w => /插不到側面/.test(w)) || '';
   ok('★★★ 旁邊另一塊（不碰側面）⇒ 那幾片肋上多一塊掉下來、標紅（loose）、講「插不到側面的塊（掉下來）」', /^肋 .*有插不到側面的塊（掉下來）/.test(w2) && r2.slices.some(s => s.loops.some(l => l.loose)), w2.slice(0, 40));
   // 很矮（0.8 cm，不到兩倍板厚）⇒ 卡不牢、黃圈
@@ -20907,7 +20907,7 @@ if (csgOK) {
   const box = (w, h, d, x, y, z) => prim.buildPrim('box', { w, h, d }).transformed(T(x, y, z));
   const b = box(20, 10, 6, 0, 5, 0);
   // 旁邊一塊（x −2～2、z 7～9，不碰側面）⇒ 肋上的塊掉下來；紅點在 z 8、x 落在那幾片肋上、面積 8（2 × 4）
-  const r = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], {});
+  const r = IL.interlockMany([b, box(4, 4, 2, 0, 2, 8)], { spine: 'z' })     /* 第三輪第四批：自動會挑掉下來少的 X ⇒ 這裡要看掉下來的塊，指定窄的 Z */;
   const ribX = r.slices.filter(s => s.tag[0] === 'R').map(s => s.coord);
   ok('★★★ 肋上掉下來的塊 ⇒ 紅點在世界座標 z 8、x ＝ 那片肋的位置、面積 8；每一塊一個點',
     r.looseDots.length === r.slices.reduce((a, s) => a + s.loops.filter(l => l.loose).length, 0) && r.looseDots.length >= 1
@@ -21907,6 +21907,57 @@ if (csgOK) {
     && AS.toastWords(el('x', false, 0), 4000) === '（已經消失）x' && AS.toastWords(el('', false, 0)) === '' && AS.toastWords(null) === '');
   const asS = src('ai/assist.js'), mn = src('main.js');
   ok('★★ 讀程式守著（③）：AI.看() 用 toastWords 讀提示；main.js 的提示記出現的時間', /lookState\(app, readWindows\(document\), toastWords\(document\.getElementById\('toast'\)\)\)/.test(asS) && /el\.dataset\.at = String\(Date\.now\(\)\);/.test(mn));
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
+section('第三輪第四批 預設要不要改：互卡側面挑掉下來少的、中心線常駐一句（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第四批」；kang 2026-10-26「① 乙 兩個方向都試、挑掉下來少的 ② 甲 照舊最左邊、面板常駐一句」。
+   * 沙箱 `輸出\第三輪第四批研究\b4_probe.mjs` 的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const IL = await import('../js/slice/interlock.js');
+  const im = await import('../js/build/import3d.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const box = (w, h, d, x, y, z) => prim.buildPrim('box', { w, h, d }).transformed(T(x, y, z));
+  const b = box(20, 10, 6, 0, 5, 0), side = box(4, 4, 2, 0, 2, 8);
+  const rA = IL.interlockMany([b, side], {}), rZ = IL.interlockMany([b, side], { spine: 'z' }), rX = IL.interlockMany([b, side], { spine: 'x' });
+  ok('★★★ ① 自動：X、Z 都切一次、挑掉下來少的 —— 長方塊旁邊多一塊：從 Z（窄的那邊）掉 ≥1 塊、從 X 0 塊 ⇒ 挑 X',
+    rA.ok && rA.axis === 'x' && rZ.looseDots.length >= 1 && rX.looseDots.length === 0 && (rA.autoSpine || {}).x === 0 && (rA.autoSpine || {}).z === rZ.looseDots.length && (rA.autoSpine || {}).narrow === 'z', JSON.stringify(rA.autoSpine));
+  ok('★★ 說明第一句「側面自動挑掉下來少的那邊：從 X 切掉 0 塊、從 Z 切會掉 ○ 塊（以前自動挑水平方向比較窄的 Z）—— 要換就在上面「側面」指定」',
+    rA.notes[0] === `側面自動挑掉下來少的那邊：從 X 切掉 0 塊、從 Z 切會掉 ${rZ.looseDots.length} 塊（以前自動挑水平方向比較窄的 Z） —— 要換就在上面「側面」指定`, rA.notes[0]);
+  const rT = IL.interlockMany([prim.buildPrim('box', { w: 60, h: 45, d: 40 })], {});
+  ok('★★ 一樣多（預設方塊兩邊都 0 塊）⇒ 照舊挑窄的那邊 Z、不多講', rT.axis === 'z' && (rT.autoSpine || {}).x === 0 && (rT.autoSpine || {}).z === 0 && !rT.notes.some(n => /自動挑掉下來少的/.test(n)));
+  const d8c = JSON.parse(readFileSync(join(here, '../../輸出/平滑細分研究/8c_doc.json'), 'utf8'));
+  const lion = io.ModelObject.fromJSON(d8c.objects[1]); const rL = IL.interlockMany([lion.mesh().transformed(lion.matrix())], {});
+  ok('★★ kang 的獅子頭：從 X 0 塊、從 Z 4 塊 ⇒ 挑 X（本來就是窄的那邊，說明不寫「以前」）', rL.axis === 'x' && (rL.autoSpine || {}).x === 0 && (rL.autoSpine || {}).z === 4 && /^側面自動挑掉下來少的那邊：從 X 切掉 0 塊、從 Z 切會掉 4 塊 —— /.test(rL.notes[0]), rL.notes[0]);
+  const buf = readFileSync(join(here, '../../輸出/匯入測試/v6_SE.161_Languedoc_carrying_a_Leduc_0.21_THIC.stl'));
+  const c = im.cleanModel(im.readModel('plane.stl', buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)));
+  const p0 = im.toParts(c, { cmPerUnit: 1, up: 'z', split: false });
+  let lo = Infinity, hi = -Infinity; for (const p of p0) for (const q of p.points) { lo = Math.min(lo, q[1]); hi = Math.max(hi, q[1]); }
+  const planes = im.toParts(c, { cmPerUnit: 17.6 / (hi - lo), up: 'z', split: false }).map(p => Mesh.fromFaceList(p.points.map(q => new THREE.Vector3(q[0], q[1], q[2])), p.faces));
+  const rP = IL.interlockMany(planes, {});
+  ok('★★★ T20 飛機（高 17.6、35.32 × 49.92）：以前自動挑窄的 X 掉 30 塊；現在挑 Z 掉 4 塊', rP.axis === 'z' && (rP.autoSpine || {}).x === 30 && (rP.autoSpine || {}).z === 4 && rP.looseDots.length === 4, JSON.stringify(rP.autoSpine));
+  const rM = IL.interlockMany([b, side], { spineCoords: [0] });
+  ok('★★ 手動挪過（給了側面的位置）⇒ ⛔ 重挑，照舊（窄的那邊 Z）', rM.axis === 'z' && !rM.autoSpine);
+  const sg = IL.suggestRibs([b, side], {});
+  const ilS = readFileSync(join(here, '../js/slice/interlock.js'), 'utf8'), slS = readFileSync(join(here, '../js/ui/slicePanel.js'), 'utf8');
+  ok('★★ 幫我挪：照自動挑過的方向試（⛔ 試的時候又照窄的那邊）；選單寫「自動（挑掉下來少的那邊）」',
+    sg && /const base = \{ \.\.\.opt, spine: cur\.axis, spineCoords: cur\.stats\.spineCoords \};/.test(ilS) && /<option value="auto">自動（挑掉下來少的那邊）<\/option>/.test(slS));
+
+  // ── ② 旋轉成形：中心線還在自動的位置、只有一端碰到 ⇒ 面板常駐一句 ──
+  const pen = a => ({ type: 'pen', h: 3, open: true, up: false, paths: [{ closed: false, a, hi: a.map(() => 0), ho: a.map(() => 0) }], rev: { dir: 'z', at: 0, seg: 32, stand: true } });
+  const lampSrc = pen([12, 0, 16, -20, 9, -45, 7, -60]);
+  lampSrc.rev.at = prim.penRevAutoAt(lampSrc, 'z');
+  const rl = prim.penRevolve(lampSrc);
+  ok('★★ T18 燈罩照預設：中心線自動在 X 7（線的最左邊 ＝ 最後一點 7/−60）⇒ 只有終點那一頭碰到（有底的碗）⇒ 那一句寫「終點那一頭」；起點離中心線打 12 ⇒ 中心線挪到 X 0、兩頭開口', lampSrc.rev.at === 7 && rl.ok && rl.endsOnAxis.join() === 'false,true' && prim.penRevAtForHeadR(lampSrc, 12).at === 0);
+  const tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8');
+  ok('★★ 讀程式守著（②）：只有一端碰到、中心線還在自動的位置 ⇒ 常駐一句「中心線是自動放的：在線的最左邊 ⇒ 起點那一頭…封起來（碗底）。要那一頭開口（像燈罩）：下面「起點離中心線 cm」打起點那一圈要的半徑…，或改「中心線在」」；自己改過 ⇒ 不講',
+    /if \(!r\.closedProfile && \(h0 !== h1\) && Math\.abs\(\+rev\.at - penRevAutoAt\(src, rev\.dir\)\) < 1e-9\) \{/.test(tb)
+    && /中心線是自動放的：在線的最左邊 ⇒ \$\{h0 \? '起點' : '終點'\}那一頭剛好在中心線上、封起來（碗底）。/.test(tb) && /要那一頭開口（像燈罩）：下面「起點離中心線 cm」打起點那一圈要的半徑（中心線跟著挪、線不動），或改「中心線在」/.test(tb));
 } else {
   ok('（略過：CSG 沒載入）', true);
 }

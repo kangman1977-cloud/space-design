@@ -151,7 +151,7 @@ export class SlicePanel {
           <button id="slDxf">存 DXF</button>
         </div>
         <div class="uwBar" id="slILBar" title="互卡：正中間一片側面＋一排等間距的肋，交叉的地方各開一半的槽卡在一起（不用膠、不用串桿）">
-          <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（從窄的那邊切正中間）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select><select id="slILSpineN"><option value="1">1 片</option><option value="2">2 片</option><option value="3">3 片</option></select>
+          <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（挑掉下來少的那邊）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select><select id="slILSpineN"><option value="1">1 片</option><option value="2">2 片</option><option value="3">3 片</option></select>
           <span class="lbl">板厚 cm</span><input type="number" id="slILT" step="0.1" min="0.05" style="width:60px">
           <span class="lbl">肋間距 cm</span><input type="number" id="slILSp" step="0.5" min="0.2" style="width:60px">
           <span class="lbl">槽寬加減 cm</span><input type="number" id="slILAdj" step="0.01" style="width:64px">
@@ -285,7 +285,7 @@ export class SlicePanel {
     const IL = this.opt.il;
     const ilIn = { spine: $('slILSpine'), spineN: $('slILSpineN'), t: $('slILT'), spacing: $('slILSp'), slotAdj: $('slILAdj'), share: $('slILShare'), flare: $('slILFlare') };
     this.ilIn = ilIn;
-    ilIn.spine.title = '側面從哪個方向切正中間。自動 ＝ 水平方向比較窄的那一邊（袋鼠、野牛、汽車都是側面）';
+    ilIn.spine.title = '側面從哪個方向切正中間。自動 ＝ X、Z 兩個方向都切一次，挑掉下來少的那邊（一樣多就挑水平方向比較窄的那一邊：袋鼠、野牛、汽車都是側面；飛機翼展比機身長，會挑沿著機身的那邊）';
     ilIn.spineN.title = `側面幾片（1～${SPINE_N_MAX}）。預設 ${INTERLOCK_DEFAULTS.spineN} 片（正中間）；2 片 ＝ 寬的 1/3、2/3；3 片 ＝ 1/4、1/2、3/4 —— 腳張開的（樹蛙）多片比較撐得住，一般的模型 1 片就夠`;
     ilIn.t.title = `板厚（也是槽寬）。預設 ${INTERLOCK_DEFAULTS.t} cm`;
     ilIn.spacing.title = `肋每幾 cm 一片。預設 ${INTERLOCK_DEFAULTS.spacing} cm`;

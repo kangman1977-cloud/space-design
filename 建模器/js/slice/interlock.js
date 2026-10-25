@@ -9,7 +9,7 @@
  *
  * | 怎麼做 | 規矩 |
  * |---|---|
- * | 側面 | 從水平方向比較窄的那一邊切正中間（可以指定 X／Z）|
+ * | 側面 | 自動：X、Z 兩個方向都切一次、挑掉下來少的（一樣多挑水平方向比較窄的那一邊；第三輪第四批 ⑤-1）；可以指定 X／Z |
  * | 肋 | 沿另一個水平方向，每 `spacing` cm 一片（跟疊層同一套切法：每一段的正中間）|
  * | 交叉 | 側面與肋交叉的那條直線（垂直的）上，兩片都有料的那一段 |
  * | 槽 | 槽寬 ＝ 板厚 ＋ 加減（**⛔ 自動補切口**，kang 2026-08-23）；肋從上面挖到中間、側面從下面挖到中間（`share` ＝ 肋那邊佔幾成）；**一路開到料的邊上**（才插得進去）；槽口張開 `flare` |
@@ -29,7 +29,7 @@ export const INTERLOCK_DEFAULTS = {
   slotAdj: 0,      // 槽寬加減 cm（正 ＝ 鬆、負 ＝ 緊；切口補償 kang 定人工處理，⛔ 自動）
   share: 0.5,      // 肋那邊的槽佔交叉長度的幾成（0.5 ＝ 一半一半）
   flare: 0.1,      // 槽口每邊張開 cm（0 ＝ 不張開）
-  spine: 'auto',   // 側面從哪個方向切：auto ＝ 水平方向比較窄的那一邊；'x'／'z'
+  spine: 'auto',   // 側面從哪個方向切：auto ＝ 兩個方向都試、挑掉下來少的（一樣多挑窄的那邊）；'x'／'z'
   spineN: 1        // 6c：側面幾片（1～3；kang 2026-10-25「肋可以挪＋側面 1～3 片…預設照表」）
 };
 export const SPINE_N_MAX = 3;
@@ -155,7 +155,29 @@ export function interlockMany(meshes, opt = {}) {
   let min = { x: Infinity, y: Infinity, z: Infinity }, max = { x: -Infinity, y: -Infinity, z: -Infinity };
   for (const m of list) { const b = m.bounds(); for (const k of 'xyz') { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); } }
   const size = { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z };
-  const spineAx = o.spine === 'x' || o.spine === 'z' ? o.spine : (size.x <= size.z ? 'x' : 'z');
+  const narrow = size.x <= size.z ? 'x' : 'z';
+  /**
+   * 🔴 第三輪第四批 ⑤-1（kang 2026-10-26「① 乙 兩個方向都試、挑掉下來少的」→ `實驗-綜合評估-第三輪.md`「第四批」）：
+   * 以前自動 ＝ 窄的那邊 ⇒ T20 飛機翼展比機身長、側面橫切機身，掉下來 30 塊（從 Z 切 4 塊）。
+   * 沙箱 13 個樣本：挑少的沒有一個比窄的差（飛機 30 → 4、騎士 2 → 1），一樣多照舊挑窄的那邊；多算一個方向不到 1 秒。
+   * ⚠ 手動挪過（給了側面或肋的位置）⇒ ⛔ 重挑（位置是照某一個方向量的；`slicePanel.js` 會把方向一起給）。
+   */
+  const manual = (Array.isArray(o.spineCoords) && o.spineCoords.length) || (Array.isArray(o.ribCoords) && o.ribCoords.length);
+  if (!(o.spine === 'x' || o.spine === 'z') && !manual) {
+    const rx = interlockMany(list, { ...opt, spine: 'x' }), rz = interlockMany(list, { ...opt, spine: 'z' });
+    const L = r => (r.ok ? (r.looseDots || []).length : Infinity);
+    const pick = L(rx) < L(rz) ? rx : L(rz) < L(rx) ? rz : (narrow === 'x' ? rx : rz);
+    const other = pick === rx ? rz : rx;
+    if (pick.ok) {
+      pick.autoSpine = { x: L(rx), z: L(rz), narrow, picked: pick.axis };
+      if (other.ok && L(other) !== L(pick)) {
+        pick.notes.unshift(`側面自動挑掉下來少的那邊：從 ${pick.axis.toUpperCase()} 切掉 ${L(pick)} 塊、從 ${other.axis.toUpperCase()} 切會掉 ${L(other)} 塊`
+          + (pick.axis !== narrow ? `（以前自動挑水平方向比較窄的 ${narrow.toUpperCase()}）` : '') + ' —— 要換就在上面「側面」指定');
+      }
+    }
+    return pick;
+  }
+  const spineAx = o.spine === 'x' || o.spine === 'z' ? o.spine : narrow;
   const ribAx = spineAx === 'x' ? 'z' : 'x';
   const bounds = { min, max, size };
 
@@ -369,7 +391,7 @@ export function suggestRibs(meshes, opt = {}) {
   });
   const before = sum(cur), start = cur.stats.ribCoords.slice();
   let coords = start.slice(), best = interlockScore(cur);
-  const base = { ...opt, spineCoords: cur.stats.spineCoords };
+  const base = { ...opt, spine: cur.axis, spineCoords: cur.stats.spineCoords };     // 第三輪第四批：自動挑過的方向照用（⛔ 試的時候又照窄的那邊）
   const t = cur.stats.t;
   for (let i = 0; i < coords.length; i++) {
     const info = cur.ribInfo.find(q => !q.empty && Math.abs(q.coord - coords[i]) < 1e-9);
