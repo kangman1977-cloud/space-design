@@ -21515,7 +21515,14 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
   ok('★★ 轉 90° 的方塊：外框寬深對調（40 × 45 × 60）、旋轉度寫 90', AI.objectInfo(rb).外框cm.寬X === 40 && AI.objectInfo(rb).外框cm.深Z === 60 && AI.objectInfo(rb).旋轉度[1] === 90);
   const pl = mk('plate', { name: '板', kind: 'sheet' }); pl.subd = 0;
   const pi = AI.objectInfo(pl);
-  ok('★ 板件寫板厚；平滑細分有勾才寫', pi.種類 === '板件' && typeof pi.板厚cm === 'number' && !('平滑細分' in pi));
+  ok('★ 板件寫板厚；平滑細分有勾才寫「平滑後」', pi.種類 === '板件' && typeof pi.板厚cm === 'number' && !('平滑後' in pi));
+  // 1b（kang 實測抓到）：勾了平滑細分 ⇒ 另外報平滑後的外框與面數
+  const sd = mk('dome', { name: '半球殼' }); sd.bake(); sd.subd = 2;
+  const si = AI.objectInfo(sd);
+  ok('★★★ 1b 勾了平滑細分：粗網格 60 × 30 × 60、257 面；另外報平滑後 59.64 × 29.95 × 59.64、4,096 面、磨 2 次（以前只報粗網格的 ⇒ 核對數字對不上）',
+    si.外框cm.寬X === 60 && si.面數 === 257 && si.平滑後 && si.平滑後.磨幾次 === 2 && si.平滑後.外框cm.寬X === 59.64 && si.平滑後.外框cm.高Y === 29.95 && si.平滑後.面數 === 4096, JSON.stringify(si.平滑後));
+  const sT = AI.lookText(AI.lookState({ doc: { head: {}, objects: [sd] }, sel: { objects: [] }, hist: {} }, []));
+  ok('★★ 1b 講成一段話也講平滑後：「「半球殼」可編輯網格 60 × 30 × 60 cm（平滑細分磨 2 次，平滑後 59.64 × 29.95 × 59.64 cm）」', sT.includes('「半球殼」可編輯網格 60 × 30 × 60 cm（平滑細分磨 2 次，平滑後 59.64 × 29.95 × 59.64 cm）'), sT);
 
   // 「看」
   const app = { doc: { head: { name: '測試' }, objects: [box, dome] }, sel: { objects: [dome], editMode: false, editSels: [] }, hist: { undoLabel: '新增半球', redoLabel: null } };
@@ -21542,6 +21549,13 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
   ok('★★★ 視窗：藏起來的不算；提醒算紅（✗）、黃、灰藍框但 ⚠ 開頭的；純說明的灰藍框不算（第一版漏了 ⚠ 那種）',
     W.length === 1 && W[0].視窗 === '3D 列印匯出' && W[0].摘要 === '1 個物件' && W[0].提醒共 === 3 && W[0].提醒.join('|') === '⚠ 外框放不下平台|✗ 不是封閉的|有 9 mm² 比 0.9 mm 薄', JSON.stringify(W));
 
+  // 1b（本機抓到）：「確定嗎？」詢問視窗沒有標題 ⇒ 讀問的那句話和按鈕
+  const askEl = { hidden: false, id: 'askWin', querySelector: s => (s === '#askMsg' ? { textContent: '轉成網格之後就不能再改上面的參數了（要反悔可以馬上按 Ctrl+Z），確定嗎？' } : null),
+    querySelectorAll: s => (s === 'button' ? [{ textContent: '取消' }, { textContent: '確定' }] : []) };
+  const AW = AI.readWindows({ querySelectorAll: () => [askEl] });
+  const aT = AI.lookText(AI.lookState(app, AW));
+  ok('★★ 1b 詢問視窗：讀出問的那句話和按鈕 ⇒「跳出詢問：「轉成網格之後…確定嗎？」（取消／確定）」（以前只報「askWin」）',
+    AW.length === 1 && AW[0].視窗 === '詢問' && AW[0].按鈕.join() === '取消,確定' && aT.includes('跳出詢問：「轉成網格之後就不能再改上面的參數了（要反悔可以馬上按 Ctrl+Z），確定嗎？」（取消／確定）。上一步'), aT);
   // 找按鈕
   const C = [{ text: '展開圖', title: '攤平成下料圖' }, { text: '3D 列印', title: '匯出 STL 給 3D 列印或 CAM' }, { text: '切成放得下的塊', title: '照平台大小切開' }, { text: '等角', title: '等角（斜看）' }];
   ok('★★ 找按鈕：字一樣 → 說明開頭一樣 → 字裡面有；找不到 −1', AI.findTarget(C, '3D 列印') === 1 && AI.findTarget(C, '照平台大小') === 2 && AI.findTarget(C, '放得下') === 2 && AI.findTarget(C, '等角（斜看）') === 3 && AI.findTarget(C, '沒有這顆') === -1);
@@ -21549,8 +21563,19 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
     AI.findTarget([{ text: '匯出 STL', title: '3D 列印用' }, { text: '3D 列印', title: '' }], '3D 列印') === 1
     && AI.findTarget([{ text: '3D 列印設定', title: '' }, { text: '3D 列印', title: '' }], '3D 列印') === 1);
 
+  // 1b（kang 實測抓到）：找到的是名字（label）⇒ 連旁邊要打字的那一格一起框
+  const fe = (tag, extra = {}) => ({ tagName: tag, offsetParent: {}, closest: () => null, type: extra.type || '', ...extra });
+  const inp = fe('INPUT', { type: 'number' }), chk = fe('INPUT', { type: 'checkbox' }), hid = fe('INPUT', { type: 'hidden' });
+  const before = fe('INPUT', { type: 'number' });
+  const lab = fe('LABEL', { control: null, compareDocumentPosition: c => (c === before ? 2 : 4) });
+  lab.parentElement = { querySelectorAll: () => [before, hid, inp] };
+  ok('★★★ 1b 名字旁邊那一格：label 自己綁的那一格（數字格）／包著勾選格 ⇒ 框 label 本身／沒綁 ⇒ 同一排排在它後面第一個看得到的格子（跳過前面的、藏起來的）／不是 label ⇒ 沒有',
+    AI.controlOf(fe('LABEL', { control: inp })) === inp && AI.controlOf(fe('LABEL', { control: chk, parentElement: { querySelectorAll: () => [chk, inp] }, compareDocumentPosition: () => 4 })) === null && AI.controlOf(lab) === inp && AI.controlOf(fe('BUTTON')) === null && AI.controlOf(null) === null);
   // 讀程式守著
   const src = readFileSync(join(here, '../js/ai/assist.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  ok('★★ 讀程式守著（1b）：框的是名字＋旁邊那一格 ⇒ 一起框（外框包住兩個）、改了那一格才算、記下改成多少',
+    /field = controlOf\(target\);/.test(src) && /const a = target\.getBoundingClientRect\(\), b = field \? field\.getBoundingClientRect\(\) : a;/.test(src)
+    && /onChange = \(\) => \{ pressed = \{ 改了: q, 值: field\.value,/.test(src) && /field\.addEventListener\('change', onChange, true\);\s*\} else target\.addEventListener\('click', onClick, true\);/.test(src));
   ok('★★ 讀程式守著：window.AI 六個（看、看文字、指給你看、指物件、收掉、按了沒）、凍結；主程式建好 app 之後掛上',
     /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,200}installAI\(app\);/.test(mn));
   ok('★★ 讀程式守著（定案 ①②）：外框會閃（aiPulse）、一行字前面寫 Claude、「知道了」收掉；kang 按了那一顆 ⇒ 記下來、收掉；⛔ 自己幾秒消失',

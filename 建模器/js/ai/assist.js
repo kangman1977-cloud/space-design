@@ -12,7 +12,7 @@
  * | `AI.指給你看(按鈕的字, 一行字)` | 把那一顆框起來（外框輕輕閃）＋旁邊一行字；留到 kang 按了它或按「知道了」|
  * | `AI.指物件(物件名字, 一行字)` | 3D 畫面上那個物件畫橘色外框＋上面一行提示 |
  * | `AI.收掉()` | 框、字、橘色外框都收掉 |
- * | `AI.按了沒()` | kang 按了被框住的那一顆沒有（教學核對用）|
+ * | `AI.按了沒()` | kang 按了被框住的那一顆沒有；框的是名字＋旁邊那一格 ⇒ 改了沒、改成多少（教學核對用）|
  *
  * 定案（kang「同意你的建議」）：① 外框會輕輕閃＋一行字（不擋別的地方）② 留到按了那一顆或按「知道了」
  * ③「看」預設精簡：視窗上的檢查結果照畫面上的字讀（跟 kang 看到的一模一樣，⛔ 重算）—— 要檢查就打開那個視窗再看。
@@ -26,10 +26,8 @@ const TYPE_NAME = { mesh: '可編輯網格', bool: '布林', revolve: '旋轉成
 const EL_NAME = { vert: '點', edge: '邊', face: '面' };
 const r2 = x => Math.round(x * 100) / 100;
 
-/** 一個物件的資料（世界座標的外框，cm）*/
-export function objectInfo(o) {
-  const m = o.mesh();
-  const m4 = o.matrix();
+/** 網格照物件的位置角度縮放換成世界座標之後的外框（cm）*/
+function worldBox(m, m4) {
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   const p = new THREE.Vector3();
   for (const v of m.verts) {
@@ -37,8 +35,25 @@ export function objectInfo(o) {
     const a = [p.x, p.y, p.z];
     for (let k = 0; k < 3; k++) { if (a[k] < lo[k]) lo[k] = a[k]; if (a[k] > hi[k]) hi[k] = a[k]; }
   }
+  return { lo, hi, size: m.verts.length ? [0, 1, 2].map(k => r2(hi[k] - lo[k])) : [0, 0, 0] };
+}
+
+/**
+ * 一個物件的資料（世界座標的外框，cm）。
+ * 🔴 1b（2026-10-25 kang 實測抓到）：勾了平滑細分 ⇒ 另外報**平滑後**的外框與面數 —— 以前只報粗網格的（圓環 60 × 15 × 60、384 面），
+ * 畫面、量測、出口用的卻是平滑後的（59.02 × 14.37 × 59.02、6,144 面）⇒ 拿「看」核對數字會對不上。
+ */
+export function objectInfo(o) {
+  const m = o.mesh();
+  const m4 = o.matrix();
+  const { lo, hi, size } = worldBox(m, m4);
   const t = o.src && o.src.type;
-  const size = m.verts.length ? [0, 1, 2].map(k => r2(hi[k] - lo[k])) : [0, 0, 0];
+  let smooth = null;
+  if (o.smoothed) {
+    const sm = o.smoothMesh();
+    const s = worldBox(sm, m4).size;
+    smooth = { 磨幾次: o.subd, 外框cm: { 寬X: s[0], 高Y: s[1], 深Z: s[2] }, 面數: sm.faces.length };
+  }
   return {
     名稱: o.name,
     種類: KIND_NAME[o.kind] || o.kind,
@@ -49,7 +64,7 @@ export function objectInfo(o) {
     旋轉度: [o.rot.x, o.rot.y, o.rot.z].map(a => r2(a * 180 / Math.PI)),
     縮放: [o.scale.x, o.scale.y, o.scale.z].map(r2),
     ...(o.kind === 'sheet' ? { 板厚cm: o.thickness } : {}),
-    ...(o.subd ? { 平滑細分: `磨 ${o.subd} 次` } : {}),
+    ...(smooth ? { 平滑後: smooth } : {}),
     面數: m.faces.length,
     封閉: m.isClosed(),
     ...(o.error ? { 錯誤: o.error } : {})
@@ -64,6 +79,12 @@ export function readWindows(root) {
   const out = [];
   for (const el of root.querySelectorAll('.uwWin')) {
     if (el.hidden) continue;
+    /** 1b（本機抓到）：「確定嗎？」那個詢問視窗（`askBox.js`）沒有標題 ⇒ 以前只報「askWin」；改成讀問的那句話和按鈕 */
+    const askMsg = el.querySelector('#askMsg');
+    if (askMsg) {
+      out.push({ 視窗: '詢問', 摘要: askMsg.textContent.trim(), 提醒: [], 提醒共: 0, 按鈕: [...el.querySelectorAll('button')].map(b => b.textContent.trim()) });
+      continue;
+    }
     const head = el.querySelector('.uwHead b'), sum = el.querySelector('.uwSum');
     const notes = [];
     for (const x of el.querySelectorAll('.uwWarn, .uwCaution, .uwSkip')) {
@@ -92,13 +113,15 @@ export function lookState(app, windows = [], toast = '') {
 
 /** 講成一段話 */
 export function lookText(L) {
-  const objs = L.物件.map(o => `「${o.名稱}」${o.形狀}${o.種類 === '板件' ? `（板件 ${o.板厚cm} cm）` : ''} ${o.外框cm.寬X} × ${o.外框cm.高Y} × ${o.外框cm.深Z} cm`).join('、');
+  const box = b => `${b.寬X} × ${b.高Y} × ${b.深Z} cm`;
+  const objs = L.物件.map(o => `「${o.名稱}」${o.形狀}${o.種類 === '板件' ? `（板件 ${o.板厚cm} cm）` : ''} ${box(o.外框cm)}`
+    + (o.平滑後 ? `（平滑細分磨 ${o.平滑後.磨幾次} 次，平滑後 ${box(o.平滑後.外框cm)}）` : '')).join('、');
   const sel = L.選取.物件.length ? `選著「${L.選取.物件.join('」「')}」` : '沒有選東西';
   const els = Object.entries(L.選取).filter(([k]) => k !== '物件').map(([k, n]) => `${n} 個${k}`).join('');
   return `畫面上有 ${L.文件.物件數} 個物件：${objs || '沒有'}。`
     + `${sel}${els ? `（選了 ${els}）` : ''}。`
     + (L.模式.拉點線面 ? '現在在「拉點線面」。' : '')
-    + L.模式.開著的視窗.map(w => `開著「${w.視窗}」視窗${w.摘要 ? '：' + w.摘要 : ''}`
+    + L.模式.開著的視窗.map(w => w.按鈕 ? `跳出詢問：「${w.摘要}」（${w.按鈕.join('／')}）。` : `開著「${w.視窗}」視窗${w.摘要 ? '：' + w.摘要 : ''}`
       + (w.提醒共 ? `；有 ${w.提醒共} 則提醒，第一則：${w.提醒[0].length > 80 ? w.提醒[0].slice(0, 80) + '…' : w.提醒[0]}` : '') + '。').join('')
     + (L.復原紀錄.上一步 ? `上一步是「${L.復原紀錄.上一步}」。` : '');
 }
@@ -143,23 +166,42 @@ function ensureStyle() {
 const visible = el => !!el && el.offsetParent !== null && !el.closest('[hidden]');
 
 /**
+ * 🔴 1b（2026-10-25 kang 實測抓到）：找到的是**名字**（label）⇒ 連它旁邊要打字／要選的那一格一起框。
+ * 以前只框得到「保持尖的轉折（°）」那幾個字，數字格本身沒有字找不到。
+ * 先問 label 自己綁的那一格（`for` 或包在裡面），再找同一排（同一個上一層）裡、排在它後面第一個看得到的格子。
+ * @returns {Element|null}
+ */
+export function controlOf(el) {
+  if (!el || el.tagName !== 'LABEL') return null;
+  if (el.control && el.control.type !== 'checkbox' && el.control.type !== 'radio') return el.control;
+  if (el.control) return null;        // 勾選格包在 label 裡：label 本身就是要按的
+  const row = el.parentElement;
+  if (!row) return null;
+  const all = [...row.querySelectorAll('input, select, textarea')];
+  return all.find(c => c.type !== 'hidden' && visible(c) && (el.compareDocumentPosition(c) & 4)) || null;
+}
+
+/**
  * 掛上 `window.AI`。⚠ 只在瀏覽器（main.js 建好 app 之後）。
  * @param {object} app main.js 的 app（doc、sel、hist、view、toast）
  */
 export function install(app) {
-  let ring = null, tip = null, target = null, onClick = null, pressed = null, objShown = false;
+  let ring = null, tip = null, target = null, field = null, onClick = null, onChange = null, pressed = null, objShown = false;
 
   const unpoint = () => {
     if (ring) ring.remove();
     if (tip) tip.remove();
     if (target && onClick) target.removeEventListener('click', onClick, true);
-    ring = tip = target = onClick = null;
+    if (field && onChange) field.removeEventListener('change', onChange, true);
+    ring = tip = target = field = onClick = onChange = null;
     if (objShown) { app.view.clearIssuePreview(); objShown = false; }
   };
 
   const place = () => {
     if (!ring || !target) return;
-    const r = target.getBoundingClientRect();
+    const a = target.getBoundingClientRect(), b = field ? field.getBoundingClientRect() : a;
+    const r = { left: Math.min(a.left, b.left), top: Math.min(a.top, b.top), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) };
+    r.width = r.right - r.left; r.height = r.bottom - r.top;
     Object.assign(ring.style, { left: r.left - 5 + 'px', top: r.top - 5 + 'px', width: r.width + 10 + 'px', height: r.height + 10 + 'px' });
     if (tip) {
       const below = r.bottom + 12 + tip.offsetHeight < innerHeight;
@@ -179,6 +221,7 @@ export function install(app) {
     const i = findTarget(els.map(e => ({ text: e.textContent.trim(), title: e.title || '' })), q);
     if (i < 0) return { 好了: false, 原因: `畫面上找不到「${q}」（可能藏在收起來的那一排、或要先打開某個視窗）` };
     target = els[i];
+    field = controlOf(target);
     target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     ring = document.createElement('div');
     ring.className = 'aiRing';
@@ -195,8 +238,12 @@ export function install(app) {
     place();
     pressed = null;
     onClick = () => { pressed = { 按了: q, 時間: new Date().toLocaleTimeString() }; unpoint(); };
-    target.addEventListener('click', onClick, true);
-    return { 好了: true, 框住: target.textContent.trim().slice(0, 30) || (target.title || '').slice(0, 30) };
+    if (field) {
+      // 框的是名字＋旁邊那一格 ⇒ kang 改了那一格才算（點名字不算）；記下改成多少
+      onChange = () => { pressed = { 改了: q, 值: field.value, 時間: new Date().toLocaleTimeString() }; unpoint(); };
+      field.addEventListener('change', onChange, true);
+    } else target.addEventListener('click', onClick, true);
+    return { 好了: true, 框住: (target.textContent.trim().slice(0, 30) || (target.title || '').slice(0, 30)) + (field ? '＋旁邊那一格' : '') };
   };
 
   const pointObj = (name, text) => {
