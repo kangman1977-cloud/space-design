@@ -650,7 +650,7 @@ function duplicateSelected() {
       color: o.color,
       thickness: o.thickness,
       lockScale: o.lockScale,
-      subd: o.subd, subdDeg: o.subdDeg      // 第八批 8a
+      subd: o.subd, subdDeg: o.subdDeg, subdKeep: o.subdKeep      // 第八批 8a／8c
     });
     // 已烘成網格的物件沒有參數可以重建，直接共用同一份網格資料
     if (!o.isParametric) fresh._mesh = o.mesh();
@@ -3346,7 +3346,7 @@ function curveThroughApply(holeOnly = false) {
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
     color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
-    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
+    subd: obj.subd, subdDeg: obj.subdDeg, subdKeep: obj.subdKeep      // 第八批 8a／8c：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -4965,7 +4965,7 @@ function separateSelected() {
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
     color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
-    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
+    subd: obj.subd, subdDeg: obj.subdDeg, subdKeep: obj.subdKeep      // 第八批 8a／8c：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -5037,7 +5037,7 @@ function solidCutSelected() {
     mesh: m,
     pos: obj.pos, rot: obj.rot, scale: obj.scale,
     color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
-    subd: obj.subd, subdDeg: obj.subdDeg      // 第八批 8a：拆出來的照樣平滑
+    subd: obj.subd, subdDeg: obj.subdDeg, subdKeep: obj.subdKeep      // 第八批 8a／8c：拆出來的照樣平滑
   }));
   for (const o of made) recenterOrigin(o);
 
@@ -7637,7 +7637,7 @@ function modelTriangles() {
   let n = 0;
   for (const o of doc.objects) {
     /** 第八批 8a：有平滑的算平滑後的（畫面上、匯出去的是那一份）*/
-    const m = o.smoothMesh ? o.smoothMesh() : o.mesh && o.mesh();
+    const m = o.smoothMesh ? o.smoothMesh({ fast: true }) : o.mesh && o.mesh();      // 8c：面數一樣、照縮的快（拉點時每一下都會問）
     if (m) n += m.triangleCount();
   }
   return n;

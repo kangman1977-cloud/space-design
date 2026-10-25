@@ -21085,13 +21085,13 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
     /this\.items = objs\.map\(o => \{\s*let mesh = o\.smoothMesh\(\);/.test(ex) && /_showNonManifold\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex)
     && /_showHoles\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex) && /let mesh = o\.smoothMesh\(\), shelled = false;/.test(ob)
     && /return o\.smoothMesh\(\)\.transformed\(o\.matrix\(\)\)/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)
-    && /const m = o\.smoothMesh \? o\.smoothMesh\(\) : o\.mesh && o\.mesh\(\);/.test(mn));
+    && /const m = o\.smoothMesh \? o\.smoothMesh\(\{ fast: true \}\) : o\.mesh && o\.mesh\(\);/.test(mn));
   ok('★★ 讀程式守著（展開照粗網格）：展開、智慧分切⛔ 叫 smoothMesh',
     !/smoothMesh/.test(src('unfold/part.js')) && !/smoothMesh/.test(src('unfold/propose.js')) && !/smoothMesh/.test(src('unfold/flatten.js')));
   ok('★★ 讀程式守著（畫面）：挑點線面的模式畫粗網格＋淡淡的平滑結果；平常畫平滑後的、只畫尖邊、不標琥珀色、收起縫線',
     /view\.cageWhen = \(\) => sel\.editMode \|\| sel\.inPickMode;/.test(mn)
     && /const smooth = obj\.smoothed && !this\._cageOn;/.test(sc) && /const base = smooth \? obj\.smoothMesh\(\) : mesh;/.test(sc)
-    && /const ghostSrc = obj\.smoothed && this\._cageOn \? obj\.smoothMesh\(\) : null;/.test(sc)
+    && /const ghostSrc = obj\.smoothed && this\._cageOn \? obj\.smoothMesh\(\{ fast: true \}\) : null;/.test(sc)
     && /if \(this\.cageWhen && this\._lastDoc && !!this\.cageWhen\(\) !== this\._cageOn\) this\.sync\(this\._lastDoc\);/.test(sc)
     && /: he\.smooth\)\) continue;/.test(sc) && /if \(!smooth\) for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
     && /const onCage = !\(obj\.smoothed && !this\._cageOn\);/.test(sc) && /ghost\.raycast = \(\) => \{\};/.test(sc));
@@ -21189,7 +21189,7 @@ section('平滑細分 8b 保持尖／磨圓（第二輪第八批，2026-10-25）
   const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
   const tb = src('ui/toolbar.js'), sc = src('view/scene.js'), iom = src('core/io.js');
   ok('★★ 讀程式守著（物件）：算平滑之前先判還沒判的邊，而且在算指紋之前',
-    /decideCreases\(m, this\.subdDeg, 'new'\);\s*const c = this\._smooth, sig = subdSig\(m\);/.test(iom));
+    /decideCreases\(m, this\.subdDeg, 'new'\);[\s\S]{0,700}?const c = this\[slot\], sig = subdSig\(m\);/.test(iom));
   ok('★★ 讀程式守著（面板）：改角度只重判照轉折判的；「全部照轉折重新判斷」有自己標的先問；拉點線面選邊兩顆；拉一個點教人用影響半徑',
     /obj\.subdDeg = v;\s*decideCreases\(obj\.mesh\(\), v, 'auto'\);/.test(tb)
     && /this\._rowBtn\('全部照轉折重新判斷'/.test(tb) && /if \(manual && !\(await ask\(/.test(tb) && /decideCreases\(obj\.mesh\(\), obj\.subdDeg, 'all'\)/.test(tb)
@@ -21197,8 +21197,83 @@ section('平滑細分 8b 保持尖／磨圓（第二輪第八批，2026-10-25）
     && /this\._rowBtn\('選到的邊保持尖'/.test(tb) && /this\._rowBtn\('選到的邊磨圓'/.test(tb)
     && /sel\.editSel\.kind === 'vertex' && !\(sel\.propRadius > 0\)/.test(tb) && /「影響半徑」填一個數字/.test(tb));
   ok('★★ 讀程式守著（畫面）：拉點線面時保持尖的邊畫紫色（只在畫粗網格時）',
-    /const cs = ghostSrc \? obj\.smoothInfo\(\)\.creaseSegs : \[\];/.test(sc) && /creases\.raycast = \(\) => \{\};/.test(sc)
+    /const cs = ghostSrc \? obj\.smoothInfo\(\{ fast: true \}\)\.creaseSegs : \[\];/.test(sc) && /creases\.raycast = \(\) => \{\};/.test(sc)
     && /SUBD_CREASE_COLOR = 0xb455ff/.test(sc));
+}
+
+
+section('平滑細分 8c 尺寸照原本的點（第二輪第八批，2026-10-25）');
+{
+  /**
+   * `規格\建模器-平滑細分.md`「8c」；kang 2026-10-25「8c 照你的建議：① 甲 做成選項、預設不勾 ② 拉點線面時淡淡那層照縮的
+   * ③ 推不準退回照縮並講、推得準寫最多差幾 mm」
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const S = await import('../js/build/subd.js');
+  const P8 = await import('../js/build/prim.js');
+  const mk = t => { const o = new io.ModelObject({ name: t, src: P8.defaultSrc(t) }); o.bake(); o.subd = 2; return o; };
+  const size = m => { const b = m.bounds(); return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z]; };
+  const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
+  ok('★ 每次推 1.5 倍、最多 30 次、準到 0.01 mm', S.INTERP_OMEGA === 1.5 && S.INTERP_MAX_ITER === 30 && S.INTERP_TOL === 0.001);
+
+  // 半球：照縮外框小 0.6%；穿過原本的點外框不縮
+  const dome = mk('dome');
+  ok('★★ 預設不勾（照縮）：半球外框 60 × 30 × 60 → 59.64 × 29.95 × 59.64', dome.subdKeep === false
+    && near(size(dome.smoothMesh()), [59.64, 29.95, 59.64], 0.01) && !dome.smoothInfo().interp);
+  dome.subdKeep = true;
+  const dk = dome.smoothMesh(), di = dome.smoothInfo();
+  ok('★★★ 勾「尺寸照原本的點」⇒ 半球外框不縮（差 0.01 mm 以內）、推了幾次、原本的點最多差多少都記下來',
+    di.interp && di.interp.ok && di.interp.iters <= 30 && di.interp.err < 0.001 && near(size(dk), [60, 30, 60], 0.002),
+    `${di.interp && di.interp.iters} ${size(dk)}`);
+  ok('★★ 原本的點都在磨完的表面上（第 i 個點 ＝ 磨完的第 i 個點，差 0.01 mm 以內）',
+    dome.mesh().verts.every((v, i) => v.p.distanceTo(dk.verts[i].p) < 0.001));
+  ok('★★ 粗網格一個點都沒動（往回推的是複製的那一份）', near(size(dome.mesh()), [60, 30, 60], 1e-9));
+  ok('★★★ ② 拉點線面用的那一份（fast）照縮：外框小 0.6%；平常的那一份不縮；兩份面數一樣',
+    near(size(dome.smoothMesh({ fast: true })), [59.64, 29.95, 59.64], 0.01) && dome.smoothMesh({ fast: true }) !== dk
+    && dome.smoothMesh({ fast: true }).faces.length === dk.faces.length && dome.smoothMesh() === dk);
+  // 方塊：本來就不縮 ⇒ 推 1 次就準
+  const box = mk('box'); box.subdKeep = true; box.smoothMesh();
+  ok('★ 方塊（直角都保持尖、本來就不縮）⇒ 推 1 次就準', box.smoothInfo().interp.ok && box.smoothInfo().interp.iters === 1);
+  // 狐狸頭（kang）：推 1.5 倍才準（1 倍 60 次都不準）
+  const kang = p => io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/' + p), 'utf8'))).objects[0];
+  const fox = kang('實驗T8/狐狸頭.json'); fox.subd = 2; fox.subdKeep = true; fox.smoothMesh();
+  ok('★★ 狐狸頭（kang）：推得準（14 次）、外框一點都不差',
+    fox.smoothInfo().interp.ok && fox.smoothInfo().interp.iters === 14 && near(size(fox.smoothMesh()), size(fox.mesh()), 0.002), `${fox.smoothInfo().interp.iters}`);
+  // ③ 獅子頭（布林的結果）：推不準 ⇒ 退回照縮
+  const lion = kang('實驗T10/獅子頭.json'); lion.subd = 2; lion.subdKeep = true;
+  const lm = lion.smoothMesh(), li = lion.smoothInfo();
+  const plain = lion.smoothMesh({ fast: true });
+  ok('★★★ ③ 獅子頭推不準（推了 30 次還差很多）⇒ 退回照縮：interp.ok 是 false、平滑後的跟照縮的一模一樣',
+    li.interp && li.interp.ok === false && li.interp.iters === 30 && li.interp.err > 0.1
+    && lm.faces.length === plain.faces.length && lm.verts.every((v, i) => v.p.distanceTo(plain.verts[i].p) < 1e-9), `${li.interp && li.interp.err}`);
+
+  // 快取：拉一個點 ⇒ 兩份都重算
+  const before = dome.smoothMesh(), beforeF = dome.smoothMesh({ fast: true });
+  let top = dome.mesh().verts[0];
+  for (const v of dome.mesh().verts) if (v.p.y > top.p.y) top = v;
+  top.p.y += 5;
+  ok('★★ 拉一個點 ⇒ 不縮的那份、照縮的那份都重算；不縮的照樣穿過拉過的點',
+    dome.smoothMesh() !== before && dome.smoothMesh({ fast: true }) !== beforeF
+    && dome.smoothMesh().verts[dome.mesh().verts.indexOf(top)].p.distanceTo(top.p) < 0.001);
+
+  // 存檔：沒勾不存、勾了存 true、讀回一樣
+  const j0 = mk('box').toJSON(), j1 = dome.toJSON();
+  const back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(j1)));
+  ok('★★★ 存檔：沒勾「尺寸照原本的點」就沒有這一欄；勾了存 subdKeep: true、讀回一樣',
+    !('subdKeep' in j0) && j1.subdKeep === true && back.subdKeep === true && back.smoothInfo().interp.ok);
+
+  // 讀程式守著
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const tb = src('ui/toolbar.js'), sc = src('view/scene.js'), mn = src('main.js');
+  ok('★★ 讀程式守著（面板）：「尺寸照原本的點（不縮）」一格；推得準寫最多差幾 mm、推了幾次；推不準紅字退回照縮',
+    /this\._rowCheck\('尺寸照原本的點（不縮）', obj\.subdKeep,/.test(tb) && /最多差 \$\{\(ip\.err \* 10\)\.toFixed\(3\)\} mm，推了 \$\{ip\.iters\} 次/.test(tb)
+    && /\} else if \(ip\) \{\s*this\.form\.appendChild\(bad\(`尺寸照原本的點：推了 \$\{ip\.iters\} 次，原本的點還差/.test(tb) && /這個形狀推不準，先照縮/.test(tb));
+  ok('★★ 讀程式守著（畫面、狀態列）：拉點線面時淡淡那一層、紫色線、三角形數用照縮的那一份（fast）',
+    /const ghostSrc = obj\.smoothed && this\._cageOn \? obj\.smoothMesh\(\{ fast: true \}\) : null;/.test(sc)
+    && /obj\.smoothInfo\(\{ fast: true \}\)\.creaseSegs/.test(sc) && /o\.smoothMesh \? o\.smoothMesh\(\{ fast: true \}\)/.test(mn));
+  ok('★ 讀程式守著：複製、切穿、分開、切成實心拆出來的帶著「尺寸照原本的點」',
+    (mn.match(/subdKeep: obj\.subdKeep/g) || []).length === 3 && /subdKeep: o\.subdKeep/.test(mn));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

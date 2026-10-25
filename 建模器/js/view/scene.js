@@ -730,7 +730,8 @@ export class SceneView {
      */
     const smooth = obj.smoothed && !this._cageOn;
     const base = smooth ? obj.smoothMesh() : mesh;
-    const ghostSrc = obj.smoothed && this._cageOn ? obj.smoothMesh() : null;
+    /** 8c ②（kang「拉點線面時淡淡那層照縮的」）：淡淡那層一律照縮 —— 它只是預覽，拉一下就要重算 */
+    const ghostSrc = obj.smoothed && this._cageOn ? obj.smoothMesh({ fast: true }) : null;
 
     // _geomDirty ＝ 編輯就地改了頂點座標。mesh 物件沒換，所以前兩個條件
     // 都察覺不到 —— 少了它，拉點之後畫面不會更新（見 markGeomDirty）。
@@ -792,7 +793,7 @@ export class SceneView {
       ghost.visible = !!ghostSrc;
       const cr = node.getObjectByName('subdCreases');
       cr.geometry.dispose();
-      const cs = ghostSrc ? obj.smoothInfo().creaseSegs : [];
+      const cs = ghostSrc ? obj.smoothInfo({ fast: true }).creaseSegs : [];
       cr.geometry = new THREE.BufferGeometry();
       cr.geometry.setAttribute('position', new THREE.Float32BufferAttribute(cs.flatMap(p => [p.x, p.y, p.z]), 3));
       cr.visible = cs.length > 0;

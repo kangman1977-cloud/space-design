@@ -1083,6 +1083,17 @@ export class Panel {
         this._edit('平滑細分全部照轉折重新判斷');
         this.app.toast(`已經照轉折 ${obj.subdDeg}° 重新判斷：改了 ${n} 條邊`);
       });
+    /**
+     * 🔴 8c（kang 2026-10-25「① 甲 做成選項、預設不勾 ② 拉點線面時淡淡那層照縮的 ③ 推不準退回照縮並講、推得準寫最多差幾 mm」
+     * → `規格\建模器-平滑細分.md`「8c」）：尺寸照原本的點（不縮）。
+     */
+    this._rowCheck('尺寸照原本的點（不縮）', obj.subdKeep, v => {
+      obj.subdKeep = !!v;
+      this.analysisCache.delete(obj.id);
+      this._edit(v ? '平滑細分尺寸照原本的點' : '平滑細分照縮');
+    }, '勾起來：磨完之後原本的點都還在表面上，外框、量好的尺寸不會縮（像 Rhino 轉換時選「點在表面上」）；'
+      + '點跟點之間會往外鼓一點（體積大約多 1%）。算 5～10 倍久；拉點線面時淡淡那一層照縮的（只是預覽）。'
+      + '推不準的形狀（布林留下的凹面、翻過來的小面）會退回照縮並講');
 
     const info = obj.smoothInfo();
     if (!info) return;
@@ -1096,7 +1107,16 @@ export class Panel {
       + `　寬${pct(a[0], b[0]) || '一樣'}、高${pct(a[1], b[1]) || '一樣'}、深${pct(a[2], b[2]) || '一樣'}`
       + `　面 ${obj.mesh().faces.length.toLocaleString()} → ${info.mesh.faces.length.toLocaleString()}`
       + `　保持尖的邊 ${info.creases} 條`));
-    this.form.appendChild(note('磨圓會往裡縮一點（業界都一樣）：量測、3D 列印、剖面分切、匯出照平滑後的尺寸；展開照粗網格'));
+    const ip = info.interp;
+    if (ip && ip.ok) {
+      this.form.appendChild(note(`尺寸照原本的點：原本的點都在磨完的表面上（最多差 ${(ip.err * 10).toFixed(3)} mm，推了 ${ip.iters} 次），`
+        + '點跟點之間會往外鼓一點。量測、3D 列印、剖面分切、匯出照這個；拉點線面時淡淡那一層照縮的；展開照粗網格'));
+    } else if (ip) {
+      this.form.appendChild(bad(`尺寸照原本的點：推了 ${ip.iters} 次，原本的點還差 ${(ip.err * 10).toFixed(1)} mm —— 這個形狀推不準，先照縮`
+        + '（布林留下的凹面、翻過來的小面常常這樣）'));
+    } else {
+      this.form.appendChild(note('磨圓會往裡縮一點（業界都一樣）：量測、3D 列印、剖面分切、匯出照平滑後的尺寸；展開照粗網格'));
+    }
     this.form.appendChild(note(`保持尖的邊是勾平滑那一刻照轉折判的${manual ? `（另有 ${manual} 條自己標的）` : ''}，`
       + '之後拉點不會重判；新長出來的邊照轉折判。要改哪幾條：按「拉點線面」選邊，這裡會出現「保持尖」「磨圓」兩顆'));
     if (info.capped) {

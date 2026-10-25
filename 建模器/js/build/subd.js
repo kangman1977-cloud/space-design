@@ -134,6 +134,41 @@ export function decideCreases(mesh, deg = CREASE_DEG, scope = 'new') {
   return n;
 }
 
+/** 8c：每次往回推幾倍、最多推幾次、準到多少（cm）—— 程式內部的，⛔ 給人調（沙箱：1 倍救不了狐狸頭、1.5 倍 14 次）*/
+export const INTERP_OMEGA = 1.5;
+export const INTERP_MAX_ITER = 30;
+export const INTERP_TOL = 0.001;
+
+/**
+ * 🔴 **穿過原本的點（不縮）**（第二輪第八批 8c，kang 2026-10-25「① 甲 做成選項、預設不勾 ③ 推不準退回照縮並講、
+ * 推得準寫最多差幾 mm」→ `規格\建模器-平滑細分.md`「8c」；業界：Rhino 轉換的 `UseMesh=Location`；做法：漸進迭代逼近 PIA，Chen 等 2008）。
+ * 粗網格**複製一份**反覆往回推：磨完之後原本第 i 個點在哪（`ccStep()` 原本的點編號不變）⇒ 差多少就把複製那份的第 i 個點多推 ω 倍，
+ * 直到每個原本的點都落在磨完的表面上（差 < `INTERP_TOL`）。⚠ 粗網格本人一個點都不動；尖邊照粗網格上記的（複製會帶標記）。
+ * 推不準（布林的結果、翻過來的小面那種，沙箱獅子頭越推越歪）⇒ **退回照縮**、`interp.ok = false` 讓面板講。
+ * @returns 跟 `subdivide()` 一樣，多一個 `interp: {ok, iters, err}`（`err` cm，原本的點離磨完的位置最遠多少）
+ */
+export function subdivideInterp(mesh, { levels = SUBD_DEFAULT, deg = CREASE_DEG } = {}) {
+  const C = mesh.clone();
+  const orig = mesh.verts.map(v => v.p);
+  let r = null, err = Infinity, iters = 0;
+  for (; iters < INTERP_MAX_ITER; ) {
+    r = subdivide(C, { levels, deg });
+    iters++;
+    err = 0;
+    const out = r.mesh.verts;
+    for (let i = 0; i < orig.length; i++) {
+      const o = orig[i], q = out[i].p;
+      const dx = o.x - q.x, dy = o.y - q.y, dz = o.z - q.z;
+      err = Math.max(err, Math.hypot(dx, dy, dz));
+      const p = C.verts[i].p;
+      p.x += dx * INTERP_OMEGA; p.y += dy * INTERP_OMEGA; p.z += dz * INTERP_OMEGA;
+    }
+    if (err < INTERP_TOL || r.levels === 0) break;
+  }
+  if (err < INTERP_TOL || (r && r.levels === 0)) return { ...r, interp: { ok: true, iters, err } };
+  return { ...subdivide(mesh, { levels, deg }), interp: { ok: false, iters, err } };
+}
+
 /**
  * 自己標選到的邊（8b ②）：保持尖（`true`）或磨圓（`false`）。
  * @returns {number} 改了幾條（本來就是那樣的不算）

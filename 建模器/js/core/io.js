@@ -30,7 +30,7 @@ import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
 import { saveBlob, textBlob, safeName, TYPES } from '../out/save.js';
 import { penPlaneFrame } from './penSnap.js';
-import { subdivide, subdSig, decideCreases, CREASE_DEG, SUBD_MAX } from '../build/subd.js';
+import { subdivide, subdivideInterp, subdSig, decideCreases, CREASE_DEG, SUBD_MAX } from '../build/subd.js';
 
 export const DOC_TYPE = 'model-doc';
 export const DOC_VERSION = 4;
@@ -381,7 +381,13 @@ export class ModelObject {
     this.subd = opts.subd ?? 0;
     /** 轉折幾度以上的邊保持尖（④；預設 `CREASE_DEG` 30）*/
     this.subdDeg = opts.subdDeg ?? CREASE_DEG;
-    this._smooth = null;              // 平滑後的快取：{ base, sig, levels, deg, info }
+    /**
+     * 8c（kang「① 甲 做成選項、預設不勾」）：尺寸照原本的點（不縮）—— 磨完之後原本的點都在表面上（`subdivideInterp()`），
+     * 點跟點之間往外鼓一點；算 5～10 倍久。推不準就退回照縮（`smoothInfo().interp.ok === false`）。
+     */
+    this.subdKeep = opts.subdKeep ?? false;
+    this._smooth = null;              // 平滑後的快取：{ base, sig, levels, deg, keep, info }
+    this._smoothFast = null;          // 8c ②：照縮的那一份（拉點線面時淡淡那一層、三角形數用）
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -393,7 +399,7 @@ export class ModelObject {
    * 沒有平滑 ⇒ 回 `mesh()` 本人（⛔ 複製）—— 所以出口全部改叫這一支，沒平滑的物件結果一模一樣。
    * ⚠ 粗網格是**就地改**的（拉點不換網格）⇒ 快取除了比網格本人，還比一個「點的位置指紋」（`subdSig()`，O(點數)）。
    */
-  smoothMesh() {
+  smoothMesh({ fast = false } = {}) {
     const m = this.mesh();
     if (!this.smoothed) return m;
     /**
@@ -401,18 +407,28 @@ export class ModelObject {
      * 判過的跳過，所以平常是 O(邊數) 掃一遍、什麼都不改。⚠ 要在算指紋之前（指紋含標記）。
      */
     decideCreases(m, this.subdDeg, 'new');
-    const c = this._smooth, sig = subdSig(m);
-    if (c && c.base === m && c.sig === sig && c.levels === this.subd && c.deg === this.subdDeg) return c.info.mesh;
-    const info = subdivide(m, { levels: this.subd, deg: this.subdDeg });
-    this._smooth = { base: m, sig, levels: this.subd, deg: this.subdDeg, info };
+    /**
+     * 8c ②：`fast` ＝ 一律照縮（拉點線面時淡淡那一層、狀態列三角形數 —— 拉一下就要重算，不縮的 5 千面要快 1 秒）；
+     * 其他（平常的畫面、量測、出口）照「尺寸照原本的點」那一格。沒勾不縮 ⇒ 兩個是同一份。
+     */
+    const keep = this.subdKeep && !fast;
+    const slot = keep || !this.subdKeep ? '_smooth' : '_smoothFast';
+    const c = this[slot], sig = subdSig(m);
+    if (c && c.base === m && c.sig === sig && c.levels === this.subd && c.deg === this.subdDeg && c.keep === keep) return c.info.mesh;
+    const info = keep ? subdivideInterp(m, { levels: this.subd, deg: this.subdDeg })
+      : subdivide(m, { levels: this.subd, deg: this.subdDeg });
+    this[slot] = { base: m, sig, levels: this.subd, deg: this.subdDeg, keep, info };
     return info.mesh;
   }
 
-  /** 平滑算出來的附帶資料（真的磨了幾次、翻過來的小面…，`subd.js` `subdivide()`）；沒平滑 ⇒ null */
-  smoothInfo() {
+  /**
+   * 平滑算出來的附帶資料（真的磨了幾次、翻過來的小面…，`subd.js` `subdivide()`；
+   * 勾了不縮多一個 `interp`：推了幾次、原本的點最多差多少、推不準退回照縮）；沒平滑 ⇒ null
+   */
+  smoothInfo({ fast = false } = {}) {
     if (!this.smoothed) return null;
-    this.smoothMesh();
-    return this._smooth.info;
+    this.smoothMesh({ fast });
+    return (this.subdKeep && fast ? this._smoothFast : this._smooth).info;
   }
 
   get isParametric() { return this.src.type !== 'mesh'; }
@@ -634,6 +650,7 @@ export class ModelObject {
     if (this.subd > 0) {
       o.subd = this.subd;
       if (this.subdDeg !== CREASE_DEG) o.subdDeg = this.subdDeg;
+      if (this.subdKeep) o.subdKeep = true;       // 8c：勾了才存
     }
     // 只有回不去參數的物件才需要把網格整包存下來
     if (!this.isParametric) o.mesh = this.mesh().toJSON();
@@ -653,7 +670,8 @@ export class ModelObject {
       thickness: d.thickness,
       lockScale: d.lockScale,
       subd: Number(d.subd) > 0 ? Math.min(SUBD_MAX, Math.round(d.subd)) : 0,
-      subdDeg: Number.isFinite(d.subdDeg) ? d.subdDeg : CREASE_DEG
+      subdDeg: Number.isFinite(d.subdDeg) ? d.subdDeg : CREASE_DEG,
+      subdKeep: d.subdKeep === true
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
