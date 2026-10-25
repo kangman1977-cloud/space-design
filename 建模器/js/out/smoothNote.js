@@ -13,8 +13,13 @@
  * | 差 ≥ 2% | 黃字，建議勾「尺寸照原本的點（不縮）」；已經勾了就⛔ 再建議 |
  * | 勾了不縮、推不準 | 照樣講差多少，加「這個形狀勾了也推不準」|
  *
+ * 🔴 第三輪第三批（2026-10-26，kang「② 甲 列印、剖面加黃字 ① 甲 只講做法」）：
+ * - `smoothFlipNote()`：平滑時翻過來的小面，3D 列印卡片、剖面分切也講（以前只在物件面板；T16 列印只報「最薄 0.02 mm」，看不出跟翻面有關）
+ * - `allKeptSharp()`：每一條有轉折的邊都保持尖 ⇒ 磨完跟原本一樣（T17 方塊拼的恐龍「寬一樣、高一樣、深一樣」沒講為什麼）
+ *
  * 純計算、⛔ 碰畫面。
  */
+import { CREASE } from '../core/mesh.js';
 
 export const SMOOTH_WARN_PCT = 2;
 const SAME_CM = 0.001;      // 0.01 mm 以內當一樣大
@@ -35,6 +40,36 @@ export function smoothDiff(obj) {
   const ip = info.interp;
   return { cage, smooth, pct, worstPct: Math.abs(pct[k]), worstMM: Math.max(...d.map(Math.abs)) * 10,
     keep: !!obj.subdKeep, interpFailed: !!(ip && !ip.ok) };
+}
+
+/**
+ * 每一條有轉折的邊（兩側不在同一個平面上）都保持尖 ⇒ `{ n, maxDeg }`；有一條會磨圓、沒平滑、沒有轉折 ⇒ null。
+ * 共面的邊（三角形的對角線）磨了也一樣平，不算。
+ */
+export function allKeptSharp(obj) {
+  if (!obj || !obj.smoothed || !obj.smoothInfo()) return null;     // smoothInfo() 先把還沒判過的邊判好（`decideCreases()`）
+  const m = obj.mesh();
+  m.computeNormals();
+  let n = 0, maxDeg = 0;
+  for (const he of m.edges()) {
+    const d = m.dihedral(he);
+    if (d === null || Math.abs(d) * 180 / Math.PI <= 0.5) continue;
+    const c = he.crease | 0;
+    if (c !== CREASE.AUTO_SHARP && c !== CREASE.SHARP) return null;
+    n++; maxDeg = Math.max(maxDeg, Math.abs(d) * 180 / Math.PI);
+  }
+  return n ? { n, maxDeg: Math.round(maxDeg) } : null;
+}
+
+/**
+ * 平滑時翻過來的小面，出口（3D 列印、剖面分切）講一句黃字；沒有 ⇒ null。
+ * @param {'print'|'slice'} where
+ */
+export function smoothFlipNote(obj, where) {
+  if (!obj || !obj.smoothed) return null;
+  const info = obj.smoothInfo();
+  if (!info || !info.flipped) return null;
+  return { level: 'caution', text: `「${obj.name}」平滑時有 ${info.flipped} 個小面翻過來（物件面板有紅字，可以在畫面上標出來）—— 那裡${where === 'slice' ? '切出來' : '印出來'}會有小瑕疵` };
 }
 
 const f2 = x => (Math.round(x * 100) / 100).toString();

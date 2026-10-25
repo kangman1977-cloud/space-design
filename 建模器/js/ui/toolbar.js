@@ -64,6 +64,7 @@ import { fetchLatest } from '../core/appver.js';
 import { meshGearPair, gearClash } from '../core/gearPair.js';
 import { ask } from './askBox.js';
 import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP, decideCreases, markCreases } from '../build/subd.js';
+import { allKeptSharp } from '../out/smoothNote.js';
 import { CREASE } from '../core/mesh.js';
 
 const SURFACE_TEXT = {
@@ -1107,6 +1108,13 @@ export class Panel {
       + `　寬${pct(a[0], b[0]) || '一樣'}、高${pct(a[1], b[1]) || '一樣'}、深${pct(a[2], b[2]) || '一樣'}`
       + `　面 ${obj.mesh().faces.length.toLocaleString()} → ${info.mesh.faces.length.toLocaleString()}`
       + `　保持尖的邊 ${info.creases} 條`));
+    /** 第三輪第三批 ②-4（kang「① 甲 只講做法」）：每一條有轉折的邊都保持尖 ⇒ 磨完跟原本一樣，講為什麼、怎麼磨圓 */
+    const ks = allKeptSharp(obj);
+    if (ks) {
+      this.form.appendChild(note(`每一條有轉折的邊都保持尖（${ks.n} 條，轉折都 ≥ ${obj.subdDeg}°）⇒ 磨完跟原本一樣。`
+        + '要磨圓：「拉點線面」選邊按「磨圓」只磨那幾條；'
+        + `或把「保持尖的轉折」調到比最大的轉折大（這個 ${ks.maxDeg}° ⇒ ${ks.maxDeg + 1} 以上）＝ 全部磨圓、會縮很多`));
+    }
     const ip = info.interp;
     if (ip && ip.ok) {
       this.form.appendChild(note(`尺寸照原本的點：原本的點都在磨完的表面上（最多差 ${(ip.err * 10).toFixed(3)} mm，推了 ${ip.iters} 次），`
@@ -1125,9 +1133,14 @@ export class Panel {
     }
     /** ⑥ 翻過來的小面：照實講、可以在畫面上標出來 */
     if (info.flipped) {
+      /**
+       * 第三輪第三批 ②-2：最常見的原因排第一 —— 布林留下的、兩個面剛好疊在一起（T16 頭盔：調角度 15～60° 都 140～148 個；
+       * 把挖的那個放大一點、埋進料裡 142 → 24）。
+       */
       this.form.appendChild(bad(`有 ${info.flipped} 個小面翻過來了（出在粗網格的 ${info.flipOrigins} 個面上）—— `
-        + '通常是很窄的長條旁邊接大面、或凹進去的面；列印、剖面在那裡會出錯。'
-        + '可以把那幾個面附近的點拉開一點、或把「保持尖的轉折」調大或調小試試'));
+        + '最常見的是布林留下的、兩個面剛好疊在一起（挖的跟被挖的一樣大）：回到布林把挖的那個稍微大一點、埋進料裡，這種調角度沒用；'
+        + '其次是很窄的長條旁邊接大面、或凹進去的面：把那幾個面附近的點拉開一點，或把「保持尖的轉折」調大或調小試試。'
+        + '列印、剖面在那裡會出錯'));
       this._rowBtn('在畫面上標出翻過來的小面', '用紅框在畫面上標出翻過來的那幾個小面', () => {
         const M = obj.matrix();
         this.app.view.setFacePreview(info.flipSegs.map(p => p.clone().applyMatrix4(M)), 0xe53935);

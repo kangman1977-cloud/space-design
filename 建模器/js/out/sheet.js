@@ -1286,6 +1286,9 @@ export function sliceTitleLines(slice, opt = {}) {
     const spans = opt.pegSpans && opt.pegSpans.length === opt.pegs.length && opt.pegSpans.every(Boolean) ? opt.pegSpans : null;
     if (spans) out.push(`定位孔 ${opt.pegs.length} 個（手動）　⌀${fmt(opt.pegD || 0)} cm　`
       + spans.map((s, i) => `孔 ${i + 1} 穿過第 ${s.from}～${s.to} 片`).join('、'));
+    /** 第三輪第三批 ②-5：自動的孔① 有片不打孔（`slice/pegs.js` `peg1Cover()`）⇒ ⛔ 寫「通到底、每一片都有」*/
+    else if (opt.peg1) out.push(`定位孔 ${opt.pegs.length} 個　⌀${fmt(opt.pegD || 0)} cm`
+      + `　孔① 穿過第 ${opt.peg1.on} 片（不是每一片都有）` + (opt.pegs.length > 1 ? '，其餘只穿得過同一段的片' : ''));
     else out.push(`定位孔 ${opt.pegs.length} 個　⌀${fmt(opt.pegD || 0)} cm`
       + (opt.pegs.length > 1
         ? '　孔① 通到底（每一片都有），其餘只穿得過同一段的片'

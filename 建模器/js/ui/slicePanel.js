@@ -13,9 +13,9 @@
  * 算什麼在 slice/，畫什麼在 out/，這裡只收設定、排結果、接按鈕。
  */
 
-import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2, isHollowSheet, sheetNotes }
+import { sliceMany, stackBounds, AXES, AXIS_KEYS, DEFAULT_AXIS, FIT_TOL, TINY_PIECE_CM, MIN_GLUE_CM2, isHollowSheet, sheetNotes, uncutObjects }
   from '../slice/section.js';
-import { findPegs, checkPegs, pegsForSlice, pegSpans, manualPegs, holesFromAuto, PEG_DEFAULTS } from '../slice/pegs.js';
+import { findPegs, checkPegs, pegsForSlice, pegSpans, peg1Cover, manualPegs, holesFromAuto, PEG_DEFAULTS } from '../slice/pegs.js';
 import { sliceProgram, sliceTitleLines, renderCanvas, progSVG, printSVGs }
   from '../out/sheet.js';
 import { sliceDXF, sliceBoardDXF, fitDXF, UNITS } from '../out/dxf.js';
@@ -26,7 +26,7 @@ import { interlockMany, INTERLOCK_DEFAULTS, SPINE_N_MAX, suggestRibs, topOutline
 import { RibMapView } from './ribMapView.js';
 import { fitComb, fitSVG, FIT_DEFAULTS, FIT_N_MIN, FIT_N_MAX } from '../slice/fitTest.js';
 import { PegMapView } from './pegMapView.js';
-import { smoothExitNote } from '../out/smoothNote.js';
+import { smoothExitNote, smoothFlipNote } from '../out/smoothNote.js';
 
 const LS_KEY = 'modeler_slice';
 /** 展開圖的設定（排版那一包第一次沿用它，kang 2026-10-14）*/
@@ -407,14 +407,15 @@ export class SlicePanel {
     // 否則圖跟畫面上看到的東西不一樣大也不一樣位置。
     const hollow = this.opt.sheet !== 'solid';      // 第三輪第一批 ②：板件預設照板厚切成空心
     const shelledT = [];
-    const meshes = objs.map(o => {
+    const pairs = objs.map(o => {
       try {
         let m = o.smoothMesh();     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
         if (hollow && isHollowSheet(o, m)) { m = o.sheetShell(m, o.thickness); shelledT.push(+o.thickness); }
-        return m.transformed(o.matrix());
+        return [o, m.transformed(o.matrix())];
       }
       catch (e) { return null; }
     }).filter(Boolean);
+    const meshes = pairs.map(p => p[1]);
 
     this.objs = objs;
     this.meshes = meshes;     // 6c：幫我挪、肋位圖的外形要用
@@ -424,7 +425,7 @@ export class SlicePanel {
       : sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 });
     this._sheetNotes = sheetNotes(this.result, shelledT, il);
     /** 第三輪第二批 A：有平滑細分的照平滑後的切，講跟展開圖差多少（三個出口同一句）*/
-    this._smoothNotes = objs.map(o => smoothExitNote(o, 'slice')).filter(Boolean);
+    this._smoothNotes = [...objs.map(o => smoothExitNote(o, 'slice')), ...objs.map(o => smoothFlipNote(o, 'slice'))].filter(Boolean);     // 第三輪第三批 ②-6：翻面也講
 
     /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
     this.pegs = (this.result.ok && this.result.slices.length && !il)     // 6a：互卡沒有定位孔
@@ -435,6 +436,13 @@ export class SlicePanel {
               counts: this.opt.bands.map(b => b.holes)
             }))
       : null;
+    this._peg1 = this.result.ok ? peg1Cover(this.pegs, this.result.slices) : null;     // 第三輪第三批 ②-5
+    /**
+     * 第三輪第三批 ②-11（kang 2026-10-26「照你的建議」）：疊層每一片在中間切 ⇒ 比一片還薄、剛好夾在兩刀之間的物件
+     *（T19 平躺在地上的底線 0～0.2 cm）一片都切不到、結果裡直接不見 ⇒ 講是哪一個、怎麼辦。互卡、照最大外形切⛔ 這個問題。
+     */
+    this._uncut = (this.result.ok && this.result.slices.length && !il && !this.opt.maxOutline)
+      ? uncutObjects(pairs.map(([o, m]) => ({ name: o.name, mesh: m })), this.result.slices, this.opt.axis) : [];
 
     this.frame = (this.result.ok && this.result.slices.length)
       ? stackBounds(this.result.slices) : null;
@@ -514,6 +522,13 @@ export class SlicePanel {
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     for (const n of this._sheetNotes || []) this.body.appendChild(box('uwSkip', n));     // 第三輪第一批 ②
     for (const n of this._smoothNotes || []) this.body.appendChild(box(n.level === 'caution' ? 'uwCaution' : 'uwSkip', n.text));     // 第三輪第二批 A
+    /** 第三輪第三批 ②-11：一片都切不到的物件 */
+    if (this._uncut && this._uncut.length) {
+      const ax = this.opt.axis === 'y' ? '高' : this.opt.axis.toUpperCase();
+      const cs = r.slices.slice(0, 2).map(s => f(s.coord)).join('、');
+      this.body.appendChild(box('uwCaution', this._uncut.map(u => `「${u.name}」（${ax} ${f(u.lo)}～${f(u.hi)} cm）`).join('、')
+        + `沒有切到任何一片（每一片在中間切：${cs}…）—— 勾「照最大外形切」就會疊進去，或把它的板厚、位置改到切得到的地方`));
+    }
 
     // 定位孔
     const g = this.pegs;
@@ -533,12 +548,13 @@ export class SlicePanel {
         { d: this.opt.d, gap: this.opt.gap });
       this.body.appendChild(box(chk.ok ? 'uwSkip' : 'uwWarn',
         (chk.ok ? '定位孔　' : '⚠ 定位孔　')
-        + `孔① (${f(g.base.x)}, ${f(g.base.y)}) 通到底　`
+        /** 第三輪第三批 ②-5：有片不打孔 ⇒ 照實寫穿過哪幾片（⛔ 寫「通到底」）；串不起來的只列不打孔以外的 */
+        + (this._peg1 ? `孔① (${f(g.base.x)}, ${f(g.base.y)}) 穿過第 ${this._peg1.on} 片（第 ${this._peg1.off} 片不打孔）　` : `孔① (${f(g.base.x)}, ${f(g.base.y)}) 通到底　`)
         + `⌀${f(this.opt.d)} cm　`
         + g.bands.map(b => `段${b.band + 1} ${b.pegs.length} 孔`).join('　')
         /** ⚠ 2026-10-19（實驗 T6：`實驗-綜合評估.md` ②-10）報「孔邊」離邊緣多遠 —— `worst` 是孔中心的（判斷本身有算孔半徑，只是顯示的數字多了半個孔）*/
         + `　最糟的那一片孔邊離邊緣還剩 ${f(chk.worst - this.opt.d / 2)} cm`
-        + (chk.ok ? '' : `　→ 第 ${chk.bad.join('、')} 片串不起來`)));
+        + (chk.ok ? '' : (bad => bad.length ? `　→ 第 ${bad.join('、')} 片串不起來` : '')(chk.bad.filter(i => !(this._peg1 && this._peg1.skipped.includes(i)))))));
       // 紅色只留給「程式做不到你要求的事」；你自己選的後果用藍色說明
       for (const w of g.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
       for (const n of g.notes) this.body.appendChild(box('uwSkip', n));
@@ -738,7 +754,7 @@ export class SlicePanel {
     card.className = 'uwCard';
     card.dataset.slice = slice.index;     // 5b：立體預覽點一片 ⇒ 跳到這裡
 
-    const opt = { ...this._progOpt(), ...this._ownFrame(slice), pegs: this._pegsOf(slice), pegSpans: pegSpans(this.pegs, slice), marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊；5c：手動的孔寫穿過第幾片
+    const opt = { ...this._progOpt(), ...this._ownFrame(slice), pegs: this._pegsOf(slice), pegSpans: pegSpans(this.pegs, slice), peg1: this._peg1, marks: true };     // 5a：卡片上塗掉下來／只黏一點點的塊；5c：手動的孔寫穿過第幾片
     const lines = sliceTitleLines(slice, { ...opt, head: this.app.head });
     const h = document.createElement('div');
     h.className = 'uwTitle';
@@ -940,7 +956,7 @@ export class SlicePanel {
       const base = { ...this._progOpt(), head: this.app.head };
       ok = printSVGs(
         this.result.slices.map(s => {
-          const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
+          const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s), peg1: this._peg1 };
           return progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt));
         }),
         '剖面分切');
@@ -967,7 +983,7 @@ export class SlicePanel {
     }
     const base = { ...this._progOpt(), head: this.app.head };
     const jobs = this.result.slices.map(s => {
-      const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s) };
+      const opt = { ...base, ...this._ownFrame(s), pegs: this._pegsOf(s), pegSpans: pegSpans(this.pegs, s), peg1: this._peg1 };
       return {
         name: `${this._base()}_第${String(s.index).padStart(2, '0')}片.svg`,
         blob: textBlob(progSVG(sliceProgram(s, opt), sliceTitleLines(s, opt)), 'image/svg+xml')

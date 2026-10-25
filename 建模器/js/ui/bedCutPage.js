@@ -266,7 +266,12 @@ export class BedCutPage {
     const bad = pd.joints.filter(j => j.noRoom);
     if (bad.length) {
       line('uwCaution', `有 ${bad.length} 個接面${o.dowel.smaller ? '連最小的銷' : '銷'}都放不下，只能黏：`
-        + bad.map(j => `${AXIS_NAME[j.a]}那一刀（從${FROM[j.a]} ${((j.c - s.bb.min[j.a]) * 10).toFixed(0)} mm）`).join('、')
+        /** 第三輪第三批 ②-10（kang「④ 甲 每一刀一行」）：同一刀合成一個、寫幾個接面（以前同一刀連寫 6 次，看不出是哪幾個）*/
+        + [...new Set(bad.map(j => j.a + ':' + j.c))].map(k => {
+          const [a, c] = [+k.split(':')[0], bad.find(j => j.a + ':' + j.c === k).c];
+          const nAll = pd.joints.filter(j => j.a === a && j.c === c).length, nBad = bad.filter(j => j.a === a && j.c === c).length;
+          return `${AXIS_NAME[a]}那一刀（從${FROM[a]} ${((c - s.bb.min[a]) * 10).toFixed(0)} mm）${nBad === nAll ? `${nAll} 個接面全部` : `${nAll} 個接面裡 ${nBad} 個`}`;
+        }).join('、')
         + (o.dowel.smaller ? '' : ' —— 勾「放不下換小一號」試試'));
     }
     this.$('go').disabled = false;

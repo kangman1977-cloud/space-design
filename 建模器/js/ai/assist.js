@@ -96,6 +96,19 @@ export function readWindows(root) {
   return out;
 }
 
+/**
+ * 畫面上面那一行提示（`#toast`）怎麼報（第三輪第三批 ②-8、②-12，kang 2026-10-26「③ 乙 消失的也報、標幾秒前」）：
+ * 提示 2.6 秒就收掉，以前照那一格的字讀 ⇒ 消失之後還報成「最近的提示」（T16「改了角度還留著 142」、T18「改了中心線還寫終點在中心線上」都是這樣讀到的）。
+ * 還在畫面上 ⇒ 照字；已經收掉 ⇒「（已經消失，3 秒前）…」（`dataset.at` ＝ 出現的時間，main.js `toast()` 記的）；沒有字 ⇒ ''。
+ */
+export function toastWords(el, now = Date.now()) {
+  const t = (el && el.textContent) || '';
+  if (!t) return '';
+  if (el.classList && el.classList.contains('show')) return t;
+  const at = Number(el.dataset && el.dataset.at);
+  return Number.isFinite(at) && at > 0 ? `（已經消失，${Math.max(0, Math.round((now - at) / 1000))} 秒前）${t}` : `（已經消失）${t}`;
+}
+
 /** 「看」：現在的狀態（`windows` ＝ `readWindows()` 的結果；node 測試直接給）*/
 export function lookState(app, windows = [], toast = '') {
   const { doc, sel, hist } = app;
@@ -262,7 +275,7 @@ export function install(app) {
     return { 好了: true };
   };
 
-  const look = () => lookState(app, readWindows(document), (document.getElementById('toast') || {}).textContent || '');
+  const look = () => lookState(app, readWindows(document), toastWords(document.getElementById('toast')));
 
   window.AI = Object.freeze({
     看: look,

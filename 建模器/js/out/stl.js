@@ -501,13 +501,17 @@ export function printCheck(mesh, tris, opt = {}) {
      * 叫人去分件或縮小；其實每一塊都小得很，在切片軟體裡排一下就放得下。
      */
     const parts = v.components > 1 ? partGroups(tris) : null;
-    const partFits = parts && parts.every(g => { const f = fitBed(ptsOf(g), bedU); return f.asIs || f.turn; });
+    const partFit = parts && parts.map(g => fitBed(ptsOf(g), bedU));
+    const partFits = partFit && partFit.every(f => f.asIs || f.turn);
+    /** 第三輪第三批 ②-13：有一塊要轉方向才放得下 ⇒ 講出來（T20 汽車最大那塊 305.3 mm 照原樣放不下）*/
+    const turnIdx = partFits ? partFit.findIndex(f => !f.asIs) : -1;
     const sz = `${mm(size.x)} × ${mm(size.y)} × ${mm(size.z)} mm`;
     if (partFits) {
       issues.push({
         level: 'warn', kind: 'parts',
         text: `整件 ${sz} 放不下平台（成型範圍 ${bedTxt}），但它是 ${v.components} 塊分開的、`
           + `最大一塊 ${mm(largestPartMM(tris))}mm —— 在切片軟體裡把它們排近一點就放得下`
+          + (turnIdx >= 0 ? `（有一塊要${turnWords(partFit[turnIdx].turn)}才放得下）` : '')
       });
     } else if (fit.turn) {
       const s = fit.turn.size;
@@ -555,7 +559,8 @@ export function printCheck(mesh, tris, opt = {}) {
       issues.push({
         level: 'caution',
         kind: 'thin',
-        text: `有 ${mm2(th.areaMM2)}（${th.pct * 100 < 0.1 ? '' : '約 '}${pct(th.pct)} 的表面）比 ${th.minWallMM} mm 薄，最薄 ${Math.round(th.minMM * 100) / 100} mm`
+        /** 第三輪第三批 ②-7：不到 1 mm² 以前四捨五入寫成「0 mm²」 */
+        text: `有${th.areaMM2 < 1 ? '不到 1 mm²' : ' ' + mm2(th.areaMM2)}（${th.pct * 100 < 0.1 ? '' : '約 '}${pct(th.pct)} 的表面）比 ${th.minWallMM} mm 薄，最薄 ${Math.round(th.minMM * 100) / 100} mm`
             + (th.sampled ? `（面太多，抽 ${th.sampled.toLocaleString()} 個點量的）` : '')
             + ' —— 0.4 mm 噴嘴印兩圈約 0.9 mm，太薄的地方印不出來或很容易斷。可以把那裡加厚；'
             + '用別的噴嘴或樹脂機，把上面「最薄的牆」改成你的數字'

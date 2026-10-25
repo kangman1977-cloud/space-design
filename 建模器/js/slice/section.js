@@ -914,6 +914,23 @@ function segDist(px, py, x1, y1, x2, y2) {
 }
 
 /** 把 [1,2,3,7,8] 印成「1~3、7~8」——片一多，一長串數字沒人讀得完 */
+/**
+ * 疊層一片都切不到的物件（第三輪第三批 ②-11，kang 2026-10-26「照你的建議」）：每一片在中間切（`coord`）⇒
+ * 比一片還薄、剛好夾在兩刀之間的（T19 平躺在地上的底線 0～0.2 cm、片在 0.5、1.5…）結果裡直接不見。
+ * 照最大外形切的、互卡的⛔ 這個問題（呼叫的地方自己不叫）。
+ * @param {{name:string, mesh:Mesh}[]} items 世界座標
+ * @returns {{name:string, lo:number, hi:number}[]}
+ */
+export function uncutObjects(items, slices, axis) {
+  const A = AXES[axis] || AXES[DEFAULT_AXIS], dir = A.dir, cs = slices.map(s => s.coord), out = [];
+  for (const { name, mesh } of items) {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of mesh.verts) { const d = v.p.x * dir[0] + v.p.y * dir[1] + v.p.z * dir[2]; if (d < lo) lo = d; if (d > hi) hi = d; }
+    if (Number.isFinite(lo) && !cs.some(c => c >= lo - 1e-9 && c <= hi + 1e-9)) out.push({ name, lo, hi });
+  }
+  return out;
+}
+
 export function listNums(ns) {
   if (!ns.length) return '';
   const out = [];

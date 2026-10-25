@@ -21085,7 +21085,7 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
   ok('★★ 讀程式守著（出口）：3D 列印與它的破洞／非流形標示、匯出 OBJ、剖面分切、結構分析、狀態列三角形數照平滑後的',
     /this\.items = objs\.map\(o => \{\s*let mesh = o\.smoothMesh\(\);/.test(ex) && /_showNonManifold\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex)
     && /_showHoles\(obj\) \{\s*const mesh = obj\.smoothMesh\(\);/.test(ex) && /let mesh = o\.smoothMesh\(\), shelled = false;/.test(ob)
-    && /let m = o\.smoothMesh\(\);[\s\S]{0,300}return m\.transformed\(o\.matrix\(\)\)/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)   // 第三輪第一批 ②：剖面先看板件要不要加厚再換世界座標
+    && /let m = o\.smoothMesh\(\);[\s\S]{0,300}return \[o, m\.transformed\(o\.matrix\(\)\)\]/.test(sl) && /setTimeout\(\(\) => \{\s*const mesh = obj\.smoothMesh\(\);/.test(tb)   // 第三輪第一批 ②：剖面先看板件要不要加厚再換世界座標
     && /const m = o\.smoothMesh \? o\.smoothMesh\(\{ fast: true \}\) : o\.mesh && o\.mesh\(\);/.test(mn));
   ok('★★ 讀程式守著（展開照粗網格）：展開、智慧分切⛔ 叫 smoothMesh',
     !/smoothMesh/.test(src('unfold/part.js')) && !/smoothMesh/.test(src('unfold/propose.js')) && !/smoothMesh/.test(src('unfold/flatten.js')));
@@ -21787,6 +21787,126 @@ if (csgOK) {
     && /couponPlan\(o\.dowel, o\.coupon, this\._usedSizes\(\)\)/.test(cpS) && /r\.pd\.dowels\.map\(x => x\.dMM\)/.test(cpS));
   ok('★★ 讀程式守著（B）：檔名照印了哪幾排（「試片_⌀3_⌀1.75」）；一排都沒有 ⇒ 講「試片用不到」不存；每一排填回自己那一號（⌀3 填「⌀3 每邊大」）',
     /_試片_\$\{plan\.rows\.map\(r => '⌀' \+ r\.dMM\)\.join\('_'\)\}_/.test(cpS) && /試片用不到/.test(cpS) && /if \(f\.plan\.none\) \{/.test(cpS) && /`「⌀\$\{r\.dMM\} 每邊大」`/.test(cpS) && /每一排剛好那一格刻的數字填回自己那一號/.test(cpS));
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
+section('第三輪第三批 字跟著狀態（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第三批」；kang 2026-10-26「① 甲 只講做法 ② 甲 列印、剖面加黃字 ③ 乙 消失的也報、標幾秒前 ④ 甲 每一刀一行 ⑤ 甲 名字加說明」。
+   * 沙箱 `輸出\第三輪第三批研究\b3_probe*.mjs` 的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const SN = await import('../js/out/smoothNote.js');
+  const SEC = await import('../js/slice/section.js');
+  const PEG = await import('../js/slice/pegs.js');
+  const SH = await import('../js/out/sheet.js');
+  const STL = await import('../js/out/stl.js');
+  const B = await import('../js/out/bedCut.js');
+  const SO = await import('../js/build/importSolid.js');
+  const AS = await import('../js/ai/assist.js');
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+  const baked = src => { const o = new io.ModelObject({ name: 'x', src }); o.bake(); return o; };
+  const meshObj = (name, m, extra = {}) => { const o = new io.ModelObject({ name, src: { type: 'mesh' }, subd: 2, ...extra }); o._mesh = m; return o; };
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+
+  // ── ②-4 每一條有轉折的邊都保持尖 ──
+  const boxM = () => baked(prim.defaultSrc('box')).mesh().clone();
+  const ks = SN.allKeptSharp(meshObj('方塊', boxM()));
+  ok('★★★ ②-4 預設方塊平滑（30°）：12 條有轉折的邊全部保持尖、最大轉折 90° ⇒ 講「磨完跟原本一樣」', ks && ks.n === 12 && ks.maxDeg === 90, JSON.stringify(ks));
+  ok('★★ 調到 91° ⇒ 會磨圓 ⇒ 不講；圓柱（側面會磨圓）⇒ 不講；沒平滑 ⇒ 不講',
+    SN.allKeptSharp(meshObj('方塊', boxM(), { subdDeg: 91 })) === null && SN.allKeptSharp(meshObj('圓柱', baked(prim.defaultSrc('cylinder')).mesh().clone())) === null
+    && SN.allKeptSharp(meshObj('方塊', boxM(), { subd: 0 })) === null);
+  const tb = src('ui/toolbar.js');
+  ok('★★ 讀程式守著（②-4、②-2）：面板寫「每一條有轉折的邊都保持尖…調到 ○ 以上 ＝ 全部磨圓、會縮很多」（只講做法、不先算）；翻面紅字最常見的原因排第一「布林留下的、兩個面剛好疊在一起…這種調角度沒用」',
+    /const ks = allKeptSharp\(obj\);\s*if \(ks\) \{\s*this\.form\.appendChild\(note\(`每一條有轉折的邊都保持尖/.test(tb) && /每一條有轉折的邊都保持尖（\$\{ks\.n\} 條/.test(tb) && /\$\{ks\.maxDeg \+ 1\} 以上）＝ 全部磨圓、會縮很多/.test(tb)
+    && /最常見的是布林留下的、兩個面剛好疊在一起（挖的跟被挖的一樣大）：回到布林把挖的那個稍微大一點、埋進料裡，這種調角度沒用/.test(tb));
+
+  // ── ②-6 平滑翻面在出口講、②-7 不到 1 mm² ──
+  const dome = r => ({ type: 'dome', r, seg: 32, segH: 8 });
+  const hO = baked({ type: 'bool', op: 'union', items: [
+    it({ type: 'bool', op: 'subtract', items: [it(dome(10.3), [0, 5.15, 0]), it(dome(10), [0, 5, 0])] }),
+    it({ type: 'bool', op: 'subtract', items: [it({ type: 'cylinder', r: 13.5, h: 0.4, seg: 32, openEnded: false }, [0, 0.2, 0]), it(dome(10.15), [0, 5.075, 0])] }),
+    it({ type: 'bool', op: 'subtract', items: [it({ type: 'bool', op: 'intersect', items: [it(dome(10.9), [0, 5.45, 0]), it({ type: 'box', w: 2.5, h: 11, d: 30 }, [0, 5.5, 0])] }), it(dome(10.15), [0, 5.075, 0])] })] });
+  const helm = meshObj('頭盔', hO.mesh().transformed(hO.matrix()));
+  const fp = SN.smoothFlipNote(helm, 'print'), fs = SN.smoothFlipNote(helm, 'slice');
+  ok('★★★ ②-6 T16 頭盔第三版平滑：翻 24 個 ⇒ 列印黃字「「頭盔」平滑時有 24 個小面翻過來（物件面板有紅字…）—— 那裡印出來會有小瑕疵」、剖面講「切出來」',
+    fp && fp.level === 'caution' && fp.text === '「頭盔」平滑時有 24 個小面翻過來（物件面板有紅字，可以在畫面上標出來）—— 那裡印出來會有小瑕疵' && /那裡切出來會有小瑕疵$/.test(fs.text), fp && fp.text);
+  ok('★★ 沒翻面（預設半球平滑）、沒平滑 ⇒ 不講', SN.smoothFlipNote(meshObj('半球', baked(prim.defaultSrc('dome')).mesh().clone()), 'print') === null && SN.smoothFlipNote(meshObj('頭盔', hO.mesh(), { subd: 0 }), 'slice') === null);
+  const ex = src('ui/exportPanel.js'), sl = src('ui/slicePanel.js');
+  ok('★★ 讀程式守著（②-6）：3D 列印每一張卡片、剖面分切（疊層、互卡）都放翻面黃字', /const fl = smoothFlipNote\(it\.obj, 'print'\);/.test(ex) && /if \(fl\) card\.appendChild\(box\('uwCaution', fl\.text\)\);/.test(ex)
+    && /\.\.\.objs\.map\(o => smoothFlipNote\(o, 'slice'\)\)/.test(sl));
+  const sm = helm.smoothMesh();
+  const { body, bb } = B.openCut(sm, '頭盔');
+  const pl = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL }, {});
+  const pd = B.placeDowels(body, bb, pl.cuts, B.DOWEL);
+  const sp = body.split(pd.dowels.map(x => ({ a: x.a, p: x.p, r: x.r, depth: x.depth })), pl.cuts);
+  body.close && body.close();
+  const thinTxt = sp.pieces.map(pm => { const c = STL.printCheck(pm, STL.triangles(pm, { scale: 10 }), { mmPerUnit: 1, bedMM: [250, 250, 250] }); const i = c.issues.find(x => x.kind === 'thin'); return i ? i.text : ''; });
+  ok('★★★ ②-7 頭盔切成 4 塊：每一塊的牆太薄都不到 1 mm²（0.017～0.352）⇒ 寫「有不到 1 mm²（不到 0.1% 的表面）」，⛔「有 0 mm²」',
+    thinTxt.length === 4 && thinTxt.every(t => t.startsWith('有不到 1 mm²（不到 0.1% 的表面）比 0.9 mm 薄')) && !thinTxt.some(t => /0 mm²/.test(t)), thinTxt.map(t => t.slice(0, 30)).join(' | '));
+  const plate = baked({ type: 'box', w: 2, h: 0.05, d: 2 }); const plM = plate.mesh().transformed(plate.matrix());
+  const strip = STL.printCheck(plM, STL.triangles(plM, { scale: 10 }), { mmPerUnit: 1, bedMM: [250, 250, 250] }).issues.find(x => x.kind === 'thin');
+  ok('★★ 1 mm² 以上照舊寫數字（20 × 20 × 0.5 mm 的薄板：「有 8xx mm²（約 …% 的表面）比 0.9 mm 薄，最薄 0.5 mm」）', strip && /^有 \d{3,} mm²（約 /.test(strip.text) && /最薄 0\.5 mm/.test(strip.text), strip && strip.text.slice(0, 40));
+
+  // ── ②-5 孔① 穿過哪幾片 ──
+  const zO = baked({ type: 'bool', op: 'union', items: [it({ type: 'box', w: 10, h: 10, d: 10 }, [0, 5, 0]), it({ type: 'box', w: 10, h: 10, d: 10 }, [10, 15, 0]), it({ type: 'box', w: 12, h: 1, d: 3 }, [5, 10, 0])] });
+  const zr = SEC.sliceMany([zO.mesh().transformed(zO.matrix())], { axis: 'y' });
+  const zg = PEG.findPegs(zr.slices, {});
+  const cov = PEG.peg1Cover(zg, zr.slices);
+  ok('★★★ ②-5 上下錯開的兩塊：孔① 只串得起第 1～11 片、第 12～20 片不打孔 ⇒ peg1Cover「1~11」「12~20」', cov && cov.on === '1~11' && cov.off === '12~20' && cov.skipped.length === 9, JSON.stringify(cov));
+  const card3 = SH.sliceTitleLines(zr.slices[2], { pegs: PEG.pegsForSlice(zg, zr.slices[2]), pegD: 0.5, peg1: cov }).find(x => /定位孔/.test(x));
+  const card3old = SH.sliceTitleLines(zr.slices[2], { pegs: PEG.pegsForSlice(zg, zr.slices[2]), pegD: 0.5 }).find(x => /定位孔/.test(x));
+  ok('★★★ 卡片：「定位孔 2 個　⌀0.5 cm　孔① 穿過第 1~11 片（不是每一片都有），其餘只穿得過同一段的片」；每一片都有照舊「孔① 通到底（每一片都有）」',
+    card3 === '定位孔 2 個　⌀0.5 cm　孔① 穿過第 1~11 片（不是每一片都有），其餘只穿得過同一段的片' && /孔① 通到底（每一片都有）/.test(card3old), card3);
+  const bxO = baked(prim.defaultSrc('box')); const br = SEC.sliceMany([bxO.mesh().transformed(bxO.matrix())], { axis: 'y' });
+  ok('★★ 每一片都有（預設方塊）、沒有孔 ⇒ null（照舊寫「通到底」）', PEG.peg1Cover(PEG.findPegs(br.slices, {}), br.slices) === null && PEG.peg1Cover(null, br.slices) === null);
+  ok('★★ 讀程式守著（②-5）：剖面分切「孔① (x, y) 穿過第 ○ 片（第 ○ 片不打孔）」、串不起來的只列不打孔以外的；卡片、存 SVG、列印都帶 peg1',
+    /\+ \(this\._peg1 \? `孔① \(\$\{f\(g\.base\.x\)\}, \$\{f\(g\.base\.y\)\}\) 穿過第 \$\{this\._peg1\.on\} 片（第 \$\{this\._peg1\.off\} 片不打孔）/.test(sl) && /chk\.bad\.filter\(i => !\(this\._peg1 && this\._peg1\.skipped\.includes\(i\)\)\)/.test(sl)
+    && (sl.match(/peg1: this\._peg1/g) || []).length === 3);
+
+  // ── ②-11 疊層切不到的物件 ──
+  const sign = io.Doc.fromJSON(JSON.parse(readFileSync(join(here, '../../輸出/實驗T6/招牌.json'), 'utf8')));
+  const items = sign.objects.map(o => { let m = o.smoothMesh(); if (SEC.isHollowSheet(o, m)) m = o.sheetShell(m, o.thickness); return { name: o.name, mesh: m.transformed(o.matrix()) }; });
+  const sr = SEC.sliceMany(items.map(x => x.mesh), { axis: 'y' });
+  const un = SEC.uncutObjects(items, sr.slices, 'y');
+  ok('★★★ ②-11 T19 招牌：底線（0～0.2 cm）一片都沒切到（片在 0.5、1.5…）⇒ 講「招牌－底線」；牌面切到 ⇒ 不講', un.length === 1 && un[0].name === '招牌－底線' && Math.abs(un[0].lo) < 1e-6 && Math.abs(un[0].hi - 0.2) < 1e-6 && sr.slices[0].coord === 0.5, JSON.stringify(un));
+  ok('★★ 讀程式守著（②-11）：照最大外形切、互卡⛔ 叫；字「…沒有切到任何一片（每一片在中間切：…）—— 勾「照最大外形切」就會疊進去…」',
+    /\(this\.result\.ok && this\.result\.slices\.length && !il && !this\.opt\.maxOutline\)\s*\? uncutObjects\(/.test(sl) && /沒有切到任何一片（每一片在中間切：\$\{cs\}…）—— 勾「照最大外形切」就會疊進去/.test(sl));
+
+  // ── ②-10 只能黏一刀一行、②-13 要轉才放得下 ──
+  const bc = src('ui/bedCutPage.js');
+  ok('★★ 讀程式守著（②-10）：只能黏的接面同一刀合成一個、寫「6 個接面全部」「2 個接面裡 1 個」', /\[\.\.\.new Set\(bad\.map\(j => j\.a \+ ':' \+ j\.c\)\)\]/.test(bc) && /\$\{nBad === nAll \? `\$\{nAll\} 個接面全部` : `\$\{nAll\} 個接面裡 \$\{nBad\} 個`\}/.test(bc));
+  // 兩塊分開：一塊 30 × 2 × 2 cm（照原樣放不下、斜著放得下）＋一塊 2 × 2 × 2，隔 40 cm
+  const two = baked({ type: 'bool', op: 'union', items: [it({ type: 'box', w: 30, h: 2, d: 2 }), it({ type: 'box', w: 2, h: 2, d: 2 }, [0, 0, 40])] });
+  const tm = two.mesh().transformed(two.matrix());
+  const pc = STL.printCheck(tm, STL.triangles(tm, { zUp: true, scale: 10 }), { mmPerUnit: 1, bedMM: [250, 250, 250] }).issues.find(x => x.kind === 'parts');
+  ok('★★★ ②-13 分開的兩塊、大的那塊要斜著放才放得下 ⇒「…排近一點就放得下（有一塊要照原本朝上、在平台上轉 ○°才放得下）」',
+    pc && /排近一點就放得下（有一塊要照原本朝上、在平台上轉 \d+°才放得下）$/.test(pc.text), pc && pc.text);
+
+  // ── ②-13 匯入分成兩個物件的名字 ──
+  const cube = (o = [0, 0, 0], n = 10, { skip = -1 } = {}) => {
+    const P = [[0, 0, 0], [n, 0, 0], [n, n, 0], [0, n, 0], [0, 0, n], [n, 0, n], [n, n, n], [0, n, n]].map(q => q.map((v, k) => v + o[k]));
+    const F = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]].filter((_, i) => i !== skip);
+    return { P, F };
+  };
+  const model = (...cs) => { const points = [], faces = [], partOf = []; cs.forEach(({ P, F }) => { const b = points.length; points.push(...P); for (const f of F) { faces.push(f.map(i => i + b)); partOf.push(0); } }); return { points, faces, partOf, parts: [null] }; };
+  const fin3 = cube([30, 0, 0], 10, { skip: 1 }); fin3.P.push([35, -5, 0]); fin3.F.push([0, 1, 8]);
+  const uv = SO.unionVariant(model(cube(), cube([5, 0, 0]), fin3));
+  ok('★★★ ②-13 STL（部分沒有名字）聯集＋另外放 ⇒ 兩個部分的名字「（聯集）」「（另外放的 1 塊）」', uv.read && uv.read.parts.slice(-2).join() === '（聯集）,（另外放的 1 塊）' && uv.info.kept === 1, JSON.stringify(uv.read && uv.read.parts));
+  const ip = src('ui/import3dPanel.js');
+  ok('★★ 讀程式守著（②-13）：「（」開頭的接在檔名後面（「LLT_3D_Print_1k72（聯集）」）；原本有名字的照舊「檔名－名字」', /if \(p\.name\.startsWith\('（'\)\) return base \+ p\.name;/.test(ip) && /`\$\{base\}－\$\{p\.name \|\| i \+ 1\}`/.test(ip));
+
+  // ── ②-8、②-12 AI.看() 的最近的提示 ──
+  const el = (t, show, at) => ({ textContent: t, classList: { contains: k => k === 'show' && show }, dataset: at ? { at: String(at) } : {} });
+  ok('★★★ ③ 乙 還在畫面上 ⇒ 照字；已經收掉 ⇒「（已經消失，3 秒前）…」；沒記時間 ⇒「（已經消失）…」；沒有字 ⇒ 空的',
+    AS.toastWords(el('已用紅框標出 142 個翻過來的小面', true, 1000), 1500) === '已用紅框標出 142 個翻過來的小面'
+    && AS.toastWords(el('已用紅框標出 142 個翻過來的小面', false, 1000), 4000) === '（已經消失，3 秒前）已用紅框標出 142 個翻過來的小面'
+    && AS.toastWords(el('x', false, 0), 4000) === '（已經消失）x' && AS.toastWords(el('', false, 0)) === '' && AS.toastWords(null) === '');
+  const asS = src('ai/assist.js'), mn = src('main.js');
+  ok('★★ 讀程式守著（③）：AI.看() 用 toastWords 讀提示；main.js 的提示記出現的時間', /lookState\(app, readWindows\(document\), toastWords\(document\.getElementById\('toast'\)\)\)/.test(asS) && /el\.dataset\.at = String\(Date\.now\(\)\);/.test(mn));
 } else {
   ok('（略過：CSG 沒載入）', true);
 }

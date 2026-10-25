@@ -8643,6 +8643,7 @@ let toastTimer = null;
 function toast(msg, bad = false) {
   const el = $('toast');
   el.textContent = msg;
+  el.dataset.at = String(Date.now());     // 第三輪第三批：AI.看() 報「已經消失，○ 秒前」用（`ai/assist.js` `toastWords()`）
   el.classList.toggle('bad', bad);
   el.classList.add('show');
   clearTimeout(toastTimer);

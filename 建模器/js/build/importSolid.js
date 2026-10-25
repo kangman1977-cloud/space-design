@@ -163,9 +163,18 @@ export function unionVariant(r) {
   info.overlap = u.sumVolume > 0 ? 1 - u.volume / u.sumVolume : 0;
   const parts = [...r.parts];
   const unitedPart = parts.length;
-  parts.push(null);                                   // 聯集出來的那一個 ⇒ 名字用檔名（`_name()` 遇到 null 用檔名）
+  /**
+   * 第三輪第三批 ②-13（kang 2026-10-26「⑤ 甲 名字加說明」）：聯集出來的、另外放的以前都叫檔名（T20 汽車兩個都叫「LLT_3D_Print_1k72」，
+   * 畫面、AI.看() 都分不出來）⇒ 名字加說明（`（` 開頭 ⇒ `import3dPanel.js` `_name()` 接在檔名後面）。原本就有名字的部分照舊。
+   */
+  parts.push('（聯集）');
   const groups = [{ ...fromMesh(u.mesh), part: unitedPart }];
-  for (const c of rest) for (const [part, fs] of byPart({ faces: c.map(i => r.faces[i]), partOf: c.map(i => r.partOf[i]) })) groups.push(localGroup(r.points, fs, part));
+  let restPart = -1;
+  for (const c of rest) for (const [part, fs] of byPart({ faces: c.map(i => r.faces[i]), partOf: c.map(i => r.partOf[i]) })) {
+    let p = part;
+    if (!parts[part]) { if (restPart < 0) { restPart = parts.length; parts.push(`（另外放的 ${rest.length} 塊）`); } p = restPart; }
+    groups.push(localGroup(r.points, fs, p));
+  }
   return { read: assemble({ ...r, parts }, groups), info };
 }
 

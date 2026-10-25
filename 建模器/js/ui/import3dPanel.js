@@ -760,6 +760,7 @@ export class Import3DPanel {
   _name(p, i) {
     const base = baseName(this.fileName) || '匯入模型';
     if (!p.name) return base;
+    if (p.name.startsWith('（')) return base + p.name;     // 第三輪第三批 ②-13：「（聯集）」「（另外放的 10 塊）」接在檔名後面
     return p.name === base ? base : `${base}－${p.name || i + 1}`;
   }
 

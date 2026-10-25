@@ -421,6 +421,19 @@ export function pegSpans(res, slice) {
   });
 }
 
+/**
+ * 自動的孔① 是不是每一片都有（第三輪第三批 ②-5，kang 2026-10-26「照你的建議」→ `實驗-綜合評估-第三輪.md`「第三批」）：
+ * 有料的片裡有不打孔的（`skipped`）⇒ `{ on, off }`（「1~11」那種寫法），畫面、卡片照實寫「孔① 穿過第 ○ 片」；
+ * 每一片都有、手動（5c 自己寫穿過第幾片）、沒有孔 ⇒ null（照舊寫「通到底」—— kang 2026-08-22 孔① 全域的做法不動）。
+ */
+export function peg1Cover(res, slices) {
+  if (!res || !res.ok || res.manual || !res.skipped || !res.skipped.length) return null;
+  const solid = slices.filter(s => s.loops && s.loops.length).map(s => s.index);
+  const off = solid.filter(i => res.skipped.includes(i));
+  const on = solid.filter(i => !res.skipped.includes(i));
+  return off.length && on.length ? { on: listNums(on), off: listNums(off), skipped: off } : null;
+}
+
 /** 這一片要鑽哪幾個孔 ＝ 它所屬那一段的孔。孔①永遠在第一個。 */
 export function pegsForSlice(res, slice) {
   if (!res || !res.ok) return [];
