@@ -23,6 +23,7 @@ import { saveBlob, saveMany, textBlob, safeName, canChoosePath, TYPES }
   from '../out/save.js';
 import { nonPlanarFaces } from '../core/edit.js';
 import { ask } from './askBox.js';
+import { smoothExitNote } from '../out/smoothNote.js';
 
 const LS_KEY = 'modeler_unfold';
 
@@ -418,6 +419,8 @@ export class UnfoldPanel {
     this._renderUnflat(objs || []);
     for (const msg of r.skipped) this.body.appendChild(box('uwSkip', msg));
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
+    /** 第三輪第二批 A：有平滑細分的 ⇒ 展開照粗網格，講跟列印、剖面差多少（kang「① 乙 三個視窗都講 ② 差 ≥ 2% 黃字」）*/
+    for (const o of objs || []) { const sn = smoothExitNote(o, 'unfold'); if (sn) this.body.appendChild(box(sn.level === 'caution' ? 'uwCaution' : 'uwSkip', sn.text)); }
 
     /**
      * 🔴 **打版的東西把「相同的折線合成一行」關掉 → 講一句**

@@ -21433,8 +21433,8 @@ if (csgOK) {
   const here = dirname(fileURLToPath(import.meta.url));
   const B = await import('../js/out/bedCut.js');
   const BL = await import('../js/build/bool.js');
-  ok('★ 預設：7 格、每格 0.05 mm、只試現在的 ⌀；格數 3～9；字高 5、筆畫 0.8、刻 0.6 mm、數字之間至少空 3.5',
-    B.COUPON.n === 7 && B.COUPON.stepMM === 0.05 && B.COUPON.smaller === false && B.COUPON_N_MIN === 3 && B.COUPON_N_MAX === 9
+  ok('★ 預設：7 格、每格 0.05 mm、印這次切塊用到的（第三輪第二批 ③；還沒切 ⇒ 主要那一號）；格數 3～9；字高 5、筆畫 0.8、刻 0.6 mm、數字之間至少空 3.5',
+    B.COUPON.n === 7 && B.COUPON.stepMM === 0.05 && B.COUPON.which === 'used' && B.COUPON_N_MIN === 3 && B.COUPON_N_MAX === 9
     && B.COUPON_TEXT.hMM === 5 && B.COUPON_TEXT.strokeMM === 0.8 && B.COUPON_TEXT.deepMM === 0.6 && B.COUPON_TEXT.spaceMM === 3.5);
   ok('★★ 刻的字：0.15 ⇒「.15」、0 ⇒「.00」、1.2 ⇒「1.20」；七段數字 8 是 7 條、1 是 2 條、小數點 1 條',
     B.couponLabel(0.15) === '.15' && B.couponLabel(0) === '.00' && B.couponLabel(1.2) === '1.20'
@@ -21457,8 +21457,8 @@ if (csgOK) {
   ok('★★ 格數、每格差可以改：5 格 0.1 ⇒ 0～0.4；7 格 0.1 ⇒ −0.1 那一格不挖、記下來（6 個孔）',
     p2.rows[0].clears.join() === '0,0.1,0.2,0.3,0.4' && p3.skipped === 1 && p3.rows[0].holes.length === 6 && p3.rows[0].skipped.join() === '-0.1');
   ok('★ 格數超出 3～9 ⇒ 夾回來', B.couponPlan(B.DOWEL, { n: 20, stepMM: 0.05 }).rows[0].holes.length === 9 && B.couponPlan(B.DOWEL, { n: 1, stepMM: 0.05 }).rows[0].holes.length === 3);
-  const p4 = B.couponPlan(B.DOWEL, { ...B.COUPON, smaller: true });
-  ok('★★★ ④ 小一號也試 ⇒ 三排 ⌀6、⌀3、⌀1.75（小的中間 0.15、孔深 6），一排一排往後排、不重疊；每排各一根銷',
+  const p4 = B.couponPlan(B.DOWEL, { ...B.COUPON, which: 'all' });
+  ok('★★★ ④ 試片印「全部」（9b 的「小一號也試」）⇒ 三排 ⌀6、⌀3、⌀1.75（小的中間 0.15、孔深 6），一排一排往後排、不重疊；每排各一根銷',
     p4.rows.map(r => r.dMM).join() === '6,3,1.75' && p4.rows[1].clears[3] === 0.15 && p4.rows[2].depthMM === 6
     && p4.rows.every((r, i) => i === 0 || r.y0 >= p4.rows[i - 1].y0 + p4.rows[i - 1].D) && p4.rows.every(r => r.pin.at[0] > r.W));
 
@@ -21480,10 +21480,10 @@ if (csgOK) {
 
   // 讀程式守著：切塊頁
   const cp = readFileSync(join(here, '../js/ui/bedCutPage.js'), 'utf8');
-  ok('★★ 讀程式守著（切塊頁）：試片那一排（格數、每格差、小一號也試、存試片）、跟人走；照上面選的格式（3MF／STL）與單位存一個檔；講要填回「孔比銷每邊大」',
-    /data-k="cn"/.test(cp) && /data-k="cstep"/.test(cp) && /data-k="csmall"/.test(cp) && /data-k="coupon">存試片</.test(cp) && /if \(!o\.coupon\) o\.coupon = \{ \.\.\.COUPON \};/.test(cp)
+  ok('★★ 讀程式守著（切塊頁）：試片那一排（格數、每格差、試片印哪幾號、存試片）、跟人走；照上面選的格式（3MF／STL）與單位存一個檔；講要填回「孔比銷每邊大」',
+    /data-k="cn"/.test(cp) && /data-k="cstep"/.test(cp) && /data-k="cwhich"/.test(cp) && /data-k="coupon">存試片</.test(cp) && /if \(!o\.coupon\) o\.coupon = \{ \.\.\.COUPON \};/.test(cp)
     && /scale: STL_UNITS\[o\.unit\]\.scale \/ 10/.test(cp) && /if \(o\.format === '3mf'\) return \{ blob: binaryBlob\(to3MF\(parts, \{ unit: o\.unit \}\)/.test(cp)
-    && /把剛好那一格刻的數字填進「孔比銷每邊大」/.test(cp) && /沒有挖/.test(cp));
+    && /把剛好那一格刻的數字填進\$\{field\(rows\[0\]\)\}/.test(cp) && /'「孔比銷每邊大」'/.test(cp) && /沒有挖/.test(cp));
   const ep9 = readFileSync(join(here, '../js/ui/exportPanel.js'), 'utf8');
   ok('★★ 讀程式守著（列印視窗）：切塊頁開著時改「格式」⛔ 重畫（本機抓到：不然切塊頁被換掉、卻還開著）',
     /saveOpt\(this\.opt\); if \(!\(this\.cutPage && this\.cutPage\.active\)\) this\._render\(\); \};/.test(ep9));
@@ -21692,6 +21692,103 @@ if (csgOK) {
     /<select id="slSheet"[^>]*><option value="hollow">空心（照板厚）<\/option><option value="solid">實心<\/option>/.test(sl) && /const hollow = this\.opt\.sheet !== 'solid';/.test(sl)
     && /if \(hollow && isHollowSheet\(o, m\)\) \{ m = o\.sheetShell\(m, o\.thickness\);/.test(sl) && /sh\.onchange = \(\) => \{ this\.opt\.sheet = sh\.value; this\.run\(\); \};/.test(sl)
     && (sl.match(/for \(const n of this\._sheetNotes \|\| \[\]\)/g) || []).length === 2);
+}
+
+section('第三輪第二批 三條出口講同一個形狀：平滑差多少、小一號一號一格、試片印這次用到的（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第二批」；kang 2026-10-26「① 乙 三個視窗都講 ② 差 ≥ 2% 黃字 ③ 甲 試片印這次用到的 ④ 甲 小一號一號一格」。
+   * 沙箱 `輸出\第三輪第二批研究\`（shrink.mjs、sizes.mjs）的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const SN = await import('../js/out/smoothNote.js');
+  const { revolve } = await import('../js/build/revolve.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1], name: src.type });
+  const lampMesh = pts => revolve(pts.map(([x, y]) => V3(x, y, 0)), { axis: 'y', a: 0, b: 0, seg: 32 }).mesh;
+  const LAMP = [[12, 0], [16, 20], [9, 45], [7, 60]];
+  const meshObj = (name, m, extra = {}) => { const o = new io.ModelObject({ name, src: { type: 'mesh' }, subd: 2, ...extra }); o._mesh = m; return o; };
+  const primMesh = type => { const o = new io.ModelObject({ name: type, src: prim.defaultSrc(type) }); o.bake(); return o.mesh(); };
+
+  // ── A 平滑差多少：三個出口同一句 ──
+  ok('★ 差 ≥ 2% 黃字（kang「② 差 ≥ 2% 黃字」）', SN.SMOOTH_WARN_PCT === 2);
+  const lamp = meshObj('燈罩', lampMesh(LAMP));
+  const dl = SN.smoothDiff(lamp);
+  ok('★★★ T18 燈罩照縮：粗網格 32 × 60 × 32、平滑後 28.45 × 60 × 28.45（寬 −11.08%，沙箱一樣）',
+    dl && dl.cage.map(x => x.toFixed(2)).join() === '32.00,60.00,32.00' && dl.smooth.map(x => x.toFixed(2)).join() === '28.45,60.00,28.45' && Math.abs(dl.worstPct - 11.08) < 0.01 && !dl.keep, JSON.stringify(dl && [dl.smooth, dl.worstPct]));
+  const [nu, np, ns] = ['unfold', 'print', 'slice'].map(w => SN.smoothExitNote(lamp, w));
+  ok('★★★ 燈罩三個視窗都是黃字、講同一組數字：展開「展開照粗網格（32 × 60 × 32 cm）…照平滑後（28.45 × 60 × 28.45 cm，寬 −11.1%、深 −11.1%）…紙模會比印出來、切出來的大…勾「尺寸照原本的點（不縮）」」',
+    [nu, np, ns].every(n => n && n.level === 'caution' && n.text.includes('28.45 × 60 × 28.45') && n.text.includes('32 × 60 × 32') && n.text.includes('勾「尺寸照原本的點（不縮）」'))
+    && nu.text.startsWith('「燈罩」有平滑細分：展開照粗網格（32 × 60 × 32 cm）') && nu.text.includes('寬 −11.1%、深 −11.1%') && nu.text.includes('紙模會比印出來、切出來的大'), nu && nu.text);
+  ok('★★ 列印講「剖面分切一樣」、剖面講「3D 列印一樣」，兩個都講展開圖照粗網格、「兩邊都要做的話」',
+    np.text.startsWith('「燈罩」照平滑後的尺寸（28.45 × 60 × 28.45 cm，比粗網格寬 −11.1%、深 −11.1%）；剖面分切一樣、展開圖照粗網格 32 × 60 × 32 cm') && ns.text.includes('；3D 列印一樣、展開圖照粗網格') && /兩邊都要做的話/.test(np.text + ns.text), np.text);
+  const lampK = meshObj('燈罩', lampMesh(LAMP), { subdKeep: true });
+  const nk = SN.smoothExitNote(lampK, 'unfold');
+  ok('★★ 勾了不縮（推得準）：藍字、差 0.1%（0.4 mm），講「點跟點之間往外鼓一點」、⛔ 再叫人勾', nk && nk.level === 'note' && /最多差 0\.4 mm/.test(nk.text) && /往外鼓一點/.test(nk.text) && !/物件面板勾/.test(nk.text), nk && nk.text);
+  const cyl = meshObj('圓柱', primMesh('cylinder'));
+  const cu = SN.smoothExitNote(cyl, 'unfold'), cp2 = SN.smoothExitNote(cyl, 'print');
+  ok('★★ 預設圓柱（−0.6%、3 mm）：藍字只講數字 —— 展開「比 3D 列印、剖面分切寬 +0.6%、深 +0.6%（最多差 3 mm）」、列印「比展開圖（粗網格）寬 −0.6%…」',
+    cu && cu.level === 'note' && cu.text === '「圓柱」有平滑細分：展開照粗網格，比 3D 列印、剖面分切寬 +0.6%、深 +0.6%（最多差 3 mm）'
+    && cp2.text === '「圓柱」照平滑後的尺寸，比展開圖（粗網格）寬 −0.6%、深 −0.6%（最多差 3 mm）', cu && cu.text);
+  const lamp8 = meshObj('燈罩', lampMesh([[12, 0], [14.5, 6], [15.8, 13], [16, 20], [13.5, 30], [10.5, 40], [8.5, 50], [7, 60]]));
+  ok('★★ 8 個點的燈罩差 −1.59%（不到 2%）⇒ 藍字；4 個點的 −11% ⇒ 黃字（差多少是點太少，不是平滑本身）', SN.smoothExitNote(lamp8, 'print').level === 'note' && Math.abs(SN.smoothDiff(lamp8).worstPct - 1.59) < 0.01);
+  ok('★★ 一樣大的不講：預設方塊磨 2 次（90° 全部保持尖）、沒勾平滑、參數物件 ⇒ 沒有字',
+    SN.smoothExitNote(meshObj('方塊', primMesh('box')), 'unfold') === null && SN.smoothExitNote(meshObj('燈罩', lampMesh(LAMP), { subd: 0 }), 'print') === null
+    && SN.smoothExitNote(new io.ModelObject({ name: 'p', src: prim.defaultSrc('cylinder') }), 'slice') === null);
+  const big = meshObj('燈罩', lampMesh(LAMP)); big.scale.set(2, 1, 2);
+  const db = SN.smoothDiff(big);
+  ok('★★ 物件縮放過：數字乘縮放（64 × 60 × 64 → 56.9）、差的 % 一樣（跟物件面板「平滑前 → 平滑後」同一個算法）', db.cage.map(x => x.toFixed(1)).join() === '64.0,60.0,64.0' && Math.abs(db.smooth[0] - 2 * dl.smooth[0]) < 1e-9 && Math.abs(db.worstPct - dl.worstPct) < 1e-9);
+  const d8c = JSON.parse(readFileSync(join(here, '../../輸出/平滑細分研究/8c_doc.json'), 'utf8'));
+  const lion = io.ModelObject.fromJSON(d8c.objects[1]); lion.subdKeep = true;
+  const nl = SN.smoothExitNote(lion, 'slice');
+  ok('★★ kang 的獅子頭勾了不縮、推不準 ⇒ 照樣講差多少（1 mm），加「這個形狀勾了「尺寸照原本的點（不縮）」也推不準，照縮的」', nl && nl.level === 'note' && /最多差 1 mm/.test(nl.text) && /也推不準，照縮的/.test(nl.text), nl && nl.text);
+  const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
+  const up = src('ui/unfoldPanel.js'), sl = src('ui/slicePanel.js'), ex = src('ui/exportPanel.js');
+  ok('★★ 讀程式守著（A）：展開、剖面（疊層、互卡兩個畫面）、3D 列印（每一張卡片）都叫 smoothExitNote；黃字用 uwCaution、藍字 uwSkip',
+    /for \(const o of objs \|\| \[\]\) \{ const sn = smoothExitNote\(o, 'unfold'\);/.test(up) && /objs\.map\(o => smoothExitNote\(o, 'slice'\)\)/.test(sl) && (sl.match(/for \(const n of this\._smoothNotes \|\| \[\]\)/g) || []).length === 2
+    && /const sn = smoothExitNote\(it\.obj, 'print'\);/.test(ex) && [up, sl, ex].every(s => /level === 'caution' \? 'uwCaution' : 'uwSkip'/.test(s)));
+
+  // ── B 小一號一號一格、試片印這次用到的 ──
+  ok('★ 小一號的每邊大預設 ⌀3、⌀1.75 都是 0.15（跟 9a 一樣）；dowelTries 照各自那一格', B.DOWEL.smallClearMM.join() === '0.15,0.15' && B.dowelTries(B.DOWEL).map(s => s.clearMM).join() === '0.2,0.15,0.15');
+  const dS = { ...B.DOWEL, smallClearMM: [0.25, 0.1] };
+  const tS = B.dowelTries(dS);
+  ok('★★★ ④ 改 ⌀3 0.25、⌀1.75 0.1 ⇒ 挑位置、挖孔都照新的（離刀距離 ⌀3 1.095 cm）；預設那一組⛔ 被改到', tS.map(s => s.clearMM).join() === '0.2,0.25,0.1' && Math.abs(B.crossBand(tS, tS[1]) - 1.095) < 1e-9 && B.SMALLER[0].clearMM === 0.15 && B.DOWEL.smallClearMM.join() === '0.15,0.15');
+  ok('★★ 不合理的值（負的、不是數字、沒有這一格）⇒ 用預設 0.15', B.smallClear({ smallClearMM: [-1, 'x'] }, 0) === 0.15 && B.smallClear({ smallClearMM: [-1, 'x'] }, 1) === 0.15 && B.smallClear({}, 0) === 0.15 && B.smallClear(dS, 1) === 0.1);
+  ok('★★ 存著的設定換過來：9b 勾「小一號也試」⇒ 全部；沒勾 ⇒ 這次用到的；壞的 ⇒ 這次用到的', B.couponWhich({ smaller: true }) === 'all' && B.couponWhich({ smaller: false }) === 'used' && B.couponWhich({ which: 'main' }) === 'main' && B.couponWhich({ which: 'x' }) === 'used' && B.COUPON_WHICH.join() === 'used,main,all');
+  const rowsOf = p => p.rows.map(r => r.dMM).join();
+  const pU = B.couponPlan(dS, B.COUPON, [3, 1.75]);
+  ok('★★★ ③ 這次用到 ⌀3、⌀1.75 ⇒ 試片印這兩排（⛔ ⌀6）、⌀3 那一排中間 ＝ 它自己那一格 0.25（0.1～0.4）、⌀1.75 中間 0.1（−0.05 那一格不挖）',
+    rowsOf(pU) === '3,1.75' && pU.rows[0].clears.join() === '0.1,0.15,0.2,0.25,0.3,0.35,0.4' && pU.rows[1].clears.join() === '0,0.05,0.1,0.15,0.2,0.25' && pU.rows[1].skipped.join() === '-0.05' && pU.which === 'used' && !pU.none, JSON.stringify(pU.rows.map(r => r.clears)));
+  const pN = B.couponPlan(B.DOWEL, B.COUPON, []);
+  ok('★★ 一根銷都沒用到（接面都只能黏）⇒ 一排都不印、記下來（頁面講「試片用不到」）', pN.none && pN.rows.length === 0);
+  ok('★★ 還沒切（null）⇒ 主要那一號；「只有主要那一號」⇒ ⌀6；「全部」⇒ 三排（跟用到哪幾號無關）',
+    rowsOf(B.couponPlan(B.DOWEL, B.COUPON, null)) === '6' && rowsOf(B.couponPlan(B.DOWEL, { ...B.COUPON, which: 'main' }, [3])) === '6' && rowsOf(B.couponPlan(B.DOWEL, { ...B.COUPON, which: 'all' }, [3])) === '6,3,1.75');
+  // 真的切：預設方塊全部 ⌀6；T16 頭盔（平滑照縮）全部小一號（沙箱 sizes.mjs）
+  const used = async m => { const { body, bb } = B.openCut(m, 'x'); try { const pl = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL }, {}); return [...new Set(B.placeDowels(body, bb, pl.cuts, B.DOWEL).dowels.map(x => x.dMM))].sort((a, b) => b - a); } finally { body.close && body.close(); } };
+  const boxO = new io.ModelObject({ name: 'b', src: prim.defaultSrc('box') }); boxO.bake();
+  const uBox = await used(boxO.mesh().transformed(boxO.matrix()));
+  const dome = r => ({ type: 'dome', r, seg: 32, segH: 8 });
+  const hO = new io.ModelObject({ name: '頭盔', src: { type: 'bool', op: 'union', items: [
+    it({ type: 'bool', op: 'subtract', items: [it(dome(10.3), [0, 5.15, 0]), it(dome(10), [0, 5, 0])] }),
+    it({ type: 'bool', op: 'subtract', items: [it({ type: 'cylinder', r: 13.5, h: 0.4, seg: 32, openEnded: false }, [0, 0.2, 0]), it(dome(10.15), [0, 5.075, 0])] }),
+    it({ type: 'bool', op: 'subtract', items: [it({ type: 'bool', op: 'intersect', items: [it(dome(10.9), [0, 5.45, 0]), it({ type: 'box', w: 2.5, h: 11, d: 30 }, [0, 5.5, 0])] }), it(dome(10.15), [0, 5.075, 0])] })] } });
+  hO.bake();
+  const hM = new io.ModelObject({ name: '頭盔', src: { type: 'mesh' }, subd: 2 }); hM._mesh = hO.mesh().transformed(hO.matrix());
+  const uH = await used(hM.smoothMesh());
+  ok('★★★ 真的切：預設方塊只用 ⌀6 ⇒ 試片照舊一排 ⌀6；T16 頭盔只用 ⌀3、⌀1.75 ⇒ 試片印 ⌀3、⌀1.75 兩排（以前預設只印 ⌀6、一排都沒試到）',
+    uBox.join() === '6' && rowsOf(B.couponPlan(B.DOWEL, B.COUPON, uBox)) === '6' && uH.join() === '3,1.75' && rowsOf(B.couponPlan(B.DOWEL, B.COUPON, uH)) === '3,1.75', `${uBox} | ${uH}`);
+  const cpS = src('ui/bedCutPage.js');
+  ok('★★ 讀程式守著（B）：「試片印」三選一（這次用到的／只有主要那一號／全部）、跟人走；小一號一號一格（勾了放不下換小一號才出現）；陣列⛔ 跟預設共用；用到的照這次切的銷',
+    /<select data-k="cwhich"[^>]*>\s*<option value="used">這次用到的<\/option><option value="main">只有主要那一號<\/option><option value="all">全部（含小一號）<\/option><\/select>/.test(cpS)
+    && /\$\('cwhich'\)\.onchange = \(\) => \{ cp\.which = \$\('cwhich'\)\.value; p\.saveOpt\(\); \};/.test(cpS) && /data-k="sc\$\{i\}"/.test(cpS)
+    && /const on = !!d\.smaller && s\.dMM < d\.dMM - 1e-9;/.test(cpS) && /o\.dowel\.smallClearMM === DOWEL\.smallClearMM/.test(cpS)
+    && /couponPlan\(o\.dowel, o\.coupon, this\._usedSizes\(\)\)/.test(cpS) && /r\.pd\.dowels\.map\(x => x\.dMM\)/.test(cpS));
+  ok('★★ 讀程式守著（B）：檔名照印了哪幾排（「試片_⌀3_⌀1.75」）；一排都沒有 ⇒ 講「試片用不到」不存；每一排填回自己那一號（⌀3 填「⌀3 每邊大」）',
+    /_試片_\$\{plan\.rows\.map\(r => '⌀' \+ r\.dMM\)\.join\('_'\)\}_/.test(cpS) && /試片用不到/.test(cpS) && /if \(f\.plan\.none\) \{/.test(cpS) && /`「⌀\$\{r\.dMM\} 每邊大」`/.test(cpS) && /每一排剛好那一格刻的數字填回自己那一號/.test(cpS));
+} else {
+  ok('（略過：CSG 沒載入）', true);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

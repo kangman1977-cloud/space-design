@@ -28,10 +28,14 @@ import { cutBody, CUT_UV } from '../build/bool.js';
 
 export const BED_MM = [250, 250, 250];          // 寬、深、高
 export const MARGIN_MM = 2;
-export const DOWEL = { dMM: 6, depthMM: 8, clearMM: 0.2, wallMM: 1.5, per: 2, smaller: true };
+export const DOWEL = { dMM: 6, depthMM: 8, clearMM: 0.2, wallMM: 1.5, per: 2, smaller: true, smallClearMM: [0.15, 0.15] };
 export const DOWEL_GAP_MM = 0.6;
 export const DOWEL_CHAMFER_MM = 0.5;
-/** 放不下換小一號（沙箱量過：工地帽 ⌀3 都放得下；⌀1.75 可以剪一段耗材當銷）*/
+/**
+ * 放不下換小一號（沙箱量過：工地帽 ⌀3 都放得下；⌀1.75 可以剪一段耗材當銷）。
+ * 🔴 每邊大（clearMM）是預設；**一號一格可以改**（`o.dowel.smallClearMM`，跟 SMALLER 同一個順序 ——
+ * 第三輪第二批 ④，kang 2026-10-26「④ 甲 小一號一號一格」：試片 ⌀3 那一排試出來的數字以前沒地方填）
+ */
 export const SMALLER = [{ dMM: 3, clearMM: 0.15, wallMM: 1.2, depthMM: 6 }, { dMM: 1.75, clearMM: 0.15, wallMM: 1.0, depthMM: 6 }];
 /** 斷面上比這個小的一塊算「碎」（cm²，25 mm²）*/
 export const TINY_CM2 = 0.25;
@@ -264,10 +268,16 @@ export function crossBand(tries, s) {
   return (Math.max(...tries.map(x => x.depthMM)) + s.dMM / 2 + s.clearMM + s.wallMM) / 10;
 }
 
-/** 銷的設定（mm）：照 o.dowel，加上放不下換的小一號 */
+/** 小一號第 i 號的每邊大（mm）：照 o.dowel.smallClearMM，沒有或不合理就用預設 */
+export function smallClear(d, i) {
+  const v = d && Array.isArray(d.smallClearMM) ? Number(d.smallClearMM[i]) : NaN;
+  return Number.isFinite(v) && v >= 0 ? v : SMALLER[i].clearMM;
+}
+
+/** 銷的設定（mm）：照 o.dowel，加上放不下換的小一號（每邊大照各自那一格）*/
 export function dowelTries(d) {
   return [{ dMM: d.dMM, clearMM: d.clearMM, wallMM: d.wallMM, depthMM: d.depthMM },
-    ...(d.smaller ? SMALLER.filter(s => s.dMM < d.dMM - 1e-9) : [])];
+    ...(d.smaller ? SMALLER.map((s, i) => ({ ...s, clearMM: smallClear(d, i) })).filter(s => s.dMM < d.dMM - 1e-9) : [])];
 }
 
 /**
@@ -345,6 +355,9 @@ export function openCut(mesh, label) {
  * 🔴 第二輪第九批 9b（2026-10-25，kang「依照你的建議」→ 規格 `規格\建模器-STL匯出.md`「試片」；查到的 → `實驗-綜合評估-第二輪.md`「9b 試片」）：
  * ① 一塊板子一排孔、每格旁邊刻「要填進『孔比銷每邊大』的數字」＋一根銷 ② 切塊頁「存試片」單獨一個檔
  * ③ 7 格、每格 0.05 mm、中間 ＝ 現在的「孔比銷每邊大」；格數 3～9、每格差可以改 ④「小一號也試」勾了多兩排 ⌀3、⌀1.75
+ * 🔴 第三輪第二批 ③（2026-10-26，kang「③ 甲 試片印這次用到的」→ `實驗-綜合評估-第三輪.md`「第二批」）：
+ * ④ 的勾選格換成「試片印：這次用到的（預設）／只有主要那一號／全部」—— 薄殼（頭盔、燈罩）切塊全部用小一號，
+ * 以前預設試片只印 ⌀6、一排都沒試到；小一號那一排的中間 ＝ 它自己那一格「⌀3 每邊大」。
  * 跟雷射的試卡片（`slice/fitTest.js`）同一個想法；程式⛔ 自己改數字（挑好由人填回去）。
  *
  * | 項目 | 值 | 為什麼 |
@@ -355,7 +368,13 @@ export function openCut(mesh, label) {
  * | 記號 | 中間那格（現在的設定）後面邊上一個小三角缺口 | 刻不刻數字都看得出哪一格是現在的 |
  * | 每邊大 < 0 | 那一格不挖、講出來 | 欄位最小 0（跟試卡片「槽寬 ≤ 0 不挖」一樣）|
  */
-export const COUPON = { n: 7, stepMM: 0.05, smaller: false };
+export const COUPON = { n: 7, stepMM: 0.05, which: 'used' };
+/** 試片印哪幾號：這次切塊用到的／只有主要那一號／全部 */
+export const COUPON_WHICH = ['used', 'main', 'all'];
+/** 存著的設定換成 which（9b 存的是 smaller：勾了 ⇒ 全部；沒勾 ⇒ 這次用到的）*/
+export function couponWhich(c) {
+  return c && COUPON_WHICH.includes(c.which) ? c.which : (c && c.smaller ? 'all' : 'used');
+}
 export const COUPON_N_MIN = 3, COUPON_N_MAX = 9;
 export const COUPON_TEXT = { hMM: 5, strokeMM: 0.8, deepMM: 0.6, spaceMM: 3.5 };
 export const COUPON_FLOOR_MM = 1.2, COUPON_WALL_MM = 4, COUPON_ROW_GAP_MM = 6;
@@ -383,12 +402,16 @@ export function couponLabel(c) { return c.toFixed(2).replace(/^0(?=\.)/, ''); }
 /**
  * 試片排版（mm、Z 朝上、都在 z ≥ 0）：每一種銷一排板子＋一根銷。
  * @param {object} d 銷的設定（DOWEL 那一組）
- * @param {{n:number, stepMM:number, smaller:boolean}} c
- * @returns {{rows:{dMM, depthMM, clears:number[], skipped:number[], W, D, T, y0, holes:{x,y,r,clear}[], text:number[][], mark:number[], pin:{r, len, ch, at:number[]}}[], skipped:number}}
+ * @param {{n:number, stepMM:number, which:'used'|'main'|'all'}} c
+ * @param {number[]|null} used 這次切塊用到的 ⌀（mm）；還沒切（null）⇒「這次用到的」先當只有主要那一號
+ * @returns {{rows:{dMM, depthMM, clears:number[], skipped:number[], W, D, T, y0, holes:{x,y,r,clear}[], text:number[][], mark:number[], pin:{r, len, ch, at:number[]}}[], skipped:number, which:string, none:boolean}}
  */
-export function couponPlan(d, c) {
+export function couponPlan(d, c, used = null) {
   const n = Math.min(COUPON_N_MAX, Math.max(COUPON_N_MIN, Math.round(c.n)));
-  const sizes = c.smaller ? dowelTries({ ...d, smaller: true }) : dowelTries({ ...d, smaller: false });
+  const which = couponWhich(c);
+  const all = dowelTries({ ...d, smaller: true });
+  const sizes = which === 'all' ? all : which === 'main' || !used ? all.slice(0, 1)
+    : all.filter(s => used.some(u => Math.abs(u - s.dMM) < 1e-9));
   const rows = [];
   let y0 = 0;
   for (const s of sizes) {
@@ -414,5 +437,5 @@ export function couponPlan(d, c) {
       pin: { r: s.dMM / 2, len, ch: DOWEL_CHAMFER_MM, at: [W + 4 + s.dMM / 2, y0 + D / 2] } });
     y0 += D + COUPON_ROW_GAP_MM;
   }
-  return { rows, skipped: rows.reduce((a, r) => a + r.skipped.length, 0), deepMM: COUPON_TEXT.deepMM };
+  return { rows, skipped: rows.reduce((a, r) => a + r.skipped.length, 0), deepMM: COUPON_TEXT.deepMM, which, none: !rows.length };
 }

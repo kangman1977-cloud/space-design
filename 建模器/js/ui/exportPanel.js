@@ -24,6 +24,7 @@ import { boundaryEdges, nonManifoldEdges, reversedFaceEdges } from '../core/sele
 import { fillHoles, holeInfo } from '../core/edit.js';
 import { today } from '../core/io.js';
 import { BED_MM, MARGIN_MM } from '../out/bedCut.js';
+import { smoothExitNote } from '../out/smoothNote.js';
 
 /**
  * 🔴 **洞小於表面的幾 % 算「小洞」⇒ 預設建議補洞；大於 ⇒ 預設建議加厚成殼**（2026-10-22，kang「實體有洞時照你的建議：
@@ -412,6 +413,9 @@ export class ExportPanel {
       }
       card.appendChild(b);
     }
+    /** 第三輪第二批 A：有平滑細分的照平滑後的印，講跟展開圖差多少（三個出口同一句）*/
+    const sn = smoothExitNote(it.obj, 'print');
+    if (sn) card.appendChild(box(sn.level === 'caution' ? 'uwCaution' : 'uwSkip', sn.text));
     return card;
   }
 

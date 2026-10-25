@@ -26,6 +26,7 @@ import { interlockMany, INTERLOCK_DEFAULTS, SPINE_N_MAX, suggestRibs, topOutline
 import { RibMapView } from './ribMapView.js';
 import { fitComb, fitSVG, FIT_DEFAULTS, FIT_N_MIN, FIT_N_MAX } from '../slice/fitTest.js';
 import { PegMapView } from './pegMapView.js';
+import { smoothExitNote } from '../out/smoothNote.js';
 
 const LS_KEY = 'modeler_slice';
 /** 展開圖的設定（排版那一包第一次沿用它，kang 2026-10-14）*/
@@ -422,6 +423,8 @@ export class SlicePanel {
       : il ? interlockMany(meshes, this._ilOpt())     // 6a：互卡（6c：手動挪過的位置）
       : sliceMany(meshes, { axis: this.opt.axis, bands: this.opt.bands, maxOutline: !!this.opt.maxOutline, tinyCm: this.opt.tinyCm, minGlueCm2: this.opt.minGlueCm2 });
     this._sheetNotes = sheetNotes(this.result, shelledT, il);
+    /** 第三輪第二批 A：有平滑細分的照平滑後的切，講跟展開圖差多少（三個出口同一句）*/
+    this._smoothNotes = objs.map(o => smoothExitNote(o, 'slice')).filter(Boolean);
 
     /** 5c：手動放過孔（同一個切片方向，上面已經清過別的方向的）⇒ 用手動的（孔留著、重新檢查）*/
     this.pegs = (this.result.ok && this.result.slices.length && !il)     // 6a：互卡沒有定位孔
@@ -510,6 +513,7 @@ export class SlicePanel {
 
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     for (const n of this._sheetNotes || []) this.body.appendChild(box('uwSkip', n));     // 第三輪第一批 ②
+    for (const n of this._smoothNotes || []) this.body.appendChild(box(n.level === 'caution' ? 'uwCaution' : 'uwSkip', n.text));     // 第三輪第二批 A
 
     // 定位孔
     const g = this.pegs;
@@ -576,6 +580,7 @@ export class SlicePanel {
     for (const w of r.warnings) this.body.appendChild(box('uwWarn', '⚠ ' + w));
     for (const n of r.notes || []) this.body.appendChild(box('uwSkip', n));
     for (const n of this._sheetNotes || []) this.body.appendChild(box('uwSkip', n));     // 第三輪第一批 ②
+    for (const n of this._smoothNotes || []) this.body.appendChild(box(n.level === 'caution' ? 'uwCaution' : 'uwSkip', n.text));     // 第三輪第二批 A
     this.body.appendChild(box('uwSkip',
       `互卡：側面從 ${st.spineAx.toUpperCase()} 切${st.spines === 1 && !this.opt.manualRibs ? '正中間（1 片）' : `（${st.spines} 片）`}＋肋沿 ${st.ribAx.toUpperCase()} ${this.opt.manualRibs ? '照肋位圖手動挪過的位置' : `每 ${f(st.spacing)} cm`}（${st.ribs} 片）；`
       + `槽寬 ${f(st.slotW)} cm（板厚 ${f(st.t)} ${+il.slotAdj ? (il.slotAdj > 0 ? '＋ ' : '− ') + f(Math.abs(il.slotAdj)) : '＋ 0'}）、肋那邊佔 ${f(il.share * 10)} 成、槽口每邊張開 ${f(il.flare)} cm。`

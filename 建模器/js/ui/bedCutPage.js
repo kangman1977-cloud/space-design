@@ -10,7 +10,8 @@
  * | 切法 | 挑位置（插銷放得下、斷面分成的塊最少；面多要算一陣子、有進度、可以先停）| 平均切（快）|
  * | 刀的位置 | 照切法 | 每一刀打數字（mm，從外框的左邊／底下／後面算起）|
  * | 銷 | ⌀6、孔深 8、孔比銷每邊大 0.2、每個接面最多 2 根、放不下換小一號 | 都可以改（跟人走）|
- * | 試片（9b）| 7 格、每格 0.05 mm、中間 ＝ 現在的「孔比銷每邊大」、只試現在的 ⌀ | 格數 3～9、每格差、小一號也試（跟人走）；「存試片」單獨一個檔 |
+ * | 小一號的每邊大（第三輪第二批 ④）| ⌀3、⌀1.75 都是 0.15 | 一號一格（勾「放不下換小一號」才出現，跟人走）|
+ * | 試片（9b；第三輪第二批 ③）| 7 格、每格 0.05 mm、中間 ＝ 那一號自己的每邊大、**印這次切塊用到的那幾號** | 格數 3～9、每格差、試片印：這次用到的／只有主要那一號／全部（跟人走）；「存試片」單獨一個檔 |
  *
  * 算的東西在 `out/bedCut.js`、`build/bool.js` `cutBody()`；這裡只管畫面。
  * ⚠ 實體轉成 Manifold 一次就留著（大模型轉一次好幾秒），離開這一頁、關視窗一定要 `close()`。
@@ -18,8 +19,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { openCut, planCuts, placeDowels, dowelSpecs, segments, fitBed, AXIS_NAME, DOWEL, SMALLER,
-  COUPON, COUPON_N_MIN, COUPON_N_MAX, couponPlan } from '../out/bedCut.js';
+import { openCut, planCuts, placeDowels, dowelSpecs, segments, fitBed, AXIS_NAME, DOWEL, SMALLER, smallClear,
+  COUPON, COUPON_N_MIN, COUPON_N_MAX, couponPlan, couponWhich } from '../out/bedCut.js';
 import { couponSolids } from '../build/bool.js';
 import { triangles, bedLayout, toSTLBinary, toSTLAscii, STL_UNITS } from '../out/stl.js';
 import { to3MF } from '../out/threemf.js';
@@ -65,8 +66,11 @@ export class BedCutPage {
   get _opt() {
     const o = this.panel.opt;
     if (!o.dowel) o.dowel = { ...DOWEL };
+    /** 第三輪第二批 ④：9a 存的沒有這一格；⚠ `{ ...DOWEL }` 的陣列跟預設共用一份 ⇒ 換成自己的（不然改一格會改到預設）*/
+    if (!Array.isArray(o.dowel.smallClearMM) || o.dowel.smallClearMM === DOWEL.smallClearMM) o.dowel.smallClearMM = SMALLER.map((s, i) => smallClear(o.dowel, i));
     if (!o.cutMode) o.cutMode = 'smart';
     if (!o.coupon) o.coupon = { ...COUPON };
+    if (!o.coupon.which) { o.coupon.which = couponWhich(o.coupon); delete o.coupon.smaller; }     // 第三輪第二批 ③：9b 存的是勾選格
     return o;
   }
 
@@ -94,11 +98,13 @@ export class BedCutPage {
         <span class="lbl">孔比銷每邊大 mm</span><input type="number" data-k="clear" step="0.05" min="0" style="width:60px">
         <span class="lbl">每個接面最多</span><input type="number" data-k="per" step="1" min="1" max="6" style="width:48px"><span class="lbl">根</span>
         <label class="uwCk" title="⌀${DOWEL.dMM} 放不下的地方換 ${SMALLER.map(s => '⌀' + s.dMM).join(' → ')}（⌀1.75 可以剪一段耗材當銷）"><input type="checkbox" data-k="smaller"> 放不下換小一號</label>
+        <span data-k="sbox">${SMALLER.map((s, i) => `<span class="lbl" data-k="sl${i}">⌀${s.dMM} 每邊大 mm</span><input type="number" data-k="sc${i}" step="0.05" min="0" style="width:60px" title="⌀${s.dMM} 的孔比銷每邊大多少（試片 ⌀${s.dMM} 那一排挑好的數字填這裡）">`).join('')}</span>
       </div>
-      <div class="uwBar" title="先印這個：一排孔、每格孔比銷每邊大一點點，旁邊刻著數字；插插看挑剛好的那一格，把數字填進上面「孔比銷每邊大」">
+      <div class="uwBar" title="先印這個：一排孔、每格孔比銷每邊大一點點，旁邊刻著數字；插插看挑剛好的那一格，把數字填回上面那一號的每邊大">
         <span class="lbl">試片（先印這個挑鬆緊）格數</span><input type="number" data-k="cn" step="1" min="${COUPON_N_MIN}" max="${COUPON_N_MAX}" style="width:48px">
         <span class="lbl">每格差 mm</span><input type="number" data-k="cstep" step="0.01" min="0.01" style="width:60px">
-        <label class="uwCk" title="⌀${DOWEL.dMM} 放不下時會換的 ${SMALLER.map(s => '⌀' + s.dMM).join('、')} 也各印一排（小的縮得比較多，要分開試）"><input type="checkbox" data-k="csmall"> 小一號也試</label>
+        <span class="lbl">試片印</span><select data-k="cwhich" title="小的縮得比較多，要分開試；預設只印這次切塊真的用到的那幾號">
+          <option value="used">這次用到的</option><option value="main">只有主要那一號</option><option value="all">全部（含小一號）</option></select>
         <button class="mini" data-k="coupon">存試片</button>
       </div>
       <div class="uwBar" data-k="cuts"></div>
@@ -120,16 +126,28 @@ export class BedCutPage {
     };
     numIn('d', 'dMM', 1); numIn('depth', 'depthMM', 2); numIn('clear', 'clearMM', 0); numIn('per', 'per', 1);
     $('smaller').checked = !!d.smaller;
-    $('smaller').onchange = () => { d.smaller = $('smaller').checked; p.saveOpt(); this._compute(); };
+    $('smaller').onchange = () => { d.smaller = $('smaller').checked; p.saveOpt(); this._smallBox(); this._compute(); };
+    /** 第三輪第二批 ④：小一號一號一格（勾了「放不下換小一號」、比主要那一號小的才出現）*/
+    SMALLER.forEach((s, i) => {
+      $('sc' + i).value = smallClear(d, i);
+      $('sc' + i).onchange = () => { const v = parseFloat($('sc' + i).value); if (Number.isFinite(v) && v >= 0) d.smallClearMM[i] = v; $('sc' + i).value = smallClear(d, i); p.saveOpt(); this._compute(); };
+    });
+    this._smallBox();
     $('go').onclick = () => this._apply();
     const cp = o.coupon;
     $('cn').value = cp.n;
     $('cn').onchange = () => { const v = Math.round(parseFloat($('cn').value)); if (v >= COUPON_N_MIN && v <= COUPON_N_MAX) cp.n = v; $('cn').value = cp.n; p.saveOpt(); };
     $('cstep').value = cp.stepMM;
     $('cstep').onchange = () => { const v = parseFloat($('cstep').value); if (Number.isFinite(v) && v > 0) cp.stepMM = v; $('cstep').value = cp.stepMM; p.saveOpt(); };
-    $('csmall').checked = !!cp.smaller;
-    $('csmall').onchange = () => { cp.smaller = $('csmall').checked; p.saveOpt(); };
+    $('cwhich').value = couponWhich(cp);
+    $('cwhich').onchange = () => { cp.which = $('cwhich').value; p.saveOpt(); };
     $('coupon').onclick = () => this._saveCoupon();
+  }
+
+  /** 小一號那幾格：勾了「放不下換小一號」、而且比主要那一號小才顯示 */
+  _smallBox() {
+    const d = this._opt.dowel;
+    SMALLER.forEach((s, i) => { const on = !!d.smaller && s.dMM < d.dMM - 1e-9; this.$('sl' + i).hidden = !on; this.$('sc' + i).hidden = !on; });
   }
 
   _busy(msg, canStop) {
@@ -243,7 +261,7 @@ export class BedCutPage {
     line('uwSkip', r.specs.length
       ? `定位銷（另外印，切開時多一個物件）：${r.specs.map(x => `⌀${x.dMM} × ${+x.lenMM.toFixed(1)} mm ${x.n} 根`).join('、')}`
         + (smaller ? `；⌀${o.dowel.dMM} 放不下的 ${smaller} 根換了小一號` : '')
-        + `；孔比銷每邊大 ${o.dowel.clearMM} mm（太緊就加、會晃就減）`
+        + `；孔比銷每邊大 ${r.specs.map(x => (r.specs.length > 1 || x.dMM !== o.dowel.dMM ? `⌀${x.dMM} ` : '') + this._clearOf(x.dMM)).join('、')} mm（太緊就加、會晃就減）`
       : '一根定位銷都放不下 —— 只能黏');
     const bad = pd.joints.filter(j => j.noRoom);
     if (bad.length) {
@@ -330,12 +348,25 @@ export class BedCutPage {
    * 試片的檔案內容（照上面選的格式、單位）。⚠ 一律同步做好再 await 存檔（`showSaveFilePicker()` 要在按的那一下呼叫）。
    * @returns {{blob:Blob, name:string, type:object, plan:object}}
    */
+  /** 這一號的每邊大（mm）：主要那一號照「孔比銷每邊大」、小一號照各自那一格 */
+  _clearOf(dMM) {
+    const d = this._opt.dowel, i = SMALLER.findIndex(s => Math.abs(s.dMM - dMM) < 1e-9);
+    return Math.abs(dMM - d.dMM) < 1e-9 || i < 0 ? d.clearMM : smallClear(d, i);
+  }
+
+  /** 這次切塊用到的 ⌀（mm，大的在前）；還沒切好 ⇒ null */
+  _usedSizes() {
+    const r = this.s && this.s.res;
+    return r ? [...new Set(r.pd.dowels.map(x => x.dMM))].sort((a, b) => b - a) : null;
+  }
+
   couponFile() {
     const p = this.panel, o = this._opt;
-    const plan = couponPlan(o.dowel, o.coupon);
+    const plan = couponPlan(o.dowel, o.coupon, this._usedSizes());
+    if (plan.none) return { plan };
     const parts = couponSolids(plan).map(x => ({ name: x.name, tris: triangles(x.mesh, { zUp: false, scale: STL_UNITS[o.unit].scale / 10 }) }));
     const u = STL_UNITS[o.unit].label;
-    const name = `${p._base()}_試片_⌀${o.dowel.dMM}_${u}`;
+    const name = `${p._base()}_試片_${plan.rows.map(r => '⌀' + r.dMM).join('_')}_${u}`;     // 第三輪第二批（②-9）：照印了哪幾排
     if (o.format === '3mf') return { blob: binaryBlob(to3MF(parts, { unit: o.unit }), 'model/3mf'), name: name + '.3mf', type: TYPES['3mf'], plan };
     const tris = bedLayout(parts.map(x => x.tris), true)[0];
     const blob = o.format === 'binary'
@@ -348,10 +379,16 @@ export class BedCutPage {
     let f;
     try { f = this.couponFile(); }
     catch (e) { this.panel.app.toast('試片做不出來：' + e.message, true); return; }
+    if (f.plan.none) {
+      this.panel.app.toast(`這次切塊一根銷都沒有用到（接面都只能黏），試片用不到 —— 要印的話，把「試片印」改成「只有主要那一號」或「全部」`, true);
+      return;
+    }
     await saveBlob(f.blob, f.name, f.type, this.panel.opt.askPath);
-    const rows = f.plan.rows;
-    this.panel.app.toast(`已存試片：${rows.map(r => `⌀${r.dMM} 孔每邊大 ${r.clears[0].toFixed(2)}～${r.clears[r.clears.length - 1].toFixed(2)} mm（${r.clears.length} 格）`).join('、')}＋${rows.length === 1 ? '一根銷' : '每排一根銷'}`
-      + '　印出來插插看，把剛好那一格刻的數字填進「孔比銷每邊大」（.15 ＝ 0.15）'
+    const rows = f.plan.rows, d = this._opt.dowel;
+    const field = r => Math.abs(r.dMM - d.dMM) < 1e-9 ? '「孔比銷每邊大」' : `「⌀${r.dMM} 每邊大」`;
+    this.panel.app.toast(`已存試片${f.plan.which === 'used' && this._usedSizes() ? '（這次切塊用到的）' : ''}：${rows.map(r => `⌀${r.dMM} 孔每邊大 ${r.clears[0].toFixed(2)}～${r.clears[r.clears.length - 1].toFixed(2)} mm（${r.clears.length} 格）`).join('、')}＋${rows.length === 1 ? '一根銷' : '每排一根銷'}`
+      + (rows.length === 1 ? `　印出來插插看，把剛好那一格刻的數字填進${field(rows[0])}（.15 ＝ 0.15）`
+        : `　印出來插插看，每一排剛好那一格刻的數字填回自己那一號：${rows.map(r => `⌀${r.dMM} 填${field(r)}`).join('、')}（.15 ＝ 0.15）`)
       + (f.plan.skipped ? `　⚠ 每邊大算出來小於 0 的 ${f.plan.skipped} 格沒有挖（把中間的數字調大或每格差調小）` : '')
       + (rows.some(r => r.dMM < 2) ? '　⌀1.75 那一排也可以直接剪一段耗材插' : ''));
   }
