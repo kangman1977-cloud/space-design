@@ -1,0 +1,228 @@
+/**
+ * assist.js — AI 協作第一步：「看」與「指給你看」
+ *
+ * 🔴 kang 2026-10-25（→ `AI協作-設計方向.md`、規格 `規格\建模器-AI協作.md`）：Claude 在 Claude 的 app 裡開著建模器，
+ * 教 kang、跟 kang 一起做。第一步只做「看」與「指給你看」—— ⛔ 改模型、⛔ 改選取、⛔ 在畫面上多按鈕。
+ * Claude 用頁面工具呼叫 `window.AI` 底下這幾個：
+ *
+ * | 名字 | 做什麼 |
+ * |---|---|
+ * | `AI.看()` | 現在的狀態（物件、選取、拉點線面、開著的視窗上寫的摘要與提醒、上一步）—— 一個物件 |
+ * | `AI.看文字()` | 同上講成一段話（教學時讀出來用）|
+ * | `AI.指給你看(按鈕的字, 一行字)` | 把那一顆框起來（外框輕輕閃）＋旁邊一行字；留到 kang 按了它或按「知道了」|
+ * | `AI.指物件(物件名字, 一行字)` | 3D 畫面上那個物件畫橘色外框＋上面一行提示 |
+ * | `AI.收掉()` | 框、字、橘色外框都收掉 |
+ * | `AI.按了沒()` | kang 按了被框住的那一顆沒有（教學核對用）|
+ *
+ * 定案（kang「同意你的建議」）：① 外框會輕輕閃＋一行字（不擋別的地方）② 留到按了那一顆或按「知道了」
+ * ③「看」預設精簡：視窗上的檢查結果照畫面上的字讀（跟 kang 看到的一模一樣，⛔ 重算）—— 要檢查就打開那個視窗再看。
+ */
+
+import * as THREE from 'three';
+import { PRIM_SPECS } from '../build/prim.js';
+
+const KIND_NAME = { solid: '實體', sheet: '板件' };
+const TYPE_NAME = { mesh: '可編輯網格', bool: '布林', revolve: '旋轉成形' };
+const EL_NAME = { vert: '點', edge: '邊', face: '面' };
+const r2 = x => Math.round(x * 100) / 100;
+
+/** 一個物件的資料（世界座標的外框，cm）*/
+export function objectInfo(o) {
+  const m = o.mesh();
+  const m4 = o.matrix();
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const p = new THREE.Vector3();
+  for (const v of m.verts) {
+    p.copy(v.p).applyMatrix4(m4);
+    const a = [p.x, p.y, p.z];
+    for (let k = 0; k < 3; k++) { if (a[k] < lo[k]) lo[k] = a[k]; if (a[k] > hi[k]) hi[k] = a[k]; }
+  }
+  const t = o.src && o.src.type;
+  const size = m.verts.length ? [0, 1, 2].map(k => r2(hi[k] - lo[k])) : [0, 0, 0];
+  return {
+    名稱: o.name,
+    種類: KIND_NAME[o.kind] || o.kind,
+    形狀: (PRIM_SPECS[t] && PRIM_SPECS[t].label) || TYPE_NAME[t] || t,
+    參數物件: !!o.isParametric,
+    外框cm: { 寬X: size[0], 高Y: size[1], 深Z: size[2] },
+    中心cm: m.verts.length ? [0, 1, 2].map(k => r2((lo[k] + hi[k]) / 2)) : [0, 0, 0],
+    旋轉度: [o.rot.x, o.rot.y, o.rot.z].map(a => r2(a * 180 / Math.PI)),
+    縮放: [o.scale.x, o.scale.y, o.scale.z].map(r2),
+    ...(o.kind === 'sheet' ? { 板厚cm: o.thickness } : {}),
+    ...(o.subd ? { 平滑細分: `磨 ${o.subd} 次` } : {}),
+    面數: m.faces.length,
+    封閉: m.isClosed(),
+    ...(o.error ? { 錯誤: o.error } : {})
+  };
+}
+
+/**
+ * 開著的視窗：標題、上面那行摘要、卡片上的提醒（紅 ✗、黃、一般 ⚠ —— 一般提醒畫成灰藍框，⛔ 漏掉；純說明的灰藍框不算）。
+ * 照畫面上的字讀 ⇒ 跟 kang 看到的一模一樣。
+ */
+export function readWindows(root) {
+  const out = [];
+  for (const el of root.querySelectorAll('.uwWin')) {
+    if (el.hidden) continue;
+    const head = el.querySelector('.uwHead b'), sum = el.querySelector('.uwSum');
+    const notes = [];
+    for (const x of el.querySelectorAll('.uwWarn, .uwCaution, .uwSkip')) {
+      const s = x.textContent.trim();
+      if (s && (/^[✗⚠]/.test(s) || x.classList.contains('uwWarn') || x.classList.contains('uwCaution'))) notes.push(s);
+    }
+    out.push({ 視窗: head ? head.textContent.trim() : el.id, 摘要: sum ? sum.textContent.trim() : '', 提醒: notes.slice(0, 8), 提醒共: notes.length });
+  }
+  return out;
+}
+
+/** 「看」：現在的狀態（`windows` ＝ `readWindows()` 的結果；node 測試直接給）*/
+export function lookState(app, windows = [], toast = '') {
+  const { doc, sel, hist } = app;
+  const es = sel.editSels || [];
+  const picked = es.length ? { [EL_NAME[es[0].kind] || es[0].kind]: es.length } : {};
+  return {
+    文件: { 名稱: (doc.head && doc.head.name) || '未命名', 物件數: doc.objects.length },
+    模式: { 拉點線面: !!sel.editMode, 開著的視窗: windows },
+    選取: { 物件: sel.objects.map(o => o.name), ...picked },
+    物件: doc.objects.map(objectInfo),
+    復原紀錄: { 上一步: hist.undoLabel, 下一步: hist.redoLabel },
+    最近的提示: toast
+  };
+}
+
+/** 講成一段話 */
+export function lookText(L) {
+  const objs = L.物件.map(o => `「${o.名稱}」${o.形狀}${o.種類 === '板件' ? `（板件 ${o.板厚cm} cm）` : ''} ${o.外框cm.寬X} × ${o.外框cm.高Y} × ${o.外框cm.深Z} cm`).join('、');
+  const sel = L.選取.物件.length ? `選著「${L.選取.物件.join('」「')}」` : '沒有選東西';
+  const els = Object.entries(L.選取).filter(([k]) => k !== '物件').map(([k, n]) => `${n} 個${k}`).join('');
+  return `畫面上有 ${L.文件.物件數} 個物件：${objs || '沒有'}。`
+    + `${sel}${els ? `（選了 ${els}）` : ''}。`
+    + (L.模式.拉點線面 ? '現在在「拉點線面」。' : '')
+    + L.模式.開著的視窗.map(w => `開著「${w.視窗}」視窗${w.摘要 ? '：' + w.摘要 : ''}`
+      + (w.提醒共 ? `；有 ${w.提醒共} 則提醒，第一則：${w.提醒[0].length > 80 ? w.提醒[0].slice(0, 80) + '…' : w.提醒[0]}` : '') + '。').join('')
+    + (L.復原紀錄.上一步 ? `上一步是「${L.復原紀錄.上一步}」。` : '');
+}
+
+/**
+ * 照「按鈕上的字」找那一顆：字完全一樣 → 說明（title）開頭一樣 → 字裡面有。只找看得到的。
+ * @param {{text:string, title:string}[]} cands
+ * @returns {number} 第幾個，找不到 -1
+ */
+export function findTarget(cands, q) {
+  const s = String(q).trim();
+  let i = cands.findIndex(c => c.text === s);
+  if (i < 0) i = cands.findIndex(c => c.title && c.title.startsWith(s));
+  if (i < 0) i = cands.findIndex(c => c.text && c.text.includes(s));
+  return i;
+}
+
+// ═══════════════════════════════════════════════════════
+//  畫面：框、一行字、3D 外框
+// ═══════════════════════════════════════════════════════
+
+export const POINT_COLOR = 0xff9d2e;
+const CSS = [
+  '.aiRing { position: fixed; z-index: 99998; border: 3px solid #ff9d2e; border-radius: 8px; pointer-events: none;',
+  '  animation: aiPulse 1.2s ease-in-out infinite; }',
+  '@keyframes aiPulse { 0%,100% { box-shadow: 0 0 0 3px rgba(255,157,46,.35); } 50% { box-shadow: 0 0 0 9px rgba(255,157,46,.08); } }',
+  '.aiTip { position: fixed; z-index: 99999; max-width: 320px; background: #fff7ea; color: #3b2a12; border: 1px solid #ff9d2e;',
+  '  border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.5; box-shadow: 0 4px 14px rgba(0,0,0,.35); }',
+  '.aiTip .who { font-weight: bold; color: #b85f00; margin-right: 4px; }',
+  '.aiTip button { margin-left: 8px; font-size: 12px; }'
+].join('\n');
+
+/** 樣式由程式自己帶（同 `stackView.js`：剛上傳時舊的主頁面配新程式也不會亂）*/
+function ensureStyle() {
+  if (document.getElementById('aiAssistStyle')) return;
+  const st = document.createElement('style');
+  st.id = 'aiAssistStyle';
+  st.textContent = CSS;
+  document.head.appendChild(st);
+}
+
+const visible = el => !!el && el.offsetParent !== null && !el.closest('[hidden]');
+
+/**
+ * 掛上 `window.AI`。⚠ 只在瀏覽器（main.js 建好 app 之後）。
+ * @param {object} app main.js 的 app（doc、sel、hist、view、toast）
+ */
+export function install(app) {
+  let ring = null, tip = null, target = null, onClick = null, pressed = null, objShown = false;
+
+  const unpoint = () => {
+    if (ring) ring.remove();
+    if (tip) tip.remove();
+    if (target && onClick) target.removeEventListener('click', onClick, true);
+    ring = tip = target = onClick = null;
+    if (objShown) { app.view.clearIssuePreview(); objShown = false; }
+  };
+
+  const place = () => {
+    if (!ring || !target) return;
+    const r = target.getBoundingClientRect();
+    Object.assign(ring.style, { left: r.left - 5 + 'px', top: r.top - 5 + 'px', width: r.width + 10 + 'px', height: r.height + 10 + 'px' });
+    if (tip) {
+      const below = r.bottom + 12 + tip.offsetHeight < innerHeight;
+      Object.assign(tip.style, {
+        left: Math.min(innerWidth - tip.offsetWidth - 8, Math.max(8, r.left)) + 'px',
+        top: (below ? r.bottom + 12 : Math.max(8, r.top - 12 - tip.offsetHeight)) + 'px'
+      });
+    }
+  };
+  window.addEventListener('resize', place);
+  window.addEventListener('scroll', place, true);
+
+  const pointAt = (q, text) => {
+    unpoint();
+    ensureStyle();
+    const els = [...document.querySelectorAll('button, select, input, label')].filter(visible);
+    const i = findTarget(els.map(e => ({ text: e.textContent.trim(), title: e.title || '' })), q);
+    if (i < 0) return { 好了: false, 原因: `畫面上找不到「${q}」（可能藏在收起來的那一排、或要先打開某個視窗）` };
+    target = els[i];
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    ring = document.createElement('div');
+    ring.className = 'aiRing';
+    document.body.appendChild(ring);
+    if (text) {
+      tip = document.createElement('div');
+      tip.className = 'aiTip';
+      const who = document.createElement('span'); who.className = 'who'; who.textContent = 'Claude';
+      const ok = document.createElement('button'); ok.className = 'mini'; ok.textContent = '知道了';
+      ok.onclick = () => unpoint();
+      tip.append(who, document.createTextNode(text), ok);
+      document.body.appendChild(tip);
+    }
+    place();
+    pressed = null;
+    onClick = () => { pressed = { 按了: q, 時間: new Date().toLocaleTimeString() }; unpoint(); };
+    target.addEventListener('click', onClick, true);
+    return { 好了: true, 框住: target.textContent.trim().slice(0, 30) || (target.title || '').slice(0, 30) };
+  };
+
+  const pointObj = (name, text) => {
+    unpoint();
+    const o = app.doc.objects.find(x => x.name === name);
+    if (!o) return { 好了: false, 原因: `沒有叫「${name}」的物件` };
+    const m4 = o.matrix(), lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    const p = new THREE.Vector3();
+    for (const v of o.mesh().verts) { p.copy(v.p).applyMatrix4(m4); [p.x, p.y, p.z].forEach((x, k) => { if (x < lo[k]) lo[k] = x; if (x > hi[k]) hi[k] = x; }); }
+    const c = [];
+    for (const x of [lo[0], hi[0]]) for (const y of [lo[1], hi[1]]) for (const z of [lo[2], hi[2]]) c.push(new THREE.Vector3(x, y, z));
+    const E = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+    app.view.setFacePreview(E.flatMap(([a, b]) => [c[a], c[b]]), POINT_COLOR);
+    objShown = true;
+    if (text) app.toast('Claude：' + text);
+    return { 好了: true };
+  };
+
+  const look = () => lookState(app, readWindows(document), (document.getElementById('toast') || {}).textContent || '');
+
+  window.AI = Object.freeze({
+    看: look,
+    看文字: () => lookText(look()),
+    指給你看: pointAt,
+    指物件: pointObj,
+    收掉: () => { unpoint(); return { 好了: true }; },
+    按了沒: () => pressed
+  });
+}

@@ -21491,6 +21491,75 @@ if (csgOK) {
   ok('（略過：CSG 沒載入）', true);
 }
 
+
+section('AI 協作第一步：看、指給你看（2026-10-25）');
+{
+  /**
+   * `規格\建模器-AI協作.md`；kang 2026-10-25「同意你的建議」：① 外框輕輕閃＋一行字 ② 留到按了那一顆或按「知道了」
+   * ③「看」預設精簡、視窗上的檢查照畫面上的字讀 → `AI協作-設計方向.md`
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const AI = await import('../js/ai/assist.js');
+  // 照畫面上「新增」出來的樣子：參數物件（⛔ 凍結）、放在地板上
+  const mk = (type, over = {}) => new io.ModelObject({ name: over.name || type, src: prim.defaultSrc(type), ...over });
+  const box = mk('box', { name: '方塊 1' }), dome = mk('dome', { name: '半球 2' });
+  box.pos.set(0, 22.5, 0); dome.pos.set(-70, 15, 0);
+  const bi = AI.objectInfo(box), di = AI.objectInfo(dome);
+  ok('★★★ 物件的資料：名字、實體、形狀「方塊」、參數物件、外框 60 × 45 × 40 cm、中心、封閉、面數',
+    bi.名稱 === '方塊 1' && bi.種類 === '實體' && bi.形狀 === '方塊' && bi.參數物件 === true && bi.外框cm.寬X === 60 && bi.外框cm.高Y === 45 && bi.外框cm.深Z === 40
+    && bi.封閉 === true && bi.面數 === 6 && bi.中心cm.join() === '0,22.5,0', JSON.stringify(bi));
+  ok('★★ 外框照世界座標（物件搬過、旋轉過也對）：半球搬到 −70 ⇒ 中心 x −70、外框 60 × 30 × 60',
+    di.形狀 === '半球' && di.中心cm[0] === -70 && di.外框cm.寬X === 60 && di.外框cm.高Y === 30, JSON.stringify(di.中心cm));
+  const rb = mk('box', { name: '轉' }); rb.rot.set(0, Math.PI / 2, 0);
+  ok('★★ 轉 90° 的方塊：外框寬深對調（40 × 45 × 60）、旋轉度寫 90', AI.objectInfo(rb).外框cm.寬X === 40 && AI.objectInfo(rb).外框cm.深Z === 60 && AI.objectInfo(rb).旋轉度[1] === 90);
+  const pl = mk('plate', { name: '板', kind: 'sheet' }); pl.subd = 0;
+  const pi = AI.objectInfo(pl);
+  ok('★ 板件寫板厚；平滑細分有勾才寫', pi.種類 === '板件' && typeof pi.板厚cm === 'number' && !('平滑細分' in pi));
+
+  // 「看」
+  const app = { doc: { head: { name: '測試' }, objects: [box, dome] }, sel: { objects: [dome], editMode: false, editSels: [] }, hist: { undoLabel: '新增半球', redoLabel: null } };
+  const win = [{ 視窗: '3D 列印匯出', 摘要: '1 個物件　510 個三角形　全部可以列印', 提醒: ['⚠ 外框 600.0 × 600.0 × 300.0 mm 放不下平台（成型範圍 250 × 250 × 250 mm），轉方向也不行 —— 按「切成放得下的塊」切開、接面加定位銷，或把模型縮小'], 提醒共: 1 }];
+  const L = AI.lookState(app, win, '新增：半球 2');
+  ok('★★★ 看：文件、物件 2 個、選著半球 2、開著的視窗（摘要＋提醒）、上一步「新增半球」、最近的提示',
+    L.文件.名稱 === '測試' && L.文件.物件數 === 2 && L.物件.length === 2 && L.選取.物件.join() === '半球 2' && L.模式.開著的視窗[0].提醒共 === 1
+    && L.復原紀錄.上一步 === '新增半球' && L.復原紀錄.下一步 === null && L.最近的提示 === '新增：半球 2');
+  const T = AI.lookText(L);
+  ok('★★★ 講成一段話：「畫面上有 2 個物件：「方塊 1」方塊 60 × 45 × 40 cm、「半球 2」半球 60 × 30 × 60 cm。選著「半球 2」。開著「3D 列印匯出」視窗：…；有 1 則提醒，第一則：⚠ 外框…（太長截到 80 字）。上一步是「新增半球」。」',
+    T.startsWith('畫面上有 2 個物件：「方塊 1」方塊 60 × 45 × 40 cm、「半球 2」半球 60 × 30 × 60 cm。選著「半球 2」。開著「3D 列印匯出」視窗：1 個物件')
+    && /有 1 則提醒，第一則：⚠ 外框 600\.0/.test(T) && /…。上一步是「新增半球」。$/.test(T), T);
+  const app2 = { ...app, sel: { objects: [box], editMode: true, editSels: [{ kind: 'face' }, { kind: 'face' }] } };
+  const T2 = AI.lookText(AI.lookState(app2, []));
+  ok('★★ 拉點線面裡選了 2 個面 ⇒「選著「方塊 1」（選了 2 個面）。現在在「拉點線面」。」', /選著「方塊 1」（選了 2 個面）。現在在「拉點線面」。/.test(T2) && AI.lookState(app2, []).選取.面 === 2, T2);
+  ok('★ 什麼都沒有 ⇒「畫面上有 0 個物件：沒有。沒有選東西。」', AI.lookText(AI.lookState({ doc: { head: {}, objects: [] }, sel: { objects: [] }, hist: {} }, [])) === '畫面上有 0 個物件：沒有。沒有選東西。');
+
+  // 讀視窗上的字（假的畫面：只要 querySelectorAll／querySelector／textContent／classList／hidden）
+  const node = (cls, text) => ({ textContent: text, classList: { contains: c => cls.split(' ').includes(c) }, cls });
+  const fakeWin = (hidden, title, sum, notes) => ({ hidden, id: 'w', querySelector: s => (s === '.uwHead b' ? { textContent: title } : s === '.uwSum' ? { textContent: sum } : null),
+    querySelectorAll: () => notes });
+  const root = { querySelectorAll: () => [fakeWin(true, '展開圖', '', []), fakeWin(false, '3D 列印匯出', ' 1 個物件 ', [node('uwSkip', '⚠ 外框放不下平台'), node('uwSkip', '匯出時會自動做三件事：…'), node('uwWarn', '✗ 不是封閉的'), node('uwCaution', '有 9 mm² 比 0.9 mm 薄')])] };
+  const W = AI.readWindows(root);
+  ok('★★★ 視窗：藏起來的不算；提醒算紅（✗）、黃、灰藍框但 ⚠ 開頭的；純說明的灰藍框不算（第一版漏了 ⚠ 那種）',
+    W.length === 1 && W[0].視窗 === '3D 列印匯出' && W[0].摘要 === '1 個物件' && W[0].提醒共 === 3 && W[0].提醒.join('|') === '⚠ 外框放不下平台|✗ 不是封閉的|有 9 mm² 比 0.9 mm 薄', JSON.stringify(W));
+
+  // 找按鈕
+  const C = [{ text: '展開圖', title: '攤平成下料圖' }, { text: '3D 列印', title: '匯出 STL 給 3D 列印或 CAM' }, { text: '切成放得下的塊', title: '照平台大小切開' }, { text: '等角', title: '等角（斜看）' }];
+  ok('★★ 找按鈕：字一樣 → 說明開頭一樣 → 字裡面有；找不到 −1', AI.findTarget(C, '3D 列印') === 1 && AI.findTarget(C, '照平台大小') === 2 && AI.findTarget(C, '放得下') === 2 && AI.findTarget(C, '等角（斜看）') === 3 && AI.findTarget(C, '沒有這顆') === -1);
+  ok('★ 字完全一樣的優先（「3D 列印」⛔ 先找到說明裡有 3D 列印的那顆、⛔ 先找到字裡面有「3D 列印」的「3D 列印設定」）',
+    AI.findTarget([{ text: '匯出 STL', title: '3D 列印用' }, { text: '3D 列印', title: '' }], '3D 列印') === 1
+    && AI.findTarget([{ text: '3D 列印設定', title: '' }, { text: '3D 列印', title: '' }], '3D 列印') === 1);
+
+  // 讀程式守著
+  const src = readFileSync(join(here, '../js/ai/assist.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  ok('★★ 讀程式守著：window.AI 六個（看、看文字、指給你看、指物件、收掉、按了沒）、凍結；主程式建好 app 之後掛上',
+    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,200}installAI\(app\);/.test(mn));
+  ok('★★ 讀程式守著（定案 ①②）：外框會閃（aiPulse）、一行字前面寫 Claude、「知道了」收掉；kang 按了那一顆 ⇒ 記下來、收掉；⛔ 自己幾秒消失',
+    /animation: aiPulse/.test(src) && /who\.textContent = 'Claude'/.test(src) && /ok\.textContent = '知道了';\s*ok\.onclick = \(\) => unpoint\(\);/.test(src)
+    && /onClick = \(\) => \{ pressed = \{ 按了: q, 時間:[^}]*\}; unpoint\(\); \};/.test(src) && !/setTimeout\(/.test(src));
+  ok('★★ 讀程式守著：⛔ 改模型、⛔ 改選取（assist.js 裡沒有 commit、sel.set、doc.add、doc.remove）', !/commit\(|\.sel\.set\(|sel\.set\(|doc\.add\(|doc\.remove\(/.test(src));
+  ok('★ 指物件：橘色外框借 setFacePreview（同 3D 列印「指出來」）、收掉時 clearIssuePreview', /app\.view\.setFacePreview\(E\.flatMap/.test(src) && /app\.view\.clearIssuePreview\(\)/.test(src) && AI.POINT_COLOR === 0xff9d2e);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -21,6 +21,7 @@ import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/pri
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter, unionMeshes, dowelMesh }
   from './build/bool.js';
 import { DOWEL_CHAMFER_MM } from './out/bedCut.js';
+import { install as installAI } from './ai/assist.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
@@ -8764,3 +8765,5 @@ boot();   // 非同步：要先等布林函式庫載完才碰文件
 
 // 開發時方便在主控台看東西
 window.APP = app;
+/** AI 協作第一步（2026-10-25，kang 同意 → `AI協作-設計方向.md`）：Claude 用頁面工具叫 `AI.看()`、`AI.指給你看()`……；⛔ 改模型、⛔ 多按鈕 */
+installAI(app);
