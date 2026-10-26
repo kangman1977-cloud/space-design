@@ -21577,7 +21577,7 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
     /field = controlOf\(target\);/.test(src) && /const a = target\.getBoundingClientRect\(\), b = field \? field\.getBoundingClientRect\(\) : a;/.test(src)
     && /onChange = \(\) => \{ pressed = \{ 改了: q, 值: field\.value,/.test(src) && /field\.addEventListener\('change', onChange, true\);\s*\} else target\.addEventListener\('click', onClick, true\);/.test(src));
   ok('★★ 讀程式守著：window.AI 六個（看、看文字、指給你看、指物件、收掉、按了沒）、凍結；主程式建好 app 之後掛上',
-    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,800}installAI\(app(, installAIDo\(app\)| ?, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \})?\);/.test(mn));
+    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,800}installAI\(app(, installAIDo\(app\)| ?, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\)(, \.\.\.installAITeach\(app\))? \})?\);/.test(mn));
   ok('★★ 讀程式守著（定案 ①②）：外框會閃（aiPulse）、一行字前面寫 Claude、「知道了」收掉；kang 按了那一顆 ⇒ 記下來、收掉；⛔ 自己幾秒消失',
     /animation: aiPulse/.test(src) && /who\.textContent = 'Claude'/.test(src) && /ok\.textContent = '知道了';\s*ok\.onclick = \(\) => unpoint\(\);/.test(src)
     && /onClick = \(\) => \{ pressed = \{ 按了: q, 時間:[^}]*\}; unpoint\(\); \};/.test(src) && !/setTimeout\(/.test(src));
@@ -22142,7 +22142,7 @@ section('AI 協作第二步：做（2026-10-26）');
   // 讀程式守著
   const dsrc = readFileSync(join(here, '../js/ai/do.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
   ok('★★ 讀程式守著：包 hist.commit（所有改模型的路最後都走這一支）；主程式把第二步一起掛進 window.AI',
-    /hist\.commit = \(label, opt\) => orig\(ai > 0 \? aiLabel\(label\) : label, opt\);/.test(dsrc) && /window\.APP = app;[\s\S]{0,800}installAI\(app, (installAIDo\(app\)|\{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \})\);/.test(mn));
+    /hist\.commit = \(label, opt\) => orig\(ai > 0 \? aiLabel\(label\) : label, opt\);/.test(dsrc) && /window\.APP = app;[\s\S]{0,800}installAI\(app, (installAIDo\(app\)|\{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\)(, \.\.\.installAITeach\(app\))? \})\);/.test(mn));
   ok('★★ 讀程式守著：按 ＝ el.click()、勾 ＝ cb.click()、填與選 ＝ 改值再送 input 與 change（⛔ 直接改程式裡的值）',
     /el\.click\(\);\s*return report\(`按了/.test(dsrc) && /if \(cb\.checked !== !!開\) cb\.click\(\);/.test(dsrc)
     && /c\.value = String\(v\);\s*c\.dispatchEvent\(new Event\('input', \{ bubbles: true \}\)\);\s*c\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/.test(dsrc));
@@ -22441,7 +22441,7 @@ section('功能地圖 a：從畫面自動抽（2026-10-26）');
 
   // 讀程式守著
   const src = readFileSync(join(here, '../js/ai/catalog.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
-  ok('★★ 讀程式守著：主程式把功能地圖一起掛進 window.AI（AI.功能地圖、AI.功能）', /installAI\(app, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \}\);/.test(mn) && /功能地圖: \(opt = \{\}\) =>/.test(src) && /功能: q =>/.test(src));
+  ok('★★ 讀程式守著：主程式把功能地圖一起掛進 window.AI（AI.功能地圖、AI.功能）', /installAI\(app, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\)(, \.\.\.installAITeach\(app\))? \}\);/.test(mn) && /功能地圖: \(opt = \{\}\) =>/.test(src) && /功能: q =>/.test(src));
   ok('★★ 讀程式守著：功能地圖只讀畫面（⛔ 按東西、⛔ 改模型、⛔ 改選取）', !/\.click\(|dispatchEvent|commit\(|sel\.set\(|\.value = /.test(src));
   // 主頁面：「編輯」那一大組裡真的在用的（註解掉的⛔ 算）每一顆代號都分得到一組
   const html = readFileSync(join(here, '../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
@@ -22605,6 +22605,89 @@ section('功能地圖 c 輪：做法（2026-10-27）');
   const done = I.infoOf({ 代號: 'toolDone', 在哪: '工具列：拉點線面' });
   ok('★★ 「完成」（toolDone）的前提寫鋼筆、刀具、曲線刀具都有 —— c 輪重跑 T18 抓到 b 輪寫成只有曲線刀具', /鋼筆/.test(done.前提) && /刀具/.test(done.前提) && /曲線刀具/.test(done.前提)
     && I.infoOf({ 代號: 'toolState', 在哪: '工具列：拉點線面' }).前提.includes('曲線刀具'));
+}
+
+section('AI 協作第三步：一步一步教（2026-10-27）');
+{
+  /**
+   * `AI協作-設計方向.md`「第三步「一步一步教」」；kang 2026-10-27「① 甲 ② 甲 ③ 甲 ④ 甲 ⑤ 甲」：同一回合等、照表現放手、
+   * 按錯了講按的是哪一顆＋改到模型問要不要復原、記下 kang 按了哪一顆（只在教學時、只記不擋）、進度／略過／停。
+   * 用假的網頁（只有 addEventListener、querySelectorAll）＋假的 window.AI 跑一遍。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const T = await import('../js/ai/teach.js');
+  ok('★★ 按錯按對怎麼判：框住那一顆被按 ⇒ 按對了（格子帶值）；按了別的 ⇒ 回最後按的那一顆＋改到模型了沒；都沒有 ⇒ 繼續等',
+    T.judge({ pressed: { 按了: 'X' }, recs: [{ 字: '複製' }] }).結果 === '按對了' && T.judge({ pressed: { 改了: 'X', 值: '12' }, recs: [] }).值 === '12'
+    && T.judge({ pressed: null, recs: [{ 字: '複製', 在哪: '工具列：編輯', 代號: 'dup' }], undoBefore: 'a', undoNow: 'a' }).按的.字 === '複製'
+    && T.judge({ pressed: null, recs: [{ 字: 'x' }], undoBefore: 'a', undoNow: 'a' }).改到模型 === false
+    && T.judge({ pressed: null, recs: [{ 字: 'x' }], undoBefore: 'a', undoNow: 'b' }).改到模型 === true
+    && T.judge({ pressed: null, recs: [] }) === null);
+  ok('★★ 進度寫在那一行字前面（⑤ 甲）；一次最多等 40 秒（頁面工具一次呼叫最多 45 秒）', T.withProgress('第 1／6 大步・第 2 顆', '按刪除') === '第 1／6 大步・第 2 顆：按刪除'
+    && T.withProgress('', '按刪除') === '按刪除' && T.MAX_WAIT === 40);
+
+  // ── 假的網頁＋假的 window.AI ──
+  const L = {}, g0 = globalThis.document, w0 = globalThis.window;
+  const el = (tag, id, text, o = {}) => ({ tagName: tag, id, textContent: text, type: o.type || '', value: o.value || '', checked: false, inTip: !!o.inTip, closest(s) { if (s === '.aiTip') return this.inTip ? {} : null; return this; } });
+  globalThis.document = { addEventListener: (t, fn, cap) => { (L[t] = L[t] || []).push({ fn, cap }); }, querySelectorAll: () => [] };
+  let pressed = null, sel = [], und = '新增方塊', shut = 0;
+  const said = [];
+  globalThis.window = { AI: { 指給你看: (q, t) => { said.push(t); return { 好了: true, 框住: '刪除' }; }, 按了沒: () => pressed, 指物件: () => ({ 好了: true }), 收掉: () => { shut++; return { 好了: true }; },
+    看: () => ({ 選取: { 物件: sel.slice() } }) } };
+  const fire = (type, target) => (L[type] || []).forEach(h => h.fn({ type, target }));
+  const later = (ms, f) => setTimeout(f, ms);
+  let R = {};
+  try {
+    const A = T.install({ hist: { get undoLabel() { return und; } } });
+    R.notOn = await A.等kang按('刪除', '按刪除');
+    R.start = A.教學開始('燈罩');
+    later(60, () => fire('click', el('BUTTON', 'dup', '複製')));
+    R.wrong = await A.等kang按('刪除', '按刪除', { 秒: 3, 進度: '第 1／6 大步・第 1 顆' });
+    later(60, () => { pressed = { 按了: '刪除' }; });
+    R.right = await A.繼續等(3);
+    R.again = await A.繼續等(1);
+    pressed = null;
+    later(60, () => { und = '複製 1 個物件'; fire('click', el('BUTTON', 'dup', '複製')); });
+    R.wrong2 = await A.等kang按('刪除', '按刪除', { 秒: 3 });
+    R.timeout = await A.等kang按('刪除', '按刪除', { 秒: 1 });
+    pressed = { 按了: '刪除' };
+    R.between = await A.繼續等(3);
+    pressed = null;
+    later(60, () => { fire('click', el('BUTTON', 'ok', '知道了', { inTip: true })); fire('click', el('INPUT', 'penCA', '', { type: 'number' })); });
+    R.tipField = await A.等kang按('X', '在 X 打 12', { 秒: 1 });
+    later(60, () => fire('change', el('INPUT', 'penCA', '', { type: 'number', value: '21' })));
+    R.change = await A.繼續等(3);
+    sel = ['方塊 1'];
+    later(60, () => { sel = ['方塊 2']; });
+    R.objWrong = await A.等kang選('方塊 3', '點這個方塊', { 秒: 3 });
+    later(60, () => { sel = ['方塊 3']; });
+    const s0 = shut; R.objRight = await A.繼續等(3); R.objShut = shut - s0;
+    R.log = A.教學紀錄();
+    const s1 = shut; R.end = A.教學結束(); R.endShut = shut - s1;
+    R.after = await A.等kang按('刪除', '按刪除', { 秒: 1 });
+    fire('click', el('BUTTON', 'dup', '複製'));
+    R.afterLog = A.教學紀錄();
+  } finally { globalThis.document = g0; globalThis.window = w0; }
+  ok('★★★ 要先開始教學才等（④ 甲：只在教學時記）；記錄掛在 click、change 的 capture（只看）', R.notOn.好了 === false && /教學開始/.test(R.notOn.原因) && R.start.好了
+    && L.click && L.click[0].cap === true && L.change && L.change[0].cap === true);
+  ok('★★★ 按了別的 ⇒ 回「按的是複製」、沒改到模型、框還在；接著按對 ⇒ 按對了；已經接到了再等 ⇒ 講沒有在等的那一步',
+    R.wrong.結果 === '按了別的' && R.wrong.按的.字 === '複製' && R.wrong.按的.代號 === 'dup' && R.wrong.改到模型 === false && R.wrong.框還在 === true
+    && R.right.結果 === '按對了' && R.again.好了 === false, JSON.stringify([R.wrong, R.right, R.again]));
+  ok('★★★ ③ 甲：按錯的那一下改到模型 ⇒ 改到模型 true（Claude 問 kang 要不要復原、⛔ 自己復原）', R.wrong2.結果 === '按了別的' && R.wrong2.改到模型 === true);
+  ok('★★★ ① 甲：沒按 ⇒ 等到秒數回「沒按」、框留著；kang 在兩次之間按了 ⇒ 繼續等馬上接到（⛔ 重框把它洗掉）',
+    R.timeout.結果 === '沒按' && R.timeout.框還在 === true && R.between.結果 === '按對了' && R.between.秒 < 0.5, JSON.stringify([R.timeout, R.between]));
+  ok('★★ 記錄：Claude 自己的「知道了」⛔ 算、格子點一下⛔ 算（等改了才算）；格子改了 ⇒ 帶值（打錯數字看得到）',
+    R.tipField.結果 === '沒按' && R.change.結果 === '按了別的' && R.change.按的.代號 === 'penCA', JSON.stringify([R.tipField.結果, R.change]));
+  ok('★★ 等 kang 點物件：點到別的 ⇒ 選了別的；點對 ⇒ 選對了、框收掉', R.objWrong.結果 === '選了別的' && R.objWrong.按的.字 === '方塊 2' && R.objRight.結果 === '選對了' && R.objShut === 1,
+    JSON.stringify([R.objWrong, R.objRight]));
+  ok('★★ 教學紀錄（② 甲 照表現放手時看）：每一步按對按錯、按的是哪一顆；教學結束 ⇒ 收掉框、停止記錄（之後再等要先開始）',
+    R.log.紀錄.length === 9 && R.log.紀錄[0].結果 === '按了別的' && R.log.紀錄[0].步 === '第 1／6 大步・第 1 顆' && R.log.紀錄[0].按的 === '複製@'
+    && R.end.教了幾步 === 9 && R.end.對 === 3 && R.endShut === 1 && R.after.好了 === false && R.afterLog.記了幾下 === 0 && said[0] === '第 1／6 大步・第 1 顆：按刪除', JSON.stringify(R.log.紀錄.map(x => x.結果)));
+  // 讀程式守著
+  const src = readFileSync(join(here, '../js/ai/teach.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  ok('★★ 讀程式守著：只記不擋（⛔ preventDefault、stopPropagation、按東西、改模型）；主程式把第三步一起掛進 window.AI',
+    !/preventDefault|stopPropagation|stopImmediatePropagation|\.click\(|commit\(|sel\.set\(/.test(src)
+    && /installAI\(app, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\), \.\.\.installAITeach\(app\) \}\);/.test(mn));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
