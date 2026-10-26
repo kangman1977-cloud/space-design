@@ -22573,6 +22573,40 @@ section('功能地圖 b 輪：前提、規格、核對、指定是哪一個、�
   ok('★★★ 主頁面每一顆按鈕、格子、下拉都有滑鼠停留說明（沒寫死的要是程式跟著狀態寫的）', noTip.length === 0, noTip.join(' '));
 }
 
+section('功能地圖 c 輪：做法（2026-10-27）');
+{
+  /**
+   * `規格\建模器-做法.md`；kang 2026-10-27「同意」：① 甲 一份文件、步驟表有代號欄、測試守著代號都還在 ② 丙 兩層 ③ 甲 記哪一版驗過＋可信度
+   * ④ 甲 5 條都做 ⑤ 甲 協作前排練、出計畫書、用完封存。
+   */
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const I = await import('../js/ai/catalogInfo.js');
+  const doc = readFileSync(join(here, '../../規格/建模器-做法.md'), 'utf8');
+  const html = readFileSync(join(here, '../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const ui = readdirSync(join(here, '../js/ui')).map(f => readFileSync(join(here, '../js/ui', f), 'utf8')).join('\n');
+  // 五條做法的段落（「## 1 …」～「## 5 …」）
+  const secs = doc.split(/\n(?=## )/).filter(s => /^## [1-9]\d* /.test(s));
+  ok('★★ 做法檔：索引一條一句話、5 條都有（T16～T20）；每一條有兩層表（大步驟、細步驟、做完核對）、坑、可信度、驗過的版本',
+    secs.length === 5 && /\| # \| 做什麼 \| 一句話 \| 出自 \|/.test(doc) && ['T16', 'T17', 'T18', 'T19', 'T20'].every(t => doc.includes('| ' + t + ' |'))
+    && secs.every(s => /\| 大步驟 \| 細步驟（按哪一顆）\| 做完核對 \|/.test(s) && /\*\*坑\*\*/.test(s) && /\*\*可信度\*\*/.test(s) && /\*\*驗過的版本\*\*：[0-9a-f]{7}/.test(s)),
+    secs.map(s => s.split('\n')[0]).join('｜'));
+  // ① 甲：步驟表裡的代號（`像這樣`）都還在 —— 按鈕改名、代號換了就抓到
+  const codes = [...new Set(secs.flatMap(s => s.split('\n').filter(l => l.startsWith('|')).flatMap(l => [...l.matchAll(/`([A-Za-z][\w]*(?::[\w]+)?)`/g)].map(m => m[1]))))];
+  const exists = c => {
+    if (c.includes(':')) { const [w, k] = c.split(':'); return ui.includes(`data-k="${k}"`) && (ui.includes(w) || html.includes(`id="${w}"`)); }
+    return html.includes(`id="${c}"`) || ui.includes(`id="${c}"`);
+  };
+  const gone = codes.filter(c => !exists(c));
+  ok('★★★ 做法裡每一個代號在主頁面或視窗程式裡都找得到（⛔ 改了按鈕、做法沒跟著改）', codes.length >= 30 && gone.length === 0, `共 ${codes.length} 個；找不到：${gone.join(' ')}`);
+  ok('★★ 做法檔寫了協作前排練、計畫書（什麼時候排練、在本機複本、計畫書的欄、用完封存 輸出\\協作計畫\\）、整理規則（先合併再新增、超過 20 條一起整理）',
+    /## 協作前排練、計畫書/.test(doc) && /大步驟 5 步以上/.test(doc) && /本機複本/.test(doc) && /輸出\\協作計畫\\/.test(doc) && /先合併|⛔ 新增/.test(doc) && /超過 20 條/.test(doc));
+  // b 輪那一筆「完成」：鋼筆、刀具、曲線刀具共用（c 輪重跑 T18 抓到）
+  const done = I.infoOf({ 代號: 'toolDone', 在哪: '工具列：拉點線面' });
+  ok('★★ 「完成」（toolDone）的前提寫鋼筆、刀具、曲線刀具都有 —— c 輪重跑 T18 抓到 b 輪寫成只有曲線刀具', /鋼筆/.test(done.前提) && /刀具/.test(done.前提) && /曲線刀具/.test(done.前提)
+    && I.infoOf({ 代號: 'toolState', 在哪: '工具列：拉點線面' }).前提.includes('曲線刀具'));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
