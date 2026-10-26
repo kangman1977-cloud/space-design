@@ -22452,6 +22452,127 @@ section('功能地圖 a：從畫面自動抽（2026-10-26）');
     ids.length > 80 && cnt['鋼筆'] > 20 && cnt['曲線刀具'] > 15 && cnt['刀具'] >= 3 && cnt['拉點線面：選取'] > 10 && cnt['拉點線面：過濾'] >= 5 && !cnt['旋轉成形'] && !ids.includes('revolve'), JSON.stringify(cnt));
 }
 
+section('功能地圖 b 輪：前提、規格、核對、指定是哪一個、說明（2026-10-27）');
+{
+  /**
+   * `AI協作-設計方向.md`「功能地圖 b 輪：動工前查到的」；kang 2026-10-27「同意...」：① 甲 照組寫表 ② 甲 看哪一欄＋AI.核對()
+   * ③ 甲 沒說明的全部補 ④ 甲 指定是哪一個（代號、在哪＋字；字一樣有好幾個 ⇒ 不猜）。
+   */
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const C = await import('../js/ai/catalog.js');
+  const I = await import('../js/ai/catalogInfo.js');
+
+  // ── 組表 ──
+  ok('★★ 組表每一列都寫了四樣（在哪、前提、規格、核對）；規格寫「規格\\建模器-…」或「沒有專門的規格」', I.GROUPS.length >= 40
+    && I.GROUPS.every(r => r.length === 4 && r.every(s => typeof s === 'string' && s.length > 1) && /^規格\\建模器-|^沒有專門的規格/.test(r[2])));
+  const inf = (在哪, 代號 = '') => I.infoOf({ 在哪, 代號 });
+  ok('★★★ 照「在哪」配最長的那一組：切塊頁、物件面板的形狀參數、平滑細分、拉點線面的各組都配到自己的',
+    inf('視窗：3D 列印匯出／切塊頁').組 === '視窗：3D 列印匯出／切塊頁' && inf('視窗：3D 列印匯出').組 === '視窗：3D 列印匯出'
+    && inf('物件面板：圓柱 參數').組 === '物件面板' && inf('物件面板：平滑細分').前提 === '選一個可編輯網格'
+    && inf('工具列：拉點線面：選取').組 === '工具列：拉點線面：選取' && inf('工具列：曲線刀具').規格 === '規格\\建模器-曲線刀具.md',
+    JSON.stringify([inf('視窗：3D 列印匯出／切塊頁').組, inf('物件面板：圓柱 參數').組]));
+  ok('★★★ 一組裡前提不一樣的照代號蓋過去：環切只選一條邊、互卡那幾格（照開頭）、吸附的旋轉那幾顆、「#2」照原本的代號；展開那一排四顆各有各的規格',
+    inf('工具列：拉點線面：改造型', 'loopCut').前提 === '拉點線面裡只選一條邊' && inf('視窗：剖面分切', 'slILSpine').前提 === '「剖面分切」裡做法選「互卡」'
+    && inf('工具列：吸附', 'snapR45').前提 === '先選一個物件、按左邊「旋轉」' && inf('工具列：吸附', 'snapT5').前提.startsWith('先選一個物件（移動')
+    && inf('工具列：拉點線面：改造型', 'loopCut#2').前提 === '拉點線面裡只選一條邊'
+    && inf('工具列：展開', 'slice').規格 === '規格\\建模器-剖面分切.md' && inf('工具列：展開', 'unfold').規格 === '規格\\建模器-展開與分片.md');
+  // 走過各種狀態看到的「在哪」（本機 2026-10-27 掃描；物件面板的十四種形狀）都配得到一組，⛔ 落到「工具列」「視窗」那種大組
+  const WHERE = ['工具列：檔案', '工具列：新增', '工具列：編輯', '工具列：展開', '工具列：模式', '工具列：視角', '工具列：檢視', '工具列：陣列', '工具列：布林', '工具列：吸附',
+    '工具列：方向', '工具列：拉點線面：過濾', '工具列：拉點線面：改造型', '工具列：拉點線面：選取', '工具列：拉點線面', '工具列：曲線刀具', '工具列：刀具', '工具列：鋼筆', '工具列：法向',
+    '工具列：貼合', '工具列：參考線', '左邊工具', '物件面板', '物件面板：案件', '物件面板：方塊 參數', '物件面板：位置 cm', '物件面板：旋轉 度', '物件面板：縮放 倍', '物件面板：折彎序列',
+    '物件面板：平滑細分', '物件面板：編輯造型', '物件面板：分片', '物件面板：智慧分切', '物件面板：對齊', '物件面板：均分', '物件面板：布林運算', '右邊面板：pAna', '右邊面板：pClash',
+    '右邊面板：pVer', '視窗：展開圖', '視窗：3D 列印匯出', '視窗：3D 列印匯出／切塊頁', '視窗：剖面分切', '視窗：匯入線稿', '視窗：匯入 3D 模型', '視窗：匯出 OBJ', '詢問視窗'];
+  const generic = WHERE.filter(w => ['工具列', '視窗', '右邊面板', null].includes(inf(w).組));
+  ok('★★★ 走過的「在哪」每一個都配得到自己那一組（⛔ 落到「工具列」「視窗」那種大組）', generic.length === 0, generic.join('、'));
+  // CLUSTERS 寫的代號都真的有（⛔ 打錯字）
+  const html = readFileSync(join(here, '../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const uiSrc = readdirSync(join(here, '../js/ui')).map(f => readFileSync(join(here, '../js/ui', f), 'utf8')).join('\n');
+  const missing = I.CLUSTERS.flatMap(c => c.ids).filter(i => typeof i === 'string' && !html.includes(`id="${i}"`) && !uiSrc.includes(`id="${i}"`) && !uiSrc.includes(`'${i}'`));
+  ok('★★ 例外表寫的代號在主頁面或視窗程式裡都找得到（⛔ 打錯字）', missing.length === 0, missing.join(' '));
+  // main.js 刷新按鈕那一段：「編輯」那一大組裡照特別條件藏的，例外表都有寫
+  const mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  const cond = {};
+  for (const m of mn.matchAll(/\$\('(\w+)'\)\.hidden = (!?[^;]+);/g)) cond[m[1]] = m[2];
+  for (const m of mn.matchAll(/for \(const id of \[([^\]]+)\]\) \$\(id\)\.hidden = ([^;]+);/g)) for (const i of m[1].match(/'(\w+)'/g).map(s => s.slice(1, -1))) cond[i] = m[2];
+  const g = html.slice(html.indexOf('id="gEdit"'), html.indexOf('id="gNormal"'));
+  const gIds = new Set([...g.matchAll(/<(?:button|select|input)\b[^>]*\bid="([^"]+)"/g)].map(m => m[1]));
+  const PLAIN = ['!sel.penMode', '!sel.knifeMode', '!curveOn', '!sel.mateMode'];
+  const special = Object.keys(cond).filter(i => gIds.has(i) && !PLAIN.includes(cond[i].trim()) && !/Lbl$/.test(i));
+  const noCl = special.filter(i => !I.CLUSTERS.some(c => c.ids.some(x => (x instanceof RegExp ? x.test(i) : x === i))));
+  ok('★★★ 讀程式守著：「編輯」那一大組裡照特別條件才出現的（選了一條邊、只選面、曲線刀具畫好…），例外表都寫了前提',
+    special.length > 60 && noCl.length === 0, noCl.map(i => i + '←' + cond[i]).join('；'));
+
+  // ── 假網頁（同 a 輪那一節）──
+  const matchOne = (el, s) => { s = s.trim(); if (s === '[hidden]') return !!el.hidden; if (s === '[id]') return !!el.id; if (s === '[title]') return !!el.title; if (s.startsWith('#')) return el.id === s.slice(1); if (s.startsWith('.')) return el.cls.includes(s.slice(1)); return el.tagName.toLowerCase() === s.toLowerCase(); };
+  const matches = (el, sel) => sel.split(',').some(s => { const parts = s.trim().split(/\s+/); if (parts.length === 1) return matchOne(el, parts[0]); if (!matchOne(el, parts[1])) return false; for (let p = el.parentElement; p; p = p.parentElement) if (matchOne(p, parts[0])) return true; return false; });
+  function E(tag, o = {}, kids = []) {
+    const el = { tagName: tag.toUpperCase(), id: o.id || '', cls: o.cls || [], title: o.title || '', type: o.type || '', hidden: !!o.hidden, disabled: !!o.disabled, dataset: o.k ? { k: o.k } : {}, placeholder: '',
+      _text: o.text || '', children: kids, parentElement: null, labels: [], options: (o.options || []).map(t => ({ text: t })) };
+    for (const c of kids) c.parentElement = el;
+    el.classList = { contains: c => el.cls.includes(c) };
+    Object.defineProperty(el, 'textContent', { get() { return el._text + el.children.map(c => c.textContent).join(''); } });
+    Object.defineProperty(el, 'previousElementSibling', { get() { const p = el.parentElement; if (!p) return null; const i = p.children.indexOf(el); return i > 0 ? p.children[i - 1] : null; } });
+    Object.defineProperty(el, 'offsetParent', { get() { for (let p = el; p; p = p.parentElement) if (p.hidden) return null; return {}; } });
+    el.matches = sel => matches(el, sel);
+    el.closest = sel => { for (let p = el; p; p = p.parentElement) if (matches(p, sel)) return p; return null; };
+    const all = () => { const out = []; const walk = n => { for (const c of n.children) { out.push(c); walk(c); } }; walk(el); return out; };
+    el.querySelectorAll = sel => all().filter(x => matches(x, sel));
+    el.querySelector = sel => el.querySelectorAll(sel)[0] || null;
+    el.contains = x => x === el || all().includes(x);
+    el.getAttribute = () => null;
+    return el;
+  }
+  const vec = sub => [E('div', { cls: ['sub'], text: sub }), E('div', { cls: ['row'], title: sub + '說明' }, [E('div', {}, [E('span', { text: 'X' }), E('input', { type: 'number' })]), E('div', {}, [E('span', { text: 'Y' }), E('input', { type: 'number' })])])];
+  const win = E('div', { cls: ['uwWin'], id: 'sliceWin' }, [E('div', { cls: ['uwHead'] }, [E('b', { text: '剖面分切' })]), E('button', { id: 'slClose', text: '關閉', title: '關閉視窗' })]);
+  const root = E('body', {}, [
+    E('div', { cls: ['grp'], id: 'gEdit' }, [E('span', { cls: ['lbl'], text: '編輯' }), E('span', { cls: ['lbl'], text: 'X' }), E('input', { id: 'penX', type: 'number', hidden: true }), E('button', { id: 'loopCut', text: '環切', hidden: true })]),
+    E('div', { id: 'pForm' }, [...vec('位置 cm'), ...vec('旋轉 度'), ...vec('縮放 倍')]),
+    E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '檔案' }), E('button', { id: 'save', text: '存檔', title: '存成檔案' })]),
+    win
+  ]);
+  const doc0 = globalThis.document; globalThis.document = root;
+  let R = {};
+  try {
+    R.x = C.resolve('X'); R.pos = C.resolve({ 在哪: '位置', 字: 'X' }); R.key = C.resolve('物件面板：旋轉 度｜Y'); R.pen = C.resolve({ 代號: 'penX' });
+    R.none = C.resolve('沒這個'); R.btn = C.resolve('X', root, el => el.tagName === 'BUTTON'); R.out = C.resolve('save', win); R.inWin = C.resolve('關閉', win);
+    R.hint = C.hiddenHint('環切'); R.list = C.collect(root);
+  } finally { globalThis.document = doc0; }
+  ok('★★★ 只給字、看得到的字一樣有好幾個 ⇒ 不猜，回那幾個地方（藏著的鋼筆 X 不算）—— a 輪線上先驗：只給「X」框到「寬 X」',
+    R.x && R.x.好幾個 && R.x.好幾個.length === 3 && R.x.好幾個.map(x => x.在哪).join() === '物件面板：位置 cm,物件面板：旋轉 度,物件面板：縮放 倍', JSON.stringify(R.x && (R.x.好幾個 || []).map(x => x.在哪)));
+  ok('★★★ 給「在哪＋字」或代號 ⇒ 就是那一格；給的是藏著的 ⇒ 講要先做什麼（地圖的前提）',
+    R.pos && R.pos.el && R.pos.entry.在哪 === '物件面板：位置 cm' && R.key && R.key.entry && R.key.entry.代號 === '物件面板：旋轉 度｜Y'
+    && R.pen && R.pen.藏著 && R.pen.藏著.前提 === '按左邊「鋼筆」' && /要先：按左邊「鋼筆」/.test(C.resolveWhy({ 代號: 'penX' }, R.pen)));
+  ok('★★ 找不到 ⇒ null（照舊的找法）；只要按鈕 ⇒ 格子不算；範圍外面的 ⇒「在外面」；範圍裡只有一個 ⇒ 就是它；藏著的字一樣 ⇒ 講前提',
+    R.none === null && R.btn === null && R.out && R.out.在外面 && R.inWin && R.inWin.el && R.inWin.el.id === 'slClose' && /環切」現在藏著 —— 要先：拉點線面裡只選一條邊/.test(R.hint),
+    JSON.stringify([R.none, R.btn && Object.keys(R.btn), !!(R.out && R.out.在外面), R.hint]));
+  ok('★★ 地圖每一筆多了前提、規格、核對；說明照外面那一排的（物件面板 X 那一排）；⛔ 帶元素出去', R.list.every(x => 'el' in x === false && typeof x.前提 === 'string')
+    && R.list.find(x => x.代號 === 'save').規格.startsWith('沒有專門的規格') && R.list.find(x => x.代號 === '物件面板：位置 cm｜X').說明 === '位置 cm說明'
+    && R.list.find(x => x.代號 === 'loopCut').前提 === '拉點線面裡只選一條邊');
+
+  // ── 核對 ──
+  const a = { 文件: { 物件數: 1 }, 物件: [{ 名稱: '方塊 1', 外框cm: { 寬X: 60 } }], 最近的提示: 'x' };
+  const b = { 文件: { 物件數: 2 }, 物件: [{ 名稱: '方塊 0', 外框cm: { 寬X: 10 } }, { 名稱: '方塊 1', 外框cm: { 寬X: 80 } }], 最近的提示: 'y' };
+  const d = C.diffLook(a, b);
+  ok('★★★ 前後比「看」：物件照名字對（前面多一個也不會整串錯位）、上面那行提示另外講', d.includes('文件.物件數：1 → 2') && d.includes('物件[方塊 1].外框cm.寬X：60 → 80')
+    && d.includes('物件[方塊 0].外框cm.寬X：（沒有） → 10') && !d.some(x => x.startsWith('最近的提示')) && d.length === 4, JSON.stringify(d));
+  let cur = a; const chk = C.makeCheck(() => cur);
+  const k0 = chk(); cur = b; const k1 = chk(); const k2 = chk();
+  ok('★★ AI.核對()：第一次只記下；第二次講改到哪幾欄；沒變 ⇒ 講設定類的看按鈕亮不亮', k0.記下了 === true && k1.共 === 4 && k1.提示 === 'y' && k2.共 === 0 && /按鈕亮不亮/.test(k2.沒變));
+
+  // ── 讀程式守著 ──
+  const as = readFileSync(join(here, '../js/ai/assist.js'), 'utf8'), dj = readFileSync(join(here, '../js/ai/do.js'), 'utf8'), tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8');
+  ok('★★ 讀程式守著：指給你看、按、填、選、勾都先照地圖指定（resolve），字一樣有好幾個就回那幾個地方；AI.核對 掛上',
+    /const r = resolve\(q\);[\s\S]{0,200}resolveWhy\(q, r\)/.test(as) && /核對: makeCheck\(look\)/.test(as)
+    && /const r = resolve\(q, w \|\| document, accept\);/.test(dj) && (dj.match(/find\(名字, '[^']+', is(Input|Select|Check)\)/g) || []).length === 3 && /find\(字, 'button', isBtn\)/.test(dj));
+  ok('★★ 讀程式守著：物件面板一整排都看得到說明（名字＋格子）；旋轉、縮放平常的說明放回去', /if \(hint\) l\.title = r\.title = hint;/.test(tb)
+    && /\$\(id\)\.title = \$\(id\)\.dataset\.tip \|\| '';/.test(mn) && /id="mRot" title="[^"]+" data-tip=/.test(html));
+  // 主頁面每一顆（去掉註解掉的）都有說明；沒寫死的那兩顆（復原、重做）是程式跟著狀態寫的
+  const noTip = [...html.matchAll(/<(button|select|input|textarea)\b([^>]*)>/g)].filter(m => !/type="(hidden|file)"/.test(m[2]) && !/\btitle=/.test(m[2]))
+    .map(m => (m[2].match(/\bid="([^"]+)"/) || [])[1] || '?').filter(i => !mn.includes(`$('${i}').title`));
+  ok('★★★ 主頁面每一顆按鈕、格子、下拉都有滑鼠停留說明（沒寫死的要是程式跟著狀態寫的）', noTip.length === 0, noTip.join(' '));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

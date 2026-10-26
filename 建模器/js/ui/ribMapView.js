@@ -69,8 +69,8 @@ export class RibMapView {
         <button class="mini" data-k="suggest" title="程式試把有掉下來、卡不牢的肋往左右挪 0.5、1 cm，比較好才留 —— 結果放在圖上，還可以再改。大的模型要算十幾秒">幫我挪有問題的肋</button>
         <span class="lbl" data-k="hint"></span>
         <span class="slrSel" data-k="selBox">
-          <span class="lbl" data-k="selName"></span><input type="number" data-k="pos" step="0.1" style="width:72px"><span class="lbl">cm</span>
-          <button class="mini" data-k="del">刪</button>
+          <span class="lbl" data-k="selName"></span><input type="number" data-k="pos" step="0.1" style="width:72px" title="選到的肋的位置（cm）；改了會重新算"><span class="lbl">cm</span>
+          <button class="mini" data-k="del" title="刪掉選到的肋">刪</button>
         </span>
       </div>
       <div class="slrView" data-k="view"><canvas></canvas></div>

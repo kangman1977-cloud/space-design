@@ -24,6 +24,7 @@
 
 import * as THREE from 'three';
 import { PRIM_SPECS } from '../build/prim.js';
+import { resolve, resolveWhy, hiddenHint, nameElOf, qText, makeCheck } from './catalog.js';
 
 const KIND_NAME = { solid: '實體', sheet: '板件' };
 const TYPE_NAME = { mesh: '可編輯網格', bool: '布林', revolve: '旋轉成形' };
@@ -255,11 +256,20 @@ export function install(app, extra = {}) {
   const pointAt = (q, text) => {
     unpoint();
     ensureStyle();
-    const els = [...document.querySelectorAll('button, select, input, label')].filter(visible);
-    const i = findTarget(els.map(e => ({ text: e.textContent.trim(), title: e.title || '' })), q);
-    if (i < 0) return { 好了: false, 原因: `畫面上找不到「${q}」（可能藏在收起來的那一排、或要先打開某個視窗）` };
-    target = els[i];
-    field = controlOf(target);
+    // 🔴 功能地圖 b 輪 ④ 甲：先照地圖指定（代號、{在哪, 字}、只給字又只有一個）；字一樣有好幾個 ⇒ 不猜
+    const r = resolve(q);
+    if (r && !r.el) return { 好了: false, 原因: resolveWhy(q, r), ...(r.好幾個 ? { 地方: r.好幾個.map(x => ({ 在哪: x.在哪, 代號: x.代號 })) } : {}) };
+    if (r) {
+      const el = r.el, isField = el.tagName !== 'BUTTON' && el.type !== 'checkbox' && el.type !== 'radio';
+      target = isField ? nameElOf(el) || el : (el.tagName === 'BUTTON' ? el : el.closest('label') || el);
+      field = isField ? el : null;
+    } else {
+      const els = [...document.querySelectorAll('button, select, input, label')].filter(visible);
+      const i = findTarget(els.map(e => ({ text: e.textContent.trim(), title: e.title || '' })), q);
+      if (i < 0) return { 好了: false, 原因: hiddenHint(q) || `畫面上找不到「${qText(q)}」（可能藏在收起來的那一排、或要先打開某個視窗）` };
+      target = els[i];
+      field = controlOf(target);
+    }
     target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     ring = document.createElement('div');
     ring.className = 'aiRing';
@@ -281,7 +291,8 @@ export function install(app, extra = {}) {
       onChange = () => { pressed = { 改了: q, 值: field.value, 時間: new Date().toLocaleTimeString() }; unpoint(); };
       field.addEventListener('change', onChange, true);
     } else target.addEventListener('click', onClick, true);
-    return { 好了: true, 框住: (target.textContent.trim().slice(0, 30) || (target.title || '').slice(0, 30)) + (field ? '＋旁邊那一格' : '') };
+    const where = r ? r.entry.在哪 + '：' : '';
+    return { 好了: true, 框住: where + ((target.textContent.trim().slice(0, 30) || (target.title || '').slice(0, 30)) + (field && field !== target ? '＋旁邊那一格' : '')) };
   };
 
   const pointObj = (name, text) => {
@@ -309,6 +320,7 @@ export function install(app, extra = {}) {
     指物件: pointObj,
     收掉: () => { unpoint(); return { 好了: true }; },
     按了沒: () => pressed,
+    核對: makeCheck(look),                       // 功能地圖 b 輪 ② 甲：跟上一次比改到什麼（catalog.js）
     ...extra
   });
 }

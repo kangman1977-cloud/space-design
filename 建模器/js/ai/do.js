@@ -27,6 +27,7 @@
  */
 
 import { findTarget, controlOf, lookState, lookText, readWindows, toastWords, readPanel } from './assist.js';
+import { resolve, resolveWhy, hiddenHint, qText } from './catalog.js';
 
 /** 會丟東西或改到 kang 電腦上的（按鈕上的字）*/
 export const ASK_BUTTONS = [/^新建$/, /^讀檔$/, /^存檔$/, /^匯入/, /^匯出/, /^存[ 試]/, /^列印$/, /^下載/];
@@ -70,19 +71,32 @@ export function install(app) {
     ai++;
     try { return await fn(...args); } finally { ai--; }
   };
-  /** 照字找：先找滑鼠點得到的（最上面那個視窗裡）；找到的在後面被蓋住 ⇒ 講出來 */
-  const find = (q, sel) => {
+  /**
+   * 照字找：先找滑鼠點得到的（最上面那個視窗裡）；找到的在後面被蓋住 ⇒ 講出來。
+   * 🔴 功能地圖 b 輪 ④ 甲：先照地圖指定（代號、{在哪, 字}、只給字又只有一個 ⇒ 直接是那一格 `direct`）；
+   * 字一樣有好幾個 ⇒ 不猜、回有哪幾個地方。`accept` ＝ 這個指令要的那一種（按 ⇒ 按鈕…）。
+   */
+  const find = (q, sel, accept) => {
+    const w = topWin();
+    const r = resolve(q, w || document, accept);
+    if (r && r.el) return { el: r.el, direct: true };
+    if (r && r.在外面) return { el: null, why: `「${qText(q)}」在後面，被「${winName(w)}」視窗蓋住了（滑鼠也點不到）—— 先關掉那個視窗` };
+    if (r) return { el: null, why: resolveWhy(q, r), ...(r.好幾個 ? { 地方: r.好幾個.map(x => ({ 在哪: x.在哪, 代號: x.代號 })) } : {}) };
+    if (q && typeof q === 'object') return { el: null, why: `找不到「${qText(q)}」` };
     const pick = root => {
       const els = [...root.querySelectorAll(sel)].filter(visible);
       const i = findTarget(els.map(e => ({ text: e.textContent.trim(), title: e.title || '' })), q);
       return i < 0 ? null : els[i];
     };
-    const w = topWin();
     const el = pick(w || document);
-    if (el || !w) return { el };
-    const behind = pick(document);
-    return { el: null, why: behind ? `「${q}」在後面，被「${winName(w)}」視窗蓋住了（滑鼠也點不到）—— 先關掉那個視窗` : null };
+    if (el) return { el };
+    const behind = w ? pick(document) : null;
+    return { el: null, why: behind ? `「${q}」在後面，被「${winName(w)}」視窗蓋住了（滑鼠也點不到）—— 先關掉那個視窗` : hiddenHint(q, accept) || null };
   };
+  const isBtn = el => el.tagName === 'BUTTON';
+  const isInput = el => el.tagName === 'INPUT' && el.type !== 'checkbox' && el.type !== 'radio';
+  const isSelect = el => el.tagName === 'SELECT';
+  const isCheck = el => el.tagName === 'INPUT' && el.type === 'checkbox';
   /** 名字旁邊那一格：label 綁的、或同一排排在名字後面第一個看得到的（`.lbl` 那種 span 也算）*/
   const fieldOf = (lab, tags) => {
     if (!lab) return null;
@@ -122,8 +136,8 @@ export function install(app) {
   });
 
   const 按 = act(async (字, opt = {}) => {
-    const { el, why } = find(字, 'button');
-    if (!el) return { 好了: false, 原因: why || `畫面上找不到「${字}」這一顆（可能要先打開某個視窗、或先選物件）` };
+    const { el, why, 地方 } = find(字, 'button', isBtn);
+    if (!el) return { 好了: false, 原因: why || `畫面上找不到「${qText(字)}」這一顆（可能要先打開某個視窗、或先選物件）`, ...(地方 ? { 地方 } : {}) };
     const t = el.textContent.trim();
     if (needAsk(t) && !opt.kang說好) return { 好了: false, 要先問: `「${t}」會丟東西或改到 kang 電腦上的檔 —— 先問 kang，說好再用 { kang說好: true }` };
     // 「確定嗎？」的取消／確定：act() 一開始就擋了（kang 說好才走得到這裡）
@@ -133,9 +147,10 @@ export function install(app) {
   }, { answer: true });
 
   const 填 = act(async (名字, 值, opt = {}) => {
-    const { el: lab, why } = find(名字, 'label, .lbl');
-    const c = fieldOf(lab, 'input');
-    if (!c || c.tagName !== 'INPUT') return { 好了: false, 原因: why || `找不到「${名字}」那一格` };
+    const { el: lab, why, direct, 地方 } = find(名字, 'label, .lbl', isInput);
+    const c = direct ? lab : fieldOf(lab, 'input');
+    名字 = qText(名字);
+    if (!c || c.tagName !== 'INPUT') return { 好了: false, 原因: why || `找不到「${名字}」那一格`, ...(地方 ? { 地方 } : {}) };
     const g = gate(c, 名字, opt);
     if (g) return g;
     if (c.disabled || c.readOnly) return { 好了: false, 原因: `「${名字}」那一格現在不能改${c.title ? '：' + c.title : ''}` };
@@ -145,9 +160,10 @@ export function install(app) {
   });
 
   const 選 = act(async (名字, 選項, opt = {}) => {
-    const { el: lab, why } = find(名字, 'label, .lbl');
-    const c = fieldOf(lab, 'select');
-    if (!c || c.tagName !== 'SELECT') return { 好了: false, 原因: why || `找不到「${名字}」那個下拉` };
+    const { el: lab, why, direct, 地方 } = find(名字, 'label, .lbl', isSelect);
+    const c = direct ? lab : fieldOf(lab, 'select');
+    名字 = qText(名字);
+    if (!c || c.tagName !== 'SELECT') return { 好了: false, 原因: why || `找不到「${名字}」那個下拉`, ...(地方 ? { 地方 } : {}) };
     const o = [...c.options].find(x => x.text === 選項 || x.value === 選項) || [...c.options].find(x => x.text.includes(選項));
     if (!o) return { 好了: false, 原因: `「${名字}」沒有「${選項}」這個選項（有：${[...c.options].map(x => x.text).join('／')}）` };
     const g = gate(c, 名字, opt);
@@ -159,12 +175,13 @@ export function install(app) {
   });
 
   const 勾 = act(async (名字, 開 = true, opt = {}) => {
-    const { el: lab, why } = find(名字, 'label');
+    const { el: lab, why, direct, 地方 } = find(名字, 'label', isCheck);
+    名字 = qText(名字);
     /** 勾選格包在名字裡／名字綁的／⚠ 跟名字並排（物件面板「平滑細分」就是這樣，本機抓到）⇒ 同一排名字後面第一個 */
-    const row = lab && lab.parentElement;
-    const cb = lab && (lab.querySelector('input[type=checkbox]') || (lab.control && lab.control.type === 'checkbox' ? lab.control : null)
+    const row = lab && !direct && lab.parentElement;
+    const cb = direct ? lab : lab && (lab.querySelector('input[type=checkbox]') || (lab.control && lab.control.type === 'checkbox' ? lab.control : null)
       || (row ? [...row.querySelectorAll('input[type=checkbox]')].find(x => visible(x) && (lab.compareDocumentPosition(x) & 4)) : null));
-    if (!cb) return { 好了: false, 原因: why || `找不到「${名字}」那個勾選格` };
+    if (!cb) return { 好了: false, 原因: why || `找不到「${名字}」那個勾選格`, ...(地方 ? { 地方 } : {}) };
     const g = gate(cb, 名字, opt);
     if (g) return g;
     if (cb.disabled) return { 好了: false, 原因: `「${名字}」現在不能改${cb.title ? '：' + cb.title : ''}` };

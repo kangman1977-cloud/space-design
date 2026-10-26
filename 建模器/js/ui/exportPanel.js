@@ -62,22 +62,22 @@ export class ExportPanel {
         <div class="uwHead">
           <b>3D 列印匯出</b>
           <span class="uwSum" id="exSum"></span>
-          <button class="mini" id="exClose">關閉</button>
+          <button class="mini" id="exClose" title="關閉：關掉這個視窗、回到 3D 畫面（設定會記住）。快速鍵 Esc">關閉</button>
         </div>
         <div class="uwBar">
           <span class="lbl">單位</span><select id="exUnit"></select>
-          <span class="lbl">格式</span><select id="exFmt">
+          <span class="lbl">格式</span><select id="exFmt" title="格式：二進位檔案小（建議）；ASCII 看得懂、除錯用；3MF 檔案裡寫了單位、每個物件有名字">
             <option value="binary">二進位（檔案小，建議）</option>
             <option value="ascii">ASCII（看得懂，除錯用）</option>
             <option value="3mf">3MF（檔案裡寫了單位、多個物件各有名字）</option>
           </select>
-          <span class="lbl">多個物件</span><select id="exGroup">
+          <span class="lbl">多個物件</span><select id="exGroup" title="多個物件：合成一個檔（保持相對位置），或每個物件一個檔">
             <option value="one">合成一個檔，保持相對位置</option>
             <option value="each">每個物件一個檔</option>
           </select>
           <label class="uwCk"><input type="checkbox" id="exAsk"> 指定存放位置</label>
           <span class="sp"></span>
-          <button id="exGo">匯出 STL</button>
+          <button id="exGo" title="匯出：照上面的格式與設定存檔">匯出 STL</button>
         </div>
         <div class="uwBar">
           <span class="lbl">最薄的牆 mm</span>

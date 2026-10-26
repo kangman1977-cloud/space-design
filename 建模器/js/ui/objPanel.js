@@ -30,17 +30,17 @@ export class ObjPanel {
         <div class="uwHead">
           <b>匯出 OBJ</b>
           <span class="uwSum" id="obSum"></span>
-          <button class="mini" id="obClose">關閉</button>
+          <button class="mini" id="obClose" title="關閉：關掉這個視窗、回到 3D 畫面（設定會記住）">關閉</button>
         </div>
         <div class="uwBar">
           <span class="lbl">單位</span><select id="obUnit"></select>
-          <span class="lbl">面</span><select id="obTri">
+          <span class="lbl">面</span><select id="obTri" title="面：多邊形照原樣（建議），或全部拆成三角形（給只認三角形的軟體）">
             <option value="0">多邊形照原樣（建議）</option>
             <option value="1">全部拆成三角形（給只認三角形的軟體）</option>
           </select>
-          <label class="uwCk"><input type="checkbox" id="obAsk"> 指定存放位置</label>
+          <label class="uwCk" title="存檔時跳「另存新檔」讓你選資料夾"><input type="checkbox" id="obAsk"> 指定存放位置</label>
           <span class="sp"></span>
-          <button id="obGo">存 OBJ</button>
+          <button id="obGo" title="存 OBJ：照上面的單位與面存成 OBJ 檔">存 OBJ</button>
         </div>
         <div class="uwBody" id="obBody"></div>
       </div>`;

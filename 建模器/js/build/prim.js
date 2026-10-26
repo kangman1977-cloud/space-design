@@ -196,70 +196,70 @@ export const PRIM_SPECS = {
   box: {
     label: '方塊',
     fields: [
-      { key: 'w', label: '寬 X', min: 0.1, step: 1 },
-      { key: 'h', label: '高 Y', min: 0.1, step: 1 },
-      { key: 'd', label: '深 Z', min: 0.1, step: 1 }
+      { key: 'w', label: '寬 X', min: 0.1, step: 1, hint: '寬（cm，左右 X 方向）' },
+      { key: 'h', label: '高 Y', min: 0.1, step: 1, hint: '高（cm，上下 Y 方向）' },
+      { key: 'd', label: '深 Z', min: 0.1, step: 1, hint: '深（cm，前後 Z 方向）' }
     ]
   },
   cylinder: {
     label: '圓柱',
     fields: [
-      { key: 'r',   label: '半徑', min: 0.1, step: 1 },
-      { key: 'h',   label: '高',   min: 0.1, step: 1 },
-      { key: 'seg', label: '分段', min: 3, max: 128, step: 1, int: true }
+      { key: 'r',   label: '半徑', min: 0.1, step: 1, hint: '半徑（cm）：直徑的一半' },
+      { key: 'h',   label: '高',   min: 0.1, step: 1, hint: '高（cm）' },
+      { key: 'seg', label: '分段', min: 3, max: 128, step: 1, int: true, hint: '一圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ]
   },
   cone: {
     label: '錐體',
     fields: [
-      { key: 'rTop',    label: '上半徑', min: 0, step: 1 },
-      { key: 'rBottom', label: '下半徑', min: 0, step: 1 },
-      { key: 'h',       label: '高',     min: 0.1, step: 1 },
-      { key: 'seg',     label: '分段',   min: 3, max: 128, step: 1, int: true }
+      { key: 'rTop',    label: '上半徑', min: 0, step: 1, hint: '上面的半徑（cm）：0 ＝ 尖頂' },
+      { key: 'rBottom', label: '下半徑', min: 0, step: 1, hint: '底面的半徑（cm）' },
+      { key: 'h',       label: '高',     min: 0.1, step: 1, hint: '高（cm）' },
+      { key: 'seg',     label: '分段',   min: 3, max: 128, step: 1, int: true, hint: '一圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ]
   },
   sphere: {
     label: '球',
     fields: [
-      { key: 'r',    label: '半徑', min: 0.1, step: 1 },
-      { key: 'segW', label: '經線', min: 3, max: 128, step: 1, int: true },
-      { key: 'segH', label: '緯線', min: 2, max: 64,  step: 1, int: true }
+      { key: 'r',    label: '半徑', min: 0.1, step: 1, hint: '半徑（cm）' },
+      { key: 'segW', label: '經線', min: 3, max: 128, step: 1, int: true, hint: '繞一圈切成幾段（經線）：分段越多越圓、面也越多（展開、切塊都比較慢）' },
+      { key: 'segH', label: '緯線', min: 2, max: 64,  step: 1, int: true, hint: '從上到下切成幾段（緯線）：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ]
   },
   prism: {
     label: '角柱',
     fields: [
-      { key: 'sides', label: '邊數',   min: 3, max: 64, step: 1, int: true },
-      { key: 'r',     label: '外接圓', min: 0.1, step: 1 },
-      { key: 'h',     label: '高',     min: 0.1, step: 1 }
+      { key: 'sides', label: '邊數',   min: 3, max: 64, step: 1, int: true, hint: '底面是幾邊形（3 ＝ 三角柱、6 ＝ 六角柱）' },
+      { key: 'r',     label: '外接圓', min: 0.1, step: 1, hint: '外接圓半徑（cm）：中心到每一個角的距離' },
+      { key: 'h',     label: '高',     min: 0.1, step: 1, hint: '高（cm）' }
     ]
   },
   tube: {
     label: '管',
     fields: [
-      { key: 'rOuter', label: '外半徑', min: 0.1, step: 1 },
-      { key: 'rInner', label: '內半徑', min: 0, step: 1 },
-      { key: 'h',      label: '高',     min: 0.1, step: 1 },
-      { key: 'seg',    label: '分段',   min: 3, max: 128, step: 1, int: true }
+      { key: 'rOuter', label: '外半徑', min: 0.1, step: 1, hint: '外半徑（cm）' },
+      { key: 'rInner', label: '內半徑', min: 0, step: 1, hint: '內半徑（cm）：一定要比外半徑小；管壁厚 ＝ 外半徑 − 內半徑' },
+      { key: 'h',      label: '高',     min: 0.1, step: 1, hint: '高（cm）' },
+      { key: 'seg',    label: '分段',   min: 3, max: 128, step: 1, int: true, hint: '一圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ],
     noteOf: src => innerTooBig(src, PRIM_DEFAULTS.tube, '管壁')
   },
   roundBox: {
     label: '圓角方塊',
     fields: [
-      { key: 'w',    label: '寬 X',     min: 0.1, step: 1 },
-      { key: 'h',    label: '高 Y',     min: 0.1, step: 1 },
-      { key: 'd',    label: '深 Z',     min: 0.1, step: 1 },
-      { key: 'r',    label: '圓角半徑', min: 0, step: 0.5 },
-      { key: 'segR', label: '圓角分段', min: 1, max: 32, step: 1, int: true }
+      { key: 'w',    label: '寬 X',     min: 0.1, step: 1, hint: '寬（cm，左右 X 方向）' },
+      { key: 'h',    label: '高 Y',     min: 0.1, step: 1, hint: '高（cm，上下 Y 方向）' },
+      { key: 'd',    label: '深 Z',     min: 0.1, step: 1, hint: '深（cm，前後 Z 方向）' },
+      { key: 'r',    label: '圓角半徑', min: 0, step: 0.5, hint: '圓角半徑（cm）：0 ＝ 直角' },
+      { key: 'segR', label: '圓角分段', min: 1, max: 32, step: 1, int: true, hint: '每個圓角切成幾段：越多越圓' }
     ]
   },
   plate: {
     label: '平板',
     sheet: true,
     fields: [
-      { key: 'w', label: '寬 X', min: 0.1, step: 1 },
-      { key: 'd', label: '深 Z', min: 0.1, step: 1 }
+      { key: 'w', label: '寬 X', min: 0.1, step: 1, hint: '寬（cm，左右 X 方向）' },
+      { key: 'd', label: '深 Z', min: 0.1, step: 1, hint: '深（cm，前後 Z 方向）；厚度在上面的「板厚」' }
     ]
   },
   bend: {
@@ -267,8 +267,8 @@ export const PRIM_SPECS = {
     sheet: true,
     /** bends（折彎序列）是動態長度的，面板另外處理，不放在 fields 裡 */
     fields: [
-      { key: 'w',      label: '板寬 Z',   min: 0.1, step: 1 },
-      { key: 'first',  label: '第一段長', min: 0.1, step: 1 },
+      { key: 'w',      label: '板寬 Z',   min: 0.1, step: 1, hint: '板寬（cm，前後 Z 方向）' },
+      { key: 'first',  label: '第一段長', min: 0.1, step: 1, hint: '第一段直線的長度（cm）；之後每一段在下面的「折彎序列」加' },
       { key: 'arcSeg', label: '圓弧分段', min: 2, max: 24, step: 1, int: true,
         hint: '折彎圓弧切成幾段。至少 2 段 —— 只切 1 段的話，網格上跟一個倒角'
             + '長得完全一樣，展開時分不出是圓弧還是倒角，長度會少算' },
@@ -289,11 +289,11 @@ export const PRIM_SPECS = {
   torus: {
     label: '圓環',
     fields: [
-      { key: 'rOuter', label: '外半徑',     min: 0.1, step: 1 },
+      { key: 'rOuter', label: '外半徑',     min: 0.1, step: 1, hint: '外半徑（cm）：中心到最外圈' },
       { key: 'rInner', label: '內半徑',     min: 0.1, step: 1,
         hint: '一定要比外半徑小。管粗 ＝ 外半徑 − 內半徑' },
-      { key: 'seg',    label: '繞一圈分段', min: 3, max: 128, step: 1, int: true },
-      { key: 'segT',   label: '管分段',     min: 3, max: 64,  step: 1, int: true }
+      { key: 'seg',    label: '繞一圈分段', min: 3, max: 128, step: 1, int: true, hint: '繞大圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' },
+      { key: 'segT',   label: '管分段',     min: 3, max: 64,  step: 1, int: true, hint: '管子一圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ],
     noteOf: src => innerTooBig(src, PRIM_DEFAULTS.torus, '環')
   },
@@ -301,9 +301,9 @@ export const PRIM_SPECS = {
   wedge: {
     label: '楔形',
     fields: [
-      { key: 'w', label: '寬 X', min: 0.1, step: 1 },
-      { key: 'h', label: '高 Y', min: 0.1, step: 1 },
-      { key: 'd', label: '深 Z', min: 0.1, step: 1 }
+      { key: 'w', label: '寬 X', min: 0.1, step: 1, hint: '寬（cm，左右 X 方向）' },
+      { key: 'h', label: '高 Y', min: 0.1, step: 1, hint: '高（cm，上下 Y 方向）' },
+      { key: 'd', label: '深 Z', min: 0.1, step: 1, hint: '深（cm，前後 Z 方向）' }
     ]
   },
   /**
@@ -313,9 +313,9 @@ export const PRIM_SPECS = {
   dome: {
     label: '半球',
     fields: [
-      { key: 'r',    label: '半徑',       min: 0.1, step: 1 },
-      { key: 'seg',  label: '繞一圈分段', min: 3, max: 128, step: 1, int: true },
-      { key: 'segH', label: '高度分段',   min: 1, max: 64,  step: 1, int: true }
+      { key: 'r',    label: '半徑',       min: 0.1, step: 1, hint: '半徑（cm）' },
+      { key: 'seg',  label: '繞一圈分段', min: 3, max: 128, step: 1, int: true, hint: '繞一圈切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' },
+      { key: 'segH', label: '高度分段',   min: 1, max: 64,  step: 1, int: true, hint: '從底到頂切成幾段：分段越多越圓、面也越多（展開、切塊都比較慢）' }
     ]
   },
   /**
@@ -325,10 +325,10 @@ export const PRIM_SPECS = {
   stairs: {
     label: '階梯',
     fields: [
-      { key: 'steps', label: '階數',   min: 1, max: 100, step: 1, int: true },
-      { key: 'stepH', label: '每階高', min: 0.1, step: 1 },
-      { key: 'stepD', label: '每階深', min: 0.1, step: 1 },
-      { key: 'w',     label: '寬',     min: 0.1, step: 1 }
+      { key: 'steps', label: '階數',   min: 1, max: 100, step: 1, int: true, hint: '一共幾階' },
+      { key: 'stepH', label: '每階高', min: 0.1, step: 1, hint: '每一階多高（cm）' },
+      { key: 'stepD', label: '每階深', min: 0.1, step: 1, hint: '每一階多深（cm）' },
+      { key: 'w',     label: '寬',     min: 0.1, step: 1, hint: '階梯多寬（cm）' }
     ]
   },
   /**

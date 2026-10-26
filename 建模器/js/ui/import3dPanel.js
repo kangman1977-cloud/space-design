@@ -65,10 +65,10 @@ export class Import3DPanel {
         <div class="uwHead">
           <b>匯入 3D 模型</b>
           <span class="uwSum" id="i3Sum"></span>
-          <button class="mini" id="i3Close">關閉</button>
+          <button class="mini" id="i3Close" title="關閉：不匯入，關掉這個視窗">關閉</button>
         </div>
         <div class="uwBar">
-          <button id="i3Pick">選檔案（.stl／.obj／.glb）…</button>
+          <button id="i3Pick" title="選檔案：從電腦挑一個 STL、OBJ 或 GLB 模型（先預覽，還不會放進畫面）">選檔案（.stl／.obj／.glb）…</button>
           <span class="lbl" id="i3File">還沒選檔案</span>
           <span class="sp"></span>
           <span class="lbl">單位</span>
@@ -77,7 +77,7 @@ export class Import3DPanel {
           <select id="i3Up"></select>
           <label class="uwCk"><input type="checkbox" id="i3Split"> 一個部分一個物件</label>
           <span class="sp"></span>
-          <button id="i3Go" disabled>匯入成網格物件</button>
+          <button id="i3Go" disabled title="匯入成網格物件：照上面的選擇放進畫面（先選檔才能按）">匯入成網格物件</button>
         </div>
         <div class="uwBody" id="i3Body"></div>
       </div>

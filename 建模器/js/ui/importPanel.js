@@ -54,10 +54,10 @@ export class ImportPanel {
         <div class="uwHead">
           <b>匯入線稿</b>
           <span class="uwSum" id="imSum"></span>
-          <button class="mini" id="imClose">關閉</button>
+          <button class="mini" id="imClose" title="關閉：不匯入，關掉這個視窗">關閉</button>
         </div>
         <div class="uwBar">
-          <button id="imPick">選 SVG 檔…</button>
+          <button id="imPick" title="選 SVG 檔：從電腦挑一個 Illustrator 存的 SVG 檔（先預覽，還不會放進畫面）">選 SVG 檔…</button>
           <span class="lbl" id="imFile">還沒選檔案</span>
           <span class="sp"></span>
           <span class="lbl">曲線精度 mm</span>
@@ -68,7 +68,7 @@ export class ImportPanel {
           <input type="number" id="imW" step="0.1" min="0.05" style="width:70px" hidden>
           <label class="uwCk"><input type="checkbox" id="imSplit"> 一個形狀一個物件</label>
           <span class="sp"></span>
-          <button id="imGo" disabled>匯入成 3D 物件</button>
+          <button id="imGo" disabled title="匯入成 3D 物件：照上面的設定把線稿擠出來放進畫面（先選檔才能按）">匯入成 3D 物件</button>
         </div>
         <div class="uwBody" id="imBody"></div>
       </div>

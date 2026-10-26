@@ -68,11 +68,11 @@ export class PegMapView {
         <button class="mini" data-k="mode"></button>
         <span class="lbl" data-k="hint"></span>
         <span class="slmSel" data-k="selBox">
-          <span class="lbl">選到的孔　x</span><input type="number" data-k="x" step="0.1" style="width:64px">
-          <span class="lbl">y</span><input type="number" data-k="y" step="0.1" style="width:64px">
-          <span class="lbl">穿過第</span><input type="number" data-k="from" step="1" min="1" style="width:52px">
-          <span class="lbl">～</span><input type="number" data-k="to" step="1" min="1" style="width:52px"><span class="lbl">片</span>
-          <button class="mini" data-k="del">刪</button>
+          <span class="lbl">選到的孔　x</span><input type="number" data-k="x" step="0.1" style="width:64px" title="選到的孔的位置 x（cm）">
+          <span class="lbl">y</span><input type="number" data-k="y" step="0.1" style="width:64px" title="選到的孔的位置 y（cm）">
+          <span class="lbl">穿過第</span><input type="number" data-k="from" step="1" min="1" style="width:52px" title="這個孔從第幾片穿到第幾片">
+          <span class="lbl">～</span><input type="number" data-k="to" step="1" min="1" style="width:52px" title="這個孔穿到第幾片"><span class="lbl">片</span>
+          <button class="mini" data-k="del" title="刪掉選到的孔">刪</button>
         </span>
       </div>
       <div class="slmView" data-k="view"><canvas></canvas></div>

@@ -88,10 +88,10 @@ export class BedCutPage {
       <div class="uwBar">
         <b>切成放得下的塊：${esc(this.s.obj.name)}</b>
         <span class="sp"></span>
-        <button class="mini" data-k="back">回到檢查表</button>
+        <button class="mini" data-k="back" title="回到檢查表：不切，回 3D 列印的檢查表">回到檢查表</button>
       </div>
       <div class="uwBar">
-        <span class="lbl">切法</span><select data-k="mode">
+        <span class="lbl">切法</span><select data-k="mode" title="切法：挑位置（插銷放得下、零碎少；面多要算一陣子），或平均切（快）">
           <option value="smart">挑位置（插銷放得下、零碎少；面多要算一陣子）</option>
           <option value="even">平均切（快）</option>
         </select>
@@ -117,7 +117,7 @@ export class BedCutPage {
         <span style="position:absolute;right:8px;bottom:6px;font-size:11px;color:#8b93a1;pointer-events:none">拉開來畫，每塊一個顏色　左鍵拖：轉　滾輪：拉近</span>
       </div>
       <div data-k="out"></div>
-      <div class="uwBar"><span class="sp"></span><button data-k="go">切開</button></div>`;
+      <div class="uwBar"><span class="sp"></span><button data-k="go" title="切開：照預覽把物件切成好幾塊、加上定位銷（可以復原）">切開</button></div>`;
     p.body.appendChild(el);
     this.el = el;
     const $ = k => el.querySelector(`[data-k="${k}"]`);
@@ -210,6 +210,7 @@ export class BedCutPage {
       s.cuts[a].forEach((c, i) => {
         const inp = document.createElement('input');
         inp.type = 'number'; inp.step = '1'; inp.style.width = '70px';
+        inp.title = '刀的位置（mm）：從外框那一頭算起；改了會重新放銷';
         inp.value = ((c - s.bb.min[a]) * 10).toFixed(1);
         inp.onchange = () => {
           const v = parseFloat(inp.value);

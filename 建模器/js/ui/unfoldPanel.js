@@ -65,19 +65,19 @@ export class UnfoldPanel {
         <div class="uwHead">
           <b>展開圖</b>
           <span class="uwSum" id="uwSum"></span>
-          <button class="mini" id="uwClose">關閉</button>
+          <button class="mini" id="uwClose" title="關閉：關掉這個視窗、回到 3D 畫面（設定會記住）。快速鍵 Esc">關閉</button>
         </div>
         <div class="uwBar">
-          <span class="lbl">材質</span><select id="uwMat"></select>
+          <span class="lbl">材質</span><select id="uwMat" title="材質：照材料決定展開的規則（例如帆布、紙模會多一列縫份／黏合片）；每一種的說明在選項上"></select>
           <span class="sp"></span>
           <span class="lbl">DXF 單位</span><select id="uwUnit"></select>
           <label class="uwCk"><input type="checkbox" id="uwAsk"> 指定存放位置</label>
           <label class="uwCk" title="一片上的折線全部一樣（同方向、同角度）時，圖上只畫線，角度寫成卡片上的一行。上折下折混在一起的那片照樣每道標字"><input type="checkbox" id="uwFold"> 相同的折線合成一行</label>
           <span class="sp"></span>
-          <button id="uwPrint">列印</button>
-          <button id="uwSvg">存 SVG</button>
-          <button id="uwDxf">存 DXF</button>
-          <button id="uwCsv">備料 CSV</button>
+          <button id="uwPrint" title="列印：把每一片（開著排版就是每一張板）送到印表機，A4 橫印">列印</button>
+          <button id="uwSvg" title="存 SVG：每一片的外框存成 SVG 檔（給雷射切割、Illustrator 用）；開著排版就一張板一個檔">存 SVG</button>
+          <button id="uwDxf" title="存 DXF：存成 DXF 檔（給雷射、CNC 用）；開著排版就一張板一個檔">存 DXF</button>
+          <button id="uwCsv" title="備料 CSV：把下面的備料明細存成 CSV 檔，Excel 打得開">備料 CSV</button>
         </div>
         <div class="uwBar">
           <span class="lbl">展開方式</span>
@@ -86,9 +86,9 @@ export class UnfoldPanel {
             <option value="dart">省道打版（容許變形）</option>
           </select>
           <span id="uwDartOpts" hidden>
-            <span class="lbl">這個材料最多能拉</span><input type="number" id="uwLimit" min="0" step="0.5" placeholder="不填" style="width:64px"><span class="lbl">%</span>
+            <span class="lbl">這個材料最多能拉</span><input type="number" id="uwLimit" title="這個材料最多能拉幾 %：填了之後，超過的那一片卡片會紅字；不填就不檢查" min="0" step="0.5" placeholder="不填" style="width:64px"><span class="lbl">%</span>
             <span class="lbl">開口畫成</span>
-            <select id="uwDartStyle">
+            <select id="uwDartStyle" title="開口畫成：剪掉的 V 形缺口，或只畫縫線（不剪）">
               <option value="cut">剪掉的 V 形缺口</option>
               <option value="sew">只畫縫線（不剪）</option>
             </select>

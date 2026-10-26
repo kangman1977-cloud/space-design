@@ -122,7 +122,7 @@ export class SlicePanel {
         <div class="uwHead">
           <b>剖面分切</b>
           <span class="uwSum" id="slSum"></span>
-          <button class="mini" id="slClose">關閉</button>
+          <button class="mini" id="slClose" title="關閉：關掉這個視窗、回到 3D 畫面（設定會記住）。快速鍵 Esc">關閉</button>
         </div>
         <div class="uwBar">
           <span class="lbl">做法</span><select id="slMethod"><option value="stack">疊層</option><option value="interlock">互卡（側面＋橫肋）</option></select>
@@ -146,9 +146,9 @@ export class SlicePanel {
           <span class="lbl">DXF 單位</span><select id="slUnit"></select>
           <label class="uwCk"><input type="checkbox" id="slAsk"> 指定存放位置</label>
           <span class="sp"></span>
-          <button id="slPrint">列印</button>
-          <button id="slSvg">存 SVG</button>
-          <button id="slDxf">存 DXF</button>
+          <button id="slPrint" title="列印：把每一片的切割圖送到印表機">列印</button>
+          <button id="slSvg" title="存 SVG：每一片的切割線存成 SVG 檔（給雷射切割、Illustrator 用）">存 SVG</button>
+          <button id="slDxf" title="存 DXF：每一片的切割線存成 DXF 檔（給雷射、CNC 用）">存 DXF</button>
         </div>
         <div class="uwBar" id="slILBar" title="互卡：正中間一片側面＋一排等間距的肋，交叉的地方各開一半的槽卡在一起（不用膠、不用串桿）">
           <span class="lbl">側面</span><select id="slILSpine"><option value="auto">自動（挑掉下來少的那邊）</option><option value="x">從 X 切</option><option value="z">從 Z 切</option></select><select id="slILSpineN"><option value="1">1 片</option><option value="2">2 片</option><option value="3">3 片</option></select>
@@ -642,7 +642,7 @@ export class SlicePanel {
             ? `　實際 ${got.length}` : ''}</span></td>
         <td>${info.n ? `${info.from} ~ ${info.to}` : '—'}</td>
         <td>${f(info.n * (+b.t || 0))}</td>
-        <td><button class="mini" ${this.opt.bands.length < 2 ? 'disabled' : ''}>刪</button></td>`;
+        <td><button class="mini" title="刪掉這一段（至少要留一段）" ${this.opt.bands.length < 2 ? 'disabled' : ''}>刪</button></td>`;
 
       const [tIn, nIn, hIn] = tr.querySelectorAll('input');
       tIn.title = '這一段用幾公分厚的板';
@@ -672,6 +672,7 @@ export class SlicePanel {
     const add = document.createElement('button');
     add.className = 'mini';
     add.textContent = '＋ 加一段';
+    add.title = '加一段：新的一段接手剩下的高度，原本最後那一段改成固定片數';
     add.style.marginTop = '6px';
     add.onclick = () => {
       const last = this.opt.bands[this.opt.bands.length - 1];

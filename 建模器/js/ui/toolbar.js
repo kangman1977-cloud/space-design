@@ -97,7 +97,7 @@ export class Panel {
         <div id="pForm" hidden></div>
       </section>
       <section id="pAna">
-        <h2>結構分析 <button id="anaRun" class="mini">重新計算</button></h2>
+        <h2>結構分析 <button id="anaRun" class="mini" title="重新計算：算選到的物件的面積、體積、重心（面多的物件要算一下，所以不會自動算）">重新計算</button></h2>
         <div id="anaBody" class="empty">選一個物件後按「重新計算」</div>
       </section>
       <!-- 干涉檢查（綜合評估 ④-20，2026-10-20）：跟程式版本一樣，不管有沒有選到物件都在 -->
@@ -123,7 +123,7 @@ export class Panel {
         「確認我現在跑的，是不是最新的那一版」。
       -->
       <section id="pVer">
-        <h2>程式版本 <button id="verGet" class="mini">抓最新版</button></h2>
+        <h2>程式版本 <button id="verGet" class="mini" title="抓最新版：跟網站上的程式比，有新版就換新、重新載入；剛上傳完想馬上看新版時用">抓最新版</button></h2>
         <div id="verBody" class="empty">按「抓最新版」<br><span>剛上傳完想馬上看新版時用</span></div>
       </section>`;
 
@@ -360,7 +360,7 @@ export class Panel {
       this._alignBox();
     }
 
-    this._rowText('名稱', obj.name, v => { obj.name = v; this._edit('改名稱'); });
+    this._rowText('名稱', obj.name, v => { obj.name = v; this._edit('改名稱'); }, '名稱：這個物件的名字（畫面上、各個視窗的卡片都用這個名字）');
 
     this._rowSelect(together('種類', all.length), obj.kind, [
       [KIND.SOLID, '實體 solid'],
@@ -611,7 +611,7 @@ export class Panel {
 
     // ── 位置 ──
     this.form.appendChild(head('位置 cm'));
-    this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'), false, pathEditing);
+    this._rowVec3(obj.pos, ['X', 'Y', 'Z'], () => this._edit('改位置'), false, pathEditing, '位置（cm）：物件原點的位置，Y 是高度（地板是 0）');
 
     /**
      * 🔴 **落地**（2026-10-09，kang 拍板做按鈕、⛔ 不做自動往上長 —— 理由在 `core/align.js` 的 `landPositions()`）。
@@ -758,11 +758,11 @@ export class Panel {
     }
 
     this.form.appendChild(head('旋轉 度'));
-    this._rowVec3(obj.rot, ['X', 'Y', 'Z'], () => this._edit('改旋轉'), true, pathEditing);
+    this._rowVec3(obj.rot, ['X', 'Y', 'Z'], () => this._edit('改旋轉'), true, pathEditing, '旋轉（度）：繞 X、Y、Z 軸各轉幾度');
 
     this.form.appendChild(head('縮放 倍'));
     this._rowVec3(obj.scale, ['X', 'Y', 'Z'], () => this._edit('改縮放'), false,
-      obj.lockScale || pathEditing);
+      obj.lockScale || pathEditing, '縮放（倍）：X、Y、Z 各放大幾倍，1 ＝ 原本的大小');
     /**
      * ④-12（2026-10-19，kang「同意你的安排與建議」）：**整體縮放打一個數字** —— 打 2 ⇒ 三個方向都**乘** 2
      * （比例照舊：原本 1 × 1.5 × 1 會變 2 × 3 × 2）。打完欄位回到 1（它是「再乘多少」，⛔ 是目前的大小）。
@@ -785,7 +785,7 @@ export class Panel {
     this._rowColor(together('顏色', all.length), obj.color, v => {
       for (const o of all) o.color = v;
       this._edit(all.length > 1 ? `改顏色（${all.length} 個）` : '改顏色');
-    });
+    }, '顏色：畫面上這個物件的顏色');
   }
 
   /**
@@ -1200,7 +1200,7 @@ export class Panel {
       h.name = name;
       this._edit('改案件名稱');
       if (this.app.toast) this.app.toast(`案件名稱：${name}　展開圖、剖面分切、DXF 的標題和存檔的檔名都會用它`);
-    });
+    }, '案件名稱：這一份的名字；展開圖、剖面分切、DXF 的標題和存檔的檔名都會用它');
     this.form.appendChild(note(`日期 ${h.date || '—'}（按「新建」時自動填今天）。展開圖、剖面分切、DXF 的標題印「案件：名稱　日期」`));
   }
 
@@ -1256,6 +1256,7 @@ export class Panel {
       for (const mode of [ALIGN.MIN, ALIGN.CENTER, ALIGN.MAX]) {
         const b = document.createElement('button');
         b.textContent = ALIGN_LABEL[ax][mode];
+        b.title = `${ALIGN_LABEL[ax][mode]}：選到的物件在 ${ax.toUpperCase()} 方向排齊（對到上面「對齊到」選的那一個）`;
         b.onclick = () => this._applyPositions(
           alignPositions(this.app.sel.objects, ax, mode, anchorIdx()),
           `對齊 ${ALIGN_LABEL[ax][mode]}${this.alignTo === 'active' ? `（到「${actName}」）` : ''}`);
@@ -2034,6 +2035,7 @@ export class Panel {
     const lab = document.createElement('label');
     lab.textContent = '運算方式';
     lab.title = '差集＝從第一個挖掉其餘的；聯集＝合成一個；交集＝只留重疊處';
+    opRow.title = lab.title;                      // 功能地圖 b 輪：下拉也看得到說明
     const sel = document.createElement('select');
     for (const v of [BOOL_OPS.SUBTRACT, BOOL_OPS.UNION, BOOL_OPS.INTERSECT]) {
       const o = document.createElement('option');
@@ -2475,14 +2477,14 @@ export class Panel {
     r.className = 'row';
     const l = document.createElement('label');
     l.textContent = label;
-    if (hint) l.title = hint;
+    if (hint) l.title = r.title = hint;           // 功能地圖 b 輪：整排（名字＋格子）都看得到說明
     r.appendChild(l);
     (this._target || this.form).appendChild(r);
     return r;
   }
 
-  _rowText(label, val, on) {
-    const r = this._row(label);
+  _rowText(label, val, on, hint) {
+    const r = this._row(label, hint);
     const i = document.createElement('input');
     i.type = 'text';
     i.value = val;
@@ -2514,9 +2516,10 @@ export class Panel {
     r.appendChild(i);
   }
 
-  _rowVec3(vec, labels, on, degrees = false, disabled = false) {
+  _rowVec3(vec, labels, on, degrees = false, disabled = false, hint = '') {
     const r = document.createElement('div');
     r.className = 'row vec';
+    if (hint) r.title = hint;
     for (const k of ['x', 'y', 'z']) {
       const wrap = document.createElement('div');
       const s = document.createElement('span');
@@ -2596,8 +2599,8 @@ export class Panel {
     r.appendChild(i);
   }
 
-  _rowColor(label, val, on) {
-    const r = this._row(label);
+  _rowColor(label, val, on, hint) {
+    const r = this._row(label, hint);
     const i = document.createElement('input');
     i.type = 'color';
     i.value = '#' + val.toString(16).padStart(6, '0');

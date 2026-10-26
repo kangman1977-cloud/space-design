@@ -8526,7 +8526,7 @@ function updateBar() {
   for (const id of ['mRot', 'mScale']) {
     $(id).disabled = vtx;
     if (vtx) $(id).title = '只選了一個點：一個點自己轉、自己縮放都不會變。選兩個以上的點，或改選邊、面';
-    else $(id).removeAttribute('title');
+    else $(id).title = $(id).dataset.tip || '';     // 功能地圖 b 輪：平常的說明放回去（以前直接拿掉 ⇒ 平常沒有說明）
   }
 
   /**

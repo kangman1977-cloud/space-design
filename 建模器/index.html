@@ -528,15 +528,15 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
     <div class="grp">
       <span class="lbl">檔案</span>
-      <button id="newDoc">新建</button>
-      <button id="load">讀檔</button>
-      <button id="save">存檔</button>
+      <button id="newDoc" title="新建：清空畫面上的物件與參考線，從空白開始。不能復原，有東西時會先問">新建</button>
+      <button id="load" title="讀檔：打開以前「存檔」存下來的 .json 檔，換掉現在畫面上的內容">讀檔</button>
+      <button id="save" title="存檔：把整份（物件、參考線）存成 .json 檔，之後用「讀檔」打開。快速鍵 Ctrl＋S">存檔</button>
     </div>
 
     <div class="grp">
       <span class="lbl">新增</span>
-      <select id="primType"></select>
-      <button id="add">加入</button>
+      <select id="primType" title="要加哪一種形狀：選好再按右邊的「加入」"></select>
+      <button id="add" title="加入：把左邊選的形狀放進畫面中間（中間有東西就放旁邊），放好會自動選起來">加入</button>
       <button id="importSvg" title="匯入 Illustrator 的線稿（SVG）：封閉輪廓會擠出成 3D 物件，內孔自動挖掉">匯入線稿</button>
       <button id="import3d" title="匯入 3D 模型（STL／OBJ／GLB）當骨架：網路上的免費模型、客戶給的檔案 —— 進來之後用建模器改它。先確認大小與哪一邊朝上">匯入 3D 模型</button>
     </div>
@@ -546,8 +546,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="undo" disabled>復原</button>
       <button id="redo" disabled>重做</button>
       <!-- ⑤-2（2026-10-20）：一直在、沒選東西時淡掉（`.blocked`，按了講原因）—— ⛔ 再一出一沒，不然整排常駐的會跟著跑 -->
-      <button id="dup" class="blocked">複製</button>
-      <button id="del" class="warn blocked">刪除</button>
+      <button id="dup" class="blocked" title="複製：選到的物件複製一份放在旁邊。快速鍵 Ctrl＋D">複製</button>
+      <button id="del" class="warn blocked" title="刪除：刪掉選到的物件，可以復原。快速鍵 Delete。拉點線面裡不刪物件，要拿掉面請按「刪除面」">刪除</button>
     </div>
 
     <div class="grp" id="gUnfold">
@@ -561,7 +561,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp">
       <span class="lbl">模式</span>
-      <button id="multi">加選</button>
+      <button id="multi" title="加選：開著時點物件會加進目前的選取（不會換掉原本選的）；再按一次關掉">加選</button>
       <button id="marquee" title="框選：拖曳畫一個矩形，碰到的物件全部選起來。開著時空白處拖曳不再旋轉視角，箭頭也先收起來（才不會一拖就把物件拖走）；要移動物件時把框選關掉">框選</button>
     </div>
 
@@ -608,9 +608,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="showGuides" class="on" title="顯示參考線：把三個方向的參考線畫出來（青色）。⚠ 關掉只是看不到—— 線還在、存檔也還在，不是刪掉。要真的刪請用左邊「參考線」那一組">顯示參考線</button>
       <button id="guideFaces" title="參考線畫成面：每一條參考線畫成很淡的半透明牆（前後線、左右線）或樓板（高度），外加一圈邊線、不畫十字 —— 斜著看比較分得出誰是誰。⚠ 只改畫法：線的位置、存檔、吸附都不變。關著（預設）＝ 原本的方框＋十字">參考線畫成面</button>
-      <button id="edges" class="on">稜線</button>
-      <button id="wire">線框</button>
-      <button id="frame">全部入鏡</button>
+      <button id="edges" class="on" title="稜線：畫出物件轉角的邊，形狀看得比較清楚；關掉只看面">稜線</button>
+      <button id="wire" title="線框：只畫網格的線、不畫面，看得到後面與裡面的結構">線框</button>
+      <button id="frame" title="全部入鏡：把所有物件拉進畫面（視角方向不變）。快速鍵 F">全部入鏡</button>
       <button id="frameSel" title="選到的入鏡：只把選到的東西拉近、擺在畫面正中間（視角方向不變）。沒選東西時跟「全部入鏡」一樣。快速鍵 Shift＋F">選到的入鏡</button>
     </div>
 
@@ -649,20 +649,20 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <span class="lbl">吸附</span>
 
       <!-- 移動 -->
-      <button class="snapBtn" data-sm="translate" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="translate" data-s="1">1</button>
-      <button class="snapBtn" data-sm="translate" data-s="5">5</button>
-      <button class="snapBtn" data-sm="translate" data-s="10">10</button>
+      <button id="snapT0" title="移動不吸附：拖多少就移多少" class="snapBtn" data-sm="translate" data-s="0">關</button>
+      <button id="snapT1" title="移動吸附 1 cm：拖曳照 1 cm 一格跳" class="snapBtn on" data-sm="translate" data-s="1">1</button>
+      <button id="snapT5" title="移動吸附 5 cm：拖曳照 5 cm 一格跳" class="snapBtn" data-sm="translate" data-s="5">5</button>
+      <button id="snapT10" title="移動吸附 10 cm：拖曳照 10 cm 一格跳" class="snapBtn" data-sm="translate" data-s="10">10</button>
 
       <!-- 旋轉：15／45／90，kang 2026-08-31 選的（做盒子、折板 90 最常用）-->
-      <button class="snapBtn" data-sm="rotate" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="rotate" data-s="15">15</button>
-      <button class="snapBtn" data-sm="rotate" data-s="45">45</button>
-      <button class="snapBtn" data-sm="rotate" data-s="90">90</button>
+      <button id="snapR0" title="旋轉不吸附：轉多少就是多少" class="snapBtn" data-sm="rotate" data-s="0">關</button>
+      <button id="snapR15" title="旋轉吸附 15 度：每次轉 15 度" class="snapBtn on" data-sm="rotate" data-s="15">15</button>
+      <button id="snapR45" title="旋轉吸附 45 度：每次轉 45 度" class="snapBtn" data-sm="rotate" data-s="45">45</button>
+      <button id="snapR90" title="旋轉吸附 90 度：每次轉 90 度（做盒子、折板最常用）" class="snapBtn" data-sm="rotate" data-s="90">90</button>
 
       <!-- 縮放 -->
-      <button class="snapBtn" data-sm="scale" data-s="0">關</button>
-      <button class="snapBtn on" data-sm="scale" data-s="0.05">0.05</button>
+      <button id="snapS0" title="縮放不吸附：拉多少就是多少" class="snapBtn" data-sm="scale" data-s="0">關</button>
+      <button id="snapS005" title="縮放吸附 0.05 倍：拉的時候照 0.05 倍一格跳" class="snapBtn on" data-sm="scale" data-s="0.05">0.05</button>
 
       <input id="snapNum" type="number" step="any" min="0" hidden
              title="吸附格距：直接打一個精確的數字按 Enter（移動＝cm、旋轉＝度）。打了之後左邊那幾顆就不亮了，因為你用的不是它們給的值。打 0 ＝ 關閉">
@@ -1401,9 +1401,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       -->
       <button id="guide" class="tool" title="參考線：在指定的座標放一條線（其實是一個平面，三個視角共用），用來對齊排列 —— 選方向（X／Y／Z）＋打位置就能加；切到「前／側／上」之後，在畫面上點一下也行。⭐ 要讓物件吸上去，在「吸附」那一組按「吸到參考線」"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v16M21 4v16" opacity=".45"/><path d="M9 2v20" stroke-dasharray="3 2.4"/><path d="M2 15h20" stroke-dasharray="3 2.4"/><circle cx="9" cy="15" r="1.6" fill="currentColor" stroke="none"/></svg><span class="lab">參考線</span></button>
     <hr>
-      <button id="mMove" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
-      <button id="mRot" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>
-      <button id="mScale" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h9v9H4z"/><path d="M13.5 13.5L21 21"/><path d="M21 15.5V21h-5.5"/></svg><span class="lab">縮放</span></button>
+      <button id="mMove" title="移動：拖箭頭搬動選到的物件。快速鍵 W" class="tool on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="M12 3l-2.6 2.8M12 3l2.6 2.8M12 21l-2.6-2.8M12 21l2.6-2.8M3 12l2.8-2.6M3 12l2.8 2.6M21 12l-2.8-2.6M21 12l-2.8 2.6"/></svg><span class="lab">移動</span></button>
+      <button id="mRot" title="旋轉：拖圓圈轉動選到的物件。快速鍵 E" data-tip="旋轉：拖圓圈轉動選到的物件。快速鍵 E" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M20.8 4v5.2h-5.2"/></svg><span class="lab">旋轉</span></button>
+      <button id="mScale" title="縮放：拖方塊放大縮小選到的物件。快速鍵 R" data-tip="縮放：拖方塊放大縮小選到的物件。快速鍵 R" class="tool"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h9v9H4z"/><path d="M13.5 13.5L21 21"/><path d="M21 15.5V21h-5.5"/></svg><span class="lab">縮放</span></button>
     <!--
       🔴🔴 **介面控制放在直條【最底下】，用分隔線隔開**（kang 2026-08-31）。
 

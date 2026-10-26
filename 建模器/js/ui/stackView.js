@@ -82,10 +82,10 @@ export class StackView {
     el.innerHTML = `
       <div class="slvBar">
         <b>立體預覽</b>
-        <button class="mini" data-k="fold"></button>
+        <button class="mini" data-k="fold" title="收起來或打開立體預覽（收起來視窗比較寬）"></button>
         <span class="slvTools">
-          <span class="lbl">只看第</span><input type="number" data-k="from" min="1" step="1" style="width:56px">
-          <span class="lbl">～</span><input type="number" data-k="to" min="1" step="1" style="width:56px"><span class="lbl">片</span>
+          <span class="lbl">只看第</span><input type="number" data-k="from" min="1" step="1" style="width:56px" title="只看第幾片到第幾片（其他的先藏起來，看得到裡面）">
+          <span class="lbl">～</span><input type="number" data-k="to" min="1" step="1" style="width:56px" title="只看到第幾片"><span class="lbl">片</span>
           <label class="uwCk" title="片跟片之間空一點，看得到每一片的上下面"><input type="checkbox" data-k="explode"> 拉開</label>
           <label class="uwCk" title="沒問題的片變淡，只看紅色（掉下來）、黃色（只黏一點點）"><input type="checkbox" data-k="faint"> 只看有問題的</label>
           <label class="uwCk" data-k="ghostLbl"><input type="checkbox" data-k="ghost"> 原模型</label>

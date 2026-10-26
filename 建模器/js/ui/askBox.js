@@ -23,8 +23,8 @@ function build() {
       background:#20232a;border:1px solid #3a3f48;border-radius:10px;box-shadow:0 12px 48px rgba(0,0,0,.5);padding:16px 18px">
       <div id="askMsg" style="font-size:13px;line-height:1.7;white-space:pre-wrap;margin-bottom:14px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button id="askNo">取消</button>
-        <button id="askOk" class="on">確定</button>
+        <button id="askNo" title="取消：不做，什麼都不改">取消</button>
+        <button id="askOk" class="on" title="確定：照上面那一句做下去">確定</button>
       </div>
     </div>`;
   document.body.appendChild(el);
