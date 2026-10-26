@@ -1,7 +1,7 @@
 # 建模器：AI 協作（Claude 在 Claude 的 app 裡操作建模器）
 
 > **這份回答**：Claude 用哪些指令看建模器的狀態、怎麼把按鈕或物件指給 kang 看、怎麼照按鈕的路改模型（第二步）、規則、驗過的。
-> **這份不回答**：為什麼做、業界怎麼做、四條路、規則與順序怎麼定的 → `AI協作-設計方向.md`。
+> **這份不回答**：為什麼做、業界怎麼做、四條路、規則與順序怎麼定的 → `AI協作-設計方向.md`；建模器有哪些功能、在哪（`AI.功能地圖()`、`AI.功能()`）→ `規格\建模器-功能地圖.md`。
 >
 > **識別碼（給 Grep 用）**：`js/ai/assist.js` ／ `js/ai/do.js` ／ `window.AI` ／ `AI.看()` ／ `AI.指給你看()` ／ `AI.指物件()` ／ `AI.按()` ／ `AI.填()` ／ `AI.這一段()` ／ AI 協作 ／ 指給你看 ／ 第二步「做」
 
@@ -104,7 +104,7 @@ kang 2026-10-25「直接驗收ok」（前 3 條 kang 一起實測過、說「目
 |---|---|
 | 新 `js/ai/do.js` | `ASK_BUTTONS`、`needAsk()`、`aiLabel()`（node 測得到）；`install(app)` 包 `hist.commit`、回傳八個指令 |
 | `js/ai/assist.js` | `objectInfo()` 多體積；新 `readPanel()`；`lookState()` 多一個 `panel`、`lookText()` 講紅字；`install(app, extra)` 把第二步的一起放進 `window.AI`（照舊凍結）；⚠ 這一支照舊 ⛔ 改模型、⛔ 改選取 |
-| `js/main.js` | `installAI(app, installAIDo(app))` |
+| `js/main.js` | `installAI(app, installAIDo(app))`（功能地圖 a 輪之後改成 `installAI(app, { ...installAIDo(app), ...installAIMap() })` → `規格\建模器-功能地圖.md`）|
 
 ### 預設＋可以調
 

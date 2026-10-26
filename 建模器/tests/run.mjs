@@ -21577,7 +21577,7 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
     /field = controlOf\(target\);/.test(src) && /const a = target\.getBoundingClientRect\(\), b = field \? field\.getBoundingClientRect\(\) : a;/.test(src)
     && /onChange = \(\) => \{ pressed = \{ 改了: q, 值: field\.value,/.test(src) && /field\.addEventListener\('change', onChange, true\);\s*\} else target\.addEventListener\('click', onClick, true\);/.test(src));
   ok('★★ 讀程式守著：window.AI 六個（看、看文字、指給你看、指物件、收掉、按了沒）、凍結；主程式建好 app 之後掛上',
-    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,600}installAI\(app(, installAIDo\(app\))?\);/.test(mn));
+    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,800}installAI\(app(, installAIDo\(app\)| ?, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \})?\);/.test(mn));
   ok('★★ 讀程式守著（定案 ①②）：外框會閃（aiPulse）、一行字前面寫 Claude、「知道了」收掉；kang 按了那一顆 ⇒ 記下來、收掉；⛔ 自己幾秒消失',
     /animation: aiPulse/.test(src) && /who\.textContent = 'Claude'/.test(src) && /ok\.textContent = '知道了';\s*ok\.onclick = \(\) => unpoint\(\);/.test(src)
     && /onClick = \(\) => \{ pressed = \{ 按了: q, 時間:[^}]*\}; unpoint\(\); \};/.test(src) && !/setTimeout\(/.test(src));
@@ -22142,7 +22142,7 @@ section('AI 協作第二步：做（2026-10-26）');
   // 讀程式守著
   const dsrc = readFileSync(join(here, '../js/ai/do.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
   ok('★★ 讀程式守著：包 hist.commit（所有改模型的路最後都走這一支）；主程式把第二步一起掛進 window.AI',
-    /hist\.commit = \(label, opt\) => orig\(ai > 0 \? aiLabel\(label\) : label, opt\);/.test(dsrc) && /window\.APP = app;[\s\S]{0,600}installAI\(app, installAIDo\(app\)\);/.test(mn));
+    /hist\.commit = \(label, opt\) => orig\(ai > 0 \? aiLabel\(label\) : label, opt\);/.test(dsrc) && /window\.APP = app;[\s\S]{0,800}installAI\(app, (installAIDo\(app\)|\{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \})\);/.test(mn));
   ok('★★ 讀程式守著：按 ＝ el.click()、勾 ＝ cb.click()、填與選 ＝ 改值再送 input 與 change（⛔ 直接改程式裡的值）',
     /el\.click\(\);\s*return report\(`按了/.test(dsrc) && /if \(cb\.checked !== !!開\) cb\.click\(\);/.test(dsrc)
     && /c\.value = String\(v\);\s*c\.dispatchEvent\(new Event\('input', \{ bubbles: true \}\)\);\s*c\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/.test(dsrc));
@@ -22348,6 +22348,108 @@ if (csgOK) {
     /薄殼放不下銷的地方加了 \$\{nb\} 個內側墊塊/.test(cp) && /從殼裡面凸出 \$\{lo === hi \? lo : lo \+ '～' \+ hi\} mm/.test(cp) && /殼太薄、有 \$\{jn\} 個接面放不下銷的地方沒有對位/.test(cp) && /const bad = r\.joints\.filter\(j => j\.noRoom && !j\.boss\);/.test(cp));
 } else {
   ok('（略過：CSG 沒載入）', true);
+}
+
+section('功能地圖 a：從畫面自動抽（2026-10-26）');
+{
+  /**
+   * `AI協作-設計方向.md`「功能地圖（第三步之前）」；kang 2026-10-26「功能地圖照你的建議：① 甲 ② 乙 ③ 甲 ④ 甲」—— 這是 a 輪（① 自動抽＋查詢指令）。
+   * 用一個小小的假網頁（只做用得到的那幾樣：上一層、兄弟、class、id、hidden、找得到底下的）跑 `collect()`、`lookup()`。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const C = await import('../js/ai/catalog.js');
+
+  // ── 假網頁 ──
+  const matchOne = (el, s) => {
+    s = s.trim();
+    if (s === '[hidden]') return !!el.hidden;
+    if (s === '[id]') return !!el.id;
+    if (s.startsWith('#')) return el.id === s.slice(1);
+    if (s.startsWith('.')) return el.cls.includes(s.slice(1));
+    return el.tagName.toLowerCase() === s.toLowerCase();
+  };
+  const matches = (el, sel) => sel.split(',').some(s => { const parts = s.trim().split(/\s+/); if (parts.length === 1) return matchOne(el, parts[0]); let p = el.parentElement; if (!matchOne(el, parts[1])) return false; while (p) { if (matchOne(p, parts[0])) return true; p = p.parentElement; } return false; });
+  function E(tag, o = {}, kids = []) {
+    const el = { tagName: tag.toUpperCase(), id: o.id || '', cls: o.cls || [], title: o.title || '', type: o.type || '', hidden: !!o.hidden, disabled: !!o.disabled, dataset: o.k ? { k: o.k } : {}, placeholder: o.placeholder || '',
+      _text: o.text || '', children: kids, parentElement: null, labels: o.labels || [], options: (o.options || []).map(t => ({ text: t })) };
+    for (const c of kids) c.parentElement = el;
+    el.classList = { contains: c => el.cls.includes(c) };
+    Object.defineProperty(el, 'textContent', { get() { return el._text + el.children.map(c => c.textContent).join(''); } });
+    Object.defineProperty(el, 'previousElementSibling', { get() { const p = el.parentElement; if (!p) return null; const i = p.children.indexOf(el); return i > 0 ? p.children[i - 1] : null; } });
+    Object.defineProperty(el, 'offsetParent', { get() { for (let p = el; p; p = p.parentElement) if (p.hidden) return null; return {}; } });
+    el.matches = sel => matches(el, sel);
+    el.closest = sel => { for (let p = el; p; p = p.parentElement) if (matches(p, sel)) return p; return null; };
+    const all = () => { const out = []; const walk = n => { for (const c of n.children) { out.push(c); walk(c); } }; walk(el); return out; };
+    el.querySelectorAll = sel => all().filter(x => matches(x, sel));
+    el.querySelector = sel => el.querySelectorAll(sel)[0] || null;
+    el.getAttribute = () => null;
+    return el;
+  };
+  const tip = E('div', { cls: ['aiTip'] }, [E('button', { text: '知道了' })]);
+  const root = E('body', {}, [
+    E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '檔案' }), E('button', { id: 'newDoc', text: '新建' }), E('button', { id: 'save', text: '存檔', title: '存成檔案' })]),
+    E('div', { cls: ['grp'], id: 'gEdit' }, [E('span', { cls: ['lbl'], text: '編輯' }), E('button', { id: 'penCorner', text: '尖角', hidden: true }), E('span', { cls: ['lbl'], text: 'X', id: 'penXLbl' }), E('input', { id: 'penX', type: 'number', hidden: true }),
+      E('button', { id: 'curveCircle', text: '圓', hidden: true }), E('button', { id: 'efVert', text: '點' }), E('button', { id: 'selRing', text: '選一圈', disabled: true }), E('button', { id: 'extrude', text: '擠出' }),
+      E('button', { id: 'toCircle', text: '變成正圓', hidden: true }), E('input', { id: 'circleR', type: 'number', title: '圓的半徑（cm）：選到東西時會自動填入', hidden: true }),
+      E('span', { cls: ['lbl'], text: '導角' }), E('input', { id: 'bevelW', type: 'number', title: '導角寬度（cm）' }), E('input', { id: 'bevelSeg', type: 'number', title: '段數' })]),
+    E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '吸附' }), E('button', { text: '0.05' }), E('input', { id: 'snapNum', type: 'number', title: '吸附格距：打數字' })]),
+    E('div', { id: 'rail' }, [E('button', { id: 'pen', cls: ['tool'] }, [E('span', { cls: ['lab'], text: '鋼筆' })])]),
+    E('div', { id: 'pForm' }, [E('div', { cls: ['sub'], text: '位置 cm' }), E('div', { cls: ['row'] }, [E('span', { text: 'X' }), E('input', { type: 'number' })]), E('input', { type: 'hidden' }), E('input', { type: 'file' })]),
+    E('div', { cls: ['uwWin'], id: 'sliceWin', hidden: true }, [E('div', { cls: ['uwHead'] }, [E('b', { text: '剖面分切' })]), E('span', { cls: ['lbl'], text: '做法' }), E('select', { id: 'slMethod', options: ['疊層', '互卡（側面＋橫肋）'] }),
+      E('div', { cls: ['bcp'] }, [E('button', { k: 'go', text: '切開' }), E('button', { k: 'go', text: '切開' })])]),
+    E('div', { cls: ['uwWin'], id: 'askWin' }, [E('div', { id: 'askMsg', text: '確定嗎？' }), E('button', { id: 'askOk', text: '確定' })]),
+    E('div', { id: 'panel' }, [E('button', { id: 'anaRun', text: '重新計算' })]),
+    tip
+  ]);
+  const L = C.collect(root);
+  const by = k => L.find(x => x.代號 === k) || {};
+  ok('★★ 照代號開頭細分「編輯」那一大組：鋼筆、曲線刀具、刀具、旋轉成形、拉點線面的過濾與選取；其他歸「拉點線面：改造型」',
+    C.subgroupOf('penCorner') === '鋼筆' && C.subgroupOf('curveCircle') === '曲線刀具' && C.subgroupOf('knifeCancel') === '刀具' && C.subgroupOf('revAxis') === '旋轉成形'
+    && C.subgroupOf('efVert') === '拉點線面：過濾' && C.subgroupOf('selRing') === '拉點線面：選取' && C.subgroupOf('checkerNth') === '拉點線面：選取' && C.subgroupOf('extrude') === '拉點線面：改造型');
+  ok('★★★ 每一顆都列（藏起來的也列、記看不看得到）；⛔ 列隱藏的格子、選檔的格子、Claude 自己的「知道了」',
+    L.length === 21 && by('penCorner').看得到 === false && by('newDoc').看得到 === true && !L.some(x => x.字 === '知道了'), JSON.stringify(L.map(x => x.代號)));
+  ok('★★★ 在哪：工具列照小標題、「編輯」細分、左邊工具、物件面板照小標題、視窗照標題（切塊頁另外寫）、詢問視窗、其他歸右邊面板',
+    by('save').在哪 === '工具列：檔案' && by('penX').在哪 === '工具列：鋼筆' && by('extrude').在哪 === '工具列：拉點線面：改造型' && by('pen').在哪 === '左邊工具'
+    && L.find(x => x.在哪 === '物件面板：位置 cm') && by('slMethod').在哪 === '視窗：剖面分切' && by('sliceWin:go').在哪 === '視窗：剖面分切／切塊頁' && by('askOk').在哪 === '詢問視窗' && by('anaRun').在哪 === '右邊面板：panel',
+    JSON.stringify(L.map(x => x.代號 + '@' + x.在哪)));
+  ok('★★ 名字：按鈕照字（圖示按鈕照小標「鋼筆」）、格子照同一排前面的名字（X）、下拉列出選項；說明、不能按都記',
+    by('pen').字 === '鋼筆' && by('penX').字 === 'X' && (L.find(x => x.在哪 === '物件面板：位置 cm') || {}).字 === 'X' && by('slMethod').選項.join() === '疊層,互卡（側面＋橫肋）'
+    && by('save').說明 === '存成檔案' && by('selRing').不能按 === true && by('extrude').不能按 === false);
+  ok('★★ 代號：有 id 用 id；視窗裡用 視窗 id:data-k；一樣的再加 #2（⛔ 蓋掉）；都沒有 ⇒ 在哪｜字', by('sliceWin:go').代號 === 'sliceWin:go' && by('sliceWin:go#2').代號 === 'sliceWin:go#2' && !!L.find(x => x.代號 === '物件面板：位置 cm｜X'));
+  ok('★★★ 格子的名字：緊挨著一顆按鈕 ⇒「按鈕的字：說明的第一句」；按鈕是數字 ⇒ 只用說明；前面是別的格子 ⇒ 停、用自己的說明 —— 本機抓到：一直往前找，19 格叫成整排的小標「編輯」或前一格的「Z」',
+    by('circleR').字 === '變成正圓：圓的半徑（cm）' && by('snapNum').字 === '吸附格距' && by('bevelW').字 === '導角' && by('bevelSeg').字 === '段數',
+    JSON.stringify(['circleR', 'snapNum', 'bevelW', 'bevelSeg'].map(k => by(k).字)));
+  const X = C.lookup(L, 'X');
+  ok('★★★ 找：同一個字在好幾個地方（X 在鋼筆、物件面板）⇒ 全部回、看得到的排前面（鋼筆那一格現在藏著）',
+    X.length === 2 && X[0]?.在哪 === '物件面板：位置 cm' && X[1]?.在哪 === '工具列：鋼筆', JSON.stringify(X.map(x => x.在哪)));
+  ok('★★ 找：字一樣 → 字開頭一樣 → 字或說明或代號裡有；找不到 ⇒ 空的', C.lookup(L, '存檔')[0]?.代號 === 'save' && C.lookup(L, '互卡').length === 0 && C.lookup(L, '存成')[0]?.代號 === 'save'
+    && C.lookup(L, 'slMethod')[0]?.代號 === 'slMethod' && C.lookup(L, '選一')[0]?.代號 === 'selRing' && C.lookup(L, '沒有這個').length === 0 && C.lookup(L, ' ').length === 0);
+
+  const mk = (字, 在哪, 看得到 = true) => ({ 代號: 在哪 + '｜' + 字, 在哪, 種類: '格子', 字, 說明: '', 選項: null, 看得到, 不能按: false });
+  const W = [mk('寬 X', '物件面板：方塊 參數'), mk('寬', '視窗：展開圖', false), mk('最寬', '右邊面板：pAna')];
+  const w1 = C.lookup(W, '寬'), w2 = C.lookup(W, '寬X');
+  ok('★★★ 找：三種都回、照「字一樣 → 字開頭一樣 → 裡面有」排（同一種裡看得到的排前面）；空白不算 —— 本機抓到：找「寬」只回展開圖那一格、漏了方塊的寬 X',
+    w1.map(x => x.字).join() === '寬,寬 X,最寬' && w2.length === 1 && w2[0].字 === '寬 X', JSON.stringify([w1.map(x => x.字), w2.map(x => x.字)]));
+
+  const doc0 = globalThis.document; globalThis.document = root;
+  let fx, fq, fn;
+  try { const A = C.install(); fx = A.功能('X'); fq = A.功能('切'); fn = A.功能('沒有這個'); } finally { globalThis.document = doc0; }
+  ok('★★ AI.功能：講字一樣的有幾個、提醒照「在哪」挑；只有開頭一樣的 ⇒ 字一樣 0、不提醒；找不到 ⇒ 好了 false 講試別的字',
+    fx?.好了 && fx.共 === 2 && fx.字一樣 === 2 && /這個字有 2 個地方/.test(fx.提醒) && fq.好了 && fq.共 === 2 && fq.字一樣 === 0 && !fq.提醒 && fn.好了 === false && /試別的字/.test(fn.原因),
+    JSON.stringify([fx.提醒, fq.字一樣, fq.提醒, fn.原因]));
+
+  // 讀程式守著
+  const src = readFileSync(join(here, '../js/ai/catalog.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  ok('★★ 讀程式守著：主程式把功能地圖一起掛進 window.AI（AI.功能地圖、AI.功能）', /installAI\(app, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\) \}\);/.test(mn) && /功能地圖: \(opt = \{\}\) =>/.test(src) && /功能: q =>/.test(src));
+  ok('★★ 讀程式守著：功能地圖只讀畫面（⛔ 按東西、⛔ 改模型、⛔ 改選取）', !/\.click\(|dispatchEvent|commit\(|sel\.set\(|\.value = /.test(src));
+  // 主頁面：「編輯」那一大組裡真的在用的（註解掉的⛔ 算）每一顆代號都分得到一組
+  const html = readFileSync(join(here, '../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const g = html.slice(html.indexOf('id="gEdit"'), html.indexOf('id="gNormal"'));
+  const ids = [...g.matchAll(/<(?:button|select|input)\b[^>]*\bid="([^"]+)"/g)].map(m => m[1]);
+  const cnt = {}; for (const id of ids) { const k = C.subgroupOf(id); cnt[k] = (cnt[k] || 0) + 1; }
+  ok('★ 主頁面「編輯」那一大組（去掉註解掉的舊按鈕）：鋼筆、曲線刀具、刀具、拉點線面各組都分得到；舊的旋轉成形那一組是註解掉的 ⛔ 算',
+    ids.length > 80 && cnt['鋼筆'] > 20 && cnt['曲線刀具'] > 15 && cnt['刀具'] >= 3 && cnt['拉點線面：選取'] > 10 && cnt['拉點線面：過濾'] >= 5 && !cnt['旋轉成形'] && !ids.includes('revolve'), JSON.stringify(cnt));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
