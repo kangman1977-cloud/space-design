@@ -210,6 +210,26 @@ export function bedLayout(lists, together) {
   return lists.map(l => centerOnBed(dropToBed(copy(l))));
 }
 
+/**
+ * 🔴 **「合成一個檔」整組放不放得下一盤**（第三輪第五批 5a，kang 2026-10-26「② 乙 黃字＋換成每個物件一個檔」）。
+ * T16 頭盔切成 4 塊合成一個 3MF ⇒ 4 塊擺在組好的位置、整組 268 × 291 mm，每一塊放得下、整個檔一盤放不下，畫面沒講。
+ * 只在**每一個自己都放得下**（照原樣、轉方向、分開的好幾塊都算）、**整組照原樣也轉不進去**時回整組多大；其他回 null
+ * （有一個自己就放不下 ⇒ 那一張卡片已經講了、還有「切成放得下的塊」）。
+ * @param {{tris:object[], check:{issues:{kind?:string}[]}}[]} items 匯出視窗的那一份（三角形是匯出單位）
+ * @param {{mmPerUnit?:number, bedMM:number[]}} opt
+ * @returns {null|{sizeMM:number[], n:number}}
+ */
+export function groupBedNote(items, opt) {
+  if (items.length < 2) return null;
+  if (items.some(it => it.check.issues.some(i => i.kind === 'toobig'))) return null;
+  const mpu = opt.mmPerUnit ?? 1;
+  const pts = [];
+  for (const it of items) for (const t of it.tris) pts.push([t.a.x, t.a.y, t.a.z], [t.b.x, t.b.y, t.b.z], [t.c.x, t.c.y, t.c.z]);
+  if (!pts.length) return null;
+  const f = fitBed(pts, opt.bedMM.map(b => b / mpu));
+  return f.asIs || f.turn ? null : { sizeMM: f.size.map(x => x * mpu), n: items.length };
+}
+
 /** 整批平移，讓外框中心的 X、Y 在 0（⑤-26；Z 不動）*/
 export function centerOnBed(tris) {
   if (!tris.length) return tris;

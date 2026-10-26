@@ -339,6 +339,23 @@ export function dowelSpecs(dowels) {
   return [...m.values()].sort((p, q) => q.dMM - p.dMM);
 }
 
+/**
+ * 🔴 **插銷那一個物件怎麼排**（第三輪第五批 5a，kang 2026-10-26「① 甲 插銷照平台寬換行」）：
+ * 一排排到平台寬（扣兩邊留邊）就換下一排。以前一種大小排成一長排 ⇒ 預設方塊 40 根 ⌀6 排成 474 mm、半球 66 根 786 mm，
+ * 插銷自己就放不下平台（`輸出\第三輪第五批研究\b5a_pins.mjs`）；細長一條也塞得進切好的塊旁邊的空位（方塊 13 → 12 盤）。
+ * 間隔照 9a：⌀ 跟 6 mm 取大的。單位 cm；`at` ＝ 每一根的中心（離這一塊的左前角）。
+ * @param {{dMM:number, n:number}} s 一種大小（`dowelSpecs()` 的一筆）
+ * @returns {{cols:number, rows:number, pitch:number, w:number, d:number, at:number[][]}}
+ */
+export function pinLayout(s, bedMM = BED_MM, marginMM = MARGIN_MM) {
+  const r = s.dMM / 20, gap = Math.max(0.6, 2 * r), pitch = 2 * r + gap;
+  const room = Math.max(0, bedMM[0] - 2 * marginMM) / 10;
+  const cols = Math.max(1, Math.min(s.n, Math.floor((room + gap + 1e-9) / pitch)));
+  const rows = Math.ceil(s.n / cols);
+  const at = Array.from({ length: s.n }, (_, i) => [(i % cols) * pitch + r, Math.floor(i / cols) * pitch + r]);
+  return { cols, rows, pitch, w: Math.min(s.n, cols) * pitch - gap, d: rows * pitch - gap, at };
+}
+
 /** 打開一個實體準備切（世界座標、封閉）—— 用完記得 `close()`。外框一起給 */
 export function openCut(mesh, label) {
   const body = cutBody(mesh, label);

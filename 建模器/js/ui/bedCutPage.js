@@ -402,7 +402,7 @@ export class BedCutPage {
   _apply() {
     const s = this.s; if (!s || !s.res) return;
     const p = this.panel;
-    const made = p.app.applyBedCut(s.obj, s.res.pieces, s.res.specs, s.bb);
+    const made = p.app.applyBedCut(s.obj, s.res.pieces, s.res.specs, s.bb, this._opt.bedMM, this._opt.marginMM);   // 5a：插銷照平台寬換行
     if (!made) return;
     this.close();
     p.run();

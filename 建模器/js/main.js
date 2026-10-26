@@ -20,7 +20,7 @@ import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter, unionMeshes, dowelMesh }
   from './build/bool.js';
-import { DOWEL_CHAMFER_MM } from './out/bedCut.js';
+import { DOWEL_CHAMFER_MM, pinLayout } from './out/bedCut.js';
 import { install as installAI } from './ai/assist.js';
 import { install as installAIDo } from './ai/do.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
@@ -503,7 +503,7 @@ const app = {
   getClash: () => clashResult,
   // 對齊之類的操作要回報「動了幾個」，否則按了沒感覺（坑第 21 條）
   /** 第九批 9a：3D 列印「切成放得下的塊」→「切開」（`applyBedCut()` 在下面才定義，⛔ 在建構時呼叫）*/
-  applyBedCut: (obj, pieces, specs, bb) => applyBedCut(obj, pieces, specs, bb),
+  applyBedCut: (obj, pieces, specs, bb, bedMM, marginMM) => applyBedCut(obj, pieces, specs, bb, bedMM, marginMM),
   toast: (msg, bad) => toast(msg, bad)
 };
 
@@ -3382,13 +3382,16 @@ function curveThroughApply(holeOnly = false) {
  * 🔴 **3D 列印「切成放得下的塊」→「切開」**（第二輪第九批 9a，2026-10-25，kang「同意你的建議」① 切開變成畫面上的物件、插銷另一個物件、可以復原）。
  * 切好的塊是世界座標（列印視窗量的那一份：平滑後的、補過洞的）⇒ 物件放回原位（位置 0、不轉、不縮放），原點置中；
  * 建物件照「切穿」（名字「－1、－2…」、原物件換掉、記一步）。⚠ 平滑已經磨在形狀裡了 ⇒ 切出來的塊⛔ 再平滑（不然會磨兩次）。
- * 插銷：每一種大小一個物件，站著排在模型前面（另外印）。
+ * 插銷：每一種大小一個物件，站著排在模型前面（另外印）；
+ * 🔴 第三輪第五批 5a（kang 2026-10-26「① 甲」）：**一排排到平台寬就換下一排**（`pinLayout()`），以前一長排、40 根就 474 mm 放不下平台；
+ * 不同大小的一塊一塊往前排。
  * @param {ModelObject} obj
  * @param {Mesh[]} pieces 世界座標
  * @param {{dMM:number, lenMM:number, n:number}[]} specs
  * @param {{min:number[], max:number[]}} bb 原本的外框（世界 cm）—— 插銷排在它前面
+ * @param {number[]} [bedMM] 平台寬、深、高（3D 列印視窗那三格）  @param {number} [marginMM] 切塊留邊
  */
-function applyBedCut(obj, pieces, specs, bb) {
+function applyBedCut(obj, pieces, specs, bb, bedMM, marginMM) {
   if (!doc.objects.includes(obj)) { toast('原本的物件已經不在了（被刪掉或換掉）—— 重新開「3D 列印」再切一次', true); return null; }
   for (const m of pieces) refreshAfterEdit(m);
   const made = pieces.map((m, i) => new ModelObject({
@@ -3399,12 +3402,11 @@ function applyBedCut(obj, pieces, specs, bb) {
     color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale
   }));
   const pins = [];
-  let x = bb.min[0], z = bb.max[2] + 2;
+  let z = bb.max[2] + 2;
   for (const s of specs) {
-    const r = s.dMM / 20, len = s.lenMM / 10, gap = Math.max(0.6, 2 * r);
-    const ms = [];
-    for (let i = 0; i < s.n; i++) { ms.push(dowelMesh(r, len, [x + r, bb.min[1] + len / 2, z + r], DOWEL_CHAMFER_MM / 10)); x += 2 * r + gap; }
-    x += 1;
+    const r = s.dMM / 20, len = s.lenMM / 10, L = pinLayout(s, bedMM, marginMM);
+    const ms = L.at.map(([u, v]) => dowelMesh(r, len, [bb.min[0] + u, bb.min[1] + len / 2, z + v], DOWEL_CHAMFER_MM / 10));
+    z += L.d + 1;
     const m = unionMeshes(ms);
     refreshAfterEdit(m);
     pins.push(new ModelObject({

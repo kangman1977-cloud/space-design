@@ -14,7 +14,7 @@
  */
 
 import * as THREE from 'three';
-import { triangles, bedLayout, printCheck, toSTLBinary, toSTLAscii, STL_UNITS }
+import { triangles, bedLayout, printCheck, groupBedNote, toSTLBinary, toSTLAscii, STL_UNITS }
   from '../out/stl.js';
 import { DEFAULT_MIN_WALL_MM, DEFAULT_OVERHANG_DEG } from '../out/printShape.js';
 import { to3MF } from '../out/threemf.js';
@@ -120,7 +120,9 @@ export class ExportPanel {
 
     const grp = $('exGroup');
     grp.value = this.opt.group;
-    grp.onchange = () => { this.opt.group = grp.value; saveOpt(this.opt); };
+    /** 5a：換了「多個物件」⇒ 重畫（整組放不下一盤那一句跟著它）；切塊頁開著時⛔ 重畫（同格式那一格）*/
+    grp.onchange = () => { this.opt.group = grp.value; saveOpt(this.opt); if (!(this.cutPage && this.cutPage.active)) this._render(); };
+    this.grpSel = grp;
 
     this.askIn = $('exAsk');
     this.askIn.checked = !!this.opt.askPath;
@@ -293,6 +295,28 @@ export class ExportPanel {
         '⚠ 目前輸出單位是 cm。STL 檔案沒有單位欄位，'
         + '切片軟體一律當 mm 讀 —— 這個檔丟進去模型會變成十分之一大。'
         + '除非對方明確要 cm，否則請改回 mm。'));
+    }
+
+    /**
+     * 🔴 **第三輪第五批 5a**（kang 2026-10-26「② 乙 黃字＋換成每個物件一個檔」）：選「合成一個檔」、每一個自己都放得下、
+     * 整組放不下一盤 ⇒ 最上面黃字講、一顆「換成每個物件一個檔」（按了才換，跟自己去選那一格同一條路；預設照舊）。
+     * 判斷在 `stl.js` `groupBedNote()`。
+     */
+    const g = this.opt.group === 'one' ? groupBedNote(this.items, { mmPerUnit: 10 / STL_UNITS[this.opt.unit].scale, bedMM: this.opt.bedMM }) : null;
+    if (g) {
+      const sz = g.sizeMM.map(x => x.toFixed(1)).join(' × ');
+      const b = box('uwCaution', `⚠ 整組 ${sz} mm 放不下一盤（成型範圍 ${this.opt.bedMM.join(' × ')} mm）：`
+        + `選的是「合成一個檔，保持相對位置」，${g.n} 個物件會擺在組好的位置；每一個自己都放得下 —— `
+        + '換成「每個物件一個檔」（各自放到平台中間），或在切片軟體裡按「排列」'
+        + (this.opt.format === '3mf' ? '' : '（合成一個 STL 是一整個網格，切片軟體要先「分割成物件」才排得開）'));
+      const btn = document.createElement('button');
+      btn.className = 'mini';
+      btn.textContent = '換成每個物件一個檔';
+      btn.title = '上面「多個物件」改成「每個物件一個檔」（會記住；要改回去就在那一格選）';
+      btn.onclick = () => { this.grpSel.value = 'each'; this.grpSel.dispatchEvent(new Event('change')); };
+      b.appendChild(document.createTextNode(' '));
+      b.appendChild(btn);
+      this.body.appendChild(b);
     }
 
     for (const it of this.items) this.body.appendChild(this._card(it));

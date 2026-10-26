@@ -21414,10 +21414,10 @@ if (csgOK) {
     && /if \(i\.kind === 'toobig'\) \{/.test(ep) && /btn\.textContent = '切成放得下的塊';/.test(ep) && /if \(!c\.ok\) \{ btn\.disabled = true;/.test(ep) && /bedMM: this\.opt\.bedMM \}\) \};/.test(ep));
   ok('★★ 讀程式守著（切塊頁）：切法兩種（預設挑位置）、每一刀一格、銷四格＋放不下換小一號、先停、切開',
     /<option value="smart">挑位置/.test(cp) && /<option value="even">平均切（快）/.test(cp) && /if \(!o\.cutMode\) o\.cutMode = 'smart';/.test(cp) && /data-k="smaller"/.test(cp)
-    && /先停，改用平均切/.test(cp) && /p\.app\.applyBedCut\(s\.obj, s\.res\.pieces, s\.res\.specs, s\.bb\)/.test(cp) && /只能黏/.test(cp));
+    && /先停，改用平均切/.test(cp) && /p\.app\.applyBedCut\(s\.obj, s\.res\.pieces, s\.res\.specs, s\.bb(, this\._opt\.bedMM, this\._opt\.marginMM)?\)/.test(cp) && /只能黏/.test(cp));
   ok('★★ 讀程式守著（切開）：名字「－1、－2…」、插銷另一個物件、原物件換掉、記一步、平滑⛔ 帶過去（已經磨在形狀裡）',
     /name: `\$\{obj\.name\}－\$\{i \+ 1\}`/.test(mn) && /插銷 ⌀\$\{s\.dMM\} × /.test(mn) && /commit\(`切成放得下的塊 \$\{made\.length\} 塊`\)/.test(mn)
-    && /function applyBedCut\(obj, pieces, specs, bb\) \{[\s\S]*?doc\.remove\(obj\);/.test(mn) && !/function applyBedCut[\s\S]{0,1500}subd: obj\.subd/.test(mn));
+    && /function applyBedCut\(obj, pieces, specs, bb(, bedMM, marginMM)?\) \{[\s\S]*?doc\.remove\(obj\);/.test(mn) && !/function applyBedCut[\s\S]{0,1500}subd: obj\.subd/.test(mn));
 } else {
   ok('（略過：CSG 沒載入）', true);
 }
@@ -22146,6 +22146,66 @@ section('AI 協作第二步：做（2026-10-26）');
   ok('★★ 讀程式守著：按 ＝ el.click()、勾 ＝ cb.click()、填與選 ＝ 改值再送 input 與 change（⛔ 直接改程式裡的值）',
     /el\.click\(\);\s*return report\(`按了/.test(dsrc) && /if \(cb\.checked !== !!開\) cb\.click\(\);/.test(dsrc)
     && /c\.value = String\(v\);\s*c\.dispatchEvent\(new Event\('input', \{ bubbles: true \}\)\);\s*c\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/.test(dsrc));
+}
+
+section('第三輪第五批 5a 切開的塊排開（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第五批 5a」；kang 2026-10-26「① 甲 插銷照平台寬換行 ② 乙 黃字＋換成每個物件一個檔」。
+   * 沙箱 `輸出\第三輪第五批研究\b5a_probe.mjs`、`b5a_pins.mjs` 的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const ST = await import('../js/out/stl.js');
+  const { unionMeshes, dowelMesh } = await import('../js/build/bool.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  // ① 插銷照平台寬換行
+  const L40 = B.pinLayout({ dMM: 6, n: 40 }), L66 = B.pinLayout({ dMM: 6, n: 66 }), L4 = B.pinLayout({ dMM: 3, n: 4 }), L1 = B.pinLayout({ dMM: 1.75, n: 1 });
+  const r2 = x => Math.round(x * 100) / 100;
+  ok('★★★ ① 預設平台 250（兩邊留 2 mm ⇒ 24.6 cm 排得下）：⌀6 40 根 ⇒ 一排 21 根、2 排、24.6 × 1.8 cm（以前一排 47.4 cm 放不下）；66 根 ⇒ 21 × 4、24.6 × 4.2',
+    L40.cols === 21 && L40.rows === 2 && r2(L40.w) === 24.6 && r2(L40.d) === 1.8 && L66.cols === 21 && L66.rows === 4 && r2(L66.d) === 4.2, JSON.stringify([L40.cols, L40.rows, L40.w, L40.d]));
+  ok('★★ ① 不到一排的照舊一排：⌀3 4 根 3.0 × 0.3 cm；1 根 ＝ 那一根的大小', L4.cols === 4 && L4.rows === 1 && r2(L4.w) === 3 && r2(L4.d) === 0.3 && Math.abs(L1.w - 0.175) < 1e-9 && Math.abs(L1.d - 0.175) < 1e-9);
+  const Ln = B.pinLayout({ dMM: 6, n: 40 }, [100, 100, 100], 2);
+  const Lm = B.pinLayout({ dMM: 6, n: 40 }, [250, 250, 250], 20);
+  ok('★★ ① 平台照設定：寬 100 ⇒ 一排 8 根、5 排（寬 9.0 ≤ 9.6）；切塊留邊 20 mm ⇒ 只剩 21 cm、一排 18 根（扣兩邊留邊）', Ln.cols === 8 && Ln.rows === 5 && Ln.w <= 9.6 + 1e-9 && Lm.cols === 18 && Lm.w <= 21 + 1e-9, JSON.stringify([Ln.cols, Ln.rows, Ln.w, Lm.cols]));
+  const sep = L => { let m = Infinity; for (let i = 0; i < L.at.length; i++) for (let j = i + 1; j < L.at.length; j++) m = Math.min(m, Math.hypot(L.at[i][0] - L.at[j][0], L.at[i][1] - L.at[j][1])); return m; };
+  ok('★★ ① 每一根的中心都在範圍裡、兩根中心至少隔 ⌀ ＋ 6 mm（照 9a 的間隔，⛔ 擠在一起）', L40.at.length === 40 && L40.at.every(([u, v]) => u > 0 && u < L40.w && v > 0 && v < L40.d) && sep(L40) >= 1.2 - 1e-9 && sep(L4) >= 0.9 - 1e-9, sep(L40));
+  // 照 main.js applyBedCut() 做出插銷那一個物件 ⇒ 列印檢查（平台 250）
+  const pinObj = (L, dMM, len) => unionMeshes(L.at.map(([u, v]) => dowelMesh(dMM / 20, len, [u, len / 2, v], B.DOWEL_CHAMFER_MM / 10)));
+  const row40 = { at: Array.from({ length: 40 }, (_, i) => [i * 1.2 + 0.3, 0.3]) };
+  const cNew = ST.printCheck(pinObj(L40, 6, 1.54), ST.triangles(pinObj(L40, 6, 1.54), { scale: 10 }), { bedMM: [250, 250, 250] });
+  const cOld = ST.printCheck(pinObj(row40, 6, 1.54), ST.triangles(pinObj(row40, 6, 1.54), { scale: 10 }), { bedMM: [250, 250, 250] });
+  ok('★★★ ① 預設方塊的插銷（⌀6 × 15.4 mm 40 根）：換行之後列印檢查沒有「放不下平台」；照舊一排 ⇒「整件放不下…排近一點就放得下」（我們自己做出來的東西要人去排）',
+    !cNew.issues.some(i => ['parts', 'turn', 'toobig'].includes(i.kind)) && cOld.issues.some(i => i.kind === 'parts'), JSON.stringify(cOld.issues.map(i => i.kind)));
+
+  // ② 合成一個檔、整組放不下一盤
+  const tbox = (x0, y0, x1, y1, h = 100) => [{ a: V3(x0, y0, 0), b: V3(x1, y0, 0), c: V3(x1, y1, h) }, { a: V3(x0, y0, 0), b: V3(x1, y1, h), c: V3(x0, y1, h) }];
+  const item = (tris, kinds = []) => ({ tris, check: { issues: kinds.map(kind => ({ kind })) } });
+  const four = [item(tbox(0, 0, 134, 134)), item(tbox(134, 0, 268, 134)), item(tbox(0, 134, 134, 291)), item(tbox(134, 134, 268, 291), ['parts'])];
+  const g = ST.groupBedNote(four, { bedMM: [250, 250, 250] });
+  ok('★★★ ② T16 那種：4 塊組起來 268 × 291 mm、每一塊放得下 ⇒ 回整組多大、幾個（分開的好幾塊那種黃字也算放得下）',
+    g && g.n === 4 && g.sizeMM.map(Math.round).join() === '268,291,100', JSON.stringify(g));
+  ok('★★ ② 不講的：只有一個物件（就算它是分開的好幾塊、整件 268 × 291 —— 那張卡片自己會講「排近一點」）、有一個自己就放不下（那張卡片已經講了、有切塊）、整組照原樣放得下、整組轉一下放得下',
+    ST.groupBedNote([four[0]], { bedMM: [250, 250, 250] }) === null && ST.groupBedNote([item(tbox(0, 0, 268, 291), ['parts'])], { bedMM: [250, 250, 250] }) === null
+    && ST.groupBedNote([...four.slice(0, 3), item(tbox(134, 134, 268, 291), ['toobig'])], { bedMM: [250, 250, 250] }) === null
+    && ST.groupBedNote([item(tbox(0, 0, 100, 100)), item(tbox(120, 0, 240, 100))], { bedMM: [250, 250, 250] }) === null
+    && ST.groupBedNote([item(tbox(0, 0, 100, 40)), item(tbox(155, 0, 255, 40))], { bedMM: [250, 250, 250] }) === null);
+  ok('★ ② 單位 cm（三角形是 cm）：照 mm 量（26.8 × 29.1 cm ⇒ 268 × 291 mm）',
+    (ST.groupBedNote(four.map(it => item(it.tris.map(t => ({ a: t.a.clone().multiplyScalar(0.1), b: t.b.clone().multiplyScalar(0.1), c: t.c.clone().multiplyScalar(0.1) })))), { mmPerUnit: 10, bedMM: [250, 250, 250] }) || { sizeMM: [] }).sizeMM.map(Math.round).join() === '268,291,100');
+
+  // 讀程式守著
+  const mn = readFileSync(join(here, '../js/main.js'), 'utf8'), bp = readFileSync(join(here, '../js/ui/bedCutPage.js'), 'utf8'), ep = readFileSync(join(here, '../js/ui/exportPanel.js'), 'utf8');
+  ok('★★ 讀程式守著 ①：切開的插銷照 pinLayout() 排、平台與留邊從 3D 列印視窗那幾格帶過來（⛔ 寫死 250）',
+    /const r = s\.dMM \/ 20, len = s\.lenMM \/ 10, L = pinLayout\(s, bedMM, marginMM\);/.test(mn) && /L\.at\.map\(\(\[u, v\]\) => dowelMesh\(r, len, \[bb\.min\[0\] \+ u, bb\.min\[1\] \+ len \/ 2, z \+ v\], DOWEL_CHAMFER_MM \/ 10\)\);\s*z \+= L\.d \+ 1;/.test(mn)
+    && /applyBedCut\(s\.obj, s\.res\.pieces, s\.res\.specs, s\.bb, this\._opt\.bedMM, this\._opt\.marginMM\)/.test(bp));
+  ok('★★ 讀程式守著 ②：只有選「合成一個檔」才判；黃框；「換成每個物件一個檔」跟自己選那一格同一條路（送 change）；換了那一格會重畫',
+    /const g = this\.opt\.group === 'one' \? groupBedNote\(this\.items,/.test(ep) && /box\('uwCaution', `⚠ 整組 \$\{sz\} mm 放不下一盤/.test(ep)
+    && /btn\.textContent = '換成每個物件一個檔';/.test(ep) && /this\.grpSel\.value = 'each'; this\.grpSel\.dispatchEvent\(new Event\('change'\)\);/.test(ep)
+    && /grp\.onchange = \(\) => \{ this\.opt\.group = grp\.value; saveOpt\(this\.opt\); if \(!\(this\.cutPage && this\.cutPage\.active\)\) this\._render\(\); \};/.test(ep));
+} else {
+  ok('（略過：CSG 沒載入）', true);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
