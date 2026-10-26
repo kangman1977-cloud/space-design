@@ -43,6 +43,8 @@ export const TINY_CM2 = 0.25;
 export const STEP_MM = 2;
 /** 世界軸 k 對到平台的哪一軸（0 寬、1 深、2 高）*/
 export const BED_OF_WORLD = [0, 2, 1];
+/** 刀面上的 (u, v) 是世界的哪兩軸（同 `build/bool.js` `CUT_UV`；5c 墊塊算是哪一個接面用）*/
+export { CUT_UV as CUT_UV_OF } from '../build/bool.js';
 export const AXIS_NAME = ['左右', '上下', '前後'];      // 世界 x、y、z
 
 // ═══════════════════════════════════════════════════════
@@ -321,7 +323,7 @@ export function placeDowels(body, bb, cuts, d) {
         dowels.push({ a, p, dMM: g.s.dMM, r: (g.s.dMM / 2 + g.s.clearMM) / 10, depth: g.s.depthMM / 10 });
         n++; if (g.s !== tries[0]) smaller++;
       }
-      joints.push({ a, c, area, islands: isl.length, noRoom: got.filter(g => !g).length, dowels: n, smaller });
+      joints.push({ a, c, cell, area, islands: isl.length, noRoom: got.filter(g => !g).length, dowels: n, smaller });
     }
   }
   return { joints, dowels };

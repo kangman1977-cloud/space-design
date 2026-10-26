@@ -22268,6 +22268,88 @@ if (csgOK) {
   ok('（略過：CSG 沒載入）', true);
 }
 
+section('第三輪第五批 5c 薄殼加內側墊塊（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第五批 5c」；kang 2026-10-26「5c 照你的建議：① 乙 殼的內側加墊塊 ② 甲 預設開、切塊頁一格可以取消」。
+   * 用正式程式跑的數字（`輸出\第三輪第五批研究\b5c_check.mjs`）照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const B = await import('../js/out/bedCut.js');
+  const SB = await import('../js/out/shellBoss.js');
+  const SD = await import('../js/build/subd.js');
+  const { revolve } = await import('../js/build/revolve.js');
+  const { unionMeshes } = await import('../js/build/bool.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const it = (src, pos = [0, 0, 0]) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1] });
+  const dome = r => ({ type: 'dome', r, seg: 32, segH: 8 });
+  const helmet = () => {
+    const shell = { type: 'bool', op: 'subtract', items: [it(dome(10.3), [0, 5.15, 0]), it(dome(10), [0, 5, 0])] };
+    const brim = { type: 'bool', op: 'subtract', items: [it({ type: 'cylinder', r: 13.5, h: 0.4, seg: 32, openEnded: false }, [0, 0.2, 0]), it(dome(10.15), [0, 5.075, 0])] };
+    const strip = { type: 'bool', op: 'intersect', items: [it(dome(10.9), [0, 5.45, 0]), it({ type: 'box', w: 2.5, h: 11, d: 30 }, [0, 5.5, 0])] };
+    const ridge = { type: 'bool', op: 'subtract', items: [it(strip), it(dome(10.15), [0, 5.075, 0])] };
+    const o = new io.ModelObject({ name: '頭盔', src: { type: 'bool', op: 'union', items: [it(shell), it(brim), it(ridge)] } }); o.bake();
+    return SD.subdivide(o.mesh(), { levels: 2, deg: 30 }).mesh.transformed(o.matrix());
+  };
+  const lamp = () => SD.subdivideInterp(revolve([V3(12, 0, 0), V3(16, 20, 0), V3(9, 45, 0), V3(7, 60, 0)], { axis: 'y', a: 0, b: 0, seg: 32 }).mesh, { levels: 2, deg: 30 }).mesh.shell(0.2);
+  const solidBox = () => { const o = new io.ModelObject({ name: '方塊', src: prim.defaultSrc('box') }); o.bake(); return o.mesh().transformed(o.matrix()); };
+  const run = async mesh => {
+    const { body, bb } = B.openCut(mesh, 't');
+    const { cuts } = await B.planCuts(body, bb, { bedMM: B.BED_MM, marginMM: B.MARGIN_MM, mode: 'smart', dowel: B.DOWEL });
+    const pd = B.placeDowels(body, bb, cuts, B.DOWEL);
+    const n0 = body.split(pd.dowels.map(x => ({ a: x.a, p: x.p, r: x.r, depth: x.depth })), cuts).pieces.length;
+    body.close();
+    const plan = SB.planBosses(mesh, cuts, bb, B.DOWEL, pd.dowels);
+    return { bb, cuts, pd, plan, J: SB.withBosses(pd.joints, plan), n0 };
+  };
+
+  // 預設
+  ok('★★ 墊塊用的那一號：勾了放不下換小一號 ⇒ ⌀3（墊塊 ⌀5.9 × 14 mm）；沒勾 ⇒ 主要那一號 ⌀6', SB.bossSpec(B.DOWEL).dMM === 3 && SB.bossSpec({ ...B.DOWEL, smaller: false }).dMM === 6
+    && Math.abs(SB.keepOf(SB.bossSpec(B.DOWEL)) - 0.285) < 1e-9);
+
+  const L = await run(lamp());
+  ok('★★★ T18 燈罩（殼 2 mm）：以前 20 個接面全部只能黏 ⇒ 32 個內側墊塊、16 個接面對到；最上面那一刀殼斜得太厲害（墊塊會凸出殼外、退了又碰不到殼）4 個接面、8 個位置放不了（照講）',
+    L.pd.joints.length === 20 && L.pd.joints.every(j => !j.dowels) && L.plan.spots.length === 32 && L.J.filter(j => j.covered).length === 16 && L.plan.skipped === 8
+    && L.J.filter(j => !j.covered).every(j => j.a === 1 && Math.abs(j.c - L.cuts[1][1]) < 1e-9),
+    JSON.stringify({ spots: L.plan.spots.length, covered: L.J.filter(j => j.covered).length, skipped: L.plan.skipped }));
+  const ins = L.plan.spots.map(x => SB.bossInwardMM(x, L.plan.r));
+  ok('★★ 燈罩：墊塊外緣都在殼外面往內 0.5 mm 以上、往殼裡面凸 4.4 mm', L.plan.spots.every(x => x.ins >= 0.05 - 1e-9) && Math.abs(Math.min(...ins) - 4.4) < 0.05 && Math.abs(Math.max(...ins) - 4.4) < 0.05, `${Math.min(...ins).toFixed(2)}～${Math.max(...ins).toFixed(2)}`);
+  ok('★★★ 墊塊都碰得到殼（往內退之後跟殼至少重疊 0.5 mm）—— 本機抓到：燈罩斜的那一段退了 2.5 mm、殼只有 2 mm ⇒ 墊塊離開殼、切開多 8 塊飄著的小碎塊', L.plan.spots.every(x => x.ins <= x.thick - 0.05 + 1e-9));
+  const bd = SB.bossDowels(L.plan);
+  ok('★★★ 銷直接打在墊塊中心：一個墊塊一根 ⌀3、孔深 6 mm；孔＋孔外的料包在墊塊裡（0.165 ＋ 0.12 ≤ 墊塊半徑 0.295）',
+    bd.length === 32 && bd.every((x, i) => x.dMM === 3 && x.p.every((v, k) => v === L.plan.spots[i].p[k]) && Math.abs(x.depth - 0.6) < 1e-9 && x.boss)
+    && bd.length > 0 && bd[0].r + 0.12 <= L.plan.r + 1e-9, JSON.stringify([(bd[0] || {}).r, L.plan.r]));
+  const u = unionMeshes([lamp(), ...L.plan.spots.map(x => SB.bossMesh(x))]);
+  const c2 = B.openCut(u, '燈罩＋墊塊');
+  const sp = c2.body.split(bd.map(x => ({ a: x.a, p: x.p, r: x.r, depth: x.depth })), L.cuts);
+  c2.body.close();
+  ok('★★★ 燈罩加了墊塊照樣切成 12 塊（跟沒加一樣、沒有飄著的小碎塊）、挖了 32 個孔', sp.pieces.length === 12 && L.n0 === 12 && sp.socketVol > 0 && sp.pieces.every(m => Math.abs(m.volume()) > 1), `${sp.pieces.length} ${L.n0}`);
+
+  const H = await run(helmet());
+  ok('★★★ T16 頭盔（殼 3 mm）：以前 4 個接面裡 1 個只能黏、兩側沒對位 ⇒ 4 個接面都有墊塊；6 個墊塊（⌀3 那一號放不下的換 ⌀1.75 那一號）、2 個位置放不了（照講）；往裡凸 0.7～3.4 mm',
+    H.J.length === 4 && H.pd.joints.filter(j => j.noRoom).length === 1 && H.J.every(j => j.covered && j.boss) && H.plan.spots.length === 6 && H.plan.skipped === 2
+    && new Set(H.plan.spots.map(x => x.spec.dMM)).size === 2 && SB.bossDowels(H.plan).some(x => x.dMM === 1.75)
+    && Math.abs(Math.min(...H.plan.spots.map(x => SB.bossInwardMM(x))) - 0.7) < 0.05 && Math.abs(Math.max(...H.plan.spots.map(x => SB.bossInwardMM(x))) - 3.4) < 0.05,
+    JSON.stringify({ spots: H.plan.spots.length, skipped: H.plan.skipped }));
+  ok('★★ 頭盔：墊塊離已經放好的銷都有 2 cm 以上（⛔ 擠在一起）', H.plan.spots.every(x => H.pd.dowels.every(d => d.a !== x.a || Math.hypot(d.p[0] - x.p[0], d.p[1] - x.p[1], d.p[2] - x.p[2]) >= 2)));
+  const X = await run(solidBox());
+  ok('★★ 實心的方塊（銷放得下）⇒ 一個墊塊都不加；接面照舊 20 個有銷', X.plan.spots.length === 0 && X.J.length === 20 && X.J.every(j => j.covered && !j.boss));
+  ok('★ placeDowels() 的接面記著它的格子（墊塊算進哪一個接面用）', L.pd.joints.every(j => Array.isArray(j.cell) && j.cell.length === 4));
+
+  // 讀程式守著
+  const cp = readFileSync(join(here, '../js/ui/bedCutPage.js'), 'utf8');
+  ok('★★ 讀程式守著：「薄殼加內側墊塊」預設開、勾選格、改了重算；墊塊照 planBosses() 放、加了墊塊的實體照刀與墊塊記著、銷＝原本的＋墊塊中心的',
+    /if \(o\.shellBoss === undefined\) o\.shellBoss = true;/.test(cp) && /<input type="checkbox" data-k="boss"> 薄殼加內側墊塊<\/label>/.test(cp)
+    && /\$\('boss'\)\.onchange = \(\) => \{ o\.shellBoss = \$\('boss'\)\.checked; p\.saveOpt\(\); this\._compute\(\); \};/.test(cp)
+    && /plan = planBosses\(s\.world, s\.cuts, s\.bb, o\.dowel, pd\.dowels\);/.test(cp) && /this\._ct = setTimeout\(\(\) => \{ if \(this\.s === s\) this\._computeNow\(\); \}, 30\);/.test(cp) && /if \(o\.shellBoss !== false && plan\.spots\.length\)/.test(cp)
+    && /socks = \[\.\.\.pd\.dowels, \.\.\.bossDowels\(plan\)\];/.test(cp) && /specs: dowelSpecs\(socks\)/.test(cp));
+  ok('★★ 讀程式守著：說明講加了幾個墊塊、凸多少（一樣就寫一個數）、幾個接面；關掉時講殼太薄沒對位；只能黏照有沒有墊塊算',
+    /薄殼放不下銷的地方加了 \$\{nb\} 個內側墊塊/.test(cp) && /從殼裡面凸出 \$\{lo === hi \? lo : lo \+ '～' \+ hi\} mm/.test(cp) && /殼太薄、有 \$\{jn\} 個接面放不下銷的地方沒有對位/.test(cp) && /const bad = r\.joints\.filter\(j => j\.noRoom && !j\.boss\);/.test(cp));
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

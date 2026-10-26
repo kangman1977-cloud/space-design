@@ -21,7 +21,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openCut, planCuts, placeDowels, dowelSpecs, segments, fitBed, AXIS_NAME, DOWEL, SMALLER, smallClear,
   COUPON, COUPON_N_MIN, COUPON_N_MAX, couponPlan, couponWhich } from '../out/bedCut.js';
-import { couponSolids } from '../build/bool.js';
+import { couponSolids, unionMeshes } from '../build/bool.js';
+import { planBosses, bossMesh, bossDowels, withBosses, bossInwardMM } from '../out/shellBoss.js';
 import { triangles, bedLayout, toSTLBinary, toSTLAscii, STL_UNITS } from '../out/stl.js';
 import { to3MF } from '../out/threemf.js';
 import { saveBlob, binaryBlob, textBlob, TYPES } from '../out/save.js';
@@ -50,7 +51,7 @@ export class BedCutPage {
       p.app.toast(`切不了：${e.message} —— 先把模型修成封閉的實體（「補洞」「修法向」）再切`, true);
       return;
     }
-    this.s = { it, obj: it.obj, body: cut.body, bb: cut.bb, grid: null, cuts: null, res: null, busy: false, stop: false, secs: 0 };
+    this.s = { it, obj: it.obj, world, body: cut.body, bb: cut.bb, grid: null, cuts: null, res: null, busy: false, stop: false, secs: 0, bossCut: null };
     this._frame();
     await this._plan();
   }
@@ -58,6 +59,7 @@ export class BedCutPage {
   close() {
     if (!this.s) return;
     try { this.s.body.close(); } catch (e) { /* 已釋放過，忽略 */ }
+    if (this.s.bossCut) { try { this.s.bossCut.body.close(); } catch (e) { /* 已釋放過，忽略 */ } }
     this.s.stop = true;
     this.s = null;
     if (this.gl) { this._clearScene(); }
@@ -69,6 +71,8 @@ export class BedCutPage {
     /** 第三輪第二批 ④：9a 存的沒有這一格；⚠ `{ ...DOWEL }` 的陣列跟預設共用一份 ⇒ 換成自己的（不然改一格會改到預設）*/
     if (!Array.isArray(o.dowel.smallClearMM) || o.dowel.smallClearMM === DOWEL.smallClearMM) o.dowel.smallClearMM = SMALLER.map((s, i) => smallClear(o.dowel, i));
     if (!o.cutMode) o.cutMode = 'smart';
+    /** 第三輪第五批 5c（kang 2026-10-26「② 甲 預設開、切塊頁一格可以取消」）：薄殼加內側墊塊 —— 跟人走 */
+    if (o.shellBoss === undefined) o.shellBoss = true;
     if (!o.coupon) o.coupon = { ...COUPON };
     if (!o.coupon.which) { o.coupon.which = couponWhich(o.coupon); delete o.coupon.smaller; }     // 第三輪第二批 ③：9b 存的是勾選格
     return o;
@@ -98,6 +102,7 @@ export class BedCutPage {
         <span class="lbl">孔比銷每邊大 mm</span><input type="number" data-k="clear" step="0.05" min="0" style="width:60px">
         <span class="lbl">每個接面最多</span><input type="number" data-k="per" step="1" min="1" max="6" style="width:48px"><span class="lbl">根</span>
         <label class="uwCk" title="⌀${DOWEL.dMM} 放不下的地方換 ${SMALLER.map(s => '⌀' + s.dMM).join(' → ')}（⌀1.75 可以剪一段耗材當銷）"><input type="checkbox" data-k="smaller"> 放不下換小一號</label>
+        <label class="uwCk" title="殼太薄放不下銷的地方（最小的 ⌀1.75 也要約 4 mm 寬），在殼的內側加小圓柱墊塊、橫跨切面，銷打在墊塊中心 —— 外面看不到、裡面會凸出幾 mm；不要就取消勾（照舊只能黏）"><input type="checkbox" data-k="boss"> 薄殼加內側墊塊</label>
         <span data-k="sbox">${SMALLER.map((s, i) => `<span class="lbl" data-k="sl${i}">⌀${s.dMM} 每邊大 mm</span><input type="number" data-k="sc${i}" step="0.05" min="0" style="width:60px" title="⌀${s.dMM} 的孔比銷每邊大多少（試片 ⌀${s.dMM} 那一排挑好的數字填這裡）">`).join('')}</span>
       </div>
       <div class="uwBar" title="先印這個：一排孔、每格孔比銷每邊大一點點，旁邊刻著數字；插插看挑剛好的那一格，把數字填回上面那一號的每邊大">
@@ -133,6 +138,8 @@ export class BedCutPage {
       $('sc' + i).onchange = () => { const v = parseFloat($('sc' + i).value); if (Number.isFinite(v) && v >= 0) d.smallClearMM[i] = v; $('sc' + i).value = smallClear(d, i); p.saveOpt(); this._compute(); };
     });
     this._smallBox();
+    $('boss').checked = o.shellBoss !== false;
+    $('boss').onchange = () => { o.shellBoss = $('boss').checked; p.saveOpt(); this._compute(); };
     $('go').onclick = () => this._apply();
     const cp = o.coupon;
     $('cn').value = cp.n;
@@ -217,20 +224,49 @@ export class BedCutPage {
   }
 
   // ── 放插銷、切開（預覽就是真的切出來的那一份）─────────
+  /**
+   * 5c：放銷＋薄殼墊塊（射線檢查）在平滑過的大殼上要好幾秒 ⇒ 先講「正在…」、下一拍再算（同 3D 列印檢查表的做法）；
+   * 算的時候「切開」按不了，視窗換掉了就不算。
+   */
   _compute() {
     const s = this.s; if (!s || !s.cuts || s.busy) return;
+    this._busy('正在放定位銷' + (this._opt.shellBoss !== false ? '、看薄殼哪裡要加墊塊' : '') + '…（大的殼要幾秒）', false);
+    clearTimeout(this._ct);
+    this._ct = setTimeout(() => { if (this.s === s) this._computeNow(); }, 30);
+  }
+
+  _computeNow() {
+    const s = this.s; if (!s || !s.cuts || s.busy) return;
     const o = this._opt;
-    let pd, sp;
+    let pd, sp, plan, boss = null, socks;
     try {
       pd = placeDowels(s.body, s.bb, s.cuts, o.dowel);
-      sp = s.body.split(pd.dowels.map(x => ({ a: x.a, p: x.p, r: x.r, depth: x.depth })), s.cuts);
+      /**
+       * 🔴 **第三輪第五批 5c 薄殼加內側墊塊**（kang 2026-10-26「① 乙 ② 甲」）：殼太薄放不下銷的地方，殼的內側加小圓柱、銷打在墊塊中心
+       * （`out/shellBoss.js`）。關著也先算墊塊會放哪 ⇒ 好講「有幾個接面殼太薄沒對位」。加了墊塊的那一份實體照刀與墊塊記著（改銷的設定不用重算）。
+       */
+      plan = planBosses(s.world, s.cuts, s.bb, o.dowel, pd.dowels);
+      let body = s.body;
+      socks = pd.dowels;
+      if (o.shellBoss !== false && plan.spots.length) {
+        const key = JSON.stringify([s.cuts, plan.spots.map(x => x.p), plan.r, plan.half]);
+        if (!s.bossCut || s.bossCut.key !== key) {
+          if (s.bossCut) { try { s.bossCut.body.close(); } catch (e) { /* 已釋放過，忽略 */ } }
+          const u = unionMeshes([s.world, ...plan.spots.map(x => bossMesh(x, plan.r, plan.half))]);
+          s.bossCut = { key, body: openCut(u, s.obj.name).body };
+        }
+        body = s.bossCut.body;
+        boss = plan;
+        socks = [...pd.dowels, ...bossDowels(plan)];
+      }
+      sp = body.split(socks.map(x => ({ a: x.a, p: x.p, r: x.r, depth: x.depth })), s.cuts);
     } catch (e) { this._busy('切不了：' + e.message, false); return; }
     const bedU = o.bedMM;
     const fits = sp.pieces.map(m => {
       const pts = m.verts.map(v => [v.p.x * 10, -v.p.z * 10, v.p.y * 10]);
       return fitBed(pts, bedU);
     });
-    s.res = { pd, pieces: sp.pieces, fits, specs: dowelSpecs(pd.dowels), socketVol: sp.socketVol };
+    s.res = { pd, pieces: sp.pieces, fits, specs: dowelSpecs(socks), socketVol: sp.socketVol, plan, boss, joints: withBosses(pd.joints, boss || { spots: [] }) };
     this._out();
     this._draw();
   }
@@ -263,13 +299,29 @@ export class BedCutPage {
         + (smaller ? `；⌀${o.dowel.dMM} 放不下的 ${smaller} 根換了小一號` : '')
         + `；孔比銷每邊大 ${r.specs.map(x => (r.specs.length > 1 || x.dMM !== o.dowel.dMM ? `⌀${x.dMM} ` : '') + this._clearOf(x.dMM)).join('、')} mm（太緊就加、會晃就減）`
       : '一根定位銷都放不下 —— 只能黏');
-    const bad = pd.joints.filter(j => j.noRoom);
+    /** 5c：墊塊 */
+    const pl = r.plan, nb = pl ? pl.spots.length : 0;
+    if (r.boss) {
+      const ins = r.boss.spots.map(x => bossInwardMM(x, r.boss.r));
+      const lo = Math.min(...ins).toFixed(1), hi = Math.max(...ins).toFixed(1);
+      const jn = r.joints.filter(j => j.boss).length;
+      const sizes = [...new Set(r.boss.spots.map(x => `⌀${(2 * x.r * 10).toFixed(1)} × ${(2 * x.half * 10).toFixed(0)}`))].join('、');
+      const pins = [...new Set(r.boss.spots.map(x => '⌀' + x.spec.dMM))].join('、');
+      line('uwSkip', `薄殼放不下銷的地方加了 ${nb} 個內側墊塊（${sizes} mm 的小圓柱、橫跨切面，`
+        + `從殼裡面凸出 ${lo === hi ? lo : lo + '～' + hi} mm；外面看不到）：${jn} 個接面，${pins} 的銷打在墊塊中心`
+        + (r.boss.skipped ? `；有 ${r.boss.skipped} 個位置（殼斜得太厲害）墊塊會凸出殼外或碰不到殼、沒放` : '')
+        + ' —— 不要墊塊就取消勾「薄殼加內側墊塊」');
+    } else if (nb && o.shellBoss === false) {
+      const jn = new Set(pl.spots.map(x => x.joint)).size;
+      line('uwCaution', `殼太薄、有 ${jn} 個接面放不下銷的地方沒有對位 —— 勾「薄殼加內側墊塊」會在殼的內側加小圓柱、銷打在裡面（外面看不到）`);
+    }
+    const bad = r.joints.filter(j => j.noRoom && !j.boss);
     if (bad.length) {
       line('uwCaution', `有 ${bad.length} 個接面${o.dowel.smaller ? '連最小的銷' : '銷'}都放不下，只能黏：`
         /** 第三輪第三批 ②-10（kang「④ 甲 每一刀一行」）：同一刀合成一個、寫幾個接面（以前同一刀連寫 6 次，看不出是哪幾個）*/
         + [...new Set(bad.map(j => j.a + ':' + j.c))].map(k => {
           const [a, c] = [+k.split(':')[0], bad.find(j => j.a + ':' + j.c === k).c];
-          const nAll = pd.joints.filter(j => j.a === a && j.c === c).length, nBad = bad.filter(j => j.a === a && j.c === c).length;
+          const nAll = r.joints.filter(j => j.a === a && j.c === c).length, nBad = bad.filter(j => j.a === a && j.c === c).length;
           return `${AXIS_NAME[a]}那一刀（從${FROM[a]} ${((c - s.bb.min[a]) * 10).toFixed(0)} mm）${nBad === nAll ? `${nAll} 個接面全部` : `${nAll} 個接面裡 ${nBad} 個`}`;
         }).join('、')
         + (o.dowel.smaller ? '' : ' —— 勾「放不下換小一號」試試'));
