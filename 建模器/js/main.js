@@ -22,6 +22,7 @@ import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL
   from './build/bool.js';
 import { DOWEL_CHAMFER_MM } from './out/bedCut.js';
 import { install as installAI } from './ai/assist.js';
+import { install as installAIDo } from './ai/do.js';
 import { ARRAY_MODES, ARRAY_LABEL } from './build/array.js';
 import { History } from './core/history.js';
 import { SceneView } from './view/scene.js';
@@ -8766,5 +8767,8 @@ boot();   // 非同步：要先等布林函式庫載完才碰文件
 
 // 開發時方便在主控台看東西
 window.APP = app;
-/** AI 協作第一步（2026-10-25，kang 同意 → `AI協作-設計方向.md`）：Claude 用頁面工具叫 `AI.看()`、`AI.指給你看()`……；⛔ 改模型、⛔ 多按鈕 */
-installAI(app);
+/**
+ * AI 協作第一步（2026-10-25，kang 同意 → `AI協作-設計方向.md`）：Claude 用頁面工具叫 `AI.看()`、`AI.指給你看()`……；⛔ 多按鈕。
+ * 第二步「做」（2026-10-26，kang「同意」）：`AI.選物件()`、`AI.按()`、`AI.填()`…… 走跟滑鼠同一條路（`ai/do.js`），一起掛在 `window.AI`。
+ */
+installAI(app, installAIDo(app));

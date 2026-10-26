@@ -16,6 +16,10 @@
  *
  * 定案（kang「同意你的建議」）：① 外框會輕輕閃＋一行字（不擋別的地方）② 留到按了那一顆或按「知道了」
  * ③「看」預設精簡：視窗上的檢查結果照畫面上的字讀（跟 kang 看到的一模一樣，⛔ 重算）—— 要檢查就打開那個視窗再看。
+ *
+ * 第二步「做」（kang 2026-10-26「同意」）：選物件、按、填、選、勾、等、這一段 在 `do.js`，一樣掛在 `window.AI` 底下；
+ * 這一支只多兩樣「看」（③ 甲）：選著的物件**面板上的紅字、藍字**（`readPanel()`）、物件的**體積**（`objectInfo()`）。
+ * ⚠ 這一支照舊 ⛔ 改模型、⛔ 改選取 —— 會動東西的都在 `do.js`。
  */
 
 import * as THREE from 'three';
@@ -25,6 +29,7 @@ const KIND_NAME = { solid: '實體', sheet: '板件' };
 const TYPE_NAME = { mesh: '可編輯網格', bool: '布林', revolve: '旋轉成形' };
 const EL_NAME = { vert: '點', edge: '邊', face: '面' };
 const r2 = x => Math.round(x * 100) / 100;
+const visible = el => !!el && el.offsetParent !== null && !el.closest('[hidden]');
 
 /** 網格照物件的位置角度縮放換成世界座標之後的外框（cm）*/
 function worldBox(m, m4) {
@@ -49,11 +54,16 @@ export function objectInfo(o) {
   const { lo, hi, size } = worldBox(m, m4);
   const t = o.src && o.src.type;
   let smooth = null;
+  const sm = o.smoothed ? o.smoothMesh() : m;
   if (o.smoothed) {
-    const sm = o.smoothMesh();
     const s = worldBox(sm, m4).size;
     smooth = { 磨幾次: o.subd, 外框cm: { 寬X: s[0], 高Y: s[1], 深Z: s[2] }, 面數: sm.faces.length };
   }
+  /**
+   * 第二步 ③ 甲（kang 2026-10-26）：報體積 —— 跟面板「結構分析」同一個算法（`toolbar.js` `analyse()`）：
+   * 有平滑細分照平滑後的、封閉的才有、乘物件的縮放（|sx·sy·sz|）。開放的（板件、開口的殼）⛔ 報。
+   */
+  const vol = sm.isClosed() ? r2(sm.volume() * Math.abs(o.scale.x * o.scale.y * o.scale.z)) : null;
   return {
     名稱: o.name,
     種類: KIND_NAME[o.kind] || o.kind,
@@ -67,6 +77,7 @@ export function objectInfo(o) {
     ...(smooth ? { 平滑後: smooth } : {}),
     面數: m.faces.length,
     封閉: m.isClosed(),
+    ...(vol !== null ? { 體積cm3: vol } : {}),
     ...(o.error ? { 錯誤: o.error } : {})
   };
 }
@@ -109,8 +120,19 @@ export function toastWords(el, now = Date.now()) {
   return Number.isFinite(at) && at > 0 ? `（已經消失，${Math.max(0, Math.round((now - at) / 1000))} 秒前）${t}` : `（已經消失）${t}`;
 }
 
-/** 「看」：現在的狀態（`windows` ＝ `readWindows()` 的結果；node 測試直接給）*/
-export function lookState(app, windows = [], toast = '') {
+/**
+ * 第二步 ③ 甲（kang 2026-10-26）：右邊物件面板上的字 —— 紅字（`.badNote`：算不出來、要處理的）、藍字（`.note`：說明）。
+ * 照畫面上的字讀（同 `readWindows()`）；面板收著、或沒有選物件 ⇒ `null`。
+ */
+export function readPanel(root) {
+  const f = root.querySelector('#pForm');
+  if (!f || f.hidden) return null;
+  const words = sel => [...f.querySelectorAll(sel)].filter(visible).map(x => x.textContent.trim()).filter(Boolean);
+  return { 紅字: words('.badNote'), 藍字: words('.note') };
+}
+
+/** 「看」：現在的狀態（`windows` ＝ `readWindows()` 的結果、`panel` ＝ `readPanel()` 的；node 測試直接給）*/
+export function lookState(app, windows = [], toast = '', panel = null) {
   const { doc, sel, hist } = app;
   const es = sel.editSels || [];
   const picked = es.length ? { [EL_NAME[es[0].kind] || es[0].kind]: es.length } : {};
@@ -119,6 +141,7 @@ export function lookState(app, windows = [], toast = '') {
     模式: { 拉點線面: !!sel.editMode, 開著的視窗: windows },
     選取: { 物件: sel.objects.map(o => o.name), ...picked },
     物件: doc.objects.map(objectInfo),
+    ...(panel && sel.active ? { 物件面板: { 物件: sel.active.name, ...panel } } : {}),
     復原紀錄: { 上一步: hist.undoLabel, 下一步: hist.redoLabel },
     最近的提示: toast
   };
@@ -131,11 +154,14 @@ export function lookText(L) {
     + (o.平滑後 ? `（平滑細分磨 ${o.平滑後.磨幾次} 次，平滑後 ${box(o.平滑後.外框cm)}）` : '')).join('、');
   const sel = L.選取.物件.length ? `選著「${L.選取.物件.join('」「')}」` : '沒有選東西';
   const els = Object.entries(L.選取).filter(([k]) => k !== '物件').map(([k, n]) => `${n} 個${k}`).join('');
+  const P = L.物件面板;
   return `畫面上有 ${L.文件.物件數} 個物件：${objs || '沒有'}。`
     + `${sel}${els ? `（選了 ${els}）` : ''}。`
     + (L.模式.拉點線面 ? '現在在「拉點線面」。' : '')
     + L.模式.開著的視窗.map(w => w.按鈕 ? `跳出詢問：「${w.摘要}」（${w.按鈕.join('／')}）。` : `開著「${w.視窗}」視窗${w.摘要 ? '：' + w.摘要 : ''}`
       + (w.提醒共 ? `；有 ${w.提醒共} 則提醒，第一則：${w.提醒[0].length > 80 ? w.提醒[0].slice(0, 80) + '…' : w.提醒[0]}` : '') + '。').join('')
+    + (P ? (P.紅字.length ? `「${P.物件}」面板上的紅字：${P.紅字.map(s => `「${s}」`).join('')}。` : '')
+      + (P.藍字.length ? `面板上有 ${P.藍字.length} 則說明（藍字）。` : '') : '')
     + (L.復原紀錄.上一步 ? `上一步是「${L.復原紀錄.上一步}」。` : '');
 }
 
@@ -176,8 +202,6 @@ function ensureStyle() {
   document.head.appendChild(st);
 }
 
-const visible = el => !!el && el.offsetParent !== null && !el.closest('[hidden]');
-
 /**
  * 🔴 1b（2026-10-25 kang 實測抓到）：找到的是**名字**（label）⇒ 連它旁邊要打字／要選的那一格一起框。
  * 以前只框得到「保持尖的轉折（°）」那幾個字，數字格本身沒有字找不到。
@@ -197,8 +221,9 @@ export function controlOf(el) {
 /**
  * 掛上 `window.AI`。⚠ 只在瀏覽器（main.js 建好 app 之後）。
  * @param {object} app main.js 的 app（doc、sel、hist、view、toast）
+ * @param {object} [extra] 第二步「做」的指令（`do.js` `install()` 回傳的），一起放進 `window.AI`
  */
-export function install(app) {
+export function install(app, extra = {}) {
   let ring = null, tip = null, target = null, field = null, onClick = null, onChange = null, pressed = null, objShown = false;
 
   const unpoint = () => {
@@ -275,7 +300,7 @@ export function install(app) {
     return { 好了: true };
   };
 
-  const look = () => lookState(app, readWindows(document), toastWords(document.getElementById('toast')));
+  const look = () => lookState(app, readWindows(document), toastWords(document.getElementById('toast')), readPanel(document));
 
   window.AI = Object.freeze({
     看: look,
@@ -283,6 +308,7 @@ export function install(app) {
     指給你看: pointAt,
     指物件: pointObj,
     收掉: () => { unpoint(); return { 好了: true }; },
-    按了沒: () => pressed
+    按了沒: () => pressed,
+    ...extra
   });
 }

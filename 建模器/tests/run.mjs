@@ -21577,7 +21577,7 @@ section('AI 協作第一步：看、指給你看（2026-10-25）');
     /field = controlOf\(target\);/.test(src) && /const a = target\.getBoundingClientRect\(\), b = field \? field\.getBoundingClientRect\(\) : a;/.test(src)
     && /onChange = \(\) => \{ pressed = \{ 改了: q, 值: field\.value,/.test(src) && /field\.addEventListener\('change', onChange, true\);\s*\} else target\.addEventListener\('click', onClick, true\);/.test(src));
   ok('★★ 讀程式守著：window.AI 六個（看、看文字、指給你看、指物件、收掉、按了沒）、凍結；主程式建好 app 之後掛上',
-    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,200}installAI\(app\);/.test(mn));
+    /window\.AI = Object\.freeze\(\{\s*看: look,\s*看文字:[\s\S]*?指給你看: pointAt,\s*指物件: pointObj,\s*收掉:[\s\S]*?按了沒: \(\) => pressed/.test(src) && /window\.APP = app;[\s\S]{0,600}installAI\(app(, installAIDo\(app\))?\);/.test(mn));
   ok('★★ 讀程式守著（定案 ①②）：外框會閃（aiPulse）、一行字前面寫 Claude、「知道了」收掉；kang 按了那一顆 ⇒ 記下來、收掉；⛔ 自己幾秒消失',
     /animation: aiPulse/.test(src) && /who\.textContent = 'Claude'/.test(src) && /ok\.textContent = '知道了';\s*ok\.onclick = \(\) => unpoint\(\);/.test(src)
     && /onClick = \(\) => \{ pressed = \{ 按了: q, 時間:[^}]*\}; unpoint\(\); \};/.test(src) && !/setTimeout\(/.test(src));
@@ -21906,7 +21906,7 @@ if (csgOK) {
     && AS.toastWords(el('已用紅框標出 142 個翻過來的小面', false, 1000), 4000) === '（已經消失，3 秒前）已用紅框標出 142 個翻過來的小面'
     && AS.toastWords(el('x', false, 0), 4000) === '（已經消失）x' && AS.toastWords(el('', false, 0)) === '' && AS.toastWords(null) === '');
   const asS = src('ai/assist.js'), mn = src('main.js');
-  ok('★★ 讀程式守著（③）：AI.看() 用 toastWords 讀提示；main.js 的提示記出現的時間', /lookState\(app, readWindows\(document\), toastWords\(document\.getElementById\('toast'\)\)\)/.test(asS) && /el\.dataset\.at = String\(Date\.now\(\)\);/.test(mn));
+  ok('★★ 讀程式守著（③）：AI.看() 用 toastWords 讀提示；main.js 的提示記出現的時間', /lookState\(app, readWindows\(document\), toastWords\(document\.getElementById\('toast'\)\)(, readPanel\(document\))?\)/.test(asS) && /el\.dataset\.at = String\(Date\.now\(\)\);/.test(mn));
 } else {
   ok('（略過：CSG 沒載入）', true);
 }
@@ -21960,6 +21960,192 @@ if (csgOK) {
     && /中心線是自動放的：在線的最左邊 ⇒ \$\{h0 \? '起點' : '終點'\}那一頭剛好在中心線上、封起來（碗底）。/.test(tb) && /要那一頭開口（像燈罩）：下面「起點離中心線 cm」打起點那一圈要的半徑（中心線跟著挪、線不動），或改「中心線在」/.test(tb));
 } else {
   ok('（略過：CSG 沒載入）', true);
+}
+
+section('AI 協作第二步：做（2026-10-26）');
+{
+  /**
+   * `AI協作-設計方向.md`「第二步「做」：動工前查到的」；kang 2026-10-26「同意」：① 甲 通用的六個指令 ② 乙 視窗裡的設定一段開始問一次、做完改回
+   * ③ 甲「看」一起補（物件面板的紅字藍字、體積）。指令在 `js/ai/do.js`；這裡用假的畫面（只有用到的那幾個）跑一遍。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const AI = await import('../js/ai/assist.js');
+  const DO = await import('../js/ai/do.js');
+  const mk = (type, over = {}) => new io.ModelObject({ name: over.name || type, src: prim.defaultSrc(type), ...over });
+
+  // ③ 甲：體積（跟面板「結構分析」同一個算法）
+  const box = mk('box', { name: '方塊 1' }), b2 = mk('box', { name: '寬兩倍' }), dome = mk('dome', { name: '半球 2' });
+  b2.scale.set(2, 1, 1);
+  const sd = mk('dome', { name: '半球殼' }); sd.bake(); sd.subd = 2;
+  const pl = mk('plate', { name: '板', kind: 'sheet' }); pl.subd = 0;
+  ok('★★★ ③ 體積：方塊 60 × 45 × 40 ⇒ 108000 cm³；寬放大兩倍 ⇒ 216000（乘物件的縮放，同結構分析）；半球 55646.21',
+    AI.objectInfo(box).體積cm3 === 108000 && AI.objectInfo(b2).體積cm3 === 216000 && AI.objectInfo(dome).體積cm3 === 55646.21, [box, b2, dome].map(o => AI.objectInfo(o).體積cm3).join());
+  ok('★★ ③ 勾了平滑細分 ⇒ 體積照平滑後的（54869.46，⛔ 粗網格的 55646.21 —— 面板、量測、出口用的都是平滑後的）', AI.objectInfo(sd).體積cm3 === 54869.46, AI.objectInfo(sd).體積cm3);
+  ok('★ ③ 開放的（板件）⛔ 報體積', !('體積cm3' in AI.objectInfo(pl)));
+
+  // ③ 甲：物件面板上的紅字、藍字（照畫面上的字讀）
+  const fnode = (text, shown = true) => ({ textContent: text, offsetParent: shown ? {} : null, closest: () => null });
+  const pForm = (hidden, red, blue) => ({ hidden, querySelectorAll: s => (s === '.badNote' ? red : s === '.note' ? blue : []) });
+  const proot = f => ({ querySelector: s => (s === '#pForm' ? f : null) });
+  const P = AI.readPanel(proot(pForm(false, [fnode('布林算不出來：兩個物件沒有碰到')], [fnode(' 旋轉成形：中心線是自動放的… '), fnode('藏起來的', false), fnode('')])));
+  ok('★★★ ③ 面板：紅字（.badNote）、藍字（.note）照畫面上的字讀；藏起來的、空的不算',
+    P.紅字.join() === '布林算不出來：兩個物件沒有碰到' && P.藍字.join('|') === '旋轉成形：中心線是自動放的…', JSON.stringify(P));
+  ok('★ ③ 面板收著／沒有面板 ⇒ null', AI.readPanel(proot(pForm(true, [], []))) === null && AI.readPanel(proot(null)) === null);
+  const appP = { doc: { head: {}, objects: [box] }, sel: { objects: [box], active: box, editSels: [] }, hist: { undoLabel: null } };
+  const LP = AI.lookState(appP, [], '', P);
+  ok('★★ ③ 看：「物件面板」寫是哪個物件的＋紅字藍字；沒有選物件 ⇒ ⛔ 報',
+    LP.物件面板 && LP.物件面板.物件 === '方塊 1' && LP.物件面板.紅字.length === 1 && LP.物件面板.藍字.length === 1
+    && !('物件面板' in AI.lookState({ ...appP, sel: { objects: [], active: null } }, [], '', P)));
+  const TP = AI.lookText(LP);
+  ok('★★ ③ 講成一段話：紅字整句講（「「方塊 1」面板上的紅字：「布林算不出來…」。」）、藍字講幾則', TP.includes('「方塊 1」面板上的紅字：「布林算不出來：兩個物件沒有碰到」。面板上有 1 則說明（藍字）。'), TP);
+  ok('★ ③ 沒有面板的字 ⇒ 一段話跟以前一樣', AI.lookText(AI.lookState(appP, [])) === '畫面上有 1 個物件：「方塊 1」方塊 60 × 45 × 40 cm。選著「方塊 1」。');
+
+  // 先問：會丟東西或改到 kang 電腦上的
+  const askT = ['新建', '讀檔', '存檔', '匯入線稿', '匯入 3D 模型', '匯出 OBJ', '匯出 STL', '存 SVG', '存 DXF', '存試片', '存試卡片', '存 OBJ', '列印'];
+  const freeT = ['展開圖', '剖面分切', '3D 列印', '關閉', '確定', '全部入鏡', '旋轉成形', '切成放得下的塊', '列印設定', '新建立方塊'];
+  ok('★★★ 先問的按鈕：新建、讀檔、存檔、匯入…、匯出…、存 SVG／DXF／OBJ／試片／試卡片、列印；展開圖、剖面分切、3D 列印、旋轉成形… 不用問',
+    askT.every(DO.needAsk) && !freeT.some(DO.needAsk), askT.filter(t => !DO.needAsk(t)).concat(freeT.filter(DO.needAsk)).join());
+  ok('★★ 復原紀錄名字前面「AI：」；已經有的不重複；空的不動', DO.aiLabel('開旋轉成形') === 'AI：開旋轉成形' && DO.aiLabel('AI：開旋轉成形') === 'AI：開旋轉成形' && DO.aiLabel('') === '' && DO.aiLabel(null) === null);
+
+  // ── 假的畫面：按鈕、視窗、勾選格、數字格 ──
+  const saved = { document: globalThis.document, gcs: globalThis.getComputedStyle };
+  const labels = [];
+  const hist = { stack: [], commit(l) { this.stack.push(l); }, get undoLabel() { return this.stack[this.stack.length - 1] || null; }, redoLabel: null };
+  const fakeEl = (tag, o = {}) => ({ tagName: tag, textContent: '', title: '', offsetParent: {}, disabled: false, isConnected: true, win: null,
+    closest(s) { return s === '.uwWin' ? this.win : s === '[hidden]' ? (this.win && this.win.hidden ? this.win : null) : null; }, ...o });
+  let clicked = [];
+  const btn = (text, win = null, onClick = null) => fakeEl('BUTTON', { textContent: text, win, click() { clicked.push(text); if (onClick) onClick(); } });
+  const mkWin = (title, kids, z = 60, ask = null) => {
+    const w = { hidden: false, id: title, z, kids,
+      querySelector: s => (s === '#askMsg' ? ask : s === '.uwHead b' && !ask ? { textContent: title } : null),
+      querySelectorAll: s => kids.filter(k => s.split(', ').some(x => k.sel === x)) };
+    for (const k of kids) k.win = w;
+    return w;
+  };
+  const revCb = fakeEl('INPUT', { type: 'checkbox', checked: false, click() { this.checked = !this.checked; hist.commit(this.checked ? '開旋轉成形' : '關旋轉成形'); } });
+  const revLab = fakeEl('LABEL', { textContent: '旋轉成形', querySelector: s => (s === 'input[type=checkbox]' ? revCb : null), sel: 'label' });
+  const objBtn = btn('轉成可編輯網格');
+  const top = [btn('讀檔'), btn('展開圖'), objBtn, revLab];
+  for (const b of top) b.sel = b.sel || 'button';
+  const ev = [];
+  const thick = fakeEl('INPUT', { type: 'number', value: '1', focus() {}, dispatchEvent(e) { ev.push(e.type); } });
+  const thLab = fakeEl('SPAN', { textContent: '板厚', sel: '.lbl', compareDocumentPosition: () => 4 });
+  thLab.parentElement = { querySelectorAll: s => (s === 'input' ? [thick] : []) };
+  const slWin = mkWin('剖面分切', [Object.assign(btn('關閉'), { sel: 'button' }), thLab, Object.assign(thick, { sel: 'input' })]);
+  slWin.hidden = true;
+  const askWin = mkWin('askWin', [Object.assign(btn('取消'), { sel: 'button' }), Object.assign(btn('確定'), { sel: 'button' })], 80,
+    { textContent: '轉成網格之後就不能再改上面的參數了（要反悔可以馬上按 Ctrl+Z），確定嗎？' });
+  askWin.hidden = true;
+  const wins = [slWin, askWin];
+  globalThis.document = {
+    querySelectorAll: s => (s === '.uwWin' ? wins : s === 'button' ? top.filter(x => x.sel === 'button') : s === 'label' || s === 'label, .lbl' ? [revLab] : []),
+    querySelector: () => null, getElementById: () => null
+  };
+  globalThis.getComputedStyle = w => ({ zIndex: String(w.z) });
+  const sel = { ids: [], editSels: [], set(ids) { this.ids = ids; }, toggle(id) { const i = this.ids.indexOf(id); if (i >= 0) this.ids.splice(i, 1); else this.ids.push(id); },
+    get objects() { return this.ids.map(id => [box, dome].find(o => o.id === id)); }, get active() { const l = this.objects; return l[l.length - 1] || null; } };
+  const app = { doc: { head: { name: '測試' }, objects: [box, dome] }, sel, hist };
+  try {
+    const A = DO.install(app);
+    ok('★★ 掛上八個：選物件、按、填、選、勾、等、這一段、這一段結束', Object.keys(A).join() === '選物件,按,填,選,勾,等,這一段,這一段結束', Object.keys(A).join());
+    hist.commit('拉點');
+    ok('★★★ kang 自己做的 ⇒ 復原紀錄照舊（⛔ 加「AI：」）', hist.undoLabel === '拉點');
+
+    const r1 = await A.勾('旋轉成形');
+    ok('★★★ 勾：真的按一下那個勾選格（跟滑鼠同一個 click）；這一步進復原紀錄叫「AI：開旋轉成形」；回做了什麼、上一步、畫面',
+      revCb.checked === true && hist.undoLabel === 'AI：開旋轉成形' && r1.好了 && r1.做了 === '「旋轉成形」勾了' && r1.上一步 === 'AI：開旋轉成形' && r1.畫面.startsWith('畫面上有 2 個物件'), JSON.stringify(r1));
+    const n0 = hist.stack.length;
+    const r2 = await A.勾('旋轉成形', true);
+    ok('★★ 勾：已經勾著 ⇒ 不按（⛔ 按一下反而取消掉）', revCb.checked === true && hist.stack.length === n0 && r2.好了);
+    hist.commit('拉點');
+    ok('★★ AI 做完之後 kang 做的 ⇒ 照舊沒有「AI：」', hist.undoLabel === '拉點');
+    // 本機抓到：物件面板「平滑細分」的勾選格跟名字並排（⛔ 包在名字裡、也沒綁）⇒ 以前找不到
+    const smCb = fakeEl('INPUT', { type: 'checkbox', checked: false, click() { this.checked = !this.checked; hist.commit('平滑細分'); } });
+    const smLab = fakeEl('LABEL', { textContent: '平滑細分', control: null, querySelector: () => null, compareDocumentPosition: c => (c === smCb ? 4 : 2), sel: 'label' });
+    smLab.parentElement = { querySelectorAll: s => (s === 'input[type=checkbox]' ? [revCb, smCb] : []) };
+    const labs0 = document.querySelectorAll;
+    document.querySelectorAll = s => (s === 'label' ? [revLab, smLab] : labs0(s));
+    const r2b = await A.勾('平滑細分');
+    document.querySelectorAll = labs0;
+    ok('★★ 勾選格跟名字並排（物件面板「平滑細分」那種）⇒ 找同一排名字後面那一個（⛔ 找到前面別人的）', smCb.checked === true && r2b.好了 && hist.undoLabel === 'AI：平滑細分', JSON.stringify(r2b));
+
+    clicked = [];
+    const r3 = await A.按('讀檔');
+    ok('★★★ 按「讀檔」沒給 kang說好 ⇒ ⛔ 按、回「要先問」', !clicked.length && r3.好了 === false && /要先問|會丟東西/.test(r3.要先問 || ''), JSON.stringify(r3));
+    await A.按('讀檔', { kang說好: true });
+    ok('★★ kang 說好 ⇒ 按', clicked.join() === '讀檔');
+    clicked = [];
+    const r4 = await A.按('展開圖');
+    ok('★ 一般的按鈕 ⇒ 直接按', clicked.join() === '展開圖' && r4.好了 && r4.做了 === '按了「展開圖」');
+    const r5 = await A.按('沒有這顆');
+    ok('★ 找不到 ⇒ 講出來', r5.好了 === false && (r5.原因 || '').includes('找不到「沒有這顆」'));
+
+    // 跳出「確定嗎？」⇒ 停下來
+    askWin.hidden = false; clicked = [];
+    const r6 = await A.按('確定');
+    const r7 = await A.選物件('半球 2');
+    ok('★★★ 跳出「確定嗎？」⇒ 每一個指令都停下來、回那一句話；⛔ 替 kang 按「確定」',
+      !clicked.length && r6.好了 === false && (r6.停下來問 || '').startsWith('「轉成網格之後就不能再改上面的參數了') && (r6.停下來問 || '').endsWith('（取消／確定）')
+      && r7.好了 === false && r7.停下來問 && !sel.ids.length, JSON.stringify(r6));
+    const r8 = await A.按('確定', { kang說好: true });
+    ok('★★ kang 說好 ⇒ 按那一顆（只找得到詢問視窗裡的）', clicked.join() === '確定' && r8.好了);
+    askWin.hidden = true;
+
+    // 開著視窗 ⇒ 滑鼠點不到後面
+    slWin.hidden = false; clicked = [];
+    const r9 = await A.按('展開圖');
+    const r10 = await A.選物件('半球 2');
+    ok('★★★ 開著「剖面分切」視窗 ⇒ 後面的「展開圖」⛔ 按（滑鼠也點不到）、選物件 ⛔ 做（點不到 3D 畫面）',
+      !clicked.length && r9.好了 === false && (r9.原因 || '').includes('被「剖面分切」視窗蓋住了') && r10.好了 === false && (r10.原因 || '').includes('點不到 3D 畫面') && !sel.ids.length, r9.原因);
+    await A.按('關閉');
+    ok('★ 視窗裡的按鈕照樣按', clicked.join() === '關閉');
+
+    // ② 乙：視窗裡的設定
+    ev.length = 0;
+    const r11 = await A.填('板厚', 0.5);
+    ok('★★★ ② 視窗裡的格子沒有「這一段」也沒有 kang說好 ⇒ ⛔ 改、回「要先問」', thick.value === '1' && !ev.length && r11.好了 === false && (r11.要先問 || '').includes('「剖面分切」視窗裡的設定'), JSON.stringify(r11));
+    const s1 = A.這一段('互卡示範：改板厚');
+    ok('★★ ② 開始一段；上一段沒結束 ⇒ ⛔ 再開', s1.好了 && s1.這一段 === '互卡示範：改板厚' && A.這一段('另一段').好了 === false);
+    const r12 = await A.填('板厚', 0.5);
+    ok('★★★ ② 這一段裡 ⇒ 改：打值、送 input 與 change（跟鍵盤打完同一個處理）', thick.value === '0.5' && ev.join() === 'input,change' && r12.好了 && r12.做了 === '「板厚」改成 0.5', JSON.stringify(r12));
+    await A.填('板厚', 0.3);
+    slWin.hidden = true;
+    const e1 = await A.這一段結束();
+    ok('★★★ ② 結束時視窗關著 ⇒ ⛔ 改（關著送出去會在看不到的地方重算）、講要先打開、這一段還沒結束', e1.好了 === false && (e1.原因 || '').includes('「剖面分切」視窗關著') && thick.value === '0.3', JSON.stringify(e1));
+    slWin.hidden = false;
+    const e2 = await A.這一段結束();
+    ok('★★★ ② 結束 ⇒ 改回這一段開始前的（1，⛔ 中間的 0.5）、講改回什麼', e2.好了 && thick.value === '1' && e2.改回.join() === '「板厚」改回 1' && (e2.做了 || '').includes('結束'), JSON.stringify(e2));
+    ok('★ ② 結束之後又要先問', (await A.填('板厚', 0.8)).好了 === false && thick.value === '1');
+    A.這一段('留著試試');
+    await A.填('板厚', 0.6);
+    const e3 = await A.這一段結束({ 留著: ['板厚'] });
+    ok('★★ ② kang 要留的寫在「留著」⇒ 不改回', e3.好了 && thick.value === '0.6' && e3.留著.join() === '板厚' && !e3.改回.length);
+    await A.填('板厚', 0.4, { kang說好: true });
+    ok('★★ 只改這一格、kang 說好 ⇒ 改（不在一段裡 ⇒ 不會被改回）', thick.value === '0.4');
+    slWin.hidden = true;
+
+    // 選物件
+    const r13 = await A.選物件('半球 2');
+    const r14 = await A.選物件('方塊', true);
+    const r15 = await A.選物件('半球 2', true);
+    ok('★★★ 選物件：跟點一下同一支（sel.set）；加選 ⇒ 多一個；加選已經選著的 ⇒ 不動（⛔ 像 Shift 點那樣取消掉）',
+      r13.好了 && r13.做了 === '選了「半球 2」' && r14.做了 === '加選了「方塊 1」' && r15.好了 && sel.ids.length === 2 && sel.ids[0] === dome.id, JSON.stringify(sel.ids));
+    ok('★ 找不到物件 ⇒ 講有哪些', ((await A.選物件('沒有')).原因 || '').includes('有：方塊 1、半球 2'));
+    const w1 = await A.等(1);
+    ok('★ 等：沒有「正在…」⇒ 馬上回', w1.好了 && w1.等了秒 < 1);
+  } finally {
+    globalThis.document = saved.document;
+    globalThis.getComputedStyle = saved.gcs;
+  }
+
+  // 讀程式守著
+  const dsrc = readFileSync(join(here, '../js/ai/do.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  ok('★★ 讀程式守著：包 hist.commit（所有改模型的路最後都走這一支）；主程式把第二步一起掛進 window.AI',
+    /hist\.commit = \(label, opt\) => orig\(ai > 0 \? aiLabel\(label\) : label, opt\);/.test(dsrc) && /window\.APP = app;[\s\S]{0,600}installAI\(app, installAIDo\(app\)\);/.test(mn));
+  ok('★★ 讀程式守著：按 ＝ el.click()、勾 ＝ cb.click()、填與選 ＝ 改值再送 input 與 change（⛔ 直接改程式裡的值）',
+    /el\.click\(\);\s*return report\(`按了/.test(dsrc) && /if \(cb\.checked !== !!開\) cb\.click\(\);/.test(dsrc)
+    && /c\.value = String\(v\);\s*c\.dispatchEvent\(new Event\('input', \{ bubbles: true \}\)\);\s*c\.dispatchEvent\(new Event\('change', \{ bubbles: true \}\)\);/.test(dsrc));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
