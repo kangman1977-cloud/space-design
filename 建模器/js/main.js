@@ -419,7 +419,11 @@ const sel = new Selection(view, {
      * ⚠ 2026-10-19（實驗 T1：`實驗-綜合評估.md` ②-4）以前只跳提示 —— 工具列、面板、數值欄都還是上一次的（點選那條路有重畫，框選這條沒有）。
      */
     panel.refresh(); updateBar(); updateEditNum();
-    toast(`框選到 ${r.added} ${what}（含轉過去才看得到的背面）　目前共選 ${r.total} 個`);
+    /** 5b：邊整條在框裡才算 ⇒ 講出來；框裡一條整條的都沒有、退回碰到就算 ⇒ 也講出來（⛔ 安靜地換判法）*/
+    const edge = r.kind === 'edge';
+    const head = edge && r.edgeFallback ? '框裡沒有整條在框裡的邊 ⇒ 改成碰到框的就算：' : '';
+    const how = edge && r.edgeWhole && !r.edgeFallback ? '條整條在框裡的邊' : what;
+    toast(`${head}框選到 ${r.added} ${how}（含轉過去才看得到的背面）　目前共選 ${r.total} 個`);
   }
 });
 sel.bindDoc(doc);
@@ -912,6 +916,20 @@ $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('extrudeIn').onclick = () => extrudeSelected(-1);
 $('extrudeEdge').onclick = () => extrudeEdgesSelected();
+/**
+ * 🔴 **框邊：整條**（第三輪第五批 5b，kang 2026-10-26「同意你的建議」② 乙）：預設開；關掉 ＝ 框選邊碰到就算（以前的做法）。
+ * 跟人走（記在瀏覽器）；判法在 `core/screen.js` `elementsInRect()`。
+ */
+const EDGE_WHOLE_KEY = 'modeler.marqueeEdgeWhole';
+try { sel.marqueeEdgeWhole = localStorage.getItem(EDGE_WHOLE_KEY) !== 'off'; } catch (e) { /* 讀不到就用預設（開）*/ }
+$('efWhole').onclick = () => {
+  sel.marqueeEdgeWhole = !sel.marqueeEdgeWhole;
+  try { localStorage.setItem(EDGE_WHOLE_KEY, sel.marqueeEdgeWhole ? 'on' : 'off'); } catch (e) { /* 存不了就算了 */ }
+  updateBar();
+  toast(sel.marqueeEdgeWhole
+    ? '框邊：整條。框選邊時整條在框裡的才算；框裡一條整條的都沒有，才改成碰到框的就算'
+    : '框邊：整條 關了。框選邊時碰到框的就算（只有一頭在框裡的也算）');
+};
 $('efBoundary').onclick = () => {
   sel.includeBoundary = !sel.includeBoundary;
   /** ⚠ 關掉時把已經選到的外緣清掉 —— ⛔ 不清的話它們還留在選取裡，而使用者以為關了 */
@@ -7821,6 +7839,8 @@ function updateBar() {
   const edgeFilter = sel.editMode && (sel.editFilter === 'edge' || sel.editFilter === 'auto');
   $('efBoundary').hidden = !edgeFilter;
   $('efBoundary').classList.toggle('on', !!sel.includeBoundary);
+  $('efWhole').hidden = !edgeFilter;
+  $('efWhole').classList.toggle('on', !!sel.marqueeEdgeWhole);
 
   const anyEdge = sel.editMode && sel.editSel && sel.editSel.kind === 'edge';
   const ew = sel.snapStep > 0 ? sel.snapStep : 1;

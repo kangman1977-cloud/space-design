@@ -22208,6 +22208,66 @@ if (csgOK) {
   ok('（略過：CSG 沒載入）', true);
 }
 
+section('第三輪第五批 5b 框選邊整條在框裡（2026-10-26）');
+if (csgOK) {
+  /**
+   * `實驗-綜合評估-第三輪.md`「第五批 5b」；kang 2026-10-26「同意你的建議」：① 甲 整條在框裡才算、一條都沒有才退回碰到就算
+   * ② 乙 拉點線面「框邊：整條」預設開、關掉 ＝ 碰到就算。沙箱 `輸出\第三輪第五批研究\b5b_probe.mjs` 的數字照抄當期望值。
+   */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const SC = await import('../js/core/screen.js');
+  const SE = await import('../js/unfold/seam.js');
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  // 前視圖（正交）：畫面 x ＝ 世界 x ＋ 100、畫面 y ＝ 100 − 世界 y
+  const cam = new THREE.OrthographicCamera(-100, 100, 100, -100, -1000, 1000);
+  cam.position.set(0, 0, 100); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true); cam.updateProjectionMatrix();
+  const rectW = (x0, x1, y0, y1) => ({ x0: x0 + 100, x1: x1 + 100, y0: 100 - y1, y1: 100 - y0 });
+
+  // 純函式
+  const short = { el: 'S', pts: [V(-1, 0, 0), V(1, 0, 0)] }, long = { el: 'L', pts: [V(-50, 5, 0), V(50, 5, 0)] }, out1 = { el: 'O', pts: [V(60, 60, 0), V(70, 60, 0)] };
+  const r1 = rectW(-10, 10, -10, 10);
+  const a = SC.elementsInRect({ edges: [long, out1] }, r1, cam, 200, 200);
+  const b = SC.elementsInRect({ edges: [short, long, out1] }, r1, cam, 200, 200);
+  const c = SC.elementsInRect({ edges: [short, long, out1] }, r1, cam, 200, 200, { edgeWhole: false });
+  ok('★★★ 框裡沒有整條的邊 ⇒ 退回碰到就算：長邊整條橫跨框、兩頭都在外面照樣選得到（規格 ★★★ 那條）、講有退回', a.edges.join() === 'L' && a.edgeFallback === true, JSON.stringify(a));
+  ok('★★★ 框裡有整條的邊 ⇒ 只算整條的（短邊 S；橫跨的 L 不算）、沒有退回', b.edges.join() === 'S' && b.edgeFallback === false, JSON.stringify(b));
+  ok('★★ 「框邊：整條」關掉（edgeWhole: false）⇒ 碰到就算（S、L）、不算退回', c.edges.join() === 'S,L' && c.edgeFallback === false, JSON.stringify(c));
+  ok('★ 什麼都沒碰到 ⇒ 空的、不算退回', (() => { const z = SC.elementsInRect({ edges: [out1] }, r1, cam, 200, 200); return !z.edges.length && !z.edgeFallback; })());
+
+  // T17 恐龍（8 個方塊聯集）、球（沙箱的數字）
+  const it = (src, pos) => ({ src, pos, rot: [0, 0, 0], scale: [1, 1, 1] });
+  const bx = (w, h, d) => ({ type: 'box', w, h, d });
+  const parts = [it(bx(16, 8, 8), [0, 9, 0]), ...[[-5, -2.6], [-5, 2.6], [5, -2.6], [5, 2.6]].map(([x, z]) => it(bx(2.5, 6, 2.5), [x, 3, z])),
+    it(bx(3, 9, 3), [8.5, 15.5, 0]), it(bx(6, 3.5, 3.5), [10.5, 20.5, 0]), it(bx(12, 3, 3), [-13, 10, 0])];
+  const dino = new io.ModelObject({ name: '恐龍', src: { type: 'bool', op: 'union', items: parts } }); dino.bake();
+  const sph = new io.ModelObject({ name: '球', src: prim.defaultSrc('sphere') }); sph.bake();
+  const edgesOf = o => ({ edges: SE.markableEdges(o.mesh()).map(he => ({ el: he, pts: [he.v.p.clone().applyMatrix4(o.matrix()), he.to.p.clone().applyMatrix4(o.matrix())] })) });
+  const D = edgesOf(dino), Sp = edgesOf(sph);
+  const feet = SC.elementsInRect(D, rectW(-20, 15, -0.3, 0.3), cam, 200, 200);
+  const feetT = SC.elementsInRect(D, rectW(-20, 15, -0.3, 0.3), cam, 200, 200, { edgeWhole: false });
+  const legs = SC.elementsInRect(D, rectW(-20, 15, 2.3, 2.7), cam, 200, 200);
+  const eq_ = SC.elementsInRect(Sp, rectW(-40, 40, -0.6, 0.6), cam, 200, 200), eqT = SC.elementsInRect(Sp, rectW(-40, 40, -0.6, 0.6), cam, 200, 200, { edgeWhole: false });
+  ok('★★★ T17 恐龍框腳底一條細長框：整條在框裡 ⇒ 腳底 16 條（以前碰到就算 32 條、多了四隻腳的直立邊）', D.edges.length === 108 && feet.edges.length === 16 && !feet.edgeFallback && feetT.edges.length === 32, `${feet.edges.length} / ${feetT.edges.length}`);
+  ok('★★ T17 框腳中段：沒有整條在框裡的 ⇒ 退回 ⇒ 直立邊 16 條（T17 繞的那一步照樣做得到）', legs.edges.length === 16 && legs.edgeFallback, `${legs.edges.length}`);
+  ok('★★ 球框赤道一條細帶：整條在框裡 ⇒ 那一圈 32 條（碰到就算 96 條、多了經線段）', eq_.edges.length === 32 && eqT.edges.length === 96, `${eq_.edges.length} / ${eqT.edges.length}`);
+
+  // 讀程式守著
+  const ss = readFileSync(join(here, '../js/view/select.js'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ix = readFileSync(join(here, '../index.html'), 'utf8');
+  ok('★★ 讀程式守著：拉點線面框選把「框邊：整條」交給 elementsInRect()、有沒有退回交給提示；預設開',
+    /elementsInRect\(items, rect, this\.view\.camera, box\.width, box\.height, \{ edgeWhole: this\.marqueeEdgeWhole \}\)/.test(ss)
+    && /edgeFallback: got\.edgeFallback, edgeWhole: this\.marqueeEdgeWhole/.test(ss) && /this\.marqueeEdgeWhole = true;/.test(ss));
+  ok('★★ 讀程式守著：提示講「框選到 1 條整條在框裡的邊」、退回時先講「框裡沒有整條在框裡的邊 ⇒ 改成碰到框的就算：」',
+    /const head = edge && r\.edgeFallback \? '框裡沒有整條在框裡的邊 ⇒ 改成碰到框的就算：' : '';/.test(mn) && /const how = edge && r\.edgeWhole && !r\.edgeFallback \? '條整條在框裡的邊' : what;/.test(mn)
+    && /toast\(`\$\{head\}框選到 \$\{r\.added\} \$\{how\}/.test(mn));
+  ok('★★ 讀程式守著：「框邊：整條」按鈕、記在瀏覽器（關掉存 off）、只在選得到邊時出現、亮著 ＝ 開',
+    /<button id="efWhole" hidden title="框邊：整條（預設開）/.test(ix) && /sel\.marqueeEdgeWhole = localStorage\.getItem\(EDGE_WHOLE_KEY\) !== 'off';/.test(mn)
+    && /localStorage\.setItem\(EDGE_WHOLE_KEY, sel\.marqueeEdgeWhole \? 'on' : 'off'\)/.test(mn)
+    && /\$\('efWhole'\)\.hidden = !edgeFilter;\s*\$\('efWhole'\)\.classList\.toggle\('on', !!sel\.marqueeEdgeWhole\);/.test(mn));
+} else {
+  ok('（略過：CSG 沒載入）', true);
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

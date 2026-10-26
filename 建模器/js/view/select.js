@@ -432,6 +432,8 @@ export class Selection {
      * 而這個工具一開始就是桌機平板都要能用。跟「分片」同一個做法。
      */
     this.marqueeMode = false;
+    /** 5b（kang 2026-10-26）：拉點線面框選邊「整條在框裡才算」—— 預設開；`main.js` 照「框邊：整條」那一顆、記在瀏覽器 */
+    this.marqueeEdgeWhole = true;
     this._marq = null;
     /** 框選矩形那個 div。沒有也不會壞，只是看不到框 */
     this.marqueeEl = document.getElementById('marqueeBox');
@@ -2128,7 +2130,8 @@ export class Selection {
       }
     }
 
-    const got = elementsInRect(items, rect, this.view.camera, box.width, box.height);
+    /** 5b：邊整條在框裡才算、一條都沒有才退回碰到就算；「框邊：整條」關掉 ⇒ 碰到就算（判法在 `elementsInRect()`）*/
+    const got = elementsInRect(items, rect, this.view.camera, box.width, box.height, { edgeWhole: this.marqueeEdgeWhole });
     const els = [...got.verts, ...got.edges, ...got.faces];
     for (const el of els) el.mesh = mesh;
 
@@ -2142,7 +2145,8 @@ export class Selection {
     if (this.editSels.length) { this._attachEditProxy(); }
     this._drawEditMark();
     if (this.hooks.onMarqueeEdit) {
-      this.hooks.onMarqueeEdit({ added: els.length, total: this.editSels.length, kind: els[0] && els[0].kind });
+      this.hooks.onMarqueeEdit({ added: els.length, total: this.editSels.length, kind: els[0] && els[0].kind,
+        edgeFallback: got.edgeFallback, edgeWhole: this.marqueeEdgeWhole });
     }
   }
 

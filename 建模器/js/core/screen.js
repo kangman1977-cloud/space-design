@@ -139,8 +139,14 @@ export function segHitRect(a, b, rect) {
  * | 型別 | 算選到的條件 |
  * |---|---|
  * | 點 | 投影落在框裡 |
- * | 邊 | 線段**碰到**框（⛔ 不是兩端都要在框裡）|
+ * | 邊 | **整條在框裡**（兩端都在框裡）；**框裡一條都沒有才退回「線段碰到框」**（`opt.edgeWhole` false ⇒ 一律碰到就算）|
  * | 面 | **重心**落在框裡 |
+ *
+ * 🔴 **邊的判法**（第三輪第五批 5b，kang 2026-10-26「同意你的建議」① 甲 ② 乙）：以前一律碰到就算 ⇒ T17 框腳底一條細長框
+ * 連四隻腳的直立邊（只有一頭在框裡）一起選，32 條（要的是 16）。改成整條在框裡（像 Blender 的邊模式）；
+ * ⚠ 一條長邊整條橫跨框、兩頭都在外面的（下面那條 ★★★）照樣選得到 —— 框裡沒有整條的邊時退回碰到就算，
+ * `edgeFallback` 講有沒有退回（呼叫端要講出來）。拉點線面「框邊：整條」關掉 ⇒ `edgeWhole: false` ⇒ 照以前碰到就算。
+ * 沙箱 `輸出\第三輪第五批研究5b_probe.mjs`：恐龍腳底 32 → 16、腳中段退回 16、方塊上緣退回 2、球赤道 96 → 32。
  *
  * ⚠ **面為什麼看重心，不看「有沒有碰到」**：一個大面只要邊角掃到框
  * 就被選走的話，框選會變得完全不可控 —— 而面通常是一片一片挑的。
@@ -150,20 +156,27 @@ export function segHitRect(a, b, rect) {
  * @param {{verts?:Array,edges?:Array,faces?:Array}} items
  *        每一項都是 `{el, pts:THREE.Vector3[]}`（世界座標）：
  *        點給 1 個、邊給 2 個、面給 1 個（重心）
- * @returns {{verts:Array, edges:Array, faces:Array}} 選到的 `el`
+ * @param {{edgeWhole?:boolean}} [opt] 邊要不要整條在框裡（預設要）
+ * @returns {{verts:Array, edges:Array, faces:Array, edgeFallback:boolean}} 選到的 `el`；`edgeFallback` ＝ 邊退回了碰到就算
  */
-export function elementsInRect(items, rect, camera, w, h) {
-  const out = { verts: [], edges: [], faces: [] };
+export function elementsInRect(items, rect, camera, w, h, opt = {}) {
+  const out = { verts: [], edges: [], faces: [], edgeFallback: false };
   if (!items || !rect || !camera) return out;
   const pr = p => projectPoint(p, camera, w, h);
 
   for (const it of (items.verts || [])) {
     if (pointInRect(pr(it.pts[0]), rect)) out.verts.push(it.el);
   }
+  const whole = opt.edgeWhole !== false;
+  const touch = [];
   for (const it of (items.edges || [])) {
     const a = pr(it.pts[0]), b = pr(it.pts[1]);
-    if (a && b && segHitRect(a, b, rect)) out.edges.push(it.el);
+    if (!a || !b || !segHitRect(a, b, rect)) continue;
+    touch.push(it.el);
+    if (whole && pointInRect(a, rect) && pointInRect(b, rect)) out.edges.push(it.el);
   }
+  if (!whole) out.edges = touch;
+  else if (!out.edges.length && touch.length) { out.edges = touch; out.edgeFallback = true; }
   for (const it of (items.faces || [])) {
     if (pointInRect(pr(it.pts[0]), rect)) out.faces.push(it.el);
   }
