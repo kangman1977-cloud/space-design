@@ -221,7 +221,8 @@ export class ExportPanel {
   _runNow() {
     saveOpt(this.opt);
     const picked = this.app.sel.objects;
-    const objs = picked.length ? picked : this.app.doc.objects;
+    const objs = picked.length ? picked : this.app.doc.shown();      // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
+    this._hidNote = this.app.doc.hiddenNote(picked);
     const s = STL_UNITS[this.opt.unit].scale;
 
     if (!this.fix) this.fix = new Map();
@@ -280,8 +281,8 @@ export class ExportPanel {
 
     this.sum.textContent = n
       ? `${n} 個物件　${tri.toLocaleString()} 個三角形　`
-        + (bad ? `⚠ ${bad} 個印不出來` : '全部可以列印')
-      : '沒有可以匯出的物件';
+        + (bad ? `⚠ ${bad} 個印不出來` : '全部可以列印') + (this._hidNote ? '　' + this._hidNote : '')
+      : '沒有可以匯出的物件' + (this._hidNote ? '　' + this._hidNote : '');
 
     if (!n) {
       this.body.appendChild(box('uwSkip', '目前文件裡沒有物件。'

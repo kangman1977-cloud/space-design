@@ -79,7 +79,10 @@ export function objectInfo(o) {
     面數: m.faces.length,
     封閉: m.isClosed(),
     ...(vol !== null ? { 體積cm3: vol } : {}),
-    ...(o.error ? { 錯誤: o.error } : {})
+    ...(o.error ? { 錯誤: o.error } : {}),
+    /** 圖層與群組第一批：藏起來、鎖住的照樣列、加標記（⛔ 跳過 —— AI 要知道它在、只是看不到／點不到）*/
+    ...(o.hidden ? { 藏起來: true } : {}),
+    ...(o.locked ? { 鎖住: true } : {})
   };
 }
 

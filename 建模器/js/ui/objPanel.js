@@ -76,7 +76,7 @@ export class ObjPanel {
   /** 要寫的物件：有選就只寫選到的、沒選就全部；照畫面上的樣子（開放的網格有厚度就加厚）*/
   _items() {
     const picked = this.app.sel.objects;
-    const objs = picked.length ? picked : this.app.doc.objects;
+    const objs = picked.length ? picked : this.app.doc.shown();      // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
     return objs.map(o => {
       let mesh = o.smoothMesh(), shelled = false;     // 第八批 8a：有平滑細分的照平滑後的（kang「⑤ 量測列印剖面看平滑後」）
       const t = this.app.view.shellThickness(o);
@@ -92,7 +92,9 @@ export class ObjPanel {
     this.result = r;
     const all = this.app.doc.objects.length;
     const only = this.app.sel.objects.length && items.length < all ? `只匯出選到的 ${items.length} 個（共 ${all} 個；沒選東西就是全部）　` : '';
-    this.sum.textContent = r.objects ? `${only}${r.objects} 個物件、${r.verts} 個點、${r.faces} 個面　單位 ${r.unit}` : '沒有可以匯出的東西';
+    const hid = this.app.doc.hiddenNote(this.app.sel.objects);
+    this.sum.textContent = (r.objects ? `${only}${r.objects} 個物件、${r.verts} 個點、${r.faces} 個面　單位 ${r.unit}` : '沒有可以匯出的東西')
+      + (hid ? '　' + hid : '');
     this.body.innerHTML = '';
     const note = (msg, cls = 'uwSkip') => { const d = document.createElement('div'); d.className = cls; d.textContent = msg; this.body.appendChild(d); };
     note('OBJ 是給 Blender、Rhino、SketchUp 這類軟體用的。多邊形照原樣寫（有洞的面照它的小面寫），標了平滑的曲面寫成平滑群組。Y 朝上。');

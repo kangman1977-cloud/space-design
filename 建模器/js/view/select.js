@@ -2063,7 +2063,8 @@ export class Selection {
      */
     if (this.editMode) { this._marqueeEdit(rect, box, additive); return; }
 
-    const entries = this._doc.objects.map(o => ({ id: o.id, box: worldBounds(o) }));
+    /** 圖層與群組第一批：藏起來、鎖住的⛔ 框（`set()` 也會擋，這裡先濾掉 ⇒「框到幾個」講的數字對）*/
+    const entries = this._doc.objects.filter(o => !o.hidden && !o.locked).map(o => ({ id: o.id, box: worldBounds(o) }));
     const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
     this.set(additive ? [...new Set([...this.ids, ...hits])] : hits);
     if (this.hooks.onMarquee) this.hooks.onMarquee(hits.length);
@@ -2487,6 +2488,7 @@ export class Selection {
       const ghost = this.view && this.view._ghostId;
       for (const o of (this._doc && this._doc.objects) || []) {
         if (ghost && o.id === ghost) continue;
+        if (o.hidden) continue;                      // 圖層與群組第一批：藏起來的⛔ 吸（看不到的東西⛔ 該吸過去）
         const b = worldBounds(o);
         /** 🔴 乙：外框投影到這一片上（側視看到的是 Z 與高度，⛔ 是 X 與 Z） */
         if (!b.isEmpty()) this._penFoot.push(...footprintPoints(this._penFrame().box2(b)));
@@ -2941,8 +2943,15 @@ export class Selection {
   }
 
   set(ids) {
-    this.ids = ids.filter(id => this._doc && this._doc.byId(id));
+    /** 圖層與群組第一批：藏起來、鎖住的⛔ 選得進來（點、拉框、全選、AI 選、清單選都走這裡，一處擋全部）*/
+    this.ids = ids.filter(id => this._canPick(id));
     this._refresh();
+  }
+
+  /** 選得進來嗎：還在文件裡、⛔ 藏起來、⛔ 鎖住 */
+  _canPick(id) {
+    const o = this._doc && this._doc.byId(id);
+    return !!o && !o.hidden && !o.locked;
   }
 
   toggle(id) {
@@ -3066,7 +3075,7 @@ export class Selection {
 
   /** 文件被外力改過（Undo、讀檔）之後呼叫 */
   revalidate() {
-    this.ids = this.ids.filter(id => this._doc && this._doc.byId(id));
+    this.ids = this.ids.filter(id => this._canPick(id));        // 復原回來藏起來、鎖住的也拿掉
     /**
      * ⚠ 子元素選取一定要清掉。Undo／讀檔會**換掉整個 mesh 物件**，
      * 而 editSel 抓的是舊網格裡的 Vertex／HalfEdge／Face 參考 ——

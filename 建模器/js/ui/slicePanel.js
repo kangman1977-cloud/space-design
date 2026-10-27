@@ -401,7 +401,7 @@ export class SlicePanel {
     if (this.opt.manualPegs && this.opt.manualPegs.axis !== this.opt.axis) this.opt.manualPegs = null;
     save(this.opt);
     const picked = this.app.sel.objects;
-    const objs = picked.length ? picked : this.app.doc.objects;
+    const objs = picked.length ? picked : this.app.doc.shown();      // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
 
     // 切的是世界座標下的樣子 —— 物件被搬過、轉過、縮放過都要吃進去，
     // 否則圖跟畫面上看到的東西不一樣大也不一樣位置。
@@ -463,8 +463,10 @@ export class SlicePanel {
     }
 
     const st = r.stats;
+    const hid = this.app.doc.hiddenNote(this.app.sel.objects);    // 圖層與群組第一批：沒選東西、有藏起來的 ⇒ 講沒算
     if (r.method === 'interlock') {
-      this.sum.textContent = `互卡　側面 ${st.spines} 片＋肋 ${st.ribs} 片${this.opt.manualRibs ? '（手動挪過）' : ''}　板厚 ${f(st.t)} cm　槽寬 ${f(st.slotW)} cm`;
+      this.sum.textContent = `互卡　側面 ${st.spines} 片＋肋 ${st.ribs} 片${this.opt.manualRibs ? '（手動挪過）' : ''}　板厚 ${f(st.t)} cm　槽寬 ${f(st.slotW)} cm`
+        + (hid ? '　' + hid : '');
       this.stack3d.setRods([], this.opt.d);
       this.body.appendChild(this.stack3d.el);
       this.stack3d.refresh();
@@ -473,7 +475,7 @@ export class SlicePanel {
     }
     this.sum.textContent = `${st.count} 片　`
       + `板厚 ${st.thickKinds.map(t => f(t) + 'cm').join('、')}　`
-      + `疊高 ${f(st.used)} / 模型 ${f(st.height)} cm`;
+      + `疊高 ${f(st.used)} / 模型 ${f(st.height)} cm` + (hid ? '　' + hid : '');
 
     /** 5b：立體預覽放在最上面（設定那兩排下面、提示上面）—— 同一個元素接回來，⛔ 每次開新的 WebGL */
     this.stack3d.setRods(this._rods(), this.opt.d);     // 5c：定位孔的桿子也畫上去

@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, arraySrcFrom, explodeArray,
+import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, setShown, isIsolated, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
@@ -750,6 +750,32 @@ function splitOp() {
   toast(`${head}${speck}。都是固定形狀，要改尺寸按 Ctrl+Z 退回去改好再分割　⚠ 平滑與分片線的標記會消失`, !!r.dropped);
 }
 
+/**
+ * 🔴 **藏起來、鎖住、只看選到的、全部顯示、全部解鎖**（圖層與群組第一批，kang 2026-10-27「照建議」→ `規格\建模器-圖層與群組.md`）。
+ * 資料在 `io.js` `setShown()`；這裡管選取（藏起來、鎖住的⛔ 留在選取裡 —— `sel.set()` 本來就擋）、畫面、記一步復原（kang ⑤ 可以 Ctrl+Z）。
+ */
+const SHOW_LABEL = { hide: '藏起來', lock: '鎖住', isolate: '只看選到的', unisolate: '回到看全部', showAll: '全部顯示', unlockAll: '全部解鎖' };
+function showOp(how) {
+  const picked = sel.objects;
+  if ((how === 'hide' || how === 'lock' || how === 'isolate') && !picked.length) { toast('先選物件', true); return; }
+  const n = setShown(doc, how, picked);
+  if (!n) { toast(how === 'isolate' ? '其他東西本來就都藏起來了' : '沒有要改的', true); return; }
+  view.sync(doc);
+  sel.set(sel.ids);                         // 藏起來、鎖住的⛔ 留在選取裡
+  panel.analysisCache.clear();
+  commit(SHOW_LABEL[how]);
+  /** ⚠ 數字講清楚是「藏了／放回／解開幾個」—— 本機驗時「只看選到的：1 個」讀起來像「看 1 個」 */
+  toast({
+    hide: `藏起來 ${n} 個　要拿回來按「全部顯示」`,
+    lock: `鎖住 ${n} 個　看得到、點不到；要解開按「全部解鎖」`,
+    isolate: `只看選到的：其他 ${n} 個先藏起來　再按一次「只看選到的」回來`,
+    unisolate: `回到看全部：放回 ${n} 個`,
+    showAll: `全部顯示：拿回 ${n} 個`,
+    unlockAll: `全部解鎖：解開 ${n} 個`
+  }[how]);
+  updateBar();
+}
+
 /** 名稱用符號串起來，太長就截短，不然狀態列會被撐爆 */
 function shortName(list, op) {
   const s = ` ${BOOL_SYMBOL[op]} `;
@@ -906,6 +932,12 @@ $('bSub').onclick   = () => boolOp(BOOL_OPS.SUBTRACT);
 $('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
 $('bSplit').onclick = splitOp;
 $('bKnife').onclick = () => $('bKnife').classList.toggle('on');
+
+$('oHide').onclick = () => showOp('hide');
+$('oLock').onclick = () => showOp('lock');
+$('oIso').onclick = () => showOp(isIsolated(doc) ? 'unisolate' : 'isolate');
+$('oShowAll').onclick = () => showOp('showAll');
+$('oUnlockAll').onclick = () => showOp('unlockAll');
 
 $('aLinear').onclick = () => arrayOp(ARRAY_MODES.LINEAR);
 $('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
@@ -7713,13 +7745,15 @@ $('frameSel').onclick = frameSelected;
 let clashResult = null;
 function runClash() {
   const picked = sel.objects.length >= 2;
-  const objs = picked ? sel.objects.slice() : doc.objects.slice();
+  const objs = picked ? sel.objects.slice() : doc.shown();         // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
   const r = findClashes(objs);
   clashResult = r.ok ? { ...r, scope: picked ? 'sel' : 'all', stale: false } : null;
   view.setClash(r.ok ? r.list.map(c => c.mesh) : null);
-  if (!r.ok) { toast(r.reason, true); return r; }
+  /** 圖層與群組第一批：查不了的時候也要講有藏起來的（本機驗看到：兩個藏一個 ⇒ 只說「至少要有兩個」會以為壞了）*/
+  if (!r.ok) { toast(r.reason + (picked ? '' : doc.hiddenNote([])), true); return r; }
   const skip = r.skipped.length ? `；${r.skipped.length} 個沒辦法算（${r.skipped.slice(0, 2).map(s => `「${s.name}」${s.reason}`).join('、')}）` : '';
-  const touch = r.touching ? `；${r.touching} 對只是貼在一起（不算）` : '';
+  const touch = (r.touching ? `；${r.touching} 對只是貼在一起（不算）` : '')
+    + (picked || !doc.hiddenCount ? '' : `；${doc.hiddenCount} 個藏起來的沒算`);
   toast(r.list.length
     ? `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：${r.list.length} 對穿進去了，重疊的地方畫成紅色${touch}${skip}`
     : `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：沒有零件穿進彼此裡面${touch}${skip}`, !!r.list.length);
@@ -7960,6 +7994,19 @@ function updateBar() {
   // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
   for (const id of ['bUnion', 'bSub', 'bInt', 'bSplit', 'bKnife']) $(id).hidden = !canDoBool;
+
+  /**
+   * 圖層與群組第一批（→ `規格\建模器-圖層與群組.md`）：藏起來、鎖住 ⇒ 選了東西才有；只看選到的 ⇒ 選了東西、或正開著（要能按回來）；
+   * 全部顯示、全部解鎖 ⇒ 有藏的／鎖的才有，括號寫幾個。狀態列有藏、有鎖就一直寫著。
+   */
+  const nHid = doc.hiddenCount, nLock = doc.lockedCount, iso = isIsolated(doc);
+  $('oHide').hidden = $('oLock').hidden = sel.count < 1 || sel.editMode;
+  $('oIso').hidden = !(iso || (sel.count >= 1 && !sel.editMode));
+  $('oIso').classList.toggle('on', iso);
+  $('oShowAll').hidden = !nHid; $('oShowAll').textContent = `全部顯示（${nHid}）`;
+  $('oUnlockAll').hidden = !nLock; $('oUnlockAll').textContent = `全部解鎖（${nLock}）`;
+  $('sShow').hidden = !(nHid || nLock);
+  $('sShow').textContent = [nHid ? `藏起來 ${nHid}` : '', nLock ? `鎖住 ${nLock}` : ''].filter(Boolean).join('　');
 
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
   for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).hidden = sel.count < 1;

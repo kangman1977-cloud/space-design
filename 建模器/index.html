@@ -683,6 +683,20 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       → `介面編排-設計方向.md`「第二輪：畫面盡量大＋分割畫面」；樣板 `樣板-功能放哪裡.html`
     -->
     <div id="toolBox">
+    <!--
+      顯示（圖層與群組第一批，kang 2026-10-27「照建議」→ 規格\建模器-圖層與群組.md）：
+      藏起來、鎖住、只看選到的 —— 選了東西才出現；全部顯示、全部解鎖 —— 有藏的／鎖的才出現（括號是幾個）。
+      ⚠ 樣板把「全部顯示、全部解鎖」畫在上方「檢視」那組；照 ⑤-2 的規則（前 7 組寬度不變、會出現的放後面）改放這裡。
+    -->
+    <div class="grp" id="gShow">
+      <span class="lbl">顯示</span>
+      <button id="oHide" hidden title="藏起來：選到的物件先看不到、也點不到（拿掉別的東西擋住的時候用）。沒選東西出圖、干涉檢查時藏起來的不算。要拿回來按「全部顯示」">藏起來</button>
+      <button id="oLock" hidden title="鎖住：選到的物件還看得到（變半透明），但點不到、框不到 —— 當參考用，免得改別的東西時誤動它。要解開按「全部解鎖」">鎖住</button>
+      <button id="oIso" hidden title="只看選到的：其他物件先藏起來，只留選到的。再按一次回來（只放回它藏的那些；你自己按「藏起來」的照舊藏著）">只看選到的</button>
+      <button id="oShowAll" hidden title="全部顯示：把藏起來的物件全部拿回來（括號是現在藏了幾個）">全部顯示</button>
+      <button id="oUnlockAll" hidden title="全部解鎖：把鎖住的物件全部解開（括號是現在鎖了幾個）">全部解鎖</button>
+    </div>
+
     <div class="grp" id="gArray">
       <span class="lbl">陣列</span>
       <button id="aLinear" hidden title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
@@ -1520,6 +1534,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
                ⚠ 2026-08-27 那個屬性搬到 #hud 了，意思不變：整列都穿得過去。 -->
           <div><b id="sFps">–</b> FPS　<span class="dim2">三角形</span> <b id="sTri">0</b></div>
           <div><span class="dim2">物件</span> <b id="sObj">0</b>　<span class="dim2">已選</span> <b id="sSel">0</b></div>
+          <!-- 圖層與群組第一批：有藏起來／鎖住的就一直寫著，免得忘了（main.js updateBar）-->
+          <div id="sShow" hidden style="color:#e0b45c"></div>
           <div class="dim2" id="sInfo">點一下物件選取它</div>
         </div>
         <!--

@@ -390,6 +390,16 @@ export class ModelObject {
     this.subdKeep = opts.subdKeep ?? false;
     this._smooth = null;              // 平滑後的快取：{ base, sig, levels, deg, keep, info }
     this._smoothFast = null;          // 8c ②：照縮的那一份（拉點線面時淡淡那一層、三角形數用）
+
+    /**
+     * 🔴 **藏起來、鎖住**（圖層與群組第一批，kang 2026-10-27「照建議」→ `規格\建模器-圖層與群組.md`）。
+     * 藏起來 ＝ 看不到、點不到、沒選東西出圖時不算；鎖住 ＝ 看得到（半透明）、點不到。
+     * `isoHidden` ＝ 被「只看選到的」藏起來的（再按一次只放回這些，⛔ 動自己藏的）。
+     * ⚠ 三個都要同時進 `toJSON()`／`fromJSON()` —— 漏一邊存檔、Ctrl+Z 都會弄丟。
+     */
+    this.hidden = opts.hidden === true;
+    this.locked = opts.locked === true;
+    this.isoHidden = opts.isoHidden === true;
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -682,6 +692,10 @@ export class ModelObject {
     }
     // 只有回不去參數的物件才需要把網格整包存下來
     if (!this.isParametric) o.mesh = this.mesh().toJSON();
+    /** 圖層與群組第一批：有才存（沒藏沒鎖的檔一個字都不變）*/
+    if (this.hidden) o.hidden = true;
+    if (this.locked) o.locked = true;
+    if (this.isoHidden) o.isoHidden = true;
     return o;
   }
 
@@ -699,7 +713,10 @@ export class ModelObject {
       lockScale: d.lockScale,
       subd: Number(d.subd) > 0 ? Math.min(SUBD_MAX, Math.round(d.subd)) : 0,
       subdDeg: Number.isFinite(d.subdDeg) ? d.subdDeg : CREASE_DEG,
-      subdKeep: d.subdKeep === true
+      subdKeep: d.subdKeep === true,
+      hidden: d.hidden === true,
+      locked: d.locked === true,
+      isoHidden: d.isoHidden === true
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
@@ -1445,7 +1462,49 @@ export class Doc {
   }
 
   static fromJSON(d) { return new Doc().loadJSON(d); }
+
+  /**
+   * 🔴 **看得到的物件**（圖層與群組第一批，kang 2026-10-27：沒選東西出圖時藏起來的不算 —— 看到什麼出什麼）。
+   * 出圖、干涉檢查「沒選東西就全部」那一句改叫這一支；`hiddenCount` 給視窗講「有 N 個藏起來的沒算」。
+   */
+  shown() { return this.objects.filter(o => !o.hidden); }
+  get hiddenCount() { return this.objects.filter(o => o.hidden).length; }
+  get lockedCount() { return this.objects.filter(o => o.locked).length; }
+  /**
+   * 出圖、干涉檢查的視窗那一句（kang 2026-10-27：看到什麼出什麼，但要講）：沒選東西、又有藏起來的 ⇒「（有 N 個藏起來的沒算）」；
+   * 有選東西 ⇒ 照選的算、⛔ 講（選了就是只要那幾個）。
+   */
+  hiddenNote(picked) {
+    const n = this.hiddenCount;
+    return !(picked && picked.length) && n ? `（有 ${n} 個藏起來的沒算）` : '';
+  }
 }
+
+/**
+ * 🔴 **藏起來、鎖住、只看選到的、全部顯示、全部解鎖**（圖層與群組第一批 → `規格\建模器-圖層與群組.md`）。
+ * 純改資料、回報改了幾個；選取、畫面、記一步復原由 `main.js` 做。
+ * @param {Doc} doc
+ * @param {'hide'|'lock'|'isolate'|'unisolate'|'showAll'|'unlockAll'} how
+ * @param {ModelObject[]} [picked] 選到的（hide、lock、isolate 用）
+ * @returns {number} 改了幾個
+ */
+export function setShown(doc, how, picked = []) {
+  const keep = new Set(picked);
+  let n = 0;
+  for (const o of doc.objects) {
+    if (how === 'hide' && keep.has(o) && !o.hidden) { o.hidden = true; n++; }
+    if (how === 'lock' && keep.has(o) && !o.locked) { o.locked = true; n++; }
+    /** 只看選到的：其他看得到的藏起來、記上 isoHidden（⛔ 動本來就藏著的）*/
+    if (how === 'isolate' && !keep.has(o) && !o.hidden) { o.hidden = true; o.isoHidden = true; n++; }
+    /** 回來：只放回「只看選到的」藏的那些 —— 自己按「藏起來」藏的照舊藏著（Rhino 的 Unisolate 也是這樣）*/
+    if (how === 'unisolate' && o.isoHidden) { o.hidden = false; o.isoHidden = false; n++; }
+    if (how === 'showAll' && o.hidden) { o.hidden = false; o.isoHidden = false; n++; }
+    if (how === 'unlockAll' && o.locked) { o.locked = false; n++; }
+  }
+  return n;
+}
+/** 現在是不是「只看選到的」（有東西是被它藏起來的）*/
+export function isIsolated(doc) { return doc.objects.some(o => o.isoHidden); }
 
 /** 本地的今天（YYYY-MM-DD）。⑤-25（2026-10-20）：匯出給 STL 檔頭共用（以前那邊用世界時間，台灣早上 8 點前會寫成昨天）*/
 export function today() {

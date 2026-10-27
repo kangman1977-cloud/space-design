@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>圖層與群組樣板</title>
+<!--
+  樣板：kang 2026-10-27「我想先看畫面樣板再決定」（圖層與群組 → 圖層與群組-設計方向.md）。
+  一個假的建模器（左側直條 66、右側面板 300），裡面是一個收納盒：盒身 4 片、隔板 2 片、插銷 4 根（綁成一組）、切的時候用的大方塊。
+  上面的開關切：看哪一批（第一批只有藏／鎖、第二批加圖層清單與群組）、清單放哪（甲 面板最上面一區、乙 面板分頁、丙 浮動視窗）、
+  群組裡面那一個怎麼點（點兩下進去 —— SketchUp、Illustrator；Ctrl＋Shift 點 —— Rhino）。
+  畫面裡的東西都點得到：點物件、Shift 加選、點兩下進群組、Esc 出來；清單的眼睛、鎖、點名字選。
+-->
+<style>
+  :root { --bg: #1b1e23; --bar: #24272e; --line: #3a3f48; --ink: #e8eaed; --muted: #8b93a1; --accent: #2f6fd0; --warn: #d9a441; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #111316; color: var(--ink); font: 14px/1.5 "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  #ctl { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; background: #0d0f12; border-bottom: 1px solid #2a2e35; position: sticky; top: 0; z-index: 20; }
+  #ctl h1 { font-size: 16px; margin: 0 6px 0 0; }
+  .g { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .g > span { color: var(--muted); }
+  button { font: inherit; cursor: pointer; }
+  #ctl button { padding: 4px 10px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); }
+  #ctl button.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  #desc { padding: 8px 16px 2px; color: #c9cfd8; max-width: 1240px; }
+  #desc b { color: #fff; }
+  #wrap { padding: 8px 16px 24px; }
+  /* ── 假的建模器 ── */
+  #app { position: relative; width: 1240px; height: 680px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  #bar { position: absolute; left: 0; right: 0; top: 0; height: 52px; background: var(--bar); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; padding: 0 12px; z-index: 3; }
+  .grp { display: flex; gap: 4px; align-items: center; padding: 0 8px; border-right: 1px solid #353a43; }
+  .grp .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  .b { padding: 3px 9px; border-radius: 5px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); font-size: 13px; }
+  .b.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  .b.new { box-shadow: 0 0 0 2px var(--warn); }
+  .b[disabled] { opacity: .4; cursor: default; }
+  .fake { color: #5d6470; font-size: 13px; }
+  #rail { position: absolute; left: 0; top: 52px; bottom: 0; width: 66px; background: #20232a; border-right: 1px solid var(--line); z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 10px; }
+  #rail .rb { width: 50px; height: 44px; border-radius: 6px; border: 1px solid #3c414b; background: #2a2e36; color: #aab1bd; font-size: 11px; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.2; }
+  #rail .rb.on { background: var(--accent); color: #fff; border-color: #4d8ae8; }
+  #rail .rb.new { box-shadow: 0 0 0 2px var(--warn); }
+  #stage { position: absolute; left: 66px; right: 300px; top: 52px; bottom: 0; }
+  #stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hint { position: absolute; left: 12px; bottom: 10px; color: #c9cfd8; background: rgba(0,0,0,.5); padding: 4px 10px; border-radius: 6px; font-size: 13px; }
+  #enterBar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: #3b2f12; border: 1px solid var(--warn); color: #f3d89a; padding: 4px 14px; border-radius: 6px; font-size: 13px; display: none; }
+  #panel { position: absolute; right: 0; top: 52px; bottom: 0; width: 300px; background: #20232a; border-left: 1px solid var(--line); z-index: 2; overflow: auto; }
+  .sec { border-bottom: 1px solid #333842; padding: 8px 10px; }
+  .sec h2 { margin: 0 0 6px; font-size: 13px; color: #c9cfd8; display: flex; align-items: center; gap: 6px; }
+  .sec h2 .sp { flex: 1; }
+  .sec .grp { border: 0; padding: 0; flex-wrap: wrap; margin-bottom: 4px; }
+  .tabs { display: flex; border-bottom: 1px solid #333842; }
+  .tabs button { flex: 1; padding: 6px; background: #1c1f25; color: var(--muted); border: 0; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: #fff; border-bottom-color: #4d8ae8; background: #20232a; }
+  .row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .row:hover { background: #2a2e36; }
+  .row.sel { background: #23395c; }
+  .row.cur .nm::after { content: "　← 現在這一層"; color: var(--muted); font-size: 11px; }
+  .row .ic { width: 22px; text-align: center; border-radius: 4px; color: #aab1bd; }
+  .row .ic:hover { background: #3a3f48; }
+  .row .ic.off { opacity: .35; }
+  .row .ic.lockOn { color: var(--warn); }
+  .row .tw { width: 14px; color: var(--muted); text-align: center; }
+  .row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .row .ct { color: var(--muted); font-size: 12px; }
+  .row.dim .nm { color: #6a717c; }
+  .listBtns { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .props { color: var(--muted); font-size: 13px; }
+  .props .kv { display: flex; justify-content: space-between; padding: 1px 0; }
+  .props .kv b { color: var(--ink); font-weight: normal; }
+  #float { position: absolute; left: 90px; top: 70px; width: 270px; background: #20232a; border: 1px solid #4d5562; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 5; display: none; }
+  #float .hd { padding: 4px 8px; background: #2a2e36; border-radius: 8px 8px 0 0; font-size: 13px; color: #c9cfd8; display: flex; justify-content: space-between; cursor: move; }
+  #notes { max-width: 1240px; margin-top: 12px; color: #c9cfd8; }
+  #notes h3 { font-size: 15px; margin: 14px 0 4px; color: #fff; }
+  #notes li { margin: 2px 0; }
+  .newTag { color: var(--warn); }
+</style>
+</head>
+<body>
+<div id="ctl">
+  <h1>圖層與群組樣板</h1>
+  <div class="g"><span>看哪一批</span>
+    <button data-k="batch" data-v="1">第一批：藏起來、鎖住</button>
+    <button data-k="batch" data-v="2">第二批：＋圖層清單、群組</button>
+  </div>
+  <div class="g" id="placeG"><span>清單放哪</span>
+    <button data-k="place" data-v="top">甲 面板最上面一區</button>
+    <button data-k="place" data-v="tab">乙 面板分頁</button>
+    <button data-k="place" data-v="float">丙 浮動視窗</button>
+  </div>
+  <div class="g" id="subG"><span>群組裡單獨點一個</span>
+    <button data-k="sub" data-v="dbl">點兩下進去（SketchUp、Illustrator）</button>
+    <button data-k="sub" data-v="ctrl">Ctrl＋Shift 點（Rhino）</button>
+  </div>
+  <div class="g"><button id="reset">重來</button></div>
+</div>
+<div id="desc"></div>
+<div id="wrap">
+  <div id="appBox"><div id="app">
+    <div id="bar">
+      <div class="grp"><span class="lbl">檔案</span><span class="fake">新建 讀檔 存檔</span></div>
+      <div class="grp"><span class="lbl">編輯</span><span class="fake">復原 重做 複製 刪除</span></div>
+      <div class="grp" id="viewGrp"><span class="lbl">檢視</span><span class="fake">顯示點 標尺寸…</span>
+        <button class="b new" id="showAll">全部顯示</button>
+        <button class="b new" id="unlockAll">全部解鎖</button>
+      </div>
+      <div class="grp" id="grpGrp"><span class="lbl">群組</span>
+        <button class="b new" id="doGroup">綁成一組</button>
+        <button class="b new" id="unGroup">拆開</button>
+      </div>
+    </div>
+    <div id="rail">
+      <div class="rb on">選取</div><div class="rb">移動</div><div class="rb">旋轉</div><div class="rb">縮放</div>
+      <div class="rb new" id="railLayer">圖層</div>
+    </div>
+    <div id="stage">
+      <svg id="svg" viewBox="0 0 874 628"></svg>
+      <div id="enterBar"></div>
+      <div id="hint"></div>
+    </div>
+    <div id="panel"></div>
+    <div id="float"><div class="hd"><span>圖層</span><span>放回面板　✕</span></div><div id="floatBody" style="padding:6px 8px"></div></div>
+  </div></div>
+  <div id="notes">
+    <h3>這一頁怎麼玩</h3>
+    <ul>
+      <li>點畫面裡的板子、插銷：選起來；按著 Shift 點：加選。點空白：全部不選。</li>
+      <li>選了東西之後，右側「工具」那一區多一組「顯示」：<span class="newTag">藏起來、鎖住、只看選到的</span>。上方「檢視」多<span class="newTag">全部顯示、全部解鎖</span>（後面括號是現在藏了／鎖了幾個）。</li>
+      <li>第二批：插銷 4 根已經綁成「插銷組」—— 點任何一根，整組選起來（虛線框）；照上面選的方式單獨點一根（點兩下進去，或 Ctrl＋Shift 點）。</li>
+      <li>第二批：清單裡每一層、每一個物件都有 👁（藏）與 🔒（鎖）；點名字就選它；點層名前面的 ▸ 展開。</li>
+      <li>「參考」那一層（切的時候用的大方塊）一開始就鎖住：看得到（淡淡的）、點不到。</li>
+      <li>畫面左下角：有藏起來的會一直寫「藏起來 N 個」，免得忘了。</li>
+      <li>黃框的是這次新加的按鈕。</li>
+    </ul>
+  </div>
+</div>
+<script>
+const COLORS = { 盒身: '#6fa8dc', 隔板: '#8fc98f', 插銷: '#e0a86f', 參考: '#a89ad0' };
+// 物件：x 往右、y 往上、z 往後（cm）；w h d
+function freshObjs() {
+  return [
+    { id: 1, name: '底板', layer: '盒身', x: 0, y: 0, z: 0, w: 60, h: 2, d: 40 },
+    { id: 2, name: '左側板', layer: '盒身', x: 0, y: 2, z: 0, w: 2, h: 30, d: 40 },
+    { id: 3, name: '右側板', layer: '盒身', x: 58, y: 2, z: 0, w: 2, h: 30, d: 40 },
+    { id: 4, name: '背板', layer: '盒身', x: 2, y: 2, z: 38, w: 56, h: 30, d: 2 },
+    { id: 5, name: '隔板 1', layer: '隔板', x: 20, y: 2, z: 2, w: 1.5, h: 26, d: 36 },
+    { id: 6, name: '隔板 2', layer: '隔板', x: 39, y: 2, z: 2, w: 1.5, h: 26, d: 36 },
+    { id: 7, name: '插銷 1', layer: '插銷', x: 6, y: 32, z: 6, w: 2, h: 6, d: 2, grp: '插銷組' },
+    { id: 8, name: '插銷 2', layer: '插銷', x: 52, y: 32, z: 6, w: 2, h: 6, d: 2, grp: '插銷組' },
+    { id: 9, name: '插銷 3', layer: '插銷', x: 6, y: 32, z: 32, w: 2, h: 6, d: 2, grp: '插銷組' },
+    { id: 10, name: '插銷 4', layer: '插銷', x: 52, y: 32, z: 32, w: 2, h: 6, d: 2, grp: '插銷組' },
+    { id: 11, name: '切的大方塊', layer: '參考', x: 70, y: 0, z: 0, w: 30, h: 40, d: 40 }
+  ];
+}
+const st = { batch: '2', place: 'top', sub: 'dbl' };
+let objs, sel, hidden, locked, layerOff, layerLock, open, inGroup, curLayer, isolated;
+function reset() {
+  objs = freshObjs(); sel = []; hidden = new Set(); locked = new Set([11]); layerOff = new Set(); layerLock = new Set(['參考']);
+  open = new Set(['盒身', '插銷']); inGroup = null; curLayer = '盒身'; isolated = null;
+}
+reset();
+
+const $ = id => document.getElementById(id);
+const byId = id => objs.find(o => o.id === id);
+const L2 = () => st.batch === '2';
+const isHidden = o => hidden.has(o.id) || (L2() && layerOff.has(o.layer)) || (isolated && !isolated.has(o.id));
+const isLocked = o => locked.has(o.id) || (L2() && layerLock.has(o.layer));
+const groupOf = o => (L2() && o.grp) ? objs.filter(p => p.grp === o.grp) : [o];
+
+// ── 畫：斜投影 ──
+const S = 5.2, OX = 250, OY = 470, KX = 0.55, KY = 0.32;
+const P = (x, y, z) => [OX + x * S + z * S * KX, OY - y * S - z * S * KY];
+function shade(hex, f) { const n = parseInt(hex.slice(1), 16); const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => Math.round(Math.min(255, v * f))); return `rgb(${c})`; }
+function poly(pts, fill, extra = '') { return `<polygon points="${pts.map(p => p.join(',')).join(' ')}" fill="${fill}" ${extra}/>`; }
+function draw() {
+  const order = objs.slice().sort((a, b) => (b.z + b.d / 2) - (a.z + a.d / 2) || (a.y - b.y));
+  let s = '';
+  // 地板格線
+  for (let i = -2; i <= 22; i++) { const a = P(i * 5, 0, -10), b = P(i * 5, 0, 60); s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#262a31"/>`; }
+  for (let j = -2; j <= 12; j++) { const a = P(-10, 0, j * 5), b = P(110, 0, j * 5); s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#262a31"/>`; }
+  for (const o of order) {
+    if (isHidden(o)) continue;
+    const lk = isLocked(o), on = sel.includes(o.id), dimByGroup = inGroup && o.grp !== inGroup;
+    const col = COLORS[o.layer];
+    const op = lk ? 0.35 : dimByGroup ? 0.3 : 1;
+    const st2 = on ? 'stroke="#ffd34d" stroke-width="2.5"' : 'stroke="#14161a" stroke-width="1"';
+    const { x, y, z, w, h, d } = o;
+    const front = [P(x, y, z), P(x + w, y, z), P(x + w, y + h, z), P(x, y + h, z)];
+    const top = [P(x, y + h, z), P(x + w, y + h, z), P(x + w, y + h, z + d), P(x, y + h, z + d)];
+    const side = [P(x + w, y, z), P(x + w, y, z + d), P(x + w, y + h, z + d), P(x + w, y + h, z)];
+    s += `<g data-id="${o.id}" opacity="${op}" style="cursor:${lk ? 'not-allowed' : 'pointer'}">`
+      + poly(side, shade(col, .7), st2) + poly(top, shade(col, 1.15), st2) + poly(front, col, st2) + '</g>';
+    if (lk) { const c = P(x + w / 2, y + h + 3, z); s += `<text x="${c[0]}" y="${c[1]}" font-size="16" text-anchor="middle">🔒</text>`; }
+  }
+  // 群組的虛線框
+  if (L2()) {
+    const gs = new Set(sel.map(byId).filter(o => o && o.grp && !inGroup).map(o => o.grp));
+    for (const g of gs) {
+      const m = objs.filter(o => o.grp === g && !isHidden(o));
+      if (!m.length) continue;
+      const pts = m.flatMap(o => [P(o.x, o.y, o.z), P(o.x + o.w, o.y + o.h, o.z + o.d), P(o.x, o.y + o.h, o.z + o.d), P(o.x + o.w, o.y, o.z)]);
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const x0 = Math.min(...xs) - 8, y0 = Math.min(...ys) - 8, x1 = Math.max(...xs) + 8, y1 = Math.max(...ys) + 8;
+      s += `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" fill="none" stroke="#ffd34d" stroke-dasharray="6 4" rx="6"/>`
+        + `<text x="${x0}" y="${y0 - 6}" fill="#ffd34d" font-size="13">🔗 ${g}（${m.length} 個）</text>`;
+    }
+  }
+  $('svg').innerHTML = s;
+}
+
+// ── 點選 ──
+let lastClick = { id: 0, t: 0 };
+$('svg').addEventListener('click', e => {
+  const g = e.target.closest('g[data-id]');
+  if (!g) { if (inGroup) leaveGroup(); sel = []; render(); return; }
+  const o = byId(+g.dataset.id);
+  if (isLocked(o)) { flash(`「${o.name}」鎖住了 —— 看得到、點不到（要改先解鎖）`); return; }
+  const now = performance.now();
+  const dbl = lastClick.id === o.id && now - lastClick.t < 350;
+  lastClick = { id: o.id, t: now };
+  if (L2() && o.grp && !inGroup && st.sub === 'dbl' && dbl) { inGroup = o.grp; sel = [o.id]; render(); return; }
+  if (inGroup && o.grp !== inGroup) { leaveGroup(); }
+  let pick;
+  if (inGroup) pick = [o.id];
+  else if (L2() && o.grp && st.sub === 'ctrl' && e.ctrlKey && e.shiftKey) pick = [o.id];
+  else pick = groupOf(o).filter(p => !isLocked(p)).map(p => p.id);
+  if (e.shiftKey && !(st.sub === 'ctrl' && e.ctrlKey)) {
+    const allIn = pick.every(id => sel.includes(id));
+    sel = allIn ? sel.filter(id => !pick.includes(id)) : sel.concat(pick.filter(id => !sel.includes(id)));
+  } else sel = pick;
+  render();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && inGroup) { leaveGroup(); render(); } });
+function leaveGroup() { inGroup = null; }
+let flashT = 0, flashMsg = '';
+function flash(m) { flashMsg = m; flashT = performance.now(); render(); setTimeout(render, 2600); }
+
+// ── 動作 ──
+function act(k) {
+  const ids = sel.slice();
+  if (k === 'hide') { ids.forEach(id => hidden.add(id)); sel = []; }
+  if (k === 'lock') { ids.forEach(id => locked.add(id)); sel = []; }
+  if (k === 'iso') { isolated = isolated ? null : new Set(ids); }
+  if (k === 'showAll') { hidden.clear(); isolated = null; if (L2()) layerOff.clear(); }
+  if (k === 'unlockAll') { locked.clear(); if (L2()) layerLock.clear(); }
+  if (k === 'group' && ids.length > 1) { const name = '群組 ' + (new Set(objs.map(o => o.grp).filter(Boolean)).size + 1); ids.forEach(id => byId(id).grp = name); }
+  if (k === 'ungroup') { const gs = new Set(ids.map(id => byId(id).grp)); objs.forEach(o => { if (gs.has(o.grp)) delete o.grp; }); inGroup = null; }
+  if (k === 'toLayer') { ids.forEach(id => byId(id).layer = curLayer); }
+  render();
+}
+$('showAll').onclick = () => act('showAll');
+$('unlockAll').onclick = () => act('unlockAll');
+$('doGroup').onclick = () => act('group');
+$('unGroup').onclick = () => act('ungroup');
+$('reset').onclick = () => { reset(); render(); };
+
+// ── 清單 ──
+function listHTML() {
+  const layers = Object.keys(COLORS);
+  let h = '';
+  for (const L of layers) {
+    const ms = objs.filter(o => o.layer === L);
+    const off = layerOff.has(L), lk = layerLock.has(L);
+    h += `<div class="row${L === curLayer ? ' cur' : ''}" data-layer="${L}">`
+      + `<span class="tw" data-tw="${L}">${open.has(L) ? '▾' : '▸'}</span>`
+      + `<span class="ic${off ? ' off' : ''}" data-leye="${L}" title="這一層看不看得到">👁</span>`
+      + `<span class="ic${lk ? ' lockOn' : ' off'}" data-llock="${L}" title="這一層鎖不鎖">🔒</span>`
+      + `<span class="dot" style="background:${COLORS[L]}"></span><span class="nm">${L}</span><span class="ct">${ms.length}</span></div>`;
+    if (!open.has(L)) continue;
+    const shownGroups = new Set();
+    for (const o of ms) {
+      if (o.grp) {
+        if (shownGroups.has(o.grp)) continue;
+        shownGroups.add(o.grp);
+        const gm = ms.filter(p => p.grp === o.grp);
+        const gsel = gm.every(p => sel.includes(p.id));
+        h += `<div class="row${gsel ? ' sel' : ''}" data-gsel="${o.grp}" style="padding-left:22px"><span class="tw">▾</span><span class="nm">🔗 ${o.grp}</span><span class="ct">${gm.length}</span></div>`;
+        for (const p of gm) h += objRow(p, 52);
+      } else h += objRow(o, 30);
+    }
+  }
+  h += `<div class="listBtns"><button class="b" data-act="newLayer">＋新圖層</button><button class="b" data-act="toLayer" ${sel.length ? '' : 'disabled'}>移到「${curLayer}」</button>`
+    + `<button class="b" data-act="group" ${sel.length > 1 ? '' : 'disabled'}>綁成一組</button><button class="b" data-act="ungroup" ${sel.some(id => byId(id).grp) ? '' : 'disabled'}>拆開</button></div>`;
+  return h;
+}
+function objRow(o, pad) {
+  const hid = hidden.has(o.id), lk = locked.has(o.id), dim = isHidden(o) || isLocked(o);
+  return `<div class="row${sel.includes(o.id) ? ' sel' : ''}${dim ? ' dim' : ''}" data-osel="${o.id}" style="padding-left:${pad}px">`
+    + `<span class="ic${hid ? ' off' : ''}" data-oeye="${o.id}">👁</span><span class="ic${lk ? ' lockOn' : ' off'}" data-olock="${o.id}">🔒</span>`
+    + `<span class="nm">${o.name}</span></div>`;
+}
+function onList(root) {
+  root.querySelectorAll('[data-tw]').forEach(el => el.onclick = e => { e.stopPropagation(); const L = el.dataset.tw; open.has(L) ? open.delete(L) : open.add(L); render(); });
+  root.querySelectorAll('[data-leye]').forEach(el => el.onclick = e => { e.stopPropagation(); const L = el.dataset.leye; layerOff.has(L) ? layerOff.delete(L) : layerOff.add(L); sel = sel.filter(id => !isHidden(byId(id))); render(); });
+  root.querySelectorAll('[data-llock]').forEach(el => el.onclick = e => { e.stopPropagation(); const L = el.dataset.llock; layerLock.has(L) ? layerLock.delete(L) : layerLock.add(L); sel = sel.filter(id => !isLocked(byId(id))); render(); });
+  root.querySelectorAll('[data-oeye]').forEach(el => el.onclick = e => { e.stopPropagation(); const id = +el.dataset.oeye; hidden.has(id) ? hidden.delete(id) : hidden.add(id); sel = sel.filter(i => i !== id || !hidden.has(id)); render(); });
+  root.querySelectorAll('[data-olock]').forEach(el => el.onclick = e => { e.stopPropagation(); const id = +el.dataset.olock; locked.has(id) ? locked.delete(id) : locked.add(id); sel = sel.filter(i => i !== id || !locked.has(id)); render(); });
+  root.querySelectorAll('[data-layer]').forEach(el => el.onclick = () => { curLayer = el.dataset.layer; render(); });
+  root.querySelectorAll('[data-osel]').forEach(el => el.onclick = e => { const o = byId(+el.dataset.osel); if (isHidden(o) || isLocked(o)) return; sel = e.shiftKey ? sel.concat(o.id) : [o.id]; render(); });
+  root.querySelectorAll('[data-gsel]').forEach(el => el.onclick = () => { sel = objs.filter(o => o.grp === el.dataset.gsel && !isHidden(o) && !isLocked(o)).map(o => o.id); render(); });
+  root.querySelectorAll('[data-act]').forEach(el => el.onclick = () => {
+    const k = el.dataset.act;
+    if (k === 'newLayer') { const n = '新圖層 ' + (Object.keys(COLORS).length - 3); COLORS[n] = '#7fc4c4'; curLayer = n; open.add(n); render(); return; }
+    act(k);
+  });
+}
+
+// ── 面板 ──
+function toolSec() {
+  const n = sel.length;
+  let h = `<div class="sec"><h2>工具</h2>`;
+  if (!n) h += `<div class="props">（選了東西才有）</div>`;
+  else h += `<div class="grp"><span class="lbl">顯示</span><button class="b new" data-a="hide">藏起來</button><button class="b new" data-a="lock">鎖住</button><button class="b new${isolated ? ' on' : ''}" data-a="iso">只看選到的</button></div>`
+    + `<div class="grp"><span class="lbl">陣列</span><span class="fake">陣列 環形 鏡射</span></div>`
+    + (n > 1 ? `<div class="grp"><span class="lbl">布林</span><span class="fake">∪ − ∩ ✂</span></div>` : '');
+  return h + `</div>`;
+}
+function propSec() {
+  const o = sel.length ? byId(sel[sel.length - 1]) : null;
+  let h = `<div class="sec"><h2>物件</h2><div class="props">`;
+  if (!o) h += '還沒有選取物件';
+  else {
+    h += `<div class="kv">名稱 <b>${sel.length > 1 ? sel.length + ' 個（最後點的：' + o.name + '）' : o.name}</b></div>`;
+    if (L2()) h += `<div class="kv">圖層 <b>${o.layer}</b></div><div class="kv">群組 <b>${o.grp || '（沒有）'}</b></div>`;
+    h += `<div class="kv">尺寸 <b>${o.w} × ${o.h} × ${o.d} cm</b></div><div class="kv">位置 <b>${o.x}, ${o.y}, ${o.z}</b></div>`;
+  }
+  return h + `</div></div>`;
+}
+let tab = 'prop';
+function render() {
+  // 控制列
+  document.querySelectorAll('#ctl button[data-k]').forEach(b => b.classList.toggle('on', st[b.dataset.k] === b.dataset.v));
+  $('placeG').style.opacity = L2() ? 1 : .35; $('subG').style.opacity = L2() ? 1 : .35;
+  $('grpGrp').style.display = L2() ? '' : 'none';
+  $('railLayer').style.display = L2() && st.place === 'float' ? '' : 'none';
+  const nh = objs.filter(isHidden).length, nl = objs.filter(isLocked).length;
+  $('showAll').textContent = `全部顯示（${nh}）`; $('showAll').disabled = !nh;
+  $('unlockAll').textContent = `全部解鎖（${nl}）`; $('unlockAll').disabled = !nl;
+  $('doGroup').disabled = sel.length < 2; $('unGroup').disabled = !sel.some(id => byId(id).grp);
+  // 面板
+  const P2 = $('panel');
+  const list = L2() ? `<div class="sec"><h2>圖層 <span class="sp"></span><span class="props">點 👁 藏、🔒 鎖、名字選</span></h2><div id="lst">${listHTML()}</div></div>` : '';
+  if (L2() && st.place === 'tab') {
+    P2.innerHTML = `<div class="tabs"><button data-tab="prop" class="${tab === 'prop' ? 'on' : ''}">工具與屬性</button><button data-tab="list" class="${tab === 'list' ? 'on' : ''}">圖層</button></div>`
+      + (tab === 'list' ? list : toolSec() + propSec());
+    P2.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+  } else if (L2() && st.place === 'top') P2.innerHTML = list + toolSec() + propSec();
+  else P2.innerHTML = toolSec() + propSec();
+  P2.querySelectorAll('[data-a]').forEach(b => b.onclick = () => act(b.dataset.a));
+  if (P2.querySelector('#lst')) onList(P2.querySelector('#lst'));
+  const fl = $('float');
+  if (L2() && st.place === 'float') { fl.style.display = 'block'; $('floatBody').innerHTML = listHTML(); onList($('floatBody')); }
+  else fl.style.display = 'none';
+  // 畫面
+  draw();
+  $('enterBar').style.display = inGroup ? 'block' : 'none';
+  $('enterBar').textContent = inGroup ? `正在改「${inGroup}」裡面的一個 —— 其他東西變淡；按 Esc 或點外面空白出來` : '';
+  const parts = [];
+  if (nh) parts.push(`藏起來 ${nh} 個`);
+  if (nl) parts.push(`鎖住 ${nl} 個`);
+  if (isolated) parts.push('只看選到的（再按一次「只看選到的」回來）');
+  const fm = performance.now() - flashT < 2500 ? flashMsg : '';
+  $('hint').textContent = fm || (parts.length ? parts.join('　') + '　（出圖時藏起來的不算 —— 第 3 題）' : '全部都看得到、都點得到');
+  // 說明
+  const d = st.batch === '1'
+    ? '<b>第一批</b>：只有「藏起來、鎖住、只看選到的」—— 選了東西，在右側「工具」的「顯示」那一組按；上方「檢視」多「全部顯示、全部解鎖」。<b>沒有清單</b>，藏起來的要靠「全部顯示」一次拿回來（Rhino 的 Hide／Show 就是這樣）。'
+    : `<b>第二批</b>：加上圖層清單（每一層、每一個物件都有 👁 🔒）與群組（插銷 4 根綁成一組）。清單放在<b>${{ top: '右側面板最上面一區（像 Blender 的大綱在屬性上面）', tab: '右側面板的分頁「圖層」（像 Rhino 圖層和屬性同一個位置換分頁）', float: '左邊直條「圖層」開出來的浮動視窗（像 1b 的工具區拉出來）' }[st.place]}</b>；群組裡單獨點一個：<b>${st.sub === 'dbl' ? '點兩下進去（在一般選取時點兩下還沒被用掉；鋼筆、刀具的點兩下不受影響）' : '按著 Ctrl＋Shift 點（Rhino 的做法）'}</b>。`;
+  $('desc').innerHTML = d;
+}
+document.querySelectorAll('#ctl button[data-k]').forEach(b => b.onclick = () => { st[b.dataset.k] = b.dataset.v; if (st.batch === '1') { inGroup = null; } render(); });
+// 視窗窄的時候整個假建模器等比縮小（裡面照實際像素畫）
+function fit() {
+  const k = Math.min(1, (document.documentElement.clientWidth - 32) / 1240);
+  $('app').style.transform = `scale(${k})`; $('app').style.transformOrigin = '0 0';
+  $('appBox').style.height = (680 * k) + 'px';
+}
+window.addEventListener('resize', fit);
+fit();
+render();
+</script>
+</body>
+</html>

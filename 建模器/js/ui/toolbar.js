@@ -2460,7 +2460,7 @@ export class Panel {
           + ' —— 要貼回地板就按右邊的「落地」');
       }
     }
-    const g = gearClash(obj, this.app.doc.objects);
+    const g = gearClash(obj, this.app.doc.shown());          // 圖層與群組第一批：藏起來的⛔ 算
     if (g) msgs.push(g);
     if (msgs.length) this.app.toast(msgs.join('　'), true);
   }

@@ -17007,6 +17007,86 @@ if (!csgOK) {
     /for \(const o of list\) doc\.remove\(o\);\s*for \(const o of r\.made\) doc\.add\(o\);[\s\S]{0,80}sel\.set\(r\.made\.map\(o => o\.id\)\);[\s\S]{0,60}commit\(knifeOnly \? '分割（後面的當刀）' : '分割'\)/.test(mn));
 }
 
+section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 2026-10-27）');
+
+/** 規格：`規格\建模器-圖層與群組.md`「第一批」。資料在 `io.js`（`hidden`／`locked`／`isoHidden`、`setShown()`、`Doc.shown()`）。*/
+{
+  const mk = name => new io.ModelObject({ name, src: { type: 'box', w: 10, h: 10, d: 10 } });
+  const d0 = new io.Doc();
+  const [A, B, C, D] = ['甲', '乙', '丙', '丁'].map(mk);
+  for (const o of [A, B, C, D]) d0.add(o);
+
+  // 存讀檔
+  const j0 = A.toJSON();
+  ok('★★ 沒藏沒鎖 ⇒ 存檔一個字都不多（沒有 hidden／locked／isoHidden）', !('hidden' in j0) && !('locked' in j0) && !('isoHidden' in j0));
+  const old = io.ModelObject.fromJSON(j0);
+  ok('★★ 舊檔讀進來 ⇒ 不藏、不鎖', old.hidden === false && old.locked === false && old.isoHidden === false);
+  A.hidden = true; B.locked = true; C.hidden = true; C.isoHidden = true;
+  const d1 = io.Doc.fromJSON(JSON.parse(JSON.stringify(d0.toJSON())));
+  const g = n => d1.objects.find(o => o.name === n);
+  ok('★★★ 存檔、讀檔（也就是 Ctrl+Z 走的那一條）藏、鎖、「只看選到的」藏的都留得住',
+    g('甲').hidden && !g('甲').locked && g('乙').locked && !g('乙').hidden && g('丙').hidden && g('丙').isoHidden && !g('丁').hidden);
+  A.hidden = false; B.locked = false; C.hidden = false; C.isoHidden = false;
+
+  // setShown
+  let n = io.setShown(d0, 'hide', [A]);
+  ok('★★★ 藏起來：只藏選到的、回報 1', n === 1 && A.hidden && !B.hidden && !C.hidden);
+  n = io.setShown(d0, 'lock', [B]);
+  ok('★★★ 鎖住：只鎖選到的、⛔ 藏', n === 1 && B.locked && !B.hidden);
+  ok('★★ 看得到的 ＝ 沒藏的（鎖住的照樣算看得到）；藏 1、鎖 1', d0.shown().length === 3 && !d0.shown().includes(A) && d0.hiddenCount === 1 && d0.lockedCount === 1);
+  ok('★★ 視窗那一句：沒選東西 ⇒「（有 1 個藏起來的沒算）」；有選 ⇒ 不講', d0.hiddenNote([]) === '（有 1 個藏起來的沒算）' && d0.hiddenNote([B]) === '');
+  n = io.setShown(d0, 'isolate', [D]);
+  ok('★★★ 只看選到的（選丁）：乙、丙藏起來並記上 isoHidden；甲本來就藏著 ⇒ ⛔ 記；回報 2',
+    n === 2 && B.hidden && C.hidden && B.isoHidden && C.isoHidden && !A.isoHidden && !D.hidden && io.isIsolated(d0));
+  n = io.setShown(d0, 'unisolate');
+  ok('★★★ 再按一次回來：只放回它藏的（乙、丙），自己按藏起來的甲照舊藏著；回報 2',
+    n === 2 && !B.hidden && !C.hidden && A.hidden && !io.isIsolated(d0));
+  io.setShown(d0, 'isolate', [D]);
+  n = io.setShown(d0, 'showAll');
+  ok('★★★ 全部顯示：全部拿回來、isoHidden 一起清；回報 3（甲乙丙）', n === 3 && d0.objects.every(o => !o.hidden && !o.isoHidden));
+  n = io.setShown(d0, 'unlockAll');
+  ok('★★ 全部解鎖：回報 1、乙解開', n === 1 && !B.locked);
+  ok('★ 沒有要改的 ⇒ 回報 0（按鈕那邊會講「沒有要改的」）', io.setShown(d0, 'showAll') === 0 && io.setShown(d0, 'hide', []) === 0);
+
+  // 畫面與點選（讀程式守著：three.js 的點選⛔ 看 visible，一定要自己濾）
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  const sc = rd('js/view/scene.js'), sl = rd('js/view/select.js'), mn = rd('js/main.js'), ih = rd('index.html');
+  ok('★★★ 點得到的清單濾掉藏起來、鎖住的', /this\.pickables = doc\.objects\.filter\(o => !o\.hidden && !o\.locked\)/.test(sc));
+  ok('★★★ 藏起來 ⇒ 整個不畫；鎖住 ⇒ 半透明（LOCKED_OPACITY）', /node\.visible = !obj\.hidden;/.test(sc) && /node\.userData\.locked \? LOCKED_OPACITY : 1/.test(sc));
+  ok('★★ 全部入鏡⛔ 算藏起來的', /if \(n\.visible\) box\.expandByObject\(n\)/.test(sc));
+  ok('★★★ 選取一處擋全部：藏起來、鎖住的選不進來（點、拉框、全選、AI、復原回來都走這裡）',
+    /this\.ids = ids\.filter\(id => this\._canPick\(id\)\);/.test(sl) && /return !!o && !o\.hidden && !o\.locked;/.test(sl)
+    && /this\.ids = this\.ids\.filter\(id => this\._canPick\(id\)\);\s*\/\/ 復原/.test(sl));
+  ok('★★ 拉框先濾掉（「框到幾個」的數字對）；鋼筆⛔ 吸藏起來的外框',
+    /this\._doc\.objects\.filter\(o => !o\.hidden && !o\.locked\)\.map\(o => \(\{ id: o\.id, box: worldBounds\(o\) \}\)\)/.test(sl) && /if \(o\.hidden\) continue;/.test(sl));
+  // 按鈕
+  const gs = (ih.match(/<div class="grp" id="gShow">[\s\S]*?<\/div>/) || [''])[0];
+  ok('★★ 「顯示」那一組在工具區（#toolBox）最前面、五顆一開始都藏著',
+    /<div id="toolBox">[\s\S]{0,400}<div class="grp" id="gShow">/.test(ih)
+    && ['oHide', 'oLock', 'oIso', 'oShowAll', 'oUnlockAll'].every(id => new RegExp(`id="${id}" hidden`).test(gs)));
+  ok('★★★ 出現的條件：藏、鎖要選了東西；只看選到的開著時一直在；全部顯示／解鎖要有藏的／鎖的、括號寫幾個',
+    /\$\('oHide'\)\.hidden = \$\('oLock'\)\.hidden = sel\.count < 1 \|\| sel\.editMode;/.test(mn)
+    && /\$\('oIso'\)\.hidden = !\(iso \|\| \(sel\.count >= 1 && !sel\.editMode\)\);/.test(mn)
+    && /\$\('oShowAll'\)\.hidden = !nHid; \$\('oShowAll'\)\.textContent = `全部顯示（\$\{nHid\}）`;/.test(mn)
+    && /\$\('oUnlockAll'\)\.hidden = !nLock;/.test(mn));
+  ok('★★ 狀態列有藏、有鎖就一直寫著', /id="sShow" hidden/.test(ih) && /\$\('sShow'\)\.hidden = !\(nHid \|\| nLock\);/.test(mn));
+  ok('★★★ 按下去：改資料 → 重畫 → 選取重新過濾 → 記一步復原（kang ⑤ 可以 Ctrl+Z）',
+    /const n = setShown\(doc, how, picked\);[\s\S]{0,200}view\.sync\(doc\);\s*sel\.set\(sel\.ids\);[\s\S]{0,80}commit\(SHOW_LABEL\[how\]\);/.test(mn));
+  // 出圖與干涉檢查：沒選東西 ⇒ 看得到的
+  const shownIn = f => /picked\.length \? picked : this\.app\.doc\.shown\(\)/.test(rd(f));
+  ok('★★★ 沒選東西出圖 ⇒ 藏起來的不算（STL／3MF、OBJ、展開圖、剖面分切）',
+    shownIn('js/ui/exportPanel.js') && shownIn('js/ui/objPanel.js') && shownIn('js/ui/unfoldPanel.js') && shownIn('js/ui/slicePanel.js'));
+  ok('★★ 四個視窗都講「有 N 個藏起來的沒算」',
+    ['js/ui/exportPanel.js', 'js/ui/objPanel.js', 'js/ui/unfoldPanel.js', 'js/ui/slicePanel.js'].every(f => /doc\.hiddenNote\(/.test(rd(f))));
+  ok('★★ 干涉檢查、齒輪檢查也只算看得到的；干涉檢查講幾個沒算',
+    /const objs = picked \? sel\.objects\.slice\(\) : doc\.shown\(\);/.test(mn) && /個藏起來的沒算`\);/.test(mn)
+    && /toast\(r\.reason \+ \(picked \? '' : doc\.hiddenNote\(\[\]\)\), true\)/.test(mn)
+    && /gearClash\(obj, this\.app\.doc\.shown\(\)\)/.test(rd('js/ui/toolbar.js')));
+  ok('★★ AI.看() 照樣列藏起來、鎖住的，加標記', /\.\.\.\(o\.hidden \? \{ 藏起來: true \} : \{\}\)/.test(rd('js/ai/assist.js')) && /\.\.\.\(o\.locked \? \{ 鎖住: true \} : \{\}\)/.test(rd('js/ai/assist.js')));
+}
+
 section('參考線 甲：從物件的面放（2026-10-17）');
 {
   const M = await import('../js/core/mate.js');
@@ -19892,7 +19972,7 @@ section('網格核心第五批 a：匯出 OBJ（2026-10-23）');
   const pn = readFileSync(join(here, '../js/ui/objPanel.js'), 'utf8'), sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8');
   const mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
   ok('★★★ 照畫面上的樣子：加厚問畫面同一支 shellThickness()；有選只匯出選到的、沒選就全部', /this\.app\.view\.shellThickness\(o\)/.test(pn)
-    && /shellThickness\(obj\) \{ return this\._shellThickness\(obj\); \}/.test(sc) && /const objs = picked\.length \? picked : this\.app\.doc\.objects;/.test(pn));
+    && /shellThickness\(obj\) \{ return this\._shellThickness\(obj\); \}/.test(sc) && /const objs = picked\.length \? picked : this\.app\.doc\.shown\(\);/.test(pn));
   ok('★★ 預設 mm、多邊形照原樣；Blender 那句講要選 m', /unit: 'mm', triangulate: false/.test(pn) && /給 Blender 用選 m/.test(pn));
   ok('★★ 工具列「匯出 OBJ」、開著時快速鍵不穿過去、模型變了跟著重算', /id="exportObj"/.test(ih) && /\$\('exportObj'\)\.onclick = \(\) => objWin\.open\(\);/.test(mn)
     && /import3dWin\.isOpen \|\| objWin\.isOpen \|\| isAskOpen\(\)/.test(mn) && /if \(objWin\.isOpen\) objWin\.run\(\);/.test(mn));
@@ -20854,7 +20934,7 @@ if (csgOK) {
   ok('★★ 讀程式守著：做法「疊層／互卡」預設疊層、新建開檔回到疊層與自動；互卡走 interlockMany、⛔ 定位孔、⛔ 分段表；每塊零件用自己的外框；藏起來的樣式由程式帶',
     /<option value="stack">疊層<\/option><option value="interlock">互卡（側面＋橫肋）<\/option>/.test(spn) && /if \(this\.opt\.method !== 'interlock'\) this\.opt\.method = 'stack';/.test(spn)
     && /this\.opt\.method = 'stack';\s*\/\/ 6a/.test(spn) && /il \? interlockMany\(meshes, this\._ilOpt\(\)\)/.test(spn) && /: this\.opt\.il;\s*\}/.test(spn) && /&& !il\)\s*\/\/ 6a：互卡沒有定位孔/.test(spn)
-    && /if \(r\.method === 'interlock'\) \{[\s\S]{0,300}this\._renderInterlock\(\);\s*return;/.test(spn) && (spn.match(/\.\.\.this\._ownFrame\((s|slice)\)/g) || []).length === 3
+    && /if \(r\.method === 'interlock'\) \{[\s\S]{0,400}this\._renderInterlock\(\);\s*return;/.test(spn) && (spn.match(/\.\.\.this\._ownFrame\((s|slice)\)/g) || []).length === 3
     && /getElementById\('slModeStyle'\)/.test(spn) && !/\.slMode/.test(ih));
 
   // 改壞沒抓到的兩處補的：側面掉下來的塊；黃圈畫在每一片肋自己的平面上

@@ -68,6 +68,8 @@ export const EDGE_LIGHT = 0xe8edf3;
  * 線一律最後畫的話會壓在它們上面（選到的邊中間多一條深色線）。
  */
 export const LINE_ORDER = 20;
+/** 圖層與群組第一批：鎖住的物件畫多透（看得到、當參考；比編輯路徑的 0.28 實一點，一眼分得出來）*/
+export const LOCKED_OPACITY = 0.4;
 const LINE_NAMES = { edges: [0, 0], seams: [2, 1], darts: [2, 1], keeps: [2, 1], proposal: [3, 2] };   // 名字 → [平常的順序, 挪到最後時加幾]
 
 export function edgeLineColor(hex) {
@@ -375,7 +377,11 @@ export class SceneView {
       }
     }
 
-    this.pickables = [...this.byId.values()];
+    /**
+     * 圖層與群組第一批：藏起來、鎖住的⛔ 放進來 ⇒ 點選、拉框、找面全部點不到。
+     * ⚠ three.js 的 `intersectObjects()` ⛔ 看 `visible`（藏起來的照樣打得到），所以一定要在這裡濾掉。
+     */
+    this.pickables = doc.objects.filter(o => !o.hidden && !o.locked).map(o => this.byId.get(o.id)).filter(Boolean);
     this._seamsDirty = false;      // 這一輪已經全部重畫過了
     this._geomDirty = false;
 
@@ -412,16 +418,18 @@ export class SceneView {
   _applyGhost() {
     const gid = this._ghostId || null;
     for (const [oid, node] of this.byId) {
-      const on = gid !== null && oid === gid;
       const m = node.material;
-      if (!m || !!m.transparent === on) continue;
-      m.transparent = on;
-      m.opacity = on ? 0.28 : 1;
+      if (!m) continue;
+      /** 圖層與群組第一批：鎖住的也半透明（看得到、當參考、點不到）；編輯路徑那一個照舊更淡 */
+      const op = gid !== null && oid === gid ? 0.28 : node.userData.locked ? LOCKED_OPACITY : 1;
+      if (m.opacity === op && !!m.transparent === (op < 1)) continue;
+      m.transparent = op < 1;
+      m.opacity = op;
       /**
        * ⚠ **`depthWrite` 要跟著關** —— 不關的話半透明的面還是會把
        * 它後面的線擋掉，看起來就像「沒有變透明」。
        */
-      m.depthWrite = !on;
+      m.depthWrite = op === 1;
       m.needsUpdate = true;
     }
   }
@@ -835,6 +843,9 @@ export class SceneView {
     node.position.copy(obj.pos);
     node.rotation.copy(obj.rot);
     node.scale.copy(obj.scale);
+    /** 圖層與群組第一批：藏起來 ⇒ 整個不畫（稜線、分片線是它的子物件，一起藏）；鎖住 ⇒ `_applyGhost()` 調半透明 */
+    node.visible = !obj.hidden;
+    node.userData.locked = !!obj.locked;
 
     node.material.color.setHex(obj.color);
     node.getObjectByName('edges').material.color.setHex(edgeLineColor(obj.color));   // 物件換顏色 ⇒ 稜線跟著換深淺
@@ -1368,8 +1379,9 @@ export class SceneView {
    */
   frameAll(doc, ids = null) {
     const box = new THREE.Box3();
-    const only = (ids || []).map(id => this.byId.get(id)).filter(Boolean);
-    for (const n of only.length ? only : this.byId.values()) box.expandByObject(n);
+    /** 圖層與群組第一批：藏起來的⛔ 算（`expandByObject` ⛔ 看 visible，自己濾）*/
+    const only = (ids || []).map(id => this.byId.get(id)).filter(n => n && n.visible);
+    for (const n of only.length ? only : this.byId.values()) if (n.visible) box.expandByObject(n);
     if (box.isEmpty()) {
       this.camera.position.set(320, 260, 340);
       this.orbit.target.set(0, 40, 0);

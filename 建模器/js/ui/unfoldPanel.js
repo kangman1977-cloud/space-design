@@ -337,7 +337,7 @@ export class UnfoldPanel {
   /** 這次要展開的物件：沒選東西就整份文件 —— 一個案子通常就是要全部出圖 */
   _targets() {
     const picked = this.app.sel.objects;
-    return picked.length ? picked : this.app.doc.objects;
+    return picked.length ? picked : this.app.doc.shown();         // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
   }
 
   /** 這個材質的縫份／黏合片預設多寬（cm）；0 ＝ 沒有（鈑金、珍珠板、壓克力）*/
@@ -409,7 +409,8 @@ export class UnfoldPanel {
      * 沒選東西 ⇒ 展開整份，⛔ 多講。
      */
     const all = this.app.doc.objects.length, n = (objs || []).length;
-    const only = this.app.sel.objects.length && n < all ? `只展開選到的 ${n} 個（共 ${all} 個；沒選東西就是全部）　` : '';
+    const hid = this.app.doc.hiddenNote(this.app.sel.objects);    // 圖層與群組第一批：沒選東西、有藏起來的 ⇒ 講沒算
+    const only = this.app.sel.objects.length && n < all ? `只展開選到的 ${n} 個（共 ${all} 個；沒選東西就是全部）　` : hid ? hid + '　' : '';
     this.sum.textContent = r.pieces.length
       ? only + `${s.pieces} 種、共 ${s.total} 片　總面積 ${fmt(s.area / 10000)} m²　`
         + `折彎 ${s.arcBends + s.sharpBends} 道`
