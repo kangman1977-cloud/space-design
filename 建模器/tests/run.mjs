@@ -22759,8 +22759,8 @@ section('介面第二輪 1b：「工具」區拉出來變浮動視窗（2026-10-
   const P = [clampPos({ x: 100, y: 120 }, S, V), clampPos({ x: 1300, y: 900 }, S, V), clampPos({ x: -50, y: -9 }, S, V), clampPos({ x: 50, y: 50 }, S, { w: 280, h: 500 })];
   ok('★★★ 位置夾在畫面裡：放得下照放；太右 ⇒ 整個寬度拉回來；太下 ⇒ 標題列留 40 在畫面裡（拖得回來）；負的 ⇒ 0；畫面比視窗窄 ⇒ 靠左',
     FLOAT_W === 300 && JSON.stringify(P) === JSON.stringify([{ x: 100, y: 120 }, { x: 1066, y: 728 }, { x: 0, y: 0 }, { x: 0, y: 50 }]), JSON.stringify(P));
-  ok('★★★ 一開始在 3D 畫面左上（左側直條右邊、工具列下面各留 12）；記住的位置照用但夾在畫面裡',
-    /\{ x: r\.left \+ 12, y: r\.top \+ 12 \}/.test(tf) && /const p = clampPos\(want, \{ w: el\.offsetWidth \|\| FLOAT_W \}, \{ w: innerWidth, h: innerHeight \}\);/.test(tf));
+  ok('★★★ 一開始在 3D 畫面左上（左側直條右邊留 12、工具列下面留 44 讓開 2a 的視角選單）；記住的位置照用但夾在畫面裡',
+    /\{ x: r\.left \+ 12, y: r\.top \+ 44 \}/.test(tf) && /const p = clampPos\(want, \{ w: el\.offsetWidth \|\| FLOAT_W \}, \{ w: innerWidth, h: innerHeight \}\);/.test(tf));
   ok('★★ 拖標題列（按鈕上按下去⛔ 算拖、滑鼠手指同一套 pointer）；放開才記位置',
     /if \(e\.target\.closest\('button'\) \|\| e\.button > 0\) return;/.test(tf) && /head\.setPointerCapture\(e\.pointerId\);/.test(tf)
     && /h\.onMoved\(\{ x: parseFloat\(el\.style\.left\) \|\| 0, y: parseFloat\(el\.style\.top\) \|\| 0 \}\);/.test(tf) && /onMoved: p => \{ const s = loadUI\(\); s\.toolPos = p; saveUI\(s\); \}/.test(mn));
@@ -22779,6 +22779,61 @@ section('介面第二輪 1b：「工具」區拉出來變浮動視窗（2026-10-
     /#toolFloat \{\s*position: fixed; z-index: 30; width: 300px;/.test(raw) && /#toolFloat\[hidden\] \{ display: none; \}/.test(raw) && /#toolFloat\.folded \.tfBody \{ display: none; \}/.test(raw)
     && /#pTools #toolBox, #toolFloat #toolBox \{/.test(raw));
   ok('★★ 功能地圖：「工具」區自己的按鈕（拉出來、放回、收起）歸「工具」大組', /if \(!grp && el\.closest\('#toolFloat, #pTools'\)\) return '工具';/.test(cat));
+}
+
+section('介面第二輪 2a：分割畫面（2026-10-27）');
+{
+  /**
+   * `規格\建模器-分割畫面.md`；kang 2026-10-27「同意你的建議」六題＋「後、下、另一側」放進每一格的視角選單。
+   * 版面的位置用純算的測（`view/panes.js`）；相機、換格、畫面在測試環境跑不起來 ⇒ 讀程式守著（本機用滑鼠驗過）。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const raw = rf(join(dir, '../index.html'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8'),
+    sc = rf(join(dir, '../js/view/scene.js'), 'utf8'), se = rf(join(dir, '../js/view/select.js'), 'utf8'), cat = rf(join(dir, '../js/ai/catalog.js'), 'utf8');
+  const P = await import('../js/view/panes.js');
+  const r4 = P.paneRects('4', 1000, 600), r1 = P.paneRects('1', 1000, 600), r4l = P.paneRects('4l', 1000, 600);
+  ok('★★★ 版面：單格整個畫面；四格「上｜透視／前｜側」、格子之間留 2 px、邊上⛔ 留；一大三小（左大）大的那格 65%',
+    JSON.stringify(r1) === JSON.stringify([{ x: 0, y: 0, w: 1000, h: 600, view: null }])
+    && JSON.stringify(r4.map(r => r.view)) === JSON.stringify(['top', 'persp', 'front', 'right'])
+    && r4[0].x === 0 && r4[0].w === 499 && r4[1].x === 501 && r4[1].w === 499 && r4[2].y === 301 && r4[2].h === 299
+    && r4l[0].w === 649 && r4l.slice(1).every(r => r.x === 651) && r4l.map(r => r.view).join() === 'persp,top,front,right', JSON.stringify([r1, r4, r4l]));
+  ok('★★ 哪一格：格子裡 ⇒ 那一格；落在縫上 ⇒ 最近的那一格（⛔ 回 -1 讓點選失效）',
+    P.paneIndexAt(r4, 10, 10) === 0 && P.paneIndexAt(r4, 900, 10) === 1 && P.paneIndexAt(r4, 10, 590) === 2 && P.paneIndexAt(r4, 900, 590) === 3
+    && P.paneIndexAt(r4, 500, 10) >= 0 && [0, 1].includes(P.paneIndexAt(r4, 500, 10)));
+  const opts = [...raw.matchAll(/<option value="([^"]+)">([^<]+)<\/option>/g)].map(m => [m[1], m[2]]);
+  const layOpts = opts.filter(([k]) => k in P.LAYOUTS);
+  ok('★★ 版面下拉（index.html）跟版面表一模一樣：7 種、字照 LAYOUT_NAMES（兩端一致）',
+    layOpts.length === 7 && layOpts.every(([k, t]) => P.LAYOUT_NAMES[k] === t) && Object.keys(P.LAYOUTS).length === 7, JSON.stringify(layOpts));
+  ok('★★★ 視角：補「下」（跟「上」同一招差一點點，⛔ 正下方）；前後左右上下 ⇒ 正交、透視 ⇒ 透視、等角照原本；選單有 8 個能選＋「自由」',
+    JSON.stringify(P.VIEW_DIRS.bottom) === JSON.stringify([0, -1, 1e-4]) && JSON.stringify(P.VIEW_DIRS.top) === JSON.stringify([0, 1, 1e-4])
+    && P.wantsOrtho('front') === true && P.wantsOrtho('bottom') === true && P.wantsOrtho('persp') === false && P.wantsOrtho('iso') === null
+    && Object.keys(P.VIEW_NAMES).join() === 'persp,iso,front,back,left,right,top,bottom,free' && /const dir = VIEW_DIRS\[which\];/.test(sc) && /this\.active\.view = which;/.test(sc));
+  ok('★★★ 換格：清掉轉視角的慣性（⛔ 帶到下一格）、平移速度照格子比例、換相機通知箭頭；正交換相機記在那一格',
+    /if \(o\._sphericalDelta\) o\._sphericalDelta\.set\(0, 0, 0\);/.test(sc) && /if \(o\._panOffset\) o\._panOffset\.set\(0, 0, 0\);/.test(sc)
+    && /o\.panSpeed = el && r\.h \? el\.clientHeight \/ r\.h : 1;/.test(sc) && /this\.persp = p\.persp; this\.ortho = p\.ortho; this\.camera = p\.camera;/.test(sc)
+    && /this\.active\.camera = want;/.test(sc));
+  ok('★★★ 每一格各畫一次：setViewport＋setScissor、影子只算第一格、畫完還原 camera／viewport／scissor；XYZ 小方向標每一格右上角',
+    /r\.setViewport\(rc\.x, H - rc\.y - rc\.h, rc\.w, rc\.h\);\s*r\.setScissor\(rc\.x, H - rc\.y - rc\.h, rc\.w, rc\.h\);/.test(sc)
+    && /r\.shadowMap\.autoUpdate = i === 0 \? autoShadow : false;/.test(sc) && /r\.shadowMap\.autoUpdate = autoShadow;\s*r\.setScissorTest\(false\);/.test(sc)
+    && /this\.camera = keepCam;/.test(sc) && /this\._renderAxisGizmo\(rc, H\);/.test(sc) && /const right = rc \? rc\.x \+ rc\.w : w, top = rc \? H - rc\.y : h;/.test(sc));
+  ok('★★ 正交範圍、每公分幾像素照那一格（⛔ 照整個畫布）',
+    /const r = this\.paneRect\(p\);\s*const aspect = r\.h \? r\.w \/ r\.h : 1;/.test(sc) && /const h = this\.paneRect\(\)\.h \|\| 0;/.test(sc));
+  ok('★★★ 滑鼠座標照現在那一格：_toCanvasPx 減掉那一格的位置、w h 用那一格；hitTest 走它；框選畫回畫布加 ox oy、放開照那一格大小',
+    /return \{ x: clientX - r\.left - p\.x, y: clientY - r\.top - p\.y, w: p\.w, h: p\.h, ox: p\.x, oy: p\.y \};/.test(se)
+    && /hitTest\(clientX, clientY\) \{[\s\S]{0,200}const r = this\._toCanvasPx\(clientX, clientY\);/.test(se)
+    && /el\.style\.left = \(r\.x0 \+ \(m\.ox \|\| 0\)\) \+ 'px';/.test(se) && /this\._marq = \{ ax: r\.x, ay: r\.y, bx: r\.x, by: r\.y, ox: r\.ox, oy: r\.oy \};/.test(se)
+    && /const box = pr \? \{ width: pr\.w, height: pr\.h \}/.test(se));
+  ok('★★★ 滑鼠在哪一格就操作哪一格：#stage 的 capture 先換格（⛔ 轉視角與點選拿到上一格的相機）、按著拖⛔ 換、點下去換藍框、離開畫面換回藍框',
+    /stageEl\.addEventListener\('pointermove', e => \{\s*if \(view\.panes\.length > 1 && e\.buttons === 0/.test(mn) && /\}, true\);\s*\/\*\* 點下去/.test(mn)
+    && /if \(view\.focus !== p\) \{ view\.focus = p; syncPaneUI\(\); \}\s*\}, true\);/.test(mn) && /stageEl\.addEventListener\('pointerleave', \(\) => \{ if \(view\.panes\.length > 1\) view\.activate\(view\.focus\); \}\);/.test(mn));
+  ok('★★ 箭頭只用那一格（tc.viewport）、每一格畫之前換箭頭的相機；換版面每格入鏡；上面的視角按鈕亮哪顆跟著藍框',
+    /view\.onPaneChange = \(\) => \{ sel\.tc\.viewport = view\.activeViewport\(\); syncPaneUI\(\); \};/.test(mn) && /view\.onPaneRender = cam => \{ sel\.tc\.camera = cam; \};/.test(mn)
+    && /view\.setLayout\(key, \(\) => view\.frameAll\(doc\)\);/.test(mn) && /const ON = \{ front: 'vFront', right: 'vRight', top: 'vTop', iso: 'vIso' \};/.test(mn));
+  ok('★★ 樣式：每一格那一層⛔ 擋滑鼠、只有選單接得到；等角⛔ 一開始就亮（一開始是透視的自由角度，兩端一致）；功能地圖歸「畫面：每一格的視角」',
+    /#paneUI \{ position: absolute; inset: 0; pointer-events: none; z-index: 3; \}/.test(raw) && /\.paneLbl \{\s*position: absolute; left: 8px; top: 8px; pointer-events: auto;/.test(raw)
+    && /<button id="vIso" title="等角（斜看）">等角<\/button>/.test(raw) && /view: 'persp', rect: null \}\];/.test(sc)
+    && /if \(el\.closest\('#paneUI'\)\) return '畫面：每一格的視角';/.test(cat));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -64,6 +64,7 @@ import { Import3DPanel } from './ui/import3dPanel.js';
 import { ask, isAskOpen } from './ui/askBox.js';
 import { bindKeep } from './ui/keepPairs.js';
 import { makeFloat, placeFloat } from './ui/toolFloat.js';
+import { LAYOUT_NAMES, VIEW_NAMES, VIEW_DIRS, wantsOrtho } from './view/panes.js';
 
 /**
  * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
@@ -440,6 +441,13 @@ view.cageWhen = () => sel.editMode || sel.inPickMode;
 
 // 場景換相機（透視 ↔ 正交）時，gizmo 也要跟著換，否則拖曳方向會對不上畫面
 view.onCameraChange = cam => sel.setCamera(cam);
+/**
+ * 2a 分割畫面：換格 ⇒ 箭頭只用那一格（`tc.viewport`，⛔ 設的話點箭頭的位置照整個畫布算、點不到）、左上角的字與藍框跟著換；
+ * 每一格畫之前 ⇒ 箭頭照那一格的相機算大小與朝向（畫完 scene.js 會換回現在那一格）。
+ * ⚠ 這兩支開場就會被叫（`resize()`）⇒ 用到的 `syncPaneUI` 是 function 宣告（提升）、⛔ 用 const 箭頭函式。
+ */
+view.onPaneChange = () => { sel.tc.viewport = view.activeViewport(); syncPaneUI(); };
+view.onPaneRender = cam => { sel.tc.camera = cam; };
 
 const hist = new History({
   get: () => doc.toJSON(),
@@ -888,6 +896,7 @@ for (const [id, v] of [['vFront', 'front'], ['vRight', 'right'],
     for (const k of ['vFront', 'vRight', 'vTop', 'vIso']) {
       $(k).classList.toggle('on', k === id);
     }
+    syncPaneUI();
   };
 }
 
@@ -896,9 +905,115 @@ $('vOrtho').onclick = () => setOrtho(!view.isOrtho);
 function setOrtho(on) {
   const now = view.setProjection(on);
   $('vOrtho').classList.toggle('on', now);
+  syncPaneUI();
   toast(now ? '正交投影：關掉近大遠小，可以照著畫面對位'
             : '透視投影：看整體量體用');
 }
+
+/* ═══════════════════════════════════════════════════════
+ *  分割畫面（介面第二輪 2a，kang 2026-10-27「同意你的建議」）
+ * ═══════════════════════════════════════════════════════
+ *
+ * - 「視角」那組的「版面」下拉（`#vLayout`）換版面；換的時候每一格自動入鏡一次（⑤）
+ * - 每一格左上角一個視角選單：透視、等角、前、後、左、右、上、下（kang 問「後、下、另一側」⇒ 放這裡，⛔ 加工具列按鈕）；
+ *   轉過、不是標準方向 ⇒ 寫「自由」
+ * - **滑鼠在哪一格就操作哪一格**（點選、拖箭頭、轉視角、框選、鋼筆、刀具）：`#stage` 的 capture 階段先換格 ——
+ *   🔴 一定要 capture：轉視角（OrbitControls）、點選的 pointerdown 都掛在畫布上，⛔ 先換的話它們會拿到上一格的相機
+ * - 上面「前／側／上／等角／正交」作用在**藍框那一格**（最後點過的）：滑鼠離開畫面就換回藍框那一格
+ * → 規格 `規格\建模器-分割畫面.md`；版面表 `view/panes.js`
+ */
+$('vLayout').onchange = e => {
+  const key = e.target.value;
+  view.setLayout(key, () => view.frameAll(doc));
+  buildPaneUI();
+  toast(key === '1' ? '單格：回到一個畫面（沿用藍框那一格）'
+    : `${LAYOUT_NAMES[key]}：滑鼠在哪一格就操作哪一格；上面的視角按鈕作用在藍框那一格（點一下那一格就換藍框）`);
+};
+
+/** 畫布裡的位置 ⇒ 哪一格 */
+function paneOfEvent(e) {
+  const r = view.canvas.getBoundingClientRect();
+  return view.paneAt(e.clientX - r.left, e.clientY - r.top);
+}
+{
+  const stageEl = $('stage');
+  /** 沒按著滑鼠移動 ⇒ 換格（滾輪縮放、點下去之前就對準那一格）；按著（拖箭頭、框選、轉視角中）⛔ 換 */
+  stageEl.addEventListener('pointermove', e => {
+    if (view.panes.length > 1 && e.buttons === 0 && !e.target.closest('.paneLbl')) view.activate(paneOfEvent(e));
+  }, true);
+  /** 點下去 ⇒ 換格＋那一格變藍框 */
+  stageEl.addEventListener('pointerdown', e => {
+    if (view.panes.length < 2 || e.target.closest('.paneLbl')) return;
+    const p = paneOfEvent(e);
+    view.activate(p);
+    if (view.focus !== p) { view.focus = p; syncPaneUI(); }
+  }, true);
+  /** 滑鼠離開畫面 ⇒ 換回藍框那一格（上面的視角按鈕、快捷鍵作用在它）*/
+  stageEl.addEventListener('pointerleave', () => { if (view.panes.length > 1) view.activate(view.focus); });
+}
+
+/** 那一格左上角選了看哪一面 */
+function applyPaneView(p, v) {
+  view.activate(p);
+  view.focus = p;
+  const o = wantsOrtho(v);
+  if (o !== null && o !== view.isOrtho) view.setProjection(o);
+  if (v === 'persp') {
+    if (VIEW_DIRS[p.view] && p.view !== 'iso') view.setView('iso');   // 從前／上…換透視 ⇒ 斜一點才看得出立體
+    p.view = 'persp';
+  } else view.setView(v);
+  syncPaneUI();
+}
+
+/** 換版面時重建每一格的框與選單（`#paneUI` 疊在畫布上、⛔ 擋滑鼠，只有選單接得到）*/
+function buildPaneUI() {
+  let ui = document.getElementById('paneUI');
+  if (!ui) {
+    ui = document.createElement('div');
+    ui.id = 'paneUI';
+    $('stage').appendChild(ui);
+  }
+  ui.innerHTML = '';
+  view.panes.forEach(p => {
+    const box = document.createElement('div');
+    box.className = 'paneBox';
+    const s = document.createElement('select');
+    s.className = 'paneLbl';
+    s.title = '這一格看哪一面：透視、等角、前、後、左、右、上、下（轉過就寫「自由」）。前後左右上下會自動換成正交，對位才準';
+    for (const [k, name] of Object.entries(VIEW_NAMES)) {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = name;
+      if (k === 'free') o.disabled = true;
+      s.appendChild(o);
+    }
+    s.onchange = () => applyPaneView(p, s.value);
+    box.appendChild(s);
+    ui.appendChild(box);
+    p.ui = { box, sel: s };
+  });
+  syncPaneUI();
+}
+
+/** 每一格的框、字、藍框跟著現況；上面視角那組的亮燈跟著藍框那一格（⚠ 開場就會被叫，見 view.onPaneChange 那一則）*/
+function syncPaneUI() {
+  const multi = view.panes.length > 1;
+  for (const p of view.panes) {
+    if (!p.ui) continue;
+    const r = view.paneRect(p);
+    Object.assign(p.ui.box.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+    p.ui.box.classList.toggle('focus', multi && p === view.focus);
+    p.ui.box.classList.toggle('multi', multi);
+    p.ui.sel.value = p.view || 'iso';
+    const ortho = p.camera === p.ortho;
+    p.ui.sel.title = `這一格：${VIEW_NAMES[p.view] || ''}（${ortho ? '正交' : '透視'}）—— 換看哪一面：透視、等角、前、後、左、右、上、下`;
+  }
+  const f = view.focus;
+  if (!f) return;
+  $('vOrtho').classList.toggle('on', f.camera === f.ortho);
+  const ON = { front: 'vFront', right: 'vRight', top: 'vTop', iso: 'vIso' };
+  for (const k of ['vFront', 'vRight', 'vTop', 'vIso']) $(k).classList.toggle('on', ON[f.view] === k);
+}
+buildPaneUI();
 
 /**
  * 🔴🔴 **鎖定視角**（2026-09-01，kang 提的）。⛔ 只鎖「轉」。

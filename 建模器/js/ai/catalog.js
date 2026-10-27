@@ -60,6 +60,8 @@ export function whereOf(el) {
   const grp = el.closest('.grp');
   /** 1b（kang 2026-10-27）：「工具」區自己的按鈕（拉出來、放回面板、收起）⇒ 歸「工具」大組（⛔ 落到「右邊面板：…」）*/
   if (!grp && el.closest('#toolFloat, #pTools')) return '工具';
+  /** 2a：每一格左上角的視角選單（疊在 3D 畫面上）*/
+  if (el.closest('#paneUI')) return '畫面：每一格的視角';
   if (grp) {
     /**
      * 介面第二輪 1a（kang 2026-10-27）：跟著選取／工具的 9 組在 #toolBox 裡 ——

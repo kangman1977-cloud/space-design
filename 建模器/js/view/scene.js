@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { seamKinds, keepEdges } from '../unfold/seam.js';
 import { nonPlanarFaces } from '../core/edit.js';
+import { paneRects, paneIndexAt, VIEW_DIRS } from './panes.js';
 
 /**
  * 🔴 **3D 上「開口」的顏色：黃綠**（2026-10-12，kang「依照你建議」）。縫照舊橘色（`0xff7a1a`）。
@@ -197,6 +198,26 @@ export class SceneView {
      * 這一行只能靠真的轉一次。
      */
     this.orbit.maxPolarAngle = Math.PI - 1e-4;
+
+    /**
+     * 🔴 **分割畫面（介面第二輪 2a，kang 2026-10-27「同意你的建議」）**：畫面分成幾格（`panes.js` 的版面），
+     * 每一格自己一對相機（透視＋正交）、自己的目標點、自己看哪一面。⚠ 還是**同一個畫布**，每一格各畫一次（`render()`）。
+     *
+     * ⭐ **「現在的那一格」（`this.active`）的相機就是 `this.camera`／`this.persp`／`this.ortho`、目標點就是 `orbit.target`** ——
+     *    換格（`activate()`）時把那幾個參照換成那一格的 ⇒ 原本所有讀 `this.camera` 的程式（點選、箭頭、入鏡、正交、標準視角…）
+     *    **一行都不用改**就作用在那一格。
+     * `this.focus` ＝ 藍框那一格（最後點過的）：滑鼠離開畫面時換回它 ⇒ 上面「視角」那組的按鈕作用在它。
+     * 單格（`layout === '1'`）時只有一格、整個畫布，跟以前一模一樣。
+     */
+    this.layout = '1';
+    /** ⚠ 一開始的鏡頭（320, 260, 340）⛔ 剛好等角（差約 4°）⇒ 寫「透視」（⛔ 寫等角 —— 一打開左上角就會被判成「自由」，本機撞到）*/
+    this.panes = [{ persp: this.persp, ortho: this.ortho, camera: this.camera, target: this.orbit.target.clone(), view: 'persp', rect: null }];
+    this.active = this.panes[0];
+    this.focus = this.panes[0];
+    /** 換格時通知外面（箭頭只用那一格、右邊的按鈕亮哪顆…）*/
+    this.onPaneChange = null;
+    /** 每一格要畫之前通知外面（箭頭的大小與朝向照那一格的相機算）*/
+    this.onPaneRender = null;
 
     this._buildEnvironment();
 
@@ -968,7 +989,11 @@ export class SceneView {
    * 只會畫在右上角那一小塊，**而症狀是「整個畫面幾乎全黑」**，
    * ⛔ 完全看不出跟這一段有關。
    */
-  _renderAxisGizmo() {
+  /**
+   * @param {{x,y,w,h}} [rc] 2a：畫在哪一格的右上角（css px，從上面算）；沒給 ⇒ 整個畫布（單格，跟以前一樣）
+   * @param {number} [H] 畫布高（2a 換算成從下面算的 y）
+   */
+  _renderAxisGizmo(rc = null, H = 0) {
     if (!this._axisGizmo) this._initAxisGizmo();
     const { scene: sc, cam, size: S } = this._axisGizmo;
 
@@ -993,6 +1018,8 @@ export class SceneView {
     this.renderer.getSize(_gizmoSize);
     const w = _gizmoSize.x, h = _gizmoSize.y;
     if (!w || !h) return;
+    /** 2a：那一格的右上角 ＝ 那一格的右邊、那一格的頂（換成從下面算）；單格 ⇒ 整個畫布的右上角 */
+    const right = rc ? rc.x + rc.w : w, top = rc ? H - rc.y : h;
 
     /**
      * ⚠ **只抄旋轉** —— 用 `quaternion`，⛔ 不要 `copy(camera)`
@@ -1020,8 +1047,8 @@ export class SceneView {
     const autoClearWas = r.autoClear;
     r.autoClear = false;
     r.setScissorTest(true);
-    r.setViewport(w - S - M, h - S - M, S, S);
-    r.setScissor(w - S - M, h - S - M, S, S);
+    r.setViewport(right - S - M, top - S - M, S, S);
+    r.setScissor(right - S - M, top - S - M, S, S);
     r.clearDepth();                      // ⚠ ⛔ 不清深度的話會被主畫面擋掉
     r.render(sc, cam);
     r.setScissorTest(false);
@@ -1312,8 +1339,8 @@ export class SceneView {
    * @returns {number} 像素／世界單位。量不出來（畫面高度 0）回 0
    */
   pxPerWorld(point) {
-    const el = this.canvas.parentElement;
-    const h = (el && el.clientHeight) || 0;
+    /** 2a：照現在那一格的高（單格 ＝ 整個畫布，跟以前一樣）*/
+    const h = this.paneRect().h || 0;
     if (!h) return 0;
 
     const cam = this.camera;
@@ -2501,6 +2528,7 @@ export class SceneView {
     if (ortho) this._fitOrtho();
 
     this.camera = want;
+    this.active.camera = want;          // 2a：記在那一格（換格回來還是同一台）
     this.orbit.object = want;
     this.orbit.update();
     this.resize();
@@ -2510,17 +2538,145 @@ export class SceneView {
   }
 
   /** 依照目前與目標點的距離，算出正交相機該看多大範圍 */
-  _fitOrtho() {
-    const dist = this.ortho.position.distanceTo(this.orbit.target) || 100;
-    const halfH = dist * Math.tan(THREE.MathUtils.degToRad(this.persp.fov / 2));
-    const el = this.canvas.parentElement;
-    const aspect = (el && el.clientHeight) ? el.clientWidth / el.clientHeight : 1;
+  _fitOrtho() { this._fitOrthoFor(this.active, this.orbit.target); }
+
+  /**
+   * 2a：照「那一格」的長寬比算（⛔ 照整個畫布 —— 四格時每一格都是畫布的一半寬、一半高，長寬比不一定一樣）。
+   * @param {object} p 那一格
+   * @param {THREE.Vector3} target 那一格的目標點（現在的那一格用 orbit.target）
+   */
+  _fitOrthoFor(p, target) {
+    const o = p.ortho;
+    const dist = o.position.distanceTo(target) || 100;
+    const halfH = dist * Math.tan(THREE.MathUtils.degToRad(p.persp.fov / 2));
+    const r = this.paneRect(p);
+    const aspect = r.h ? r.w / r.h : 1;
     const halfW = halfH * aspect;
-    Object.assign(this.ortho, {
+    Object.assign(o, {
       left: -halfW, right: halfW, top: halfH, bottom: -halfH
     });
-    this.ortho.zoom = 1;
-    this.ortho.updateProjectionMatrix();
+    o.zoom = 1;
+    o.updateProjectionMatrix();
+  }
+
+  // ── 分割畫面（介面第二輪 2a）─────────────────────
+
+  /** 那一格在畫布裡的位置（css px）；沒算過 ⇒ 整個畫布 */
+  paneRect(p = this.active) {
+    if (p && p.rect) return p.rect;
+    const el = this.canvas.parentElement;
+    return { x: 0, y: 0, w: (el && el.clientWidth) || 1, h: (el && el.clientHeight) || 1 };
+  }
+
+  /** 畫布裡的 (x, y)（css px）落在哪一格 */
+  paneAt(x, y) {
+    if (this.panes.length === 1) return this.panes[0];
+    return this.panes[paneIndexAt(this.panes.map(p => this.paneRect(p)), x, y)];
+  }
+
+  /**
+   * 換成操作這一格：`this.camera`／`persp`／`ortho`／`orbit` 換成它的 ⇒ 點選、箭頭、入鏡、標準視角都作用在它。
+   * 🔴 換之前把轉視角的**慣性**清掉 —— ⛔ 不清的話，上一格轉到一半的慣性會帶到這一格（`OrbitControls` 內部的
+   *    `_sphericalDelta`／`_panOffset`／`_scale`，這個版本的名字【已查證 · lib OrbitControls.js】）。
+   * 🔴 平移速度照格子比例放大（`panSpeed`）：OrbitControls 照**整個畫布**的高度換算平移，格子比較矮 ⇒ ⛔ 調的話模型跟不上滑鼠。
+   */
+  activate(p) {
+    if (!p || p === this.active) return;
+    const o = this.orbit;
+    this.active.target.copy(o.target);
+    if (o._sphericalDelta) o._sphericalDelta.set(0, 0, 0);
+    if (o._panOffset) o._panOffset.set(0, 0, 0);
+    if ('_scale' in o) o._scale = 1;
+    this.active = p;
+    this.persp = p.persp; this.ortho = p.ortho; this.camera = p.camera;
+    o.object = p.camera;
+    o.target.copy(p.target);
+    const el = this.canvas.parentElement, r = this.paneRect(p);
+    o.panSpeed = el && r.h ? el.clientHeight / r.h : 1;
+    o.update();
+    if (this.onCameraChange) this.onCameraChange(p.camera);
+    if (this.onPaneChange) this.onPaneChange(p);
+  }
+
+  /** 箭頭（TransformControls）只用這一格：它的 `viewport` 是 (x, 從下面算的 y, 寬, 高)；單格 ⇒ null（整個畫布）*/
+  activeViewport() {
+    if (this.panes.length === 1) return null;
+    const el = this.canvas.parentElement, r = this.paneRect();
+    return new THREE.Vector4(r.x, ((el && el.clientHeight) || 0) - r.y - r.h, r.w, r.h);
+  }
+
+  /**
+   * 換版面（`panes.js` 的 `LAYOUTS`）。藍框那一格的相機留給新版面裡「沿用」的那一格（單格），
+   * 其他格照預設看哪一面（前上側正交、透視格透視），⑤ 每一格自動入鏡一次。
+   * @param {string} key 版面
+   * @param {Function} frame 入鏡（main.js 傳 `p => view.frameAll(doc)`；在這裡一格一格叫）
+   */
+  setLayout(key, frame) {
+    const el = this.canvas.parentElement;
+    const W = (el && el.clientWidth) || 1, H = (el && el.clientHeight) || 1;
+    const rects = paneRects(key, W, H);
+    this.active.target.copy(this.orbit.target);
+    const keep = this.focus;
+    const panes = rects.map(r => {
+      if (!r.view) return Object.assign(keep, { rect: null });          // 單格：沿用藍框那一格
+      const persp = new THREE.PerspectiveCamera(45, 1, 1, 20000);
+      const ortho = new THREE.OrthographicCamera(-100, 100, 100, -100, -20000, 20000);
+      /** 透視那一格沿用藍框那一格現在的方向（使用者原本在看的角度）；其他格下面 setView() 擺 */
+      if (r.view === 'persp') {
+        persp.position.copy(keep.camera.position);
+        persp.quaternion.copy(keep.camera.quaternion);
+        persp.up.copy(keep.camera.up);
+      }
+      return { persp, ortho, camera: r.view === 'persp' ? persp : ortho, target: keep.target.clone(), view: r.view, rect: null };
+    });
+    this.layout = key;
+    this.panes = panes;
+    this._layoutRects();
+    /** 先換到第一格當「現在的」，再一格一格擺方向、入鏡；最後換到透視那一格（沒有就第一格）當藍框 */
+    this.active = panes[0];
+    this.persp = panes[0].persp; this.ortho = panes[0].ortho; this.camera = panes[0].camera;
+    this.orbit.object = this.camera; this.orbit.target.copy(panes[0].target);
+    for (const p of panes) {
+      this.activate(p);
+      if (VIEW_DIRS[p.view]) this.setView(p.view);
+      if (frame) frame(p);
+    }
+    const f = panes.find(p => p.view === 'persp') || panes[0];
+    this.focus = f;
+    this.activate(f);
+    if (this.onPaneChange) this.onPaneChange(f);
+  }
+
+  /** 照現在的畫布大小算每一格的位置、長寬比（`resize()` 與 `setLayout()` 叫）*/
+  _layoutRects() {
+    const el = this.canvas.parentElement;
+    const W = (el && el.clientWidth) || 1, H = (el && el.clientHeight) || 1;
+    const rects = paneRects(this.layout, W, H);
+    this.panes.forEach((p, i) => {
+      p.rect = this.panes.length === 1 ? null : { x: rects[i].x, y: rects[i].y, w: rects[i].w, h: rects[i].h };
+      const r = this.paneRect(p);
+      p.persp.aspect = r.w / r.h;
+      p.persp.updateProjectionMatrix();
+      if (p.camera === p.ortho) this._fitOrthoFor(p, p === this.active ? this.orbit.target : p.target);
+    });
+    if (this.active) {
+      const r = this.paneRect();
+      this.orbit.panSpeed = this.panes.length === 1 ? 1 : H / r.h;
+    }
+  }
+
+  /**
+   * 2a：那一格被轉過、不再是標準方向 ⇒ 左上角改寫「自由」（⛔ 還寫「前」騙人）。
+   * 標準方向跟現在的視線差 1° 以上才算轉過（平移、縮放⛔ 改方向，不會被當成轉過）。
+   */
+  _checkFree() {
+    const p = this.active;
+    const d = VIEW_DIRS[p.view];
+    if (!d) return false;
+    const want = new THREE.Vector3(...d).normalize();
+    const now = new THREE.Vector3().subVectors(this.camera.position, this.orbit.target).normalize();
+    if (want.dot(now) < Math.cos(THREE.MathUtils.degToRad(1))) { p.view = 'free'; return true; }
+    return false;
   }
 
   /**
@@ -2533,24 +2689,21 @@ export class SceneView {
   setView(which) {
     const t = this.orbit.target;
     const dist = this.camera.position.distanceTo(t) || 300;
-    const dir = {
-      front: [0, 0, 1],
-      back:  [0, 0, -1],
-      right: [1, 0, 0],
-      left:  [-1, 0, 0],
-      top:   [0, 1, 0],
-      iso:   [0.8, 0.65, 0.85]
-    }[which];
+    /**
+     * 方向表搬到 `panes.js` `VIEW_DIRS`（每一格的視角選單也用同一張）；
+     * 2a 補「下」（kang 2026-10-27 問「後、下、另一側」）—— 跟「上」同一招差一點點（`0, -1, 1e-4`），⛔ 正下方算不出方位角。
+     */
+    const dir = VIEW_DIRS[which];
     if (!dir) return;
 
     const v = new THREE.Vector3(...dir).normalize();
-    if (which === 'top') v.set(0, 1, 1e-4).normalize();
 
     this.camera.position.copy(t).addScaledVector(v, dist);
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(t);
     if (this.isOrtho) this._fitOrtho();
     this.orbit.update();
+    this.active.view = which;           // 2a：那一格左上角寫的字
   }
 
   // ── 畫面 ──────────────────────────────────────────
@@ -2590,10 +2743,10 @@ export class SceneView {
      */
     this.renderer.getSize(_gizmoSize);
     if (_gizmoSize.x === w && _gizmoSize.y === h) return;
-    this.persp.aspect = w / h;
-    this.persp.updateProjectionMatrix();
-    if (this.isOrtho) this._fitOrtho();
     this.renderer.setSize(w, h, false);
+    /** 2a：每一格的位置與長寬比（單格就是整個畫布，跟以前一樣）；箭頭只用現在那一格 */
+    this._layoutRects();
+    if (this.onPaneChange) this.onPaneChange(this.active);
   }
 
   render() {
@@ -2622,8 +2775,46 @@ export class SceneView {
      * 只比一個布林，沒變就什麼都不做。
      */
     if (this.cageWhen && this._lastDoc && !!this.cageWhen() !== this._cageOn) this.sync(this._lastDoc);
-    this.renderer.render(this.scene, this.camera);
-    this._renderAxisGizmo();
+    /** 2a：轉過 ⇒ 左上角改寫「自由」（單格也要，左上角一樣有選單）*/
+    if (this._checkFree() && this.onPaneChange) this.onPaneChange(this.active);
+    if (this.panes.length === 1) {
+      this.renderer.render(this.scene, this.camera);
+      this._renderAxisGizmo();
+      return;
+    }
+    this._renderPanes();
+  }
+
+  /**
+   * 2a：每一格各畫一次（同一個畫布，`setViewport`＋`setScissor` 只畫那一塊 —— 右上 XYZ 小方向標早就是這一招）。
+   * - 箭頭的大小、朝向照那一格的相機（`onPaneRender` ⇒ main.js 換 `tc.camera`）；尺寸字的大小也照那一格的相機算
+   * - 🔴 影子只算一次（第一格），其他格沿用 —— ⛔ 每一格都重算影子，四格就是四倍（`shadowMap.autoUpdate`）
+   * - 畫完一定把 `this.camera`、`setViewport`、`setScissorTest` 還原（⛔ 還原的話下一幀、點選都錯）
+   */
+  _renderPanes() {
+    const r = this.renderer;
+    r.getSize(_gizmoSize);
+    const H = _gizmoSize.y;
+    const keepCam = this.camera, autoShadow = r.shadowMap.autoUpdate;
+    r.setScissorTest(true);
+    this.panes.forEach((p, i) => {
+      const rc = this.paneRect(p);
+      r.setViewport(rc.x, H - rc.y - rc.h, rc.w, rc.h);
+      r.setScissor(rc.x, H - rc.y - rc.h, rc.w, rc.h);
+      this.camera = p.camera;
+      if (this.onPaneRender) this.onPaneRender(p.camera);
+      this._syncMeasureLabelScale();
+      r.shadowMap.autoUpdate = i === 0 ? autoShadow : false;
+      r.render(this.scene, p.camera);
+      this._renderAxisGizmo(rc, H);
+      r.setScissorTest(true);
+    });
+    r.shadowMap.autoUpdate = autoShadow;
+    r.setScissorTest(false);
+    r.setViewport(0, 0, _gizmoSize.x, H);
+    this.camera = keepCam;
+    if (this.onPaneRender) this.onPaneRender(keepCam);
+    this._syncMeasureLabelScale();
   }
 
   get fps() { return this._fps.value; }

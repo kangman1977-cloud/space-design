@@ -1390,7 +1390,7 @@ export class Selection {
       }
       if (this.marqueeMode && !this.tc.dragging) {
         const r = this._toCanvasPx(e.clientX, e.clientY);
-        this._marq = { ax: r.x, ay: r.y, bx: r.x, by: r.y };
+        this._marq = { ax: r.x, ay: r.y, bx: r.x, by: r.y, ox: r.ox, oy: r.oy };
         // 抓住指標，這樣拖出畫布外再放開也收得到事件
         if (cv.setPointerCapture) { try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 舊瀏覽器沒有就算了 */ } }
         this._drawMarquee();
@@ -2028,8 +2028,9 @@ export class Selection {
     const m = this._marq;
     const r = normRect(m.ax, m.ay, m.bx, m.by);
     el.hidden = false;
-    el.style.left = r.x0 + 'px';
-    el.style.top = r.y0 + 'px';
+    /** 2a：框的座標是那一格裡的 ⇒ 畫回畫布上要加那一格的位置（單格 0）*/
+    el.style.left = (r.x0 + (m.ox || 0)) + 'px';
+    el.style.top = (r.y0 + (m.oy || 0)) + 'px';
     el.style.width = (r.x1 - r.x0) + 'px';
     el.style.height = (r.y1 - r.y0) + 'px';
   }
@@ -2046,8 +2047,9 @@ export class Selection {
     if (this.marqueeEl) this.marqueeEl.hidden = true;
     if (!m || !commit || !this._doc) return;
 
-    const cv = this.view.canvas;
-    const box = cv.getBoundingClientRect();
+    /** 2a：框的大小照那一格（⛔ 照整個畫布 —— 框的座標也是那一格裡的）*/
+    const pr = this.view.paneRect ? this.view.paneRect() : null;
+    const box = pr ? { width: pr.w, height: pr.h } : this.view.canvas.getBoundingClientRect();
     const rect = normRect(m.ax, m.ay, m.bx, m.by);
 
     // 按著 Shift 或開著「加選」就是往現有選取上加，跟點選的規矩一致
@@ -2179,7 +2181,13 @@ export class Selection {
   /** 螢幕座標 → 畫布內的 px 座標 */
   _toCanvasPx(clientX, clientY) {
     const r = this.view.canvas.getBoundingClientRect();
-    return { x: clientX - r.left, y: clientY - r.top, w: r.width, h: r.height };
+    /**
+     * 🔴 **2a 分割畫面：照「現在那一格」算**（x、y 是那一格裡的位置、w、h 是那一格的大小）——
+     * 呼叫的人都拿這四個數換算 NDC、或把 3D 點投影回來比距離，全部照同一格 ⇒ 一行都不用改。
+     * `ox`、`oy` ＝ 那一格在畫布裡的位置（框選的框要畫回畫布上才加）。單格 ⇒ 整個畫布、ox oy 0，跟以前一樣。
+     */
+    const p = this.view.paneRect ? this.view.paneRect() : { x: 0, y: 0, w: r.width, h: r.height };
+    return { x: clientX - r.left - p.x, y: clientY - r.top - p.y, w: p.w, h: p.h, ox: p.x, oy: p.y };
   }
 
   /** 世界座標 → 畫布 px */
@@ -2907,10 +2915,10 @@ export class Selection {
 
   /** 螢幕座標 → 打到哪個物件 */
   hitTest(clientX, clientY) {
-    const cv = this.view.canvas;
-    const r = cv.getBoundingClientRect();
-    this._ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
-    this._ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
+    /** 2a：照現在那一格（`_toCanvasPx()`），⛔ 照整個畫布 */
+    const r = this._toCanvasPx(clientX, clientY);
+    this._ndc.x = (r.x / r.w) * 2 - 1;
+    this._ndc.y = -(r.y / r.h) * 2 + 1;
     this._ray.setFromCamera(this._ndc, this.view.camera);
 
     const hits = this._ray.intersectObjects(this.view.pickables, true);

@@ -73,14 +73,15 @@ export function fitHeight(el) {
 }
 
 /**
- * 擺到該擺的位置：記住的位置（夾在畫面裡），沒有就 3D 畫面左上角（左側直條右邊、工具列下面，各留 12）。
+ * 擺到該擺的位置：記住的位置（夾在畫面裡），沒有就 3D 畫面左上角（左側直條右邊留 12、工具列下面留 44 讓開視角選單）。
  * @param {Element} el 浮動視窗
  * @param {{x:number,y:number}|null} saved 記住的位置
  * @param {Element} stage 3D 畫面那一塊（`#stage`）
  */
 export function placeFloat(el, saved, stage) {
   const r = stage.getBoundingClientRect();
-  const want = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved : { x: r.left + 12, y: r.top + 12 };
+  /** 2a：往下讓開 3D 畫面左上角那一格的視角選單（⛔ 一拉出來就蓋住它）—— 1b 原本是 top + 12 */
+  const want = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved : { x: r.left + 12, y: r.top + 44 };
   const p = clampPos(want, { w: el.offsetWidth || FLOAT_W }, { w: innerWidth, h: innerHeight });
   el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
   fitHeight(el);

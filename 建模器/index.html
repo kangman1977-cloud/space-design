@@ -91,6 +91,18 @@ html, body {
 #toolFloat.folded .tfHead { border-radius: 10px; }
 .toolAway { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-size: 12px; color: #8b93a1; }
 .toolAway[hidden], #toolPop[hidden] { display: none; }
+/* 🔴 2a 分割畫面（kang 2026-10-27「同意你的建議」）：每一格的框與左上角視角選單（main.js `buildPaneUI()`）。
+   整層⛔ 擋滑鼠（pointer-events: none），只有選單接得到；藍框 ＝ 上面視角按鈕作用的那一格。
+   第 3 層：在畫布上、在尺寸框（6）與浮動視窗（30）下面。 */
+#paneUI { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.paneBox { position: absolute; box-sizing: border-box; }
+.paneBox.multi { outline: 1px solid #3a3f48; outline-offset: -1px; }
+.paneBox.focus { outline: 2px solid #4d8ae8; outline-offset: -2px; }
+.paneLbl {
+  position: absolute; left: 8px; top: 8px; pointer-events: auto;
+  font-size: 12px; padding: 2px 4px; border-radius: 6px;
+  background: rgba(36,39,46,.85); color: #c9cfd8; border: 1px solid #454b56;
+}
 /* 🔴 1a 補（kang 2026-10-27「同意你的建議」）：按鈕（或名字）＋數字格＋單位包成一組 span.keep（`ui/keepPairs.js`）
    ⇒ 要換行就整組一起換，⛔ 格子掉到下一行、跟按鈕分開（「鎖角度」的「度」那件也是這個）。
    裡面全部藏起來 ⇒ 這一組也收（⛔ 留一個空的佔著間距）。 */
@@ -600,10 +612,21 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
 
     <div class="grp">
       <span class="lbl">視角</span>
+      <!-- 介面第二輪 2a（kang 2026-10-27「同意你的建議」）：版面下拉放「視角」這一組（一直都在、寬度固定）；字照樣板 `樣板-分割畫面.html`、表在 `js/view/panes.js` -->
+      <select id="vLayout" title="版面：把畫面分成幾格，每一格自己看一面（左上角選）。滑鼠在哪一格就操作哪一格；下面這幾顆視角按鈕作用在藍框那一格">
+        <option value="1">單格</option>
+        <option value="2h">左右兩格</option>
+        <option value="2v">上下兩格</option>
+        <option value="3l">一大兩小</option>
+        <option value="4l">一大三小（左大）</option>
+        <option value="4t">一大三小（上大）</option>
+        <option value="4">四格</option>
+      </select>
       <button id="vFront" title="正視圖（從前面看）。對齊要靠這個 —— 透視圖裡對不準">前</button>
       <button id="vRight" title="右側視圖">側</button>
       <button id="vTop" title="上視圖（俯視）">上</button>
-      <button id="vIso" class="on" title="等角（斜看）">等角</button>
+      <!-- 2a：亮哪一顆跟著藍框那一格看哪一面（main.js syncPaneUI()）；一開始是透視的自由角度、⛔ 剛好等角 ⇒ 一顆都不亮（兩端一致：這裡⛔ 寫 class="on"）-->
+      <button id="vIso" title="等角（斜看）">等角</button>
       <button id="vOrtho" title="正交投影：關掉近大遠小。要精確對位一定要開">正交</button>
       <!--
         🔴🔴 視角鎖定（2026-09-01，kang 提的）。
