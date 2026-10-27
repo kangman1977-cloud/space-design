@@ -214,6 +214,8 @@ export class SceneView {
     this.panes = [{ persp: this.persp, ortho: this.ortho, camera: this.camera, target: this.orbit.target.clone(), view: 'persp', rect: null }];
     this.active = this.panes[0];
     this.focus = this.panes[0];
+    /** 2b：放大中的那一格（佔滿整個畫面、其他格先收起來）；null ＝ 沒有放大 */
+    this.maxPane = null;
     /** 換格時通知外面（箭頭只用那一格、右邊的按鈕亮哪顆…）*/
     this.onPaneChange = null;
     /** 每一格要畫之前通知外面（箭頭的大小與朝向照那一格的相機算）*/
@@ -2401,6 +2403,8 @@ export class SceneView {
    */
   setViewLock(on) {
     this.viewLocked = !!on;
+    /** 2b（kang 2026-10-27「照建議」）：鎖記在現在那一格（每一格各自鎖；換格時 `activate()` 套上那一格的鎖）*/
+    this.active.locked = this.viewLocked;
     this.setRotateBlock('viewLock', this.viewLocked);
     return this.viewLocked;
   }
@@ -2571,6 +2575,7 @@ export class SceneView {
   /** 畫布裡的 (x, y)（css px）落在哪一格 */
   paneAt(x, y) {
     if (this.panes.length === 1) return this.panes[0];
+    if (this.maxPane) return this.maxPane;          // 2b：放大中只有那一格
     return this.panes[paneIndexAt(this.panes.map(p => this.paneRect(p)), x, y)];
   }
 
@@ -2594,13 +2599,30 @@ export class SceneView {
     const el = this.canvas.parentElement, r = this.paneRect(p);
     o.panSpeed = el && r.h ? el.clientHeight / r.h : 1;
     o.update();
+    /** 2b：套上這一格的鎖（每一格各自鎖；「還想拖著轉」的提醒讀 viewLocked ⇒ 自然講的是這一格）*/
+    this.viewLocked = !!p.locked;
+    this.setRotateBlock('viewLock', this.viewLocked);
     if (this.onCameraChange) this.onCameraChange(p.camera);
     if (this.onPaneChange) this.onPaneChange(p);
   }
 
+  /**
+   * 2b（kang 2026-10-27「照建議」：取代「雙擊放大」—— 3D 畫面上的快點兩下已經是鋼筆收尾、刀具接回起點）：
+   * 放大這一格（佔滿整個畫面、其他格先收起來）；再叫一次（或傳 null）＝ 還原。換版面時自動還原。
+   */
+  maximize(p) {
+    if (this.panes.length === 1) return;
+    this.maxPane = p && p !== this.maxPane ? p : null;
+    const f = this.maxPane || this.focus;
+    this._layoutRects();
+    this.focus = f;
+    this.activate(f);
+    if (f === this.active && this.onPaneChange) this.onPaneChange(f);
+  }
+
   /** 箭頭（TransformControls）只用這一格：它的 `viewport` 是 (x, 從下面算的 y, 寬, 高)；單格 ⇒ null（整個畫布）*/
   activeViewport() {
-    if (this.panes.length === 1) return null;
+    if (this.panes.length === 1 || this.maxPane) return null;   // 2b：放大中 ＝ 整個畫布
     const el = this.canvas.parentElement, r = this.paneRect();
     return new THREE.Vector4(r.x, ((el && el.clientHeight) || 0) - r.y - r.h, r.w, r.h);
   }
@@ -2616,6 +2638,7 @@ export class SceneView {
     const W = (el && el.clientWidth) || 1, H = (el && el.clientHeight) || 1;
     const rects = paneRects(key, W, H);
     this.active.target.copy(this.orbit.target);
+    this.maxPane = null;                // 2b：換版面就不放大
     const keep = this.focus;
     const panes = rects.map(r => {
       if (!r.view) return Object.assign(keep, { rect: null });          // 單格：沿用藍框那一格
@@ -2627,7 +2650,7 @@ export class SceneView {
         persp.quaternion.copy(keep.camera.quaternion);
         persp.up.copy(keep.camera.up);
       }
-      return { persp, ortho, camera: r.view === 'persp' ? persp : ortho, target: keep.target.clone(), view: r.view, rect: null };
+      return { persp, ortho, camera: r.view === 'persp' ? persp : ortho, target: keep.target.clone(), view: r.view, rect: null, locked: false };
     });
     this.layout = key;
     this.panes = panes;
@@ -2653,11 +2676,17 @@ export class SceneView {
     const W = (el && el.clientWidth) || 1, H = (el && el.clientHeight) || 1;
     const rects = paneRects(this.layout, W, H);
     this.panes.forEach((p, i) => {
-      p.rect = this.panes.length === 1 ? null : { x: rects[i].x, y: rects[i].y, w: rects[i].w, h: rects[i].h };
+      /** 2b：放大中那一格 ＝ 整個畫布（rect null）；其他格照算、只是先不畫 */
+      p.rect = this.panes.length === 1 || p === this.maxPane ? null : { x: rects[i].x, y: rects[i].y, w: rects[i].w, h: rects[i].h };
       const r = this.paneRect(p);
       p.persp.aspect = r.w / r.h;
       p.persp.updateProjectionMatrix();
-      if (p.camera === p.ortho) this._fitOrthoFor(p, p === this.active ? this.orbit.target : p.target);
+      /** 2b：放大／還原、改視窗大小時保留使用者縮放過的倍率（⛔ 每次都跳回 1） */
+      if (p.camera === p.ortho) {
+        const z = p.ortho.zoom;
+        this._fitOrthoFor(p, p === this.active ? this.orbit.target : p.target);
+        p.ortho.zoom = z; p.ortho.updateProjectionMatrix();
+      }
     });
     if (this.active) {
       const r = this.paneRect();
@@ -2797,7 +2826,7 @@ export class SceneView {
     const H = _gizmoSize.y;
     const keepCam = this.camera, autoShadow = r.shadowMap.autoUpdate;
     r.setScissorTest(true);
-    this.panes.forEach((p, i) => {
+    (this.maxPane ? [this.maxPane] : this.panes).forEach((p, i) => {     // 2b：放大中只畫那一格
       const rc = this.paneRect(p);
       r.setViewport(rc.x, H - rc.y - rc.h, rc.w, rc.h);
       r.setScissor(rc.x, H - rc.y - rc.h, rc.w, rc.h);

@@ -897,6 +897,7 @@ for (const [id, v] of [['vFront', 'front'], ['vRight', 'right'],
       $(k).classList.toggle('on', k === id);
     }
     syncPaneUI();
+    savePanes();
   };
 }
 
@@ -906,6 +907,7 @@ function setOrtho(on) {
   const now = view.setProjection(on);
   $('vOrtho').classList.toggle('on', now);
   syncPaneUI();
+  savePanes();
   toast(now ? '正交投影：關掉近大遠小，可以照著畫面對位'
             : '透視投影：看整體量體用');
 }
@@ -926,6 +928,7 @@ $('vLayout').onchange = e => {
   const key = e.target.value;
   view.setLayout(key, () => view.frameAll(doc));
   buildPaneUI();
+  savePanes();
   toast(key === '1' ? '單格：回到一個畫面（沿用藍框那一格）'
     : `${LAYOUT_NAMES[key]}：滑鼠在哪一格就操作哪一格；上面的視角按鈕作用在藍框那一格（點一下那一格就換藍框）`);
 };
@@ -939,11 +942,11 @@ function paneOfEvent(e) {
   const stageEl = $('stage');
   /** 沒按著滑鼠移動 ⇒ 換格（滾輪縮放、點下去之前就對準那一格）；按著（拖箭頭、框選、轉視角中）⛔ 換 */
   stageEl.addEventListener('pointermove', e => {
-    if (view.panes.length > 1 && e.buttons === 0 && !e.target.closest('.paneLbl')) view.activate(paneOfEvent(e));
+    if (view.panes.length > 1 && e.buttons === 0 && !e.target.closest('.paneHead')) view.activate(paneOfEvent(e));
   }, true);
   /** 點下去 ⇒ 換格＋那一格變藍框 */
   stageEl.addEventListener('pointerdown', e => {
-    if (view.panes.length < 2 || e.target.closest('.paneLbl')) return;
+    if (view.panes.length < 2 || e.target.closest('.paneHead')) return;
     const p = paneOfEvent(e);
     view.activate(p);
     if (view.focus !== p) { view.focus = p; syncPaneUI(); }
@@ -963,6 +966,7 @@ function applyPaneView(p, v) {
     p.view = 'persp';
   } else view.setView(v);
   syncPaneUI();
+  savePanes();
 }
 
 /** 換版面時重建每一格的框與選單（`#paneUI` 疊在畫布上、⛔ 擋滑鼠，只有選單接得到）*/
@@ -987,9 +991,27 @@ function buildPaneUI() {
       s.appendChild(o);
     }
     s.onchange = () => applyPaneView(p, s.value);
-    box.appendChild(s);
+    /** 選單、放大、🔒 排成一列（`.paneHead` 接得到滑鼠，其他地方⛔ 擋）*/
+    const head = document.createElement('div');
+    head.className = 'paneHead';
+    head.appendChild(s);
+    box.appendChild(head);
+    /** 2b：放大／還原（取代「雙擊」—— 3D 畫面上的快點兩下是鋼筆收尾、刀具接回起點）；鎖住的格子旁邊一個 🔒 */
+    const mx = document.createElement('button');
+    mx.className = 'paneMax mini';
+    mx.onclick = () => {
+      view.maximize(p);
+      syncPaneUI();
+      toast(view.maxPane ? '放大這一格：佔滿整個畫面　再按「還原 ⤡」回到原本的版面' : '還原：回到原本的版面');
+    };
+    head.appendChild(mx);
+    const lk = document.createElement('span');
+    lk.className = 'paneLock';
+    lk.textContent = '🔒';
+    lk.title = '這一格鎖住了：拖曳不會轉（平移、縮放照用）。點這一格、再按上方「鎖定」解開';
+    head.appendChild(lk);
     ui.appendChild(box);
-    p.ui = { box, sel: s };
+    p.ui = { box, sel: s, max: mx, lock: lk };
   });
   syncPaneUI();
 }
@@ -1001,8 +1023,13 @@ function syncPaneUI() {
     if (!p.ui) continue;
     const r = view.paneRect(p);
     Object.assign(p.ui.box.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
-    p.ui.box.classList.toggle('focus', multi && p === view.focus);
-    p.ui.box.classList.toggle('multi', multi);
+    p.ui.box.classList.toggle('focus', multi && p === view.focus && !view.maxPane);
+    p.ui.box.classList.toggle('multi', multi && !view.maxPane);
+    p.ui.box.hidden = !!view.maxPane && p !== view.maxPane;          // 2b：放大中其他格的框與選單先收起來
+    p.ui.max.hidden = !multi;
+    p.ui.max.textContent = view.maxPane === p ? '還原 ⤡' : '放大 ⤢';
+    p.ui.max.title = view.maxPane === p ? '還原：回到原本的版面' : '放大這一格：佔滿整個畫面（其他格先收起來，按「還原」回來）';
+    p.ui.lock.hidden = !p.locked;
     p.ui.sel.value = p.view || 'iso';
     const ortho = p.camera === p.ortho;
     p.ui.sel.title = `這一格：${VIEW_NAMES[p.view] || ''}（${ortho ? '正交' : '透視'}）—— 換看哪一面：透視、等角、前、後、左、右、上、下`;
@@ -1010,10 +1037,47 @@ function syncPaneUI() {
   const f = view.focus;
   if (!f) return;
   $('vOrtho').classList.toggle('on', f.camera === f.ortho);
+  $('vLock').classList.toggle('on', !!f.locked);                   // 2b：鎖定按鈕亮不亮跟著藍框那一格
   const ON = { front: 'vFront', right: 'vRight', top: 'vTop', iso: 'vIso' };
   for (const k of ['vFront', 'vRight', 'vTop', 'vIso']) $(k).classList.toggle('on', ON[f.view] === k);
 }
 buildPaneUI();
+
+/**
+ * 2b 記住上次的版面（kang 2026-10-27「照建議」③ 甲：記在瀏覽器、跟人走 —— 跟工具列／面板收合、浮動工具視窗同一套；⛔ 存進檔案）。
+ * 記：用哪一種版面、每一格看哪一面（含正交透視）、哪幾格鎖住。⛔ 記：放大中（下次打開不放大）、鏡頭位置（打開時每一格入鏡）。
+ * 轉過的「自由」記不住方向 ⇒ 下次照那一格的預設。
+ */
+const LS_PANES = 'modeler.ui.panes';
+function savePanes() {
+  const o = { layout: view.layout, panes: view.panes.map(p => ({ view: p.view, ortho: p.camera === p.ortho, locked: !!p.locked })) };
+  try { localStorage.setItem(LS_PANES, JSON.stringify(o)); } catch (e) { /* 存不了就算了 */ }
+}
+/** 開場（boot() 載入模型、入鏡之後）照上次的擺 */
+function restorePanes() {
+  let o = null;
+  try { o = JSON.parse(localStorage.getItem(LS_PANES)); } catch (e) { o = null; }
+  if (!o || !o.layout || !o.panes) return;
+  if (o.layout !== view.layout) {
+    if (!(o.layout in LAYOUT_NAMES)) return;
+    view.setLayout(o.layout, () => view.frameAll(doc));
+    $('vLayout').value = o.layout;
+    buildPaneUI();
+  }
+  view.panes.forEach((p, i) => {
+    const q = o.panes[i];
+    if (!q) return;
+    view.activate(p);
+    if (q.view && q.view !== 'free' && q.view !== p.view) {
+      if (q.ortho !== (p.camera === p.ortho)) view.setProjection(!!q.ortho);
+      if (q.view === 'persp') p.view = 'persp'; else view.setView(q.view);
+      view.frameAll(doc);
+    } else if (q.ortho !== (p.camera === p.ortho)) view.setProjection(!!q.ortho);
+    view.setViewLock(!!q.locked);
+  });
+  view.activate(view.focus);
+  syncPaneUI();
+}
 
 /**
  * 🔴🔴 **鎖定視角**（2026-09-01，kang 提的）。⛔ 只鎖「轉」。
@@ -1022,8 +1086,10 @@ buildPaneUI();
  * 整個畫面都動不了，而那⛔ 不是事實。
  */
 $('vLock').onclick = () => {
-  const now = view.setViewLock(!view.viewLocked);
+  const now = view.setViewLock(!view.viewLocked);   // 2b：滑鼠在工具列上 ⇒ 現在那一格就是藍框那一格（離開畫面時換回）
   $('vLock').classList.toggle('on', now);
+  syncPaneUI();
+  savePanes();
   toast(now
     ? '視角鎖定：拖曳不再轉動畫面　⭐ 平移（右鍵拖／兩指）與縮放照樣可以用'
     : '視角解鎖：拖曳又可以轉了');
@@ -8840,6 +8906,7 @@ async function boot() {
   hist.reset(restored ? '接續上次' : '開始');
   panel.refresh();
   view.frameAll(doc);
+  restorePanes();       // 2b：照上次的版面擺（要在模型載入、入鏡之後，每一格才入得了鏡）
   updateBar();
 
   if (!csgOK) {

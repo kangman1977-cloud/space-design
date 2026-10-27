@@ -98,11 +98,16 @@ html, body {
 .paneBox { position: absolute; box-sizing: border-box; }
 .paneBox.multi { outline: 1px solid #3a3f48; outline-offset: -1px; }
 .paneBox.focus { outline: 2px solid #4d8ae8; outline-offset: -2px; }
+.paneBox[hidden] { display: none; }
+/* 2b：左上角一列 —— 視角選單、放大／還原、🔒（鎖住才出現）；只有這一列接得到滑鼠 */
+.paneHead { position: absolute; left: 8px; top: 8px; display: flex; gap: 4px; align-items: center; pointer-events: auto; }
 .paneLbl {
-  position: absolute; left: 8px; top: 8px; pointer-events: auto;
   font-size: 12px; padding: 2px 4px; border-radius: 6px;
   background: rgba(36,39,46,.85); color: #c9cfd8; border: 1px solid #454b56;
 }
+.paneMax { background: rgba(36,39,46,.85); }
+.paneMax[hidden], .paneLock[hidden] { display: none; }
+.paneLock { font-size: 13px; }
 /* 🔴 1a 補（kang 2026-10-27「同意你的建議」）：按鈕（或名字）＋數字格＋單位包成一組 span.keep（`ui/keepPairs.js`）
    ⇒ 要換行就整組一起換，⛔ 格子掉到下一行、跟按鈕分開（「鎖角度」的「度」那件也是這個）。
    裡面全部藏起來 ⇒ 這一組也收（⛔ 留一個空的佔著間距）。 */

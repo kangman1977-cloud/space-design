@@ -22830,10 +22830,38 @@ section('介面第二輪 2a：分割畫面（2026-10-27）');
   ok('★★ 箭頭只用那一格（tc.viewport）、每一格畫之前換箭頭的相機；換版面每格入鏡；上面的視角按鈕亮哪顆跟著藍框',
     /view\.onPaneChange = \(\) => \{ sel\.tc\.viewport = view\.activeViewport\(\); syncPaneUI\(\); \};/.test(mn) && /view\.onPaneRender = cam => \{ sel\.tc\.camera = cam; \};/.test(mn)
     && /view\.setLayout\(key, \(\) => view\.frameAll\(doc\)\);/.test(mn) && /const ON = \{ front: 'vFront', right: 'vRight', top: 'vTop', iso: 'vIso' \};/.test(mn));
-  ok('★★ 樣式：每一格那一層⛔ 擋滑鼠、只有選單接得到；等角⛔ 一開始就亮（一開始是透視的自由角度，兩端一致）；功能地圖歸「畫面：每一格的視角」',
-    /#paneUI \{ position: absolute; inset: 0; pointer-events: none; z-index: 3; \}/.test(raw) && /\.paneLbl \{\s*position: absolute; left: 8px; top: 8px; pointer-events: auto;/.test(raw)
+  ok('★★ 樣式：每一格那一層⛔ 擋滑鼠、只有左上角那一列（選單、放大、🔒）接得到；等角⛔ 一開始就亮（一開始是透視的自由角度，兩端一致）；功能地圖歸「畫面：每一格的視角」',
+    /#paneUI \{ position: absolute; inset: 0; pointer-events: none; z-index: 3; \}/.test(raw) && /\.paneHead \{ position: absolute; left: 8px; top: 8px; display: flex; gap: 4px; align-items: center; pointer-events: auto; \}/.test(raw)
     && /<button id="vIso" title="等角（斜看）">等角<\/button>/.test(raw) && /view: 'persp', rect: null \}\];/.test(sc)
     && /if \(el\.closest\('#paneUI'\)\) return '畫面：每一格的視角';/.test(cat));
+}
+
+section('介面第二輪 2b：放大一格、每一格各自鎖定、記住版面（2026-10-27）');
+{
+  /**
+   * kang 2026-10-27「照建議」：① 甲 每一格左上角「放大 ⤢／還原 ⤡」按鈕（取代雙擊 —— 3D 畫面上快點兩下是鋼筆收尾、刀具接回起點）
+   * ② 上方「鎖定」作用在藍框那一格、鎖住的格子旁邊 🔒、預設不鎖 ③ 甲 記在瀏覽器（版面、每一格看哪一面與正交透視、哪幾格鎖）。讀程式守著。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const raw = rf(join(dir, '../index.html'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8'), sc = rf(join(dir, '../js/view/scene.js'), 'utf8');
+  ok('★★★ 放大：放大中那一格整個畫布、只畫那一格、滑鼠都算那一格、箭頭用整個畫布；換版面自動還原；再按一次還原',
+    /this\.maxPane = p && p !== this\.maxPane \? p : null;/.test(sc) && /p\.rect = this\.panes\.length === 1 \|\| p === this\.maxPane \? null :/.test(sc)
+    && /\(this\.maxPane \? \[this\.maxPane\] : this\.panes\)\.forEach/.test(sc) && /if \(this\.maxPane\) return this\.maxPane;/.test(sc)
+    && /if \(this\.panes\.length === 1 \|\| this\.maxPane\) return null;/.test(sc) && /this\.maxPane = null;\s*\/\/ 2b：換版面就不放大/.test(sc));
+  ok('★★ 放大按鈕在每一格左上角那一列（⛔ 雙擊 3D 畫面）；放大中其他格的框收起來；按鈕字跟著換；單格⛔ 出現',
+    /mx\.onclick = \(\) => \{\s*view\.maximize\(p\);/.test(mn) && /p\.ui\.box\.hidden = !!view\.maxPane && p !== view\.maxPane;/.test(mn)
+    && /p\.ui\.max\.hidden = !multi;/.test(mn) && /p\.ui\.max\.textContent = view\.maxPane === p \? '還原 ⤡' : '放大 ⤢';/.test(mn) && !/addEventListener\('dblclick'/.test(mn) && /\.paneBox\[hidden\] \{ display: none; \}/.test(raw));
+  ok('★★★ 每一格各自鎖：鎖記在那一格、換格套上那一格的鎖（提醒照讀 viewLocked）；鎖定按鈕亮不亮跟著藍框；鎖住的格子 🔒；新格預設不鎖',
+    /this\.active\.locked = this\.viewLocked;/.test(sc) && /this\.viewLocked = !!p\.locked;\s*this\.setRotateBlock\('viewLock', this\.viewLocked\);/.test(sc)
+    && /\$\('vLock'\)\.classList\.toggle\('on', !!f\.locked\);/.test(mn) && /p\.ui\.lock\.hidden = !p\.locked;/.test(mn) && /locked: false \};/.test(sc));
+  ok('★★ 放大／還原、改視窗大小時保留正交縮放過的倍率（⛔ 每次跳回 1）',
+    /const z = p\.ortho\.zoom;\s*this\._fitOrthoFor\(p, p === this\.active \? this\.orbit\.target : p\.target\);\s*p\.ortho\.zoom = z; p\.ortho\.updateProjectionMatrix\(\);/.test(sc));
+  const hits = mn.split('savePanes();').length - 1;
+  ok('★★★ 記住（瀏覽器 modeler.ui.panes）：版面、每一格看哪一面＋正交透視＋鎖；換版面、視角選單、工具列視角、正交、鎖定都記；⛔ 記放大與鏡頭位置；開場在模型入鏡之後照上次擺',
+    /const LS_PANES = 'modeler\.ui\.panes';/.test(mn) && /panes: view\.panes\.map\(p => \(\{ view: p\.view, ortho: p\.camera === p\.ortho, locked: !!p\.locked \}\)\)/.test(mn)
+    && !/maxPane/.test(mn.slice(mn.indexOf('function savePanes()'), mn.indexOf('function restorePanes()'))) && hits >= 5
+    && /view\.frameAll\(doc\);\s*restorePanes\(\);/.test(mn) && /if \(!\(o\.layout in LAYOUT_NAMES\)\) return;/.test(mn), 'savePanes 叫了 ' + hits + ' 次');
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
