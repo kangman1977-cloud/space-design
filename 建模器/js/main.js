@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, boolSrcFrom, arraySrcFrom, explodeArray,
+import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
@@ -722,6 +722,34 @@ function boolOp(op) {
   toast(`${BOOL_LABEL[op]}完成：${list.length} 個物件 → 1 個`);
 }
 
+/**
+ * 🔴 **布林「分割」**（kang 2026-10-27「照建議」→ `規格\建模器-布林分割.md`）：重疊的地方切開，每一塊各自一個物件。
+ * 預設（甲）三塊都留；「只當刀」按亮（丙）⇒ 只切第一個，後面的切完不留。幾何與名字在 `io.js` `splitObjects()`。
+ */
+function splitOp() {
+  const list = sel.objects;
+  const chk = canBool(list.map(o => o.mesh()), list.map(o => o.name));
+  if (!chk.ok) { toast(chk.reason.replace('布林運算', '分割'), true); return; }
+
+  const knifeOnly = $('bKnife').classList.contains('on');
+  let r;
+  try { r = splitObjects(list, { knifeOnly }); } catch (e) { toast('分割失敗：' + e.message, true); return; }
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  for (const o of list) doc.remove(o);
+  for (const o of r.made) doc.add(o);
+  view.sync(doc);
+  sel.set(r.made.map(o => o.id));
+  panel.analysisCache.clear();
+  commit(knifeOnly ? '分割（後面的當刀）' : '分割');
+  const n = r.made.length;
+  const head = knifeOnly
+    ? `分割完成：「${list[0].name}」切成 ${n} 塊，後面 ${list.length - 1} 個當刀、切完不留`
+    : `分割完成：${list.length} 個物件 → ${n} 塊（重疊的 ${r.overlap} 塊、各自剩下的 ${n - r.overlap} 塊）`;
+  const speck = r.dropped ? `；${r.dropped} 塊極小的碎屑丟掉了` : '';
+  toast(`${head}${speck}。都是固定形狀，要改尺寸按 Ctrl+Z 退回去改好再分割　⚠ 平滑與分片線的標記會消失`, !!r.dropped);
+}
+
 /** 名稱用符號串起來，太長就截短，不然狀態列會被撐爆 */
 function shortName(list, op) {
   const s = ` ${BOOL_SYMBOL[op]} `;
@@ -876,6 +904,8 @@ $('dup').onclick = duplicateSelected;
 $('bUnion').onclick = () => boolOp(BOOL_OPS.UNION);
 $('bSub').onclick   = () => boolOp(BOOL_OPS.SUBTRACT);
 $('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
+$('bSplit').onclick = splitOp;
+$('bKnife').onclick = () => $('bKnife').classList.toggle('on');
 
 $('aLinear').onclick = () => arrayOp(ARRAY_MODES.LINEAR);
 $('aRadial').onclick = () => arrayOp(ARRAY_MODES.RADIAL);
@@ -7929,7 +7959,7 @@ function updateBar() {
    */
   // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
-  for (const id of ['bUnion', 'bSub', 'bInt']) $(id).hidden = !canDoBool;
+  for (const id of ['bUnion', 'bSub', 'bInt', 'bSplit', 'bKnife']) $(id).hidden = !canDoBool;
 
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
   for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).hidden = sel.count < 1;

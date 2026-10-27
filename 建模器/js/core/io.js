@@ -24,7 +24,7 @@ import { Mesh } from './mesh.js';
 import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths,
          penRevolve } from '../build/prim.js';
-import { evalBoolTree, isBoolSrc, makeItem, itemMatrix }
+import { evalBoolTree, isBoolSrc, makeItem, itemMatrix, splitAll }
   from '../build/bool.js';
 import { evalArrayTree, isArraySrc, arrayMatrices, copyCount,
          ARRAY_MODES, ARRAY_DEFAULTS } from '../build/array.js';
@@ -757,6 +757,59 @@ export function boolSrcFrom(objects, op) {
   });
 
   return { type: 'bool', op, items };
+}
+
+/**
+ * 🔴 **布林「分割」：選到的物件 ⇒ 切開後的每一塊各自一個物件**（kang 2026-10-27「照建議」→ `規格\建模器-布林分割.md`）。
+ * 幾何在 `bool.js` `splitAll()`；這裡管座標、名字、顏色。原本的物件⛔ 動（呼叫端拿掉、放新的）。
+ *
+ * 座標：全部換到第一個（母體）的座標系去算，每一塊都掛在母體的位置／角度／縮放底下，再 `recenterOrigin()` ⇒ 原點在那一塊中間、畫面上⛔ 動。
+ * 切完是固定形狀（`src.type ＝ 'mesh'`，跟刀具「切穿」一樣）—— 一個動作生出好幾塊，改其中一塊⛔ 會連動其他塊。
+ *
+ * 名字：只在一個物件裡 ⇒「方塊（剩下的）」；在好幾個裡 ⇒「方塊 ∩ 圓柱」（太長截短）；同一區分開的幾截加「－1、－2」。
+ * 顏色、實體／板件、板厚、鎖比例照那一塊所在的第一個物件。
+ *
+ * @param {ModelObject[]} objects 照選取順序，第一個是母體
+ * @param {{knifeOnly?: boolean}} [opt] true ⇒ 後面的只當刀，切完不留（丙）
+ * @returns {{ok:true, made: ModelObject[], overlap: number, dropped: number} | {ok:false, reason: string}}
+ *   `overlap` ＝ 在兩個以上物件裡的塊數（重疊的）
+ */
+export function splitObjects(objects, { knifeOnly = false } = {}) {
+  if (!objects || objects.length < 2) return { ok: false, reason: '分割至少要選兩個物件' };
+  const base = objects[0];
+  const inv = base.matrix().invert();
+  const meshes = objects.map(o => o.mesh().transformed(new THREE.Matrix4().multiplyMatrices(inv, o.matrix())));
+  const r = splitAll(meshes, { knifeOnly, labels: objects.map(o => o.name) });
+
+  const overlap = r.pieces.filter(p => p.members.length > 1).length;
+  if (!overlap) return { ok: false, reason: knifeOnly ? `後面選的跟「${base.name}」沒有重疊到 —— 沒有切到東西` : '這些物件沒有重疊到 —— 沒有東西可以分割' };
+  if (knifeOnly && r.pieces.length < 2) return { ok: false, reason: `「${base.name}」整個在刀裡面 —— 沒有被分開` };
+
+  const nameOf = members => {
+    if (members.length === 1) return `${objects[members[0]].name}（剩下的）`;
+    const full = members.map(i => objects[i].name).join(' ∩ ');
+    return full.length <= 28 ? full : `${objects[members[0]].name} ∩ …（${members.length} 個）`;
+  };
+  const key = p => p.members.join(',');
+  const count = new Map(), seen = new Map();
+  for (const p of r.pieces) count.set(key(p), (count.get(key(p)) || 0) + 1);
+
+  const made = r.pieces.map(p => {
+    const k = key(p), n = (seen.get(k) || 0) + 1;
+    seen.set(k, n);
+    const from = objects[p.members[0]];
+    const obj = new ModelObject({
+      name: nameOf(p.members) + (count.get(k) > 1 ? `－${n}` : ''),
+      kind: from.kind,
+      src: { type: 'mesh' },
+      mesh: p.mesh,
+      pos: base.pos, rot: base.rot, scale: base.scale,
+      color: from.color, thickness: from.thickness, lockScale: from.lockScale
+    });
+    recenterOrigin(obj);
+    return obj;
+  });
+  return { ok: true, made, overlap, dropped: r.dropped };
 }
 
 // ═══════════════════════════════════════════════════════

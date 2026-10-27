@@ -616,6 +616,71 @@ export function splitByCutter(mesh, cutter, label = '物件') {
   }
 }
 
+/**
+ * 🔴 **布林「分割」：重疊的地方切開，每一塊都留**（kang 2026-10-27「照建議」→ `規格\建模器-布林分割.md`）。
+ * 放在這裡的理由同 `unionMeshes()`：只有這個檔可以碰 Manifold。
+ *
+ * 做法：從第一個開始，每多一個物件 K，手上的每一塊都切成「∩ K」與「− K」兩塊；
+ * 預設（甲）再加上「K 沒被前面任何一個蓋到的部分」⇒ 結果就是所有物件疊出來的每一個區域。
+ * `knifeOnly`（丙）⛔ 加那一塊 ⇒ 後面的只當刀，切完不留。
+ *
+ * 每一塊再拆成分開的幾截（圓柱穿過方塊，剩下的是上下兩截 ⇒ 兩塊）。
+ * ⚠ 中空的⛔ 能直接拆：`decompose()` 會把空洞拆成一塊負體積的殼 ⇒ 有空洞時每一截改成「這一區 ∩ 那一截的外殼」，空洞留在它裡面。
+ * 體積小於全部百萬分之一的碎屑（`SPECK_FRAC`）丟掉、回報丟了幾塊。
+ *
+ * @param {Mesh[]} meshes 封閉、⭐ 同一個座標系（呼叫端先換好）；第一個是母體
+ * @param {{knifeOnly?: boolean, labels?: string[]}} [opt]
+ * @returns {{pieces: Array<{mesh: Mesh, members: number[], volume: number}>, dropped: number}}
+ *   `members` ＝ 這一塊在哪幾個物件裡面（照選取順序的索引，由小到大）
+ */
+export function splitAll(meshes, { knifeOnly = false, labels = [] } = {}) {
+  if (!meshes || meshes.length < 2) throw new Error('分割至少要選兩個物件');
+  const { Manifold } = need();
+  const made = [];
+  const keep = m => { made.push(m); return m; };
+  try {
+    const mans = meshes.map((m, i) => keep(toManifold(m, labels[i] || `第 ${i + 1} 個`)));
+    let regs = [{ man: mans[0], members: [0] }];
+    for (let i = 1; i < mans.length; i++) {
+      const k = mans[i], next = [];
+      for (const r of regs) {
+        const inn = keep(Manifold.intersection(r.man, k));
+        const out = keep(Manifold.difference(r.man, k));
+        if (!inn.isEmpty()) next.push({ man: inn, members: [...r.members, i] });
+        if (!out.isEmpty()) next.push({ man: out, members: r.members });
+      }
+      if (!knifeOnly) {
+        let rest = k;
+        for (let j = 0; j < i && !rest.isEmpty(); j++) rest = keep(Manifold.difference(rest, mans[j]));
+        if (!rest.isEmpty()) next.push({ man: rest, members: [i] });
+      }
+      regs = next;
+    }
+
+    const total = (knifeOnly ? [mans[0]] : mans).reduce((s, m) => s + Math.abs(m.volume()), 0);
+    const pieces = [];
+    let dropped = 0;
+    for (const r of regs) {
+      const parts = r.man.decompose();
+      made.push(...parts);
+      const shells = parts.filter(p => p.volume() > 0);
+      const hasVoid = shells.length < parts.length;
+      for (const s of shells) {
+        const chunk = hasVoid && shells.length > 1 ? keep(Manifold.intersection(r.man, s))
+          : hasVoid ? r.man : s;
+        const v = chunk.volume();
+        if (chunk.isEmpty() || v < total * SPECK_FRAC) { dropped++; continue; }
+        pieces.push({ mesh: fromManifold(chunk), members: r.members, volume: v });
+      }
+    }
+    return { pieces, dropped };
+  } finally {
+    for (const m of made) {
+      try { m.delete(); } catch (e) { /* 已釋放過，忽略 */ }
+    }
+  }
+}
+
 /** 切成放得下的塊：每個軸的刀面上 (u, v) 是世界的哪兩軸（見 `cutBody()`）*/
 export const CUT_UV = [[2, 1], [0, 2], [0, 1]];
 const CUT_ROT = [[0, 90, 0], [-90, 0, 0], null];     // 把軸 a 轉到 Z（轉完 Z ＝ −x、−y、z）

@@ -16895,6 +16895,118 @@ if (!csgOK) {
     good(sF.inside) && good(sF.outside) && Math.abs(zb.max.z - zb.min.z - 45) < 1e-6 && Math.abs(sF.inside.volume() + sF.outside.volume() - 108000) < 1e-3, pF.reason);
 }
 
+section('布林分割：重疊的地方切開、每一塊都留（kang 2026-10-27）');
+
+/**
+ * 規格：`規格\建模器-布林分割.md`。`io.js` `splitObjects()`（名字、座標）＋ `bool.js` `splitAll()`（幾何）。
+ * 方塊 60 × 40 × 45 放在 (0, 20, 0)（108000）；圓柱 r 10、高 40 放在 (30, 20, 0) ⇒ 一半在方塊裡。
+ */
+if (!csgOK) {
+  ok('（略過：布林函式庫沒載入）', true);
+} else {
+  const { overlapOf } = await import('../js/build/bool.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const mk = (name, src, pos, extra = {}) => new io.ModelObject({ name, src, kind: 'solid', pos, ...extra });
+  const W = o => o.mesh().transformed(o.matrix());                       // 世界座標的網格
+  const wv = o => (o ? W(o).volume() : 0);                                // ⚠ 少一塊時打 ✗、⛔ 整個測試當掉（改壞檢查抓到過）
+  const good = o => { if (!o) return false; const m = o.mesh(); return m.isClosed() && m.validate().ok && m.volume() > 0; };
+  const names = r => r.made.map(o => o.name);
+  const box = mk('方塊', { type: 'box', w: 60, h: 40, d: 45 }, V3(0, 20, 0), { color: 0x6fa8dc });
+  const cyl = mk('圓柱', { type: 'cylinder', r: 10, h: 40 }, V3(30, 20, 0), { color: 0xe0a86f });
+  const cv = wv(cyl), ov = overlapOf(W(box), W(cyl)).volume;
+
+  // 甲（預設）：三塊都留
+  const a = io.splitObjects([box, cyl]);
+  ok('★★★ 甲：方塊＋圓柱 ⇒ 3 塊（重疊 1、各自剩下 2）', a.ok && a.made.length === 3 && a.overlap === 1, a.reason);
+  ok('★★ 　 名字：「方塊 ∩ 圓柱」「方塊（剩下的）」「圓柱（剩下的）」',
+    a.ok && ['方塊 ∩ 圓柱', '方塊（剩下的）', '圓柱（剩下的）'].every(n => names(a).includes(n)), names(a).join('、'));
+  const byName = (r, n) => r.made.find(o => o.name === n);
+  near('★★★ 　 重疊那塊 ＝ 兩個的交集體積', a.ok ? wv(byName(a, '方塊 ∩ 圓柱')) : 0, ov, 1e-3);
+  near('★★★ 　 方塊剩下的 ＝ 108000 − 交集', a.ok ? wv(byName(a, '方塊（剩下的）')) : 0, 108000 - ov, 1e-3);
+  near('★★★ 　 圓柱剩下的 ＝ 圓柱 − 交集', a.ok ? wv(byName(a, '圓柱（剩下的）')) : 0, cv - ov, 1e-3);
+  ok('★★ 　 每一塊都封閉、結構沒問題', a.ok && a.made.every(good));
+  ok('★★ 　 顏色照那一塊所在的第一個物件（重疊的跟方塊、圓柱剩下的跟圓柱）',
+    a.ok && byName(a, '方塊 ∩ 圓柱')?.color === 0x6fa8dc && byName(a, '圓柱（剩下的）')?.color === 0xe0a86f);
+  const ao = a.ok ? byName(a, '圓柱（剩下的）') : null, ab = ao ? W(ao).bounds() : null;
+  ok('★★ 　 圓柱剩下的在原地（世界 x 30～40）、原點在那一塊中間（pos.x ＝ 35）',
+    ab && Math.abs(ab.min.x - 30) < 1e-6 && Math.abs(ab.max.x - 40) < 1e-6 && Math.abs(ao.pos.x - 35) < 1e-6);
+  ok('★ 　 是固定形狀（src.type ＝ mesh）', a.ok && a.made.every(o => o.src.type === 'mesh'));
+  ok('★ 原本的兩個物件沒被動到', Math.abs(wv(box) - 108000) < 1e-6 && Math.abs(wv(cyl) - cv) < 1e-9 && box.pos.x === 0 && cyl.pos.x === 30);
+
+  // 丙：後面的只當刀
+  const c = io.splitObjects([box, cyl], { knifeOnly: true });
+  ok('★★★ 丙（只當刀）：方塊切成 2 塊、圓柱不留', c.ok && c.made.length === 2 && !names(c).includes('圓柱（剩下的）'), names(c).join('、'));
+  near('★★★ 　 兩塊加起來 ＝ 方塊 108000', c.ok ? c.made.reduce((s, o) => s + wv(o), 0) : 0, 108000, 1e-3);
+
+  // 分開的幾截各自一個物件
+  const pole = mk('長柱', { type: 'cylinder', r: 5, h: 100 }, V3(0, 20, 0));
+  const p = io.splitObjects([box, pole]);
+  ok('★★★ 長柱整根穿過方塊 ⇒ 4 塊：長柱剩下的上下兩截各自一個（－1、－2）',
+    p.ok && p.made.length === 4 && names(p).includes('長柱（剩下的）－1') && names(p).includes('長柱（剩下的）－2'), names(p).join('、'));
+  const ends = p.ok ? p.made.filter(o => o.name.startsWith('長柱（剩下的）')).map(o => W(o).bounds()) : [];
+  ok('★★ 　 上面那截在方塊上面（y ≥ 40）、下面那截在方塊下面（y ≤ 0）',
+    ends.length === 2 && ends.some(b => b.min.y > 40 - 1e-6) && ends.some(b => b.max.y < 1e-6));
+
+  // 擋下來的
+  const far = mk('遠', { type: 'box', w: 10, h: 10, d: 10 }, V3(200, 5, 0));
+  const nf = io.splitObjects([box, far]);
+  ok('★★ 沒重疊 ⇒ 擋下來、講原因', !nf.ok && /沒有重疊/.test(nf.reason), nf.reason);
+  const nk = io.splitObjects([box, far], { knifeOnly: true });
+  ok('★★ 只當刀、刀沒碰到 ⇒ 擋下來、講原因', !nk.ok && /沒有切到/.test(nk.reason), nk.reason);
+  const inner = mk('小方塊', { type: 'box', w: 10, h: 10, d: 10 }, V3(0, 20, 0));
+  const ki = io.splitObjects([inner, box], { knifeOnly: true });
+  ok('★★ 只當刀、第一個整個在刀裡面 ⇒ 擋下來（沒有被分開）', !ki.ok && /沒有被分開/.test(ki.reason), ki.reason);
+
+  // 中空：小方塊包在大方塊裡 ⇒ 大方塊剩下的是一個帶空洞的實體（⛔ 拆成外殼＋空洞兩個）
+  const h = io.splitObjects([box, inner]);
+  ok('★★★ 小方塊包在裡面 ⇒ 2 塊；方塊剩下的 ＝ 107000、封閉（空洞留在裡面）',
+    h.ok && h.made.length === 2 && Math.abs(wv(byName(h, '方塊（剩下的）')) - 107000) < 1e-3 && good(byName(h, '方塊（剩下的）')), h.ok && names(h).join('、'));
+
+  // 中空＋分開的幾截：一刀把帶空洞的方塊切成左右兩半，空洞在左半 ⇒ 左半 51200（帶洞）、右半 52200
+  const hole = mk('空洞', { type: 'box', w: 10, h: 10, d: 10 }, V3(-20, 20, 0));
+  const slab = mk('薄板', { type: 'box', w: 2, h: 100, d: 100 }, V3(0, 20, 0));
+  const t = io.splitObjects([box, hole, slab], { knifeOnly: true });
+  const tv = t.ok ? t.made.map(o => Math.round(wv(o))).sort((x, y) => x - y) : [];
+  ok('★★★ 帶空洞的那一區又分成兩截 ⇒ 4 塊：1000、3600、51200（左半帶洞）、52200', tv.join() === '1000,3600,51200,52200', tv.join());
+  ok('★★ 　 每一塊都封閉', t.ok && t.made.every(good));
+
+  // 三個物件（甲）：每一個區域都分出來
+  const c2 = mk('圓柱2', { type: 'cylinder', r: 10, h: 40 }, V3(-30, 20, 0));
+  const m3 = io.splitObjects([box, cyl, c2]);
+  ok('★★ 三個物件 ⇒ 5 塊（兩塊重疊、三塊各自剩下）', m3.ok && m3.made.length === 5 && m3.overlap === 2, m3.ok && names(m3).join('、'));
+  near('★★ 　 加起來 ＝ 三個的聯集體積（108000 ＋ 兩根圓柱露在外面的）', m3.ok ? m3.made.reduce((s, o) => s + wv(o), 0) : 0, 108000 + 2 * (cv - ov), 0.01);
+
+  // 母體轉過、縮放過：每一塊在世界裡的位置跟原本重疊的一樣
+  const rb = mk('斜方塊', { type: 'box', w: 60, h: 40, d: 45 }, V3(0, 20, 0));
+  rb.rot.set(0, Math.PI / 6, 0); rb.scale.set(1.5, 1, 1);
+  const rov = overlapOf(W(rb), W(cyl)).volume;
+  const rr = io.splitObjects([rb, cyl]);
+  near('★★★ 母體轉 30°、X 放大 1.5 倍 ⇒ 重疊那塊的世界體積 ＝ 兩個在世界裡的交集', rr.ok ? wv(byName(rr, '斜方塊 ∩ 圓柱')) : 0, rov, 1e-3);
+  near('★★ 　 三塊加起來 ＝ 斜方塊 ＋ 圓柱 − 交集', rr.ok ? rr.made.reduce((s, o) => s + wv(o), 0) : 0, wv(rb) + cv - rov, 1e-3);
+
+  // 名字太長截短
+  const L1 = mk('這是一個名字非常非常非常長的方塊', { type: 'box', w: 60, h: 40, d: 45 }, V3(0, 20, 0));
+  const L2 = mk('另一個名字也非常長的圓柱', { type: 'cylinder', r: 10, h: 40 }, V3(30, 20, 0));
+  const lr = io.splitObjects([L1, L2]);
+  ok('★ 名字超過 28 個字 ⇒ 「第一個 ∩ …（2 個）」', lr.ok && names(lr).includes('這是一個名字非常非常非常長的方塊 ∩ …（2 個）'), lr.ok && names(lr).join('、'));
+}
+
+{
+  // 畫面那一半：按鈕、出現的條件、「只當刀」是開關
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const ih = readFileSync(join(here, '../index.html'), 'utf8'), mn = readFileSync(join(here, '../js/main.js'), 'utf8');
+  const g = (ih.match(/<div class="grp" id="gBool">[\s\S]*?<\/div>/) || [''])[0];
+  ok('★★ 「布林」那一組有「✂ 分割」「只當刀」，排在「∩ 交集」後面、一開始藏著',
+    /id="bInt"[\s\S]*id="bSplit" hidden[^>]*>✂ 分割</.test(g) && /id="bSplit"[\s\S]*id="bKnife" hidden[^>]*>只當刀</.test(g));
+  ok('★★ 跟聯集、差集、交集一樣：選兩個以上、函式庫載好才出現',
+    /\['bUnion', 'bSub', 'bInt', 'bSplit', 'bKnife'\]\)\s*\$\(id\)\.hidden = !canDoBool/.test(mn));
+  ok('★★ 「分割」照「只當刀」亮不亮決定丙／甲', /\$\('bSplit'\)\.onclick = splitOp/.test(mn)
+    && /knifeOnly = \$\('bKnife'\)\.classList\.contains\('on'\)/.test(mn) && /\$\('bKnife'\)\.onclick = \(\) => \$\('bKnife'\)\.classList\.toggle\('on'\)/.test(mn));
+  ok('★★ 分割完：原本的拿掉、新的放進去、全部選起來、記一步復原',
+    /for \(const o of list\) doc\.remove\(o\);\s*for \(const o of r\.made\) doc\.add\(o\);[\s\S]{0,80}sel\.set\(r\.made\.map\(o => o\.id\)\);[\s\S]{0,60}commit\(knifeOnly \? '分割（後面的當刀）' : '分割'\)/.test(mn));
+}
+
 section('參考線 甲：從物件的面放（2026-10-17）');
 {
   const M = await import('../js/core/mate.js');

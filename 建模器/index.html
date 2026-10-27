@@ -695,6 +695,9 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="bUnion" hidden title="聯集：把選取的物件合成一個">∪ 聯集</button>
       <button id="bSub" hidden title="差集：從第一個選取的物件挖掉其餘的">− 差集</button>
       <button id="bInt" hidden title="交集：只留下互相重疊的部分">∩ 交集</button>
+      <!-- 分割（kang 2026-10-27「照建議」→ 規格\建模器-布林分割.md）：預設每一塊都留；「只當刀」按亮 ⇒ 後面選的切完不留 -->
+      <button id="bSplit" hidden title="分割：重疊的地方切開，每一塊都變成獨立的物件（重疊的那塊、各自剩下的都留；分開的幾截各自一個）。切完是固定形狀，要改尺寸按 Ctrl+Z 退回去改好再分割。⚠ 平滑與分片線的標記會消失">✂ 分割</button>
+      <button id="bKnife" hidden title="只當刀：按亮之後，「分割」只切第一個選的物件，後面選的當刀用、切完不留（例如拿一個大方塊把模型切一刀，不會多出一塊挖了洞的大方塊）。再按一次關掉">只當刀</button>
     </div>
 
     <div class="grp">
