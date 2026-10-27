@@ -1216,6 +1216,23 @@ export function mergeCoplanarFaces(mesh, tolDeg = 0.5) {
 }
 
 /**
+ * 🔴 **布林切出來的固定形狀整理一次**（網格核心第六批，kang 2026-10-28「照建議：① 四個都自動整理 ② 舊檔的給一顆「整理網格」③ 提示不多講」
+ * → `規格\建模器-網格核心.md`「第六批」）。
+ *
+ * 布林函式庫（Manifold）吐出來的一律是三角形。參數物件在 `ModelObject.mesh()` 最外層合、轉成網格在 `bake()` 合，
+ * 但**分割、切穿／挖洞、3D 列印切塊、插銷**這四條路直接做出固定形狀、以前沒合 ⇒ 畫面一樣（平面上的斜線本來就藏著），
+ * 資料裡卻是一堆細長三角形，環切、選一圈走不動（沙箱：方塊被圓柱分割，環切 1 條 vs 差集 21 條）。
+ * 合不動（`ok: false`：本來就乾淨、或只剩環形的區域）⇒ 原樣回傳。形狀一點都不變（同一支 `mergeCoplanarFaces()`）。
+ * ⚠ 只在「做出物件的那一刻」叫 —— ⛔ 放進 `fromManifold()`：布林樹每一層都合，展開排法會跟轉網格不一樣（第四批試過）。
+ * @param {Mesh} mesh
+ * @returns {Mesh} 合過的新網格，或合不動時原本那一個
+ */
+export function tidyMesh(mesh) {
+  const r = mergeCoplanarFaces(mesh);
+  return r.ok ? r.mesh : mesh;
+}
+
+/**
  * 這一圈頂點是不是共平面（在 `PLANAR_TOL_CM` 之內）。
  *
  * 用 Newell 法定一個平面，量最遠的點離平面多少 ——

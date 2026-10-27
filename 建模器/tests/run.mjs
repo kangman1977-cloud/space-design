@@ -17007,6 +17007,97 @@ if (!csgOK) {
     /for \(const o of list\) doc\.remove\(o\);\s*for \(const o of r\.made\) doc\.add\(o\);[\s\S]{0,80}sel\.set\(r\.made\.map\(o => o\.id\)\);[\s\S]{0,60}commit\(knifeOnly \? '分割（後面的當刀）' : '分割'\)/.test(mn));
 }
 
+section('網格核心第六批：布林切出來的固定形狀整理一次（kang 2026-10-28）');
+
+/**
+ * 規格：`規格\建模器-網格核心.md`「第六批」。`edit.js` `tidyMesh()`（＝ `mergeCoplanarFaces()` 合得動就用合好的）；
+ * 四條路：分割（`io.js` `splitObjects()`）、切穿／挖洞（`main.js` `curveThroughApply()`）、3D 列印切塊與插銷（`main.js` `applyBedCut()`）；
+ * 舊檔：物件面板「整理網格」（`toolbar.js` `tidyPlan()`、`_tidyBtn()`）。
+ */
+if (!csgOK) {
+  ok('（略過：布林函式庫沒載入）', true);
+} else {
+  const { splitByCutter, cutBody, dowelMesh } = await import('../js/build/bool.js');
+  const { tidyMesh, mergeCoplanarFaces: mcf, edgeRing } = await import('../js/core/edit.js');
+  const { tidyPlan, TIDY_CHECK_FACES } = await import('../js/ui/toolbar.js');
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  const mk = (name, src, pos) => new io.ModelObject({ name, src, kind: 'solid', pos });
+  const ring = m => { let b = 0; for (const he of m.halfEdges) b = Math.max(b, edgeRing(m, he).hes.length); return b; };
+  const tri = m => m.faces.filter(f => m.faceVerts(f).length === 3).length;
+  const tidyAlready = m => !!m && !mcf(m).ok;                                   // 再合一次合不動 ＝ 已經整理過
+  const box = () => mk('方塊', { type: 'box', w: 60, h: 40, d: 45 }, V3(0, 20, 0));
+  const diffOf = (a, b) => new io.ModelObject({ name: '差集', src: io.boolSrcFrom([a, b], 'subtract'), kind: 'solid', pos: a.pos }).mesh();
+
+  // 分割：圓柱咬掉方塊一邊（x 30）、圓柱穿正中間
+  const b1 = box(), c1 = mk('圓柱', { type: 'cylinder', r: 10, h: 40 }, V3(30, 20, 0));
+  const s1 = io.splitObjects([b1, c1]);
+  const rest1 = s1.ok ? s1.made.find(o => o.name === '方塊（剩下的）') : null;
+  const d1 = diffOf(b1, c1);
+  ok('★★★ 分割做出來的每一塊都整理過（再合一次合不動）', s1.ok && s1.made.every(o => tidyAlready(o.mesh())));
+  ok('★★★ 分割「方塊（剩下的）」＝ 用差集做同一個形狀：面數一樣（23）、三角形 0、環切走得到 21 條（以前 80 個三角形、1 條）',
+    !!rest1 && rest1.mesh().faces.length === d1.faces.length && d1.faces.length === 23 && tri(rest1.mesh()) === 0 && ring(rest1.mesh()) === 21,
+    rest1 ? `${rest1.mesh().faces.length} 面、三角形 ${tri(rest1.mesh())}、環切 ${ring(rest1.mesh())}` : '沒做出來');
+  near('★★ 　 形狀不變：體積照樣 ＝ 差集', rest1 ? rest1.mesh().volume() : 0, d1.volume(), 1e-6);
+  const b2 = box(), c2 = mk('圓柱', { type: 'cylinder', r: 10, h: 40 }, V3(0, 20, 0));
+  const s2 = io.splitObjects([b2, c2]);
+  const rest2 = s2.ok ? s2.made.find(o => o.name === '方塊（剩下的）') : null;
+  ok('★★ 洞在正中間：帶洞的上下兩片合不動（一個面裝不下洞）、其他合好 ⇒ 跟差集一樣 108 個面',
+    !!rest2 && rest2.mesh().faces.length === 108 && diffOf(b2, c2).faces.length === 108, rest2 ? `${rest2.mesh().faces.length} 面` : '沒做出來');
+
+  // 切穿／挖洞：同一支 splitByCutter() 做出來的再 tidyMesh()
+  const b3 = box(), cut = mk('圈', { type: 'cylinder', r: 12, h: 60 }, V3(10, 20, 0));
+  const cutter = cut.mesh().transformed(new THREE.Matrix4().multiplyMatrices(b3.matrix().invert(), cut.matrix()));
+  const sb = splitByCutter(b3.mesh(), cutter, '方塊');
+  const holeRaw = sb.outside, hole = tidyMesh(holeRaw);
+  ok('★★★ 挖洞：144 個三角形、環切 1 條 ⇒ 整理後 108 個面、環切走得到 32 條', holeRaw.faces.length === 144 && ring(holeRaw) === 1 && hole.faces.length === 108 && ring(hole) === 32,
+    `${holeRaw.faces.length} → ${hole.faces.length}、環切 ${ring(holeRaw)} → ${ring(hole)}`);
+  near('★★ 　 體積不變', hole.volume(), holeRaw.volume(), 1e-6);
+  ok('★★ 　 整理後照樣封閉、結構沒問題', hole.isClosed() && hole.validate().ok);
+
+  // 3D 列印切塊：球從中間切一刀；插銷
+  const ball = mk('球', { type: 'sphere', r: 30 }, V3(0, 0, 0));
+  const cb = cutBody(ball.mesh().transformed(ball.matrix()), '球');
+  const half = cb.split([], [[0], [], []]).pieces[0];
+  cb.close();
+  const halfT = half ? tidyMesh(half) : null;
+  ok('★★★ 3D 列印切塊：半顆球 510 個三角形 ⇒ 257 個面（曲面變回四邊形格子）、環切 1 → 17 條', !!halfT && half.faces.length === 510 && halfT.faces.length === 257 && ring(halfT) === 17,
+    halfT ? `${half.faces.length} → ${halfT.faces.length}、環切 ${ring(halfT)}` : '沒切出來');
+  const pin = dowelMesh(0.3, 1.2, [0, 0, 0], 0.05), pinT = tidyMesh(pin);
+  ok('★★ 插銷 252 → 98 個面、體積不變', pin.faces.length === 252 && pinT.faces.length === 98 && Math.abs(pinT.volume() - pin.volume()) < 1e-9, `${pin.faces.length} → ${pinT.faces.length}`);
+
+  // 標記照搬：在碎三角形的網格上標一條看得見的邊（縫），整理後還在
+  const marked = splitByCutter(box().mesh(), cutter, '方塊').outside;
+  const vis = marked.halfEdges.find(he => he.twin && !marked.isHiddenEdge(he));
+  marked.setRole(vis, EDGE_ROLE.CUT);
+  const cuts = m => m.halfEdges.filter(he => he.role === EDGE_ROLE.CUT).length;
+  ok('★★★ 標記照搬：整理前標的縫，整理後一條都不少', cuts(marked) > 0 && cuts(tidyMesh(marked)) === cuts(marked), `${cuts(marked)} → ${cuts(tidyMesh(marked))}`);
+  const bx = box().mesh();
+  ok('★ 合不動 ⇒ 原樣回傳同一個（方塊本來就乾淨）', tidyMesh(bx) === bx);
+
+  // 舊檔：「整理網格」出不出現
+  const p1 = tidyPlan(holeRaw), p2 = tidyPlan(hole);
+  ok('★★★ 整理網格：有碎三角形 ⇒ 出現、講 144 → 108；已經整理過 ⇒⛔ 出現（坑 21）', p1.show && p1.before === 144 && p1.after === 108 && !p2.show);
+  ok('★★ 　 同一個網格再問一次 ⇒ 用記下來的（面板重畫⛔ 每次重算）', tidyPlan(holeRaw) === p1);
+  holeRaw.verts[0].p.x += 0.5;                                                  // 拉點線面是就地改的
+  ok('★★ 　 網格就地改過（指紋變了）⇒ 重算', tidyPlan(holeRaw) !== p1);
+  ok('★ 　 面太多（超過 TIDY_CHECK_FACES）先不算、按鈕照樣出現、按了才算', TIDY_CHECK_FACES >= 10000
+    && /if \(mesh\.faces\.length > TIDY_CHECK_FACES\) return \{ show: true, before: mesh\.faces\.length, after: null \};/.test(rd('js/ui/toolbar.js')));
+
+  // 讀程式守著：四條路都整理、⛔ 放進 fromManifold（第四批：布林樹每一層都合會讓展開不一樣）
+  const mn = rd('js/main.js'), tb = rd('js/ui/toolbar.js');
+  ok('★★★ 讀程式守著：分割 mesh: tidyMesh(p.mesh)', /mesh: tidyMesh\(p\.mesh\),/.test(rd('js/core/io.js')));
+  ok('★★★ 讀程式守著：切穿／挖洞先整理再重標折線', /const meshes = \(holeOnly \? \[r\.outside\] : \[r\.inside, r\.outside\]\)\.map\(tidyMesh\);\s*for \(const m of meshes\) refreshAfterEdit\(m\);/.test(mn));
+  ok('★★★ 讀程式守著：3D 列印切塊、插銷都整理', /pieces = pieces\.map\(tidyMesh\);[^\n]*\n\s*for \(const m of pieces\) refreshAfterEdit\(m\);/.test(mn) && /const m = tidyMesh\(unionMeshes\(ms\)\);/.test(mn));
+  ok('★★ 讀程式守著：布林函式庫那一支⛔ 自己合（只在做出物件的那一刻合）', !/tidyMesh|mergeCoplanarFaces/.test(rd('js/build/bool.js')));
+  ok('★★ 讀程式守著：「整理網格」在網格物件的面板、照當下的網格重合、記一步、講幾個 → 幾個、有勾平滑多講一句',
+    /this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb) && /const r = mergeCoplanarFaces\(obj\.mesh\(\)\);/.test(tb) && /obj\.setMesh\(r\.mesh\);/.test(tb)
+    && /this\._edit\('整理網格'\);/.test(tb) && /整理網格：\$\{r\.before\} → \$\{r\.after\} 個面/.test(tb) && /obj\.smoothed \? '　⚠ 這個物件有勾平滑/.test(tb));
+  ok('★ 功能地圖認得「物件面板：整理網格」', /\['物件面板：整理網格',/.test(rd('js/ai/catalogInfo.js')));
+}
+
 section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 2026-10-27）');
 
 /** 規格：`規格\建模器-圖層與群組.md`「第一批」。資料在 `io.js`（`hidden`／`locked`／`isoHidden`、`setShown()`、`Doc.shown()`）。*/
@@ -21488,7 +21579,7 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
     && /: he\.smooth\)\) continue;/.test(sc) && /if \(!smooth\) for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
     && /const onCage = !\(obj\.smoothed && !this\._cageOn\);/.test(sc) && /ghost\.raycast = \(\) => \{\};/.test(sc));
   ok('★★ 讀程式守著（面板）：網格物件才有、勾起來預設 2 次、磨幾次 1～3、保持尖的角度、平滑前後尺寸、面太多少磨、翻過來的講出來＋標出來',
-    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._subdBox\(obj\);/.test(tb)
+    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb)   // 網格核心第六批：中間多「整理網格」
     && /obj\.subd = v \? SUBD_DEFAULT : 0;/.test(tb) && /\['3', '3 次（面 ×64）'\]/.test(tb) && /this\._rowNum\('保持尖的轉折（°）'/.test(tb)
     && /平滑前 \$\{a\.map\(f2\)\.join\(' × '\)\}　→　平滑後/.test(tb) && /if \(info\.capped\)/.test(tb)
     && /有 \$\{info\.flipped\} 個小面翻過來了/.test(tb) && /setFacePreview\(info\.flipSegs\.map/.test(tb));

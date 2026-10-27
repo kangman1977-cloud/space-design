@@ -21,7 +21,7 @@
 
 import * as THREE from 'three';
 import { Mesh } from './mesh.js';
-import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin } from './edit.js';
+import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin, tidyMesh } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths,
          penRevolve } from '../build/prim.js';
 import { evalBoolTree, isBoolSrc, makeItem, itemMatrix, splitAll }
@@ -840,7 +840,7 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
       name: nameOf(p.members) + (count.get(k) > 1 ? `－${n}` : ''),
       kind: from.kind,
       src: { type: 'mesh' },
-      mesh: p.mesh,
+      mesh: tidyMesh(p.mesh),                      // 網格核心第六批：布林吐出來的三角形併回原本的面（環切、選一圈才走得動）
       pos: base.pos, rot: base.rot, scale: base.scale,
       color: from.color, thickness: from.thickness, lockScale: from.lockScale
     });

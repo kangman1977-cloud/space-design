@@ -51,7 +51,27 @@ export function seamPreviewKey(obj, st) {
   return [obj.id, meshUid.get(mesh), s.x, s.y, s.z, markSignature(mesh), st.mode, st.material].join('|');
 }
 const fmtPct = v => `${Math.round(v * 1000) / 10}%`;
-import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces }
+
+/**
+ * 🔴 **「整理網格」那顆出不出現**（網格核心第六批，kang 2026-10-28「② 舊檔的給一顆「整理網格」」→ `規格\建模器-網格核心.md`「第六批」）。
+ * 先合一次看看（跟做法同一支 `mergeCoplanarFaces()`）：面數會變少才出現 —— 沒東西可整理⛔ 出現（坑 21：按了看不出作用的按鈕）。
+ * 只記「幾個 → 幾個」、照指紋（`subdSig()`：拉點線面是就地改的）判斷還能不能用 ⇒ 面板重畫⛔ 每次重算；
+ * ⚠ ⛔ 記合好的網格拿來用：之後標的縫、平滑不在指紋裡，按下去要照當下的網格重合一次。
+ * 面數超過 `TIDY_CHECK_FACES` ⇒ 先不算（一選到就卡），按鈕照樣出現、按了才算。
+ */
+export const TIDY_CHECK_FACES = 60000;
+const tidyCache = new WeakMap();
+export function tidyPlan(mesh) {
+  if (!mesh || !mesh.faces.length) return { show: false };
+  if (mesh.faces.length > TIDY_CHECK_FACES) return { show: true, before: mesh.faces.length, after: null };
+  const sig = subdSig(mesh), c = tidyCache.get(mesh);
+  if (c && c.sig === sig) return c.plan;
+  const r = mergeCoplanarFaces(mesh);
+  const plan = r.ok ? { show: true, before: r.before, after: r.after } : { show: false };
+  tidyCache.set(mesh, { sig, plan });
+  return plan;
+}
+import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces, mergeCoplanarFaces }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { clashLine } from '../core/interfere.js';
@@ -63,7 +83,7 @@ import { alignPositions, distributePositions, spacePositions, currentGaps,
 import { fetchLatest } from '../core/appver.js';
 import { meshGearPair, gearClash } from '../core/gearPair.js';
 import { ask } from './askBox.js';
-import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP, decideCreases, markCreases } from '../build/subd.js';
+import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP, decideCreases, markCreases, subdSig } from '../build/subd.js';
 import { allKeptSharp } from '../out/smoothNote.js';
 import { CREASE } from '../core/mesh.js';
 
@@ -538,6 +558,7 @@ export class Panel {
       }
     } else {
       this.form.appendChild(note('這個物件已經是網格，沒有參數可以改'));
+      this._tidyBtn(obj);
       this._subdBox(obj);
     }
 
@@ -1030,6 +1051,29 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  /**
+   * 🔴 **整理網格**（網格核心第六批，kang 2026-10-28「② 舊檔的給一顆「整理網格」」）。
+   * 第六批之前分割、切穿／挖洞、3D 列印切塊、插銷做出來的固定形狀，存的是布林的碎三角形（之後做的會自動整理）⇒ 給一顆收得回來的按鈕。
+   * 出不出現看 `tidyPlan()`；按下去照當下的網格重合一次、記一步、講「○ → ○ 個面」。
+   * 有勾平滑 ⇒ 多講一句：格子換了，平滑出來的樣子會跟著變一點（沙箱：預設 30° 帶洞方塊體積差 0.02%）。
+   */
+  _tidyBtn(obj) {
+    const plan = tidyPlan(obj.mesh());
+    if (!plan.show) return;
+    this._rowBtn(plan.after == null ? '整理網格' : `整理網格（${plan.before} → ${plan.after} 個面）`,
+      '把平面上的碎三角形併回原本的面（形狀、尺寸一點都不變；畫面上本來就看不到那些斜線）。'
+      + '整理後環切、選一圈走得動。按 Ctrl+Z 收得回來', () => {
+        const r = mergeCoplanarFaces(obj.mesh());
+        if (!r.ok) { this.app.toast(r.reason, true); this.refresh(); return; }
+        if (this.app.sel.editMode) this.app.sel.clearEditSel();
+        obj.setMesh(r.mesh);
+        this.analysisCache.delete(obj.id);
+        this._edit('整理網格');
+        this.app.toast(`整理網格：${r.before} → ${r.after} 個面（形狀不變，環切、選一圈走得動了）　按 Ctrl+Z 收得回來`
+          + (obj.smoothed ? '　⚠ 這個物件有勾平滑：格子換了，平滑出來的樣子會跟著變一點' : ''));
+      });
   }
 
   /**

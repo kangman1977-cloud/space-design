@@ -41,7 +41,7 @@ import { regionInfo, tinyRegions, withTiny, growRegions, pieceRegions, component
 import { faceFrame, edgeFrame, vertexPoint,
          mateFaceToFace, mateEdgeToEdge, mateVertexToVertex, cylinderFrame, mateCoaxial, holeDistance } from './core/mate.js';
 import { elementVerts, refreshAfterEdit, visibleAround, splitUnflat, nonPlanarFaces, extrudeFace,
-         flattenElements, mergeFaces, mergeCoplanarFaces, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
+         flattenElements, mergeFaces, mergeCoplanarFaces, tidyMesh, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
          splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut,
@@ -3658,7 +3658,8 @@ function curveThroughApply(holeOnly = false) {
   sel.setKnifeMode(false);
   $('knife').classList.remove('on');
 
-  const meshes = holeOnly ? [r.outside] : [r.inside, r.outside];
+  /** 網格核心第六批（kang 2026-10-28）：布林吐出來的三角形併回原本的面，再重標折線（`tidyMesh()`）*/
+  const meshes = (holeOnly ? [r.outside] : [r.inside, r.outside]).map(tidyMesh);
   for (const m of meshes) refreshAfterEdit(m);
   const made = meshes.map((m, i) => new ModelObject({
     ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
@@ -3710,6 +3711,7 @@ function curveThroughApply(holeOnly = false) {
  */
 function applyBedCut(obj, pieces, specs, bb, bedMM, marginMM) {
   if (!doc.objects.includes(obj)) { toast('原本的物件已經不在了（被刪掉或換掉）—— 重新開「3D 列印」再切一次', true); return null; }
+  pieces = pieces.map(tidyMesh);                 // 網格核心第六批（kang 2026-10-28）：切塊、插銷都併回原本的面（`tidyMesh()`）
   for (const m of pieces) refreshAfterEdit(m);
   const made = pieces.map((m, i) => new ModelObject({
     ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
@@ -3725,7 +3727,7 @@ function applyBedCut(obj, pieces, specs, bb, bedMM, marginMM) {
     const r = s.dMM / 20, len = s.lenMM / 10, L = pinLayout(s, bedMM, marginMM);
     const ms = L.at.map(([u, v]) => dowelMesh(r, len, [bb.min[0] + u, bb.min[1] + len / 2, z + v], DOWEL_CHAMFER_MM / 10));
     z += L.d + 1;
-    const m = unionMeshes(ms);
+    const m = tidyMesh(unionMeshes(ms));
     refreshAfterEdit(m);
     pins.push(new ModelObject({
       layer: obj.layer,                       // 圖層 2a：插銷跟那一塊同一層（顏色照舊固定紅色）
