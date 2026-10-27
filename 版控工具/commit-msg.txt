@@ -1,33 +1,10 @@
-介面第二輪 2a：分割畫面（kang 2026-10-27「同意你的建議」六題：① 版面下拉放「視角」那組 ② 每格預設照 Rhino、左上角選看哪一面 ③ 前上側正交、透視格透視 ④ 甲 滑鼠在哪一格就操作哪一格、視角按鈕作用在藍框那一格 ⑤ 全部入鏡作用在藍框、換版面每格入鏡 ⑥ 2a／2b 分批；「後、下、另一側」問業界後「同意你的建議」放進每一格的視角選單；「查完」那一段也在這次）—— 查完的（介面編排-設計方向.md「2a 動工前查到的」：一個畫布一台現在的相機、已經有換相機那一套、滑鼠座標照整個畫布、每一幀畫一次、跟著相機算大小的；業界 Blender Ctrl＋數字鍵、SketchUp 標準視角、Rhino Set View、3ds Max ViewCube）；新 view/panes.js（版面表、下拉的字、視角的字與方向〔補「下」〕、paneRects 格子位置、paneIndexAt 哪一格、wantsOrtho）；scene.js 每一格一對相機＋目標點＋看哪一面、現在那一格的相機就是 this.camera／persp／ortho、activate() 換格（清慣性、平移速度照格子比例、通知箭頭）、setLayout() 換版面（透視格沿用原本方向、其他格照預設方向、每格入鏡）、_renderPanes() 每一格各畫一次（影子只算第一格、畫完還原）、XYZ 小方向標每一格右上角、_fitOrthoFor() 正交照那一格長寬比、pxPerWorld 照那一格、setView 方向表搬 panes.js、_checkFree 轉過寫「自由」、一開始寫「透視」；select.js _toCanvasPx 照現在那一格（ox oy）、hitTest 走它、框選的框加 ox oy 放開照那一格大小；main.js 版面下拉、#stage capture 換格（按著⛔ 換、點下去換藍框、離開畫面換回藍框）、onPaneChange 箭頭只用那一格（tc.viewport）、onPaneRender 箭頭照那一格相機、每一格左上角視角選單（buildPaneUI／syncPaneUI／applyPaneView）、視角按鈕亮哪顆跟著藍框；index.html 版面下拉、#paneUI 樣式、等角一開始⛔ 亮（兩端一致）；功能地圖每一格的視角選單歸「畫面：每一格的視角」；浮動工具視窗一開始往下讓開左上角選單（12 → 44）；回歸測試 4911 → 4922 全部通過；在複本裡改壞 15 處全部抓到、每處都跑到「通過 N」；本機（埠 8816）四格每格畫得對、滑鼠在「前」那一格點方塊選到且算的位置跟畫的一致、箭頭每一格指到的跟單格一樣且拖 200 像素移 53 cm（那一格比例 53.3）、真的滑鼠拖空白處只轉那一格且寫「自由」、真的滑鼠在「上」那一格拉框框到與空白處框不到、上方「前」作用在藍框、選「下」從下面看且正交、鋼筆點落在 (99.95, −20)、(160.19, 29.98)、刀具在「前」那一格切 6 → 7 面、7 種版面輪流切沒錯、回單格跟以前一樣、平板寬一大三小；速度（窗格在背景只能參考）26 萬三角形單格 0.3、四格 1.3 ms／張；做的時候看到已改兩件（一開始寫自由、浮動視窗蓋住選單）；真的滑鼠拖箭頭、平板手指、前景順暢度 AI 驗不到；規格 規格\建模器-分割畫面.md（新，含 ⏳ 實測）；工具區規格一開始位置改一行；設計方向 2a 定案；STATUS ⏳ 一行、真待辦；目次產生器重產＋檢查通過
+介面第二輪 2a 結案（kang 2026-10-27「驗收OK」）—— 先驗（74922d6 上傳後：panes.js、main.js、scene.js 線上都是新版、左上角寫透視、等角一開始不亮、沒有「版本對不上」；瀏覽器模擬 1600 寬：版面下拉選四格 ⇒ 上｜透視（藍框）／前｜右、四格都看得到方塊；滑鼠在「前」那一格點方塊選到、藍框換過去、照箭頭那一套拖 X 200 像素移 53 cm（那一格比例 53.3）；滑鼠在透視那一格拖只轉那一格；右下選「下」鏡頭在下面、正交；滑鼠點左上那一格再按上方「前」⇒ 左上變前、前按鈕亮；滑鼠框選在左上那一格框到方塊；六種版面輪流切都對、回單格箭頭用整個畫布、平移速度 1；這一頁 82 個檔全部載入成功、一則 404 是分頁之前留下的舊訊息；暫存先備份、放回後先離開頁面、重開確認方塊 1、單格、左上角透視；真的滑鼠拖箭頭、平板手指、大模型順暢度 AI 驗不到）寫進規格後，連同「⏳ 實測（kang）」逐字搬到 HISTORY 新一節「介面第二輪 2a：分割畫面結案」（28 行 md5 82764a83b8407c7f33846674b05ede22；搬進去後重算一樣），附經過與老實話（一開始寫自由與浮動視窗蓋住選單都是本機看到才改、AI 目測看錯與兩次測法錯都靠單格對照組分出來、拖箭頭只用箭頭那一套驗、速度是背景量的只能參考、看差異時抓到一行少一個空格、先驗與結案同一個 commit）；規格分批表與 2a 標題加「kang 2026-10-27 驗收 OK」、⏳ 換成「實測：已結案」＋指到 HISTORY；設計方向 2a 結案一行；STATUS 拿掉 ⏳ 那一行、真待辦改成 2a 驗收 OK、下一步 2b 雙擊放大、每格鎖定、記住版面（動工前先查再問 kang）；目次產生器重產＋檢查通過；不改程式
 
-【動手前檢查表】
-【這次要做什麼】分割畫面：版面下拉、每一格自己的相機與視角選單（補「下」）、滑鼠在哪一格就操作哪一格、藍框、換版面每格入鏡
-【依賴哪些事實】
-  1. 一個畫布、view.camera 指向現在的相機；setProjection 換 orbit.object、onCameraChange ⇒ sel.setCamera  【已查證 · scene.js、main.js、select.js】
-  2. 點選每次現讀 view.camera  【已查證 · select.js setCamera() 註解、hitTest()】
-  3. 滑鼠座標換算大多經過 _toCanvasPx()；hitTest 與框選另外用畫布大小  【已查證 · grep】
-  4. TransformControls 有 viewport 屬性；大小朝向照 controls.camera  【已查證 · lib TransformControls.js】
-  5. OrbitControls 平移照整個畫布高、panSpeed 乘在平移量；慣性 _sphericalDelta／_panOffset／_scale  【已查證 · lib OrbitControls.js】
-  6. XYZ 小方向標用 setViewport／setScissor  【已查證 · scene.js _renderAxisGizmo()】
-  7. 尺寸字照相機看到的高度算比例  【已查證 · scene.js _syncLabelGroupScale()】
-  8. setView 沒有下  【已查證 · scene.js setView()】
-  9. 沒有 LineMaterial 粗線  【已查證 · grep】
-【怎麼知道做對了】回歸測試＋四道檢查；改壞抓得到；本機滑鼠每一格點選、箭頭、轉、框選、鋼筆、刀具；單格跟以前一樣；量速度
-
-動到 14 個檔：
-  A  建模器/js/view/panes.js              版面、格子位置（純算）
-  M  建模器/js/view/scene.js              每一格相機、換格、每一格各畫一次
-  M  建模器/js/view/select.js             滑鼠座標照那一格、框選
-  M  建模器/js/main.js                    版面下拉、capture 換格、視角選單、藍框
-  M  建模器/index.html                    版面下拉、樣式、等角一開始不亮
-  M  建模器/js/ai/catalog.js              每一格的視角選單歸「畫面」
-  M  建模器/js/ai/catalogInfo.js          「畫面：每一格的視角」那一組
-  M  建模器/js/ui/toolFloat.js            一開始往下讓開選單
-  M  建模器/tests/run.mjs                 新 11 項、浮動視窗位置那一項
-  A  規格/建模器-分割畫面.md               規格＋⏳ 實測
-  M  規格/建模器-工具區.md                 一開始位置一行
-  M  介面編排-設計方向.md                  2a 查到的與定案
-  M  STATUS.md                            ⏳ 一行、真待辦
+動到 5 個檔：
+  M  HISTORY.md                     新一節「介面第二輪 2a：分割畫面結案」＋目次
+  M  規格/建模器-分割畫面.md          先驗與 ⏳ 搬走、換成已結案、標驗收 OK
+  M  STATUS.md                      拿掉 ⏳ 一行、真待辦
+  M  介面編排-設計方向.md             2a 結案一行
   M  版控工具/commit-msg.txt
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
