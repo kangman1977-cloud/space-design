@@ -58,6 +58,8 @@ export function whereOf(el) {
   }
   if (el.closest('#rail') || (el.classList && el.classList.contains('tool'))) return '左邊工具';
   const grp = el.closest('.grp');
+  /** 1b（kang 2026-10-27）：「工具」區自己的按鈕（拉出來、放回面板、收起）⇒ 歸「工具」大組（⛔ 落到「右邊面板：…」）*/
+  if (!grp && el.closest('#toolFloat, #pTools')) return '工具';
   if (grp) {
     /**
      * 介面第二輪 1a（kang 2026-10-27）：跟著選取／工具的 9 組在 #toolBox 裡 ——

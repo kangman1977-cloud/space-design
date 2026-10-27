@@ -69,9 +69,28 @@ html, body {
    ⚠ #pTools[hidden] 那一行跟 .grp[hidden] 同一個坑（作者樣式蓋過瀏覽器預設的 display:none）。 */
 #toolBox { display: contents; }
 #pTools[hidden] { display: none; }
-#pTools #toolBox { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; }
-#pTools .grp { width: 100%; }
-#pTools .grp > .lbl:first-child { flex-basis: 100%; color: #c9cfd8; }
+#pTools #toolBox, #toolFloat #toolBox { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; }
+#pTools .grp, #toolFloat .grp { width: 100%; }
+#pTools .grp > .lbl:first-child, #toolFloat .grp > .lbl:first-child { flex-basis: 100%; color: #c9cfd8; }
+/* 🔴 1b（kang 2026-10-27「照建議」）：拉出來的浮動視窗（`ui/toolFloat.js`）。寬 300 跟面板一樣（綁好的組不重排）；
+   第 30 層：在工具列（20）上面、在展開圖那些視窗（60）下面；高度由 fitHeight() 算到畫面底下、超過在裡面捲。
+   標題列可以拖（滑鼠、手指同一套）；收成一條 ⇒ 只留標題列。面板上那一區浮著時只留一條「工具在浮動視窗」。 */
+#toolFloat {
+  position: fixed; z-index: 30; width: 300px; display: flex; flex-direction: column;
+  background: #20232a; border: 1px solid #4a505b; border-radius: 10px; box-shadow: 0 10px 24px rgba(0,0,0,.5);
+}
+#toolFloat[hidden] { display: none; }
+#toolFloat .tfHead {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  padding: 6px 8px 6px 12px; background: #24272e; border-radius: 10px 10px 0 0;
+  font-size: 12px; color: #c9cfd8; cursor: move; touch-action: none; user-select: none;
+}
+#toolFloat .tfBtns { display: flex; gap: 4px; }
+#toolFloat .tfBody { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#toolFloat.folded .tfBody { display: none; }
+#toolFloat.folded .tfHead { border-radius: 10px; }
+.toolAway { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-size: 12px; color: #8b93a1; }
+.toolAway[hidden], #toolPop[hidden] { display: none; }
 /* 🔴 1a 補（kang 2026-10-27「同意你的建議」）：按鈕（或名字）＋數字格＋單位包成一組 span.keep（`ui/keepPairs.js`）
    ⇒ 要換行就整組一起換，⛔ 格子掉到下一行、跟按鈕分開（「鎖角度」的「度」那件也是這個）。
    裡面全部藏起來 ⇒ 這一組也收（⛔ 留一個空的佔著間距）。 */

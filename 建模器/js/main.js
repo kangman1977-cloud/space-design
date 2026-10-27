@@ -63,6 +63,7 @@ import { ImportPanel } from './ui/importPanel.js';
 import { Import3DPanel } from './ui/import3dPanel.js';
 import { ask, isAskOpen } from './ui/askBox.js';
 import { bindKeep } from './ui/keepPairs.js';
+import { makeFloat, placeFloat } from './ui/toolFloat.js';
 
 /**
  * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
@@ -8639,7 +8640,7 @@ function updateHandles() {
   face('panelToggle', panelOff);
   $('panelToggle').title = panelOff
     ? '展開右邊的物件面板'
-    : '收合右邊的物件面板（畫面會變寬 300px；面板最上面「工具」那一區會搬回上面的工具列）';
+    : '收合右邊的物件面板（畫面會變寬 300px；面板最上面「工具」那一區會變成浮動視窗，面板打開時回來）';
 }
 
 /**
@@ -8664,7 +8665,15 @@ function hideEmptyGroups() {
   }
   /** 「工具」區裡一組都沒有 ⇒ 連標題一起收（⛔ 留一個空標題掛在面板最上面，同上面那則「孤兒標籤」）*/
   const sec = document.getElementById('pTools');   // ⛔ 用 $()：同 placeTools() 那一則（替身永遠是真的）
-  if (sec) sec.hidden = ![...document.querySelectorAll('#toolBox .grp')].some(g => !g.hidden);
+  const any = [...document.querySelectorAll('#toolBox .grp')].some(g => !g.hidden);
+  if (sec) sec.hidden = !any;
+  /**
+   * 1b：浮動視窗也一樣 —— 該浮（`dataset.on`，placeTools() 定的）而且裡面有東西才出現。
+   * 🔴 這裡⛔ 用 `toolFloat` 那個變數：這一支開場很早就會被叫到，那時變數還沒宣告 ⇒ 讀它會丟錯、整個建模器停住
+   *（STATUS「`const` 宣告前使用」那一類）⇒ 照 id 問。
+   */
+  const fl = document.getElementById('toolFloat');
+  if (fl) fl.hidden = !(fl.dataset.on && any);
 }
 
 // ── 提示條 ────────────────────────────────────────────
@@ -8777,8 +8786,15 @@ function saveUI(o) {
  *    1920／1366／1024 寬從 276／276／401 變成 103／103／147）。
  * ⭐ 搬的是同一批元件（`appendChild` 會把它從原本的地方拿走）⇒ 按鈕接好的功能、`updateBar()` 管的出現／消失全部跟著走，⛔ 重寫。
  * ⚠ 面板的內容只在建構時整個寫一次（`ui/toolbar.js` `Panel._build()`），之後只改裡面的小塊 ⇒ 插在最上面的區⛔ 會被洗掉。
- * 1b 會把「面板收起來」那一支改成浮動視窗（kang 2026-10-27「同意」）。→ `介面編排-設計方向.md`「第二輪」
+ *
+ * 🔴 **1b（kang 2026-10-27「照建議」）**：可以「拉出來」變浮動視窗（`ui/toolFloat.js`），「放回面板」回來 ——
+ * - 浮著 ＝ 自己按了「拉出來」（記在 `toolPop`），**或**面板收起來（取代 1a 的「回到上方工具列」）
+ * - 面板打開時：自己拉出來的照舊浮著；因為收面板才浮出來的（`toolPop` 沒開）自動回面板
+ * - 浮著、面板又開著 ⇒ 面板最上面只留一條「工具（在浮動視窗）」＋「放回面板」（⛔ 整區不見，看起來像壞掉）
+ * - 有沒有拉出來、放哪（`toolPos`）、收成一條（`toolFold`）記在瀏覽器（跟收合同一個 `modeler.ui.collapse`，跟人走）
+ * → `介面編排-設計方向.md`「第二輪」「1b 動工前查到的」；規格 `規格\建模器-工具區.md`
  */
+let toolFloat = null;   // ⚠ JS 建的元件留住變數、⛔ 用 $() 問（同下面那則替身）
 function placeTools() {
   const box = $('toolBox'), panelEl = $('panel');
   /**
@@ -8789,13 +8805,46 @@ function placeTools() {
   if (!sec) {
     sec = document.createElement('section');
     sec.id = 'pTools';
-    sec.innerHTML = '<h2>工具</h2>';
+    sec.innerHTML = '<h2>工具 <button id="toolPop" class="mini" title="拉出來：工具變成一個可以拖的浮動視窗，放在 3D 畫面上方便的地方（右側面板就空出來）；按視窗上的「放回面板」回來">拉出來 ↗</button></h2>'
+      + '<div id="toolAway" class="toolAway" hidden><span>工具在浮動視窗</span>'
+      + '<button id="toolBack" class="mini" title="放回面板：浮動視窗收掉，工具回到這裡">放回面板 ↘</button></div>';
     panelEl.prepend(sec);
     /** 按鈕（或名字）＋數字格＋單位包成一組、整組一起換行（`ui/keepPairs.js`，kang 2026-10-27「同意你的建議」）；只包一次 */
     bindKeep(box);
+    sec.querySelector('#toolPop').onclick = () => setToolPop(true);
+    sec.querySelector('#toolBack').onclick = () => setToolPop(false);
   }
-  if (panelEl.hidden) { if (box.parentElement !== $('bar')) $('bar').appendChild(box); }
-  else if (box.parentElement !== sec) sec.appendChild(box);
+  const st = loadUI();
+  const float = panelEl.hidden || !!st.toolPop;
+  if (float) {
+    if (!toolFloat) {
+      toolFloat = makeFloat({
+        onFold: () => { const s = loadUI(); s.toolFold = !s.toolFold; saveUI(s); placeTools(); },
+        onDock: () => setToolPop(false),
+        onMoved: p => { const s = loadUI(); s.toolPos = p; saveUI(s); }
+      });
+    }
+    if (box.parentElement !== toolFloat.body) toolFloat.body.appendChild(box);
+    toolFloat.el.dataset.on = '1';
+    toolFloat.el.hidden = false;
+    toolFloat.el.classList.toggle('folded', !!st.toolFold);
+    toolFloat.fold.textContent = st.toolFold ? '展開 ▾' : '收起 ▴';
+    placeFloat(toolFloat.el, st.toolPos || null, $('stage'));
+  } else {
+    if (toolFloat) { toolFloat.el.dataset.on = ''; toolFloat.el.hidden = true; }
+    if (box.parentElement !== sec) sec.appendChild(box);
+  }
+  /** 面板上那一區：浮著時只留一條（拉出來那顆藏起來） */
+  sec.querySelector('#toolAway').hidden = !float;
+  sec.querySelector('#toolPop').hidden = float;
+}
+
+/** 「拉出來」「放回面板」。放回時面板收著 ⇒ 一起打開（kang 2026-10-27 ⑤：放回面板就是要回面板）*/
+function setToolPop(on) {
+  const st = loadUI(); st.toolPop = !!on; saveUI(st);
+  if (!on && $('panel').hidden) { setCollapsed('panel', false); return; }   // setCollapsed 裡會 placeTools＋updateBar
+  placeTools();
+  updateBar();
 }
 
 function setCollapsed(which, on) {
@@ -8820,6 +8869,16 @@ $('panelToggle').onclick = () => setCollapsed('panel', !$('panel').hidden);
 })();
 
 window.addEventListener('resize', () => view.resize());
+/**
+ * 1b：視窗大小變了 ⇒ 浮動視窗挪回畫面裡（⛔ 跑到外面找不到）、高度重算。
+ * ⚠ 除了 resize 事件，再盯著 #app 的大小（`ResizeObserver`，同 `watchBar()`）當保險。
+ *    本機版用瀏覽器窗格模擬 1920 → 1024 寬時視窗有一截留在畫面外（2026-10-27）—— 查到是窗格收著、頁面在背景，
+ *    resize 與 ResizeObserver **兩種都⛔ 送**（AI 自己掛的監聽也沒收到）；手動送 resize 就挪對、在窄的寬度重新整理也夾對。
+ *    ⇒ 那次⛔ 是程式的錯；盯大小這一條⛔ 是那次的解法，是多一層保險。
+ */
+const refloat = () => { if (toolFloat && !toolFloat.el.hidden) placeFloat(toolFloat.el, loadUI().toolPos || null, $('stage')); };
+window.addEventListener('resize', refloat);
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(refloat).observe($('app'));
 view.resize();
 setMode('translate');
 loop();

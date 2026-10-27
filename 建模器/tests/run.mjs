@@ -22708,13 +22708,15 @@ section('介面第二輪 1a：跟著選取／工具的 9 組搬到右側面板�
   ok('★★★ 9 組（陣列、布林、吸附、方向、拉點線面那一大組、法向、貼合、參考線）在 #toolBox 裡；一直都在的 7 組⛔ 在',
     IN.every(id => box.includes(`id="${id}"`)) && OUT.every(id => !box.includes(`id="${id}"`) && fixed.includes(`id="${id}"`)),
     JSON.stringify({ 缺: IN.filter(id => !box.includes(`id="${id}"`)), 跑進去: OUT.filter(id => box.includes(`id="${id}"`)) }));
-  ok('★★★ 誰搬：placeTools() 面板開著 ⇒ 面板最上面「工具」區、面板收起來 ⇒ 回工具列；收合與開場都叫它（收合先搬再 updateBar）',
-    /function placeTools\(\)/.test(mn) && /panelEl\.prepend\(sec\)/.test(mn) && /if \(panelEl\.hidden\) \{ if \(box\.parentElement !== \$\('bar'\)\) \$\('bar'\)\.appendChild\(box\); \}/.test(mn)
+  ok('★★★ 誰搬：placeTools() 不浮 ⇒ 面板最上面「工具」區；浮（自己拉出來或面板收起來）⇒ 浮動視窗（1b 取代 1a 的回工具列）；收合與開場都叫它（收合先搬再 updateBar）',
+    /function placeTools\(\)/.test(mn) && /panelEl\.prepend\(sec\)/.test(mn) && /const float = panelEl\.hidden \|\| !!st\.toolPop;/.test(mn)
+    && /if \(box\.parentElement !== toolFloat\.body\) toolFloat\.body\.appendChild\(box\);/.test(mn) && /if \(box\.parentElement !== sec\) sec\.appendChild\(box\);/.test(mn)
+    && !/\$\('bar'\)\.appendChild\(box\)/.test(mn)
     && /saveUI\(st\);\s*placeTools\(\);\s*updateBar\(\);/.test(mn) && /\$\('panel'\)\.hidden = !!st\.panel;\s*placeTools\(\);/.test(mn));
   ok('★★★ 「工具」區用 document.getElementById 找（⛔ 用 $()：找不到會回替身、永遠是真的 ⇒ 9 組被搬進替身、整組消失 —— 本機版撞到）',
     /let sec = document\.getElementById\('pTools'\);/.test(mn) && /const sec = document\.getElementById\('pTools'\);/.test(mn) && !/\$\('pTools'\)/.test(mn));
   ok('★★ 收空的組兩邊都問（#bar 與 #toolBox）；工具區一組都沒有 ⇒ 連標題一起收',
-    /querySelectorAll\('#bar \.grp, #toolBox \.grp'\)/.test(mn) && /sec\.hidden = !\[\.\.\.document\.querySelectorAll\('#toolBox \.grp'\)\]\.some\(g => !g\.hidden\)/.test(mn));
+    /querySelectorAll\('#bar \.grp, #toolBox \.grp'\)/.test(mn) && /const any = \[\.\.\.document\.querySelectorAll\('#toolBox \.grp'\)\]\.some\(g => !g\.hidden\);\s*if \(sec\) sec\.hidden = !any;/.test(mn));
   ok('★★ 樣式：#toolBox 在工具列裡 display: contents（照舊一起排）、#pTools[hidden] 真的收得起來',
     /#toolBox \{ display: contents; \}/.test(raw) && /#pTools\[hidden\] \{ display: none; \}/.test(raw));
   ok('★★ 功能地圖：#toolBox 裡的寫「工具：…」、其他照舊「工具列：…」', /el\.closest\('#toolBox'\) \? '工具：' : '工具列：'/.test(cat));
@@ -22739,6 +22741,44 @@ section('介面第二輪 1a：跟著選取／工具的 9 組搬到右側面板�
     /import \{ bindKeep \} from '\.\/ui\/keepPairs\.js';/.test(mn) && /panelEl\.prepend\(sec\);[\s\S]{0,200}bindKeep\(box\);/.test(mn)
     && /\.keep \{ display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; \}/.test(raw) && /\.keep:not\(:has\(> :not\(\[hidden\]\)\)\) \{ display: none; \}/.test(raw)
     && /\.grp > \.lbl, \.keep > \.lbl \{/.test(raw));
+}
+
+section('介面第二輪 1b：「工具」區拉出來變浮動視窗（2026-10-27）');
+{
+  /**
+   * kang 2026-10-27「照建議」：① 按鈕拉出來／放回面板 ② 一開始在 3D 畫面左上 ③ 寬 300、高最多到畫面、可收一條
+   * ④ 拉出來時面板留一條 ⑤ 面板收起來自動浮、打開時自己拉出來的照舊浮著；有沒有拉出來、放哪、收不收記在瀏覽器。
+   * 版面在測試環境跑不起來 ⇒ 位置夾在畫面裡用純算的測、其他讀程式守著。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const raw = rf(join(dir, '../index.html'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8'),
+    tf = rf(join(dir, '../js/ui/toolFloat.js'), 'utf8'), cat = rf(join(dir, '../js/ai/catalog.js'), 'utf8');
+  const { clampPos, FLOAT_W } = await import('../js/ui/toolFloat.js');
+  const V = { w: 1366, h: 768 }, S = { w: FLOAT_W };
+  const P = [clampPos({ x: 100, y: 120 }, S, V), clampPos({ x: 1300, y: 900 }, S, V), clampPos({ x: -50, y: -9 }, S, V), clampPos({ x: 50, y: 50 }, S, { w: 280, h: 500 })];
+  ok('★★★ 位置夾在畫面裡：放得下照放；太右 ⇒ 整個寬度拉回來；太下 ⇒ 標題列留 40 在畫面裡（拖得回來）；負的 ⇒ 0；畫面比視窗窄 ⇒ 靠左',
+    FLOAT_W === 300 && JSON.stringify(P) === JSON.stringify([{ x: 100, y: 120 }, { x: 1066, y: 728 }, { x: 0, y: 0 }, { x: 0, y: 50 }]), JSON.stringify(P));
+  ok('★★★ 一開始在 3D 畫面左上（左側直條右邊、工具列下面各留 12）；記住的位置照用但夾在畫面裡',
+    /\{ x: r\.left \+ 12, y: r\.top \+ 12 \}/.test(tf) && /const p = clampPos\(want, \{ w: el\.offsetWidth \|\| FLOAT_W \}, \{ w: innerWidth, h: innerHeight \}\);/.test(tf));
+  ok('★★ 拖標題列（按鈕上按下去⛔ 算拖、滑鼠手指同一套 pointer）；放開才記位置',
+    /if \(e\.target\.closest\('button'\) \|\| e\.button > 0\) return;/.test(tf) && /head\.setPointerCapture\(e\.pointerId\);/.test(tf)
+    && /h\.onMoved\(\{ x: parseFloat\(el\.style\.left\) \|\| 0, y: parseFloat\(el\.style\.top\) \|\| 0 \}\);/.test(tf) && /onMoved: p => \{ const s = loadUI\(\); s\.toolPos = p; saveUI\(s\); \}/.test(mn));
+  ok('★★★ ⑤ 浮 ＝ 自己拉出來（toolPop）或面板收起來；放回面板時面板收著 ⇒ 一起打開；收一條記 toolFold',
+    /const float = panelEl\.hidden \|\| !!st\.toolPop;/.test(mn) && /function setToolPop\(on\) \{\s*const st = loadUI\(\); st\.toolPop = !!on; saveUI\(st\);\s*if \(!on && \$\('panel'\)\.hidden\) \{ setCollapsed\('panel', false\); return; \}/.test(mn)
+    && /onFold: \(\) => \{ const s = loadUI\(\); s\.toolFold = !s\.toolFold; saveUI\(s\); placeTools\(\); \}/.test(mn) && /toolFloat\.el\.classList\.toggle\('folded', !!st\.toolFold\);/.test(mn));
+  ok('★★ ④ 浮著時面板上那一區只留一條「工具在浮動視窗」＋放回面板、「拉出來」那顆藏起來',
+    /sec\.querySelector\('#toolAway'\)\.hidden = !float;\s*sec\.querySelector\('#toolPop'\)\.hidden = float;/.test(mn) && /id="toolBack"/.test(mn) && /\.toolAway\[hidden\], #toolPop\[hidden\] \{ display: none; \}/.test(raw));
+  const hide = mn.slice(mn.indexOf('function hideEmptyGroups()'), mn.indexOf('// ── 提示條'));
+  ok('★★★ 收空組那一支照 id 問浮動視窗（⛔ 讀 toolFloat 變數：開場很早就被叫、變數還沒宣告 ⇒ 整個停住）；該浮而且有東西才出現',
+    hide.length > 0 && !/toolFloat\./.test(hide) && /const fl = document\.getElementById\('toolFloat'\);\s*if \(fl\) fl\.hidden = !\(fl\.dataset\.on && any\);/.test(hide));
+  ok('★★ 視窗大小變了 ⇒ 浮動視窗挪回畫面裡、高度重算（resize 事件＋盯 #app 大小，模擬寬度時 resize 沒來那次撞到）；JS 建的元件留住變數（⛔ $()）',
+    /const refloat = \(\) => \{ if \(toolFloat && !toolFloat\.el\.hidden\) placeFloat\(toolFloat\.el, loadUI\(\)\.toolPos \|\| null, \$\('stage'\)\); \};\s*window\.addEventListener\('resize', refloat\);\s*if \(typeof ResizeObserver !== 'undefined'\) new ResizeObserver\(refloat\)\.observe\(\$\('app'\)\);/.test(mn)
+    && !/\$\('toolFloat'\)|\$\('toolAway'\)|\$\('toolPop'\)/.test(mn));
+  ok('★★ 樣式：第 30 層（工具列 20 上、視窗 60 下）、寬 300、[hidden] 真的收、收一條只留標題；裡面跟面板同一套排法',
+    /#toolFloat \{\s*position: fixed; z-index: 30; width: 300px;/.test(raw) && /#toolFloat\[hidden\] \{ display: none; \}/.test(raw) && /#toolFloat\.folded \.tfBody \{ display: none; \}/.test(raw)
+    && /#pTools #toolBox, #toolFloat #toolBox \{/.test(raw));
+  ok('★★ 功能地圖：「工具」區自己的按鈕（拉出來、放回、收起）歸「工具」大組', /if \(!grp && el\.closest\('#toolFloat, #pTools'\)\) return '工具';/.test(cat));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
