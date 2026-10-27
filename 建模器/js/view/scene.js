@@ -415,13 +415,18 @@ export class SceneView {
     this._applyGhost();
   }
 
+  /** 群組 2b：進到哪一組（null ⇒ 出來）—— 組外的變淡 */
+  setFocusGroup(g) { this._focusGroup = g; this._applyGhost(); }
+
   _applyGhost() {
     const gid = this._ghostId || null;
     for (const [oid, node] of this.byId) {
       const m = node.material;
       if (!m) continue;
       /** 圖層與群組第一批：鎖住的也半透明（看得到、當參考、點不到）；編輯路徑那一個照舊更淡 */
-      const op = gid !== null && oid === gid ? 0.28 : node.userData.locked ? LOCKED_OPACITY : 1;
+      /** 群組 2b：點兩下進到一組時，組外的變淡（`setFocusGroup()`）—— 跟鎖住同一個透明度，一眼看出「現在只改這一組」*/
+      const outside = this._focusGroup != null && node.userData.group !== this._focusGroup;
+      const op = gid !== null && oid === gid ? 0.28 : (node.userData.locked || outside) ? LOCKED_OPACITY : 1;
       if (m.opacity === op && !!m.transparent === (op < 1)) continue;
       m.transparent = op < 1;
       m.opacity = op;
@@ -850,6 +855,7 @@ export class SceneView {
     const D = this._lastDoc;
     node.visible = !(D ? D.isHidden(obj) : obj.hidden);
     node.userData.locked = D ? D.isLocked(obj) : !!obj.locked;
+    node.userData.group = obj.group;                 // 群組 2b：進到一組時判斷誰在組外
 
     node.material.color.setHex(col);
     node.getObjectByName('edges').material.color.setHex(edgeLineColor(col));   // 物件換顏色 ⇒ 稜線跟著換深淺

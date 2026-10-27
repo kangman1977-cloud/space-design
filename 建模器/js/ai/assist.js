@@ -82,7 +82,8 @@ export function objectInfo(o) {
     ...(o.error ? { 錯誤: o.error } : {}),
     /** 圖層與群組第一批：藏起來、鎖住的照樣列、加標記（⛔ 跳過 —— AI 要知道它在、只是看不到／點不到）*/
     ...(o.hidden ? { 藏起來: true } : {}),
-    ...(o.locked ? { 鎖住: true } : {})
+    ...(o.locked ? { 鎖住: true } : {}),
+    ...(o.group !== null && o.group !== undefined ? { 群組: `群組 ${o.group}` } : {})      // 群組 2b
   };
 }
 

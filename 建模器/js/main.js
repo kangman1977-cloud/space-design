@@ -158,6 +158,12 @@ const sel = new Selection(view, {
    * 〔重複呼叫沒關係：1000 個點重建一次是微秒級，而這裡是事件驅動不是每幀〕
    */
   onChange: () => { sel.refreshVertexDots(); panel.refresh(); updateBar(); },
+  /** 群組 2b：點兩下進到一組／出來 ⇒ 組外的變淡、上面那行講怎麼出來（kang ⑦）*/
+  onGroupChange: g => {
+    view.setFocusGroup(g);
+    if (g !== null) toast(`正在改「群組 ${g}」裡面的一個 —— 其他東西變淡；按 Esc 或點外面空白出來`);
+    updateBar();
+  },
   /**
    * 量測讀數變了 → 重畫左下角那一塊。
    * ⚠ `select.js` 刻意**不碰 DOM**（它是 view 層），所以字從這裡進 HTML。
@@ -548,6 +554,8 @@ function commit(label, opt) {
    * 搬走、轉了 ⇒ 自動脫鉤（kang 2026-10-15）。⭐ 放在這裡 ＝ 搬物件的每一條路（拉箭頭、打數字、對齊…）都管得到，
    * ⛔ 一條一條去改。⚠ 提示延後一拍：呼叫端接著會跳自己的提示，⛔ 延後的話會被蓋掉。
    */
+  /** 群組 2b：只剩一個的組拆掉（刪掉、布林吃掉之後會剩下）—— 放這裡 ＝ 每一條會少物件的路都管得到 */
+  doc.cleanGroups();
   const det = revCheckBinds(doc);
   if (det.length) {
     setTimeout(() => toast(`${det.map(o => `「${o.name}」`).join('、')}的中心線離開了它跟著的參考線，`
@@ -680,6 +688,17 @@ function duplicateSelected() {
     doc.add(fresh);
     made.push(fresh.id);
   }
+  /**
+   * 群組 2b（kang ⑦）：複本另成新的一組 —— 同一組複製出來的那幾個共用一個新的組（只複製出一個 ⇒ 不成組，`commit()` 會拆）。
+   * ⚠ ⛔ 留在原本那一組（Rhino 會，論壇有人嫌 —— 設計方向「第二批動工前查到的」）。
+   */
+  const remap = new Map();
+  for (const id of made) {
+    const c = doc.byId(id);
+    if (c.group === null) continue;
+    if (!remap.has(c.group)) remap.set(c.group, doc.newGroupId());
+    c.group = remap.get(c.group);
+  }
   view.sync(doc);
   sel.set(made);
   commit(`複製 ${made.length} 個物件`);
@@ -776,6 +795,30 @@ function showOp(how) {
     showAll: `全部顯示：拿回 ${n} 個` + (doc.layerHiddenCount ? `　還有 ${doc.layerHiddenCount} 個在關掉的圖層裡（到「圖層」那一頁打開）` : ''),
     unlockAll: `全部解鎖：解開 ${n} 個`
   }[how]);
+  updateBar();
+}
+
+/**
+ * 🔴 **群組 2b：綁成一組、拆開**（kang 2026-10-28「照建議」⑦ → `規格\建模器-圖層與群組.md`「2b」）。資料在 `io.js` `groupObjects()`／`ungroup()`。
+ * 綁好之後整組還選著（點任一個就是整組）；記一步復原。
+ */
+function groupOp(on) {
+  const list = sel.objects;
+  if (on) {
+    if (list.length < 2) { toast('綁成一組要先選兩個以上（Shift 加選或拉框）', true); return; }
+    const g = doc.groupObjects(list);
+    sel.set(doc.groupMembers(g).map(o => o.id));
+    view.sync(doc);
+    commit('綁成一組');
+    toast(`綁成「群組 ${g}」（${doc.groupMembers(g).length} 個）　點任一個就整組選起來；點兩下進去改單一個　拆開：Ctrl+Shift+G`);
+  } else {
+    if (!list.some(o => o.group !== null)) { toast('選到的東西沒有在任何一組裡', true); return; }
+    if (sel.inGroup !== null) sel.leaveGroup(false);
+    const n = doc.ungroup(list);
+    view.sync(doc);
+    commit('拆開群組');
+    toast(`拆開 ${n} 組　每一個都可以單獨點了`);
+  }
   updateBar();
 }
 
@@ -938,6 +981,9 @@ $('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
 $('bSplit').onclick = splitOp;
 $('bKnife').onclick = () => $('bKnife').classList.toggle('on');
 
+$('gGroup').onclick = () => groupOp(true);
+$('gUngroup').onclick = () => groupOp(false);
+$('gLeave').onclick = () => { sel.leaveGroup(true); toast('離開群組（整組還選著）'); };
 $('oHide').onclick = () => showOp('hide');
 $('oLock').onclick = () => showOp('lock');
 $('oIso').onclick = () => showOp(isIsolated(doc) ? 'unisolate' : 'isolate');
@@ -4133,6 +4179,8 @@ function escapeLayer() {
     toggleEditMode();
     return;
   }
+  /** 群組 2b：在一組裡面 ⇒ 先出來（整組還選著）；再按一次才清掉選取 */
+  if (sel.inGroup !== null) { sel.leaveGroup(true); toast('離開群組（整組還選著）　再按一次 Esc 取消選取'); return; }
   sel.clear();
 }
 
@@ -7938,6 +7986,8 @@ window.addEventListener('keydown', e => {
   }
   if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); duplicateSelected(); return; }
   if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); sel.selectAll(); return; }
+  /** 群組 2b：Ctrl+G 綁成一組、Ctrl+Shift+G 拆開（Rhino、Illustrator 都是這兩個）*/
+  if ((e.ctrlKey || e.metaKey) && k === 'g') { e.preventDefault(); groupOp(!e.shiftKey); return; }
   if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); download(doc); toast('已存檔'); return; }
 
   if (k === 'w') setMode('translate');
@@ -8012,6 +8062,12 @@ function updateBar() {
   const nHid = doc.hiddenCount, nLock = doc.lockedCount, iso = isIsolated(doc);
   $('oHide').hidden = $('oLock').hidden = sel.count < 1 || sel.editMode;
   $('oIso').hidden = !(iso || (sel.count >= 1 && !sel.editMode));
+  /** 群組 2b：綁成一組 ⇒ 選兩個以上、還⛔ 剛好是同一整組；拆開 ⇒ 選到的有在組裡；離開群組 ⇒ 在一組裡面時 */
+  const selObjs = sel.objects, g0 = selObjs.length ? selObjs[0].group : null;
+  const oneWholeGroup = g0 !== null && selObjs.every(o => o.group === g0) && doc.groupMembers(g0).length === selObjs.length;
+  $('gGroup').hidden = sel.editMode || selObjs.length < 2 || oneWholeGroup;
+  $('gUngroup').hidden = sel.editMode || !selObjs.some(o => o.group !== null);
+  $('gLeave').hidden = sel.inGroup === null;
   $('oIso').classList.toggle('on', iso);
   $('oShowAll').hidden = !nHid; $('oShowAll').textContent = `全部顯示（${nHid}）`;
   $('oUnlockAll').hidden = !nLock; $('oUnlockAll').textContent = `全部解鎖（${nLock}）`;
@@ -9148,6 +9204,8 @@ function placeLayers() {
         sel.set(add ? [...new Set([...sel.ids, id])] : [id]);
         panel.refresh(); updateBar();
       },
+      /** 群組 2b：清單上「🔗 群組 N」那一列 ⇒ 整組選起來 */
+      pickGroup: g => { if (sel.inGroup !== null) sel.leaveGroup(false); sel.set(doc.groupMembers(g).map(o => o.id)); panel.refresh(); updateBar(); },
       toast
     });
     tabs.querySelector('#tabTools').onclick = () => setLayerTab(false);

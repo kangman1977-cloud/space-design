@@ -17054,7 +17054,7 @@ section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 
   const rd = f => readFileSync(join(here, '..', f), 'utf8');
   const sc = rd('js/view/scene.js'), sl = rd('js/view/select.js'), mn = rd('js/main.js'), ih = rd('index.html');
   ok('★★★ 點得到的清單濾掉藏起來、鎖住的', /this\.pickables = doc\.objects\.filter\(o => !doc\.isHidden\(o\) && !doc\.isLocked\(o\)\)/.test(sc));
-  ok('★★★ 藏起來 ⇒ 整個不畫；鎖住 ⇒ 半透明（LOCKED_OPACITY）', /node\.visible = !\(D \? D\.isHidden\(obj\) : obj\.hidden\);/.test(sc) && /node\.userData\.locked \? LOCKED_OPACITY : 1/.test(sc));
+  ok('★★★ 藏起來 ⇒ 整個不畫；鎖住 ⇒ 半透明（LOCKED_OPACITY）', /node\.visible = !\(D \? D\.isHidden\(obj\) : obj\.hidden\);/.test(sc) && /\(node\.userData\.locked \|\| outside\) \? LOCKED_OPACITY : 1/.test(sc));
   ok('★★ 全部入鏡⛔ 算藏起來的', /if \(n\.visible\) box\.expandByObject\(n\)/.test(sc));
   ok('★★★ 選取一處擋全部：藏起來、鎖住的選不進來（點、拉框、全選、AI、復原回來都走這裡）',
     /this\.ids = ids\.filter\(id => this\._canPick\(id\)\);/.test(sl) && /return !!o && !this\._doc\.isHidden\(o\) && !this\._doc\.isLocked\(o\);/.test(sl)
@@ -17206,6 +17206,84 @@ section('圖層與群組 2a：圖層（kang 2026-10-28）');
   ok('★★ AI.看()：文件列圖層（目前、關掉、鎖住）、每個物件寫在哪一層；功能地圖認得分頁與圖層清單',
     /圖層: doc\.layers\.map/.test(rd('js/ai/assist.js')) && /圖層: doc\.layerOf\(o\)\.name/.test(rd('js/ai/assist.js'))
     && /if \(el\.closest\('#pLayers, #layerFloat'\)\) return '圖層';/.test(rd('js/ai/catalog.js')));
+}
+
+section('圖層與群組 2b：群組（kang 2026-10-28）');
+
+/** 規格：`規格\建模器-圖層與群組.md`「2b」。資料在 `io.js`（`ModelObject.group`、`groupObjects()`／`ungroup()`／`cleanGroups()`、`layerFrom()` 帶組）。*/
+{
+  const mk = name => new io.ModelObject({ name, src: { type: 'box', w: 10, h: 10, d: 10 } });
+  const d = new io.Doc();
+  const [A, B, C, D, E] = ['甲', '乙', '丙', '丁', '戊'].map(n => d.add(mk(n)));
+  ok('★ 一開始沒有組', d.objects.every(o => o.group === null) && d.newGroupId() === 1);
+  const g1 = d.groupObjects([A, B]);
+  ok('★★★ 綁成一組：甲乙同一組、id 1', g1 === 1 && A.group === 1 && B.group === 1 && C.group === null && d.groupMembers(1).length === 2);
+  const g2 = d.groupObjects([B, C]);
+  ok('★★★ 已經在組裡的再綁 ⇒ 連原本那一組其他的一起進新組（⛔ 留下半組、⛔ 組裡包組）', g2 === 2 && [A, B, C].every(o => o.group === 2) && !d.groupMembers(1).length);
+  D.layer = d.addLayer().id;
+  d.groupObjects([D, E]);
+  ok('★★ 一組可以跨圖層（kang ⑦）', D.group === E.group && D.layer !== E.layer);
+  // 存讀檔
+  const d2 = io.Doc.fromJSON(JSON.parse(JSON.stringify(d.toJSON())));
+  ok('★★★ 存檔讀檔（Ctrl+Z 走的那一條）組留得住', d2.objects.find(o => o.name === '甲').group === 2 && d2.objects.find(o => o.name === '丁').group === D.group);
+  const j = A.toJSON();
+  ok('★ 沒有組的⛔ 存 group（檔案一個字都不多）', !('group' in mk('x').toJSON()) && j.group === 2);
+  // 從舊物件變來的留在原組（kang ⑦）
+  ok('★★★ layerFrom 帶組 ⇒ 布林、分割這類變出來的新塊留在原本那一組', io.layerFrom(A).group === 2);
+  // 拆開、只剩一個自動拆
+  const n = d.ungroup([A]);
+  ok('★★★ 拆開：選到的所在的組整組拆掉（選一個就拆整組）', n === 1 && [A, B, C].every(o => o.group === null) && D.group !== null);
+  d.remove(E);
+  const k = d.cleanGroups();
+  ok('★★★ 只剩一個的組自動拆（刪掉、布林吃掉之後）', k === 1 && D.group === null);
+  // 分割（io.js 裡的那一條）：碎塊留在原組
+  if (csgOK) {
+    const g = new io.Doc();
+    const b1 = g.add(new io.ModelObject({ name: '方塊', src: { type: 'box', w: 60, h: 40, d: 45 } }));
+    const c1 = g.add(new io.ModelObject({ name: '圓柱', src: { type: 'cylinder', r: 10, h: 40 }, pos: new THREE.Vector3(30, 0, 0) }));
+    const x1 = g.add(new io.ModelObject({ name: '旁邊', src: { type: 'box', w: 5, h: 5, d: 5 }, pos: new THREE.Vector3(200, 0, 0) }));
+    g.groupObjects([b1, x1]);
+    const sp = io.splitObjects([b1, c1]);
+    ok('★★ 分割：方塊那幾塊留在方塊原本那一組、圓柱剩下的⛔ 在組裡', sp.ok && sp.made.find(o => o.name === '方塊（剩下的）').group === b1.group && sp.made.find(o => o.name === '圓柱（剩下的）').group === null);
+  }
+  // 清單（純算）帶組
+  const { layerRows } = await import('../js/ui/layerPanel.js');
+  const h = new io.Doc(); const P = h.add(mk('P')), Q = h.add(mk('Q')); h.groupObjects([P, Q]);
+  ok('★★ 清單每個物件帶它在哪一組', layerRows(h, [])[0].objects.every(o => o.group === P.group));
+
+  // 讀程式守著（select.js 在 Node 載不起來 ⇒ 點選那一半讀程式）
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f2 => readFileSync(join(here, '..', f2), 'utf8');
+  const sl = rd('js/view/select.js'), mn = rd('js/main.js'), sc = rd('js/view/scene.js'), ih = rd('index.html'), lp = rd('js/ui/layerPanel.js');
+  ok('★★★ 點一個 ⇒ 整組（在組裡 ⇒ 只那一個）；Shift ⇒ 整組一起加或拿掉；點到組外 ⇒ 出來',
+    /const ids = this\._groupIds\(id\);/.test(sl) && /if \(!o \|\| o\.group === null \|\| o\.group === undefined \|\| this\.inGroup === o\.group\) return \[id\];/.test(sl)
+    && /const allIn = ids\.every\(i => this\.ids\.includes\(i\)\);/.test(sl) && /if \(this\.inGroup !== null && \(!o \|\| o\.group !== this\.inGroup\)\) this\.leaveGroup\(false\);/.test(sl));
+  ok('★★ 點空白 ⇒ 出來；框到組裡任一個 ⇒ 整組',
+    /if \(this\.inGroup !== null\) this\.leaveGroup\(false\);\s*\/\/ 群組 2b：點空白/.test(sl) && /const hits = \[\.\.\.new Set\(raw\.flatMap\(id => this\._groupIds\(id\)\)\)\];/.test(sl));
+  ok('★★★ 一般選取點兩下 ⇒ 進到那一組（只選那一個）；照鋼筆那一套的時間與距離',
+    /const dbl = !!lt && \(now - lt\.t\) < DOUBLE_TAP_MS && Math\.hypot\(e\.clientX - lt\.x, e\.clientY - lt\.y\) <= DOUBLE_TAP_MOVE;/.test(sl)
+    && /if \(dbl && !\(e\.shiftKey \|\| this\.multi\) && this\.enterGroupAt\(e\.clientX, e\.clientY\)\) return;\s*this\.pick\(/.test(sl)
+    && /this\.inGroup = o\.group;\s*this\.set\(\[id\]\);/.test(sl));
+  ok('★★ 出來時整組還選著（Esc）；復原回來那一組不在了 ⇒ 出來',
+    /if \(keepGroup && this\._doc\) this\.set\(this\._doc\.groupMembers\(g\)\.map\(m => m\.id\)\);/.test(sl) && /!this\._doc\.groupMembers\(this\.inGroup\)\.length\) this\.leaveGroup\(false\);/.test(sl));
+  ok('★★★ 進到一組時組外的變淡（跟鎖住同一個透明度）',
+    /const outside = this\._focusGroup != null && node\.userData\.group !== this\._focusGroup;/.test(sc) && /node\.userData\.group = obj\.group;/.test(sc)
+    && /onGroupChange: g => \{\s*view\.setFocusGroup\(g\);/.test(mn));
+  ok('★★★ Esc：在組裡 ⇒ 先出來（整組還選著），再按一次才清選取',
+    /if \(sel\.inGroup !== null\) \{ sel\.leaveGroup\(true\);[^}]*return; \}\s*sel\.clear\(\);\s*\}/.test(mn));
+  ok('★★ Ctrl+G 綁成一組、Ctrl+Shift+G 拆開', /if \(\(e\.ctrlKey \|\| e\.metaKey\) && k === 'g'\) \{ e\.preventDefault\(\); groupOp\(!e\.shiftKey\); return; \}/.test(mn));
+  ok('★★ 「群組」那一組三顆在工具區、一開始藏著；出現條件（綁：兩個以上且⛔ 剛好一整組；拆：選到的有組；離開：在組裡）',
+    ['gGroup', 'gUngroup', 'gLeave'].every(id => new RegExp(`id="${id}" hidden`).test(ih)) && /<div class="grp" id="gGrp">/.test(ih)
+    && /\$\('gGroup'\)\.hidden = sel\.editMode \|\| selObjs\.length < 2 \|\| oneWholeGroup;/.test(mn) && /\$\('gLeave'\)\.hidden = sel\.inGroup === null;/.test(mn));
+  ok('★★★ 複製 ⇒ 複本另成新的一組（同一組複製出來的共用一個新組）',
+    /if \(!remap\.has\(c\.group\)\) remap\.set\(c\.group, doc\.newGroupId\(\)\);\s*c\.group = remap\.get\(c\.group\);/.test(mn));
+  ok('★★ 每一步存檔前把只剩一個的組拆掉（commit 裡）', /function commit\(label, opt\) \{[\s\S]{0,700}doc\.cleanGroups\(\);[\s\S]{0,400}hist\.commit\(label, opt\);/.test(mn));
+  ok('★★ 綁好整組還選著、記一步；拆開記一步', /const g = doc\.groupObjects\(list\);\s*sel\.set\(doc\.groupMembers\(g\)\.map\(o => o\.id\)\);\s*view\.sync\(doc\);\s*commit\('綁成一組'\);/.test(mn) && /commit\('拆開群組'\);/.test(mn));
+  ok('★★ 圖層清單：同一組排在一起、「🔗 群組 N」那一列點了整組選',
+    /ordered\.push\(\{ head: o\.group, n: doc\.groupMembers\(o\.group\)\.length \}\);/.test(lp) && /gn\.onclick = \(\) => this\.h\.pickGroup\(o\.head\);/.test(lp)
+    && /pickGroup: g => \{[^}]*sel\.set\(doc\.groupMembers\(g\)\.map\(o => o\.id\)\);/.test(mn));
+  ok('★ AI.看() 寫物件在哪一組', /群組: `群組 \$\{o\.group\}`/.test(rd('js/ai/assist.js')));
 }
 
 section('參考線 甲：從物件的面放（2026-10-17）');

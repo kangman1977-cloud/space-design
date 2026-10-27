@@ -408,6 +408,11 @@ export class ModelObject {
      */
     this.layer = Number.isInteger(opts.layer) ? opts.layer : null;
     this.colorByLayer = opts.colorByLayer === true;
+    /**
+     * 🔴 **在哪一組**（圖層與群組 2b，kang 2026-10-28「照建議」⑦）：群組的 id；null ＝ 沒有。⛔ 能一組裡再包一組（kang ⑥）。
+     * 群組跟圖層無關（同一組可以跨好幾層）；名字照 id 叫「群組 N」。只剩一個的組在 `commit()` 時自動拆掉（`doc.cleanGroups()`）。
+     */
+    this.group = Number.isInteger(opts.group) ? opts.group : null;
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -707,6 +712,7 @@ export class ModelObject {
     /** 圖層 2a：在哪一層一律存（讀回來才放得回同一層）；顏色跟圖層有才存 */
     if (this.layer !== null) o.layer = this.layer;
     if (this.colorByLayer) o.colorByLayer = true;
+    if (this.group !== null) o.group = this.group;     // 群組 2b：有才存
     return o;
   }
 
@@ -729,7 +735,8 @@ export class ModelObject {
       locked: d.locked === true,
       isoHidden: d.isoHidden === true,
       layer: d.layer,
-      colorByLayer: d.colorByLayer === true
+      colorByLayer: d.colorByLayer === true,
+      group: d.group
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
@@ -1546,6 +1553,37 @@ export class Doc {
     for (const o of mine) { if (how === 'delete') this.remove(o); else o.layer = to.id; }
     return { ok: true, n: mine.length };
   }
+  // ── 群組（圖層與群組 2b，kang 2026-10-28「照建議」⑦ → `規格建模器-圖層與群組.md`「2b」）──
+  /** 這一組的物件（照文件順序）*/
+  groupMembers(g) { return g === null || g === undefined ? [] : this.objects.filter(o => o.group === g); }
+  /** 下一個沒人用的群組 id */
+  newGroupId() { return Math.max(0, ...this.objects.map(o => o.group || 0)) + 1; }
+  /**
+   * 綁成一組：這幾個（⚠ 原本在別組的連那一組其他的一起，⛔ 留下半組）放進一個新的組；回傳新 id。
+   * ⛔ 能一組裡再包一組（kang ⑥）⇒ 新的組直接取代舊的。
+   */
+  groupObjects(list) {
+    const all = new Set();
+    for (const o of list) { if (o.group !== null) this.groupMembers(o.group).forEach(m => all.add(m)); else all.add(o); }
+    const id = this.newGroupId();
+    for (const o of all) o.group = id;
+    return id;
+  }
+  /** 拆開：這幾個所在的組整組拆掉；回傳拆了幾組 */
+  ungroup(list) {
+    const gs = new Set(list.map(o => o.group).filter(g => g !== null));
+    for (const o of this.objects) if (gs.has(o.group)) o.group = null;
+    return gs.size;
+  }
+  /** 只剩一個（或沒有）的組拆掉（刪掉、布林吃掉之後會剩下）；回傳拆了幾組 */
+  cleanGroups() {
+    const n = new Map();
+    for (const o of this.objects) if (o.group !== null) n.set(o.group, (n.get(o.group) || 0) + 1);
+    let k = 0;
+    for (const o of this.objects) if (o.group !== null && n.get(o.group) < 2) { o.group = null; k++; }
+    return k;
+  }
+
   /** 回到只有「預設」一層（新建檔案用；⚠ `clear()` ⛔ 清圖層 —— 它是「刪掉所有物件」那條路）*/
   resetLayers() { this.layers = defaultLayers(); this.currentLayer = this.layers[0].id; }
 }
@@ -1603,7 +1641,8 @@ export function setShown(doc, how, picked = []) {
  * 複製、布林、分割、陣列、打散、切穿、切塊、分離、切成實心 —— 建新物件時 `...layerFrom(來源)`（比照 `color: 來源.color`）。
  */
 export function layerFrom(src) {
-  return src ? { layer: src.layer, colorByLayer: !!src.colorByLayer } : {};
+  /** 群組 2b（kang ⑦）：布林、分割這類變出來的新塊也留在原本那一組（複製另外處理：另成新的一組，`duplicateSelected()`）*/
+  return src ? { layer: src.layer, colorByLayer: !!src.colorByLayer, group: src.group } : {};
 }
 
 /** 現在是不是「只看選到的」（有東西是被它藏起來的）*/

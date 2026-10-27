@@ -117,6 +117,8 @@ html, body {
 .lyRow, .lyObj { display: flex; align-items: center; gap: 3px; padding: 2px 2px; border-radius: 4px; font-size: 13px; white-space: nowrap; }
 .lyRow.cur { background: #233047; }
 .lyObj { padding-left: 22px; }
+.lyObj.inGrp { padding-left: 36px; }      /* 群組 2b：組裡的那幾列再縮一點 */
+.lyGrp .lyName { color: #8fb4ec; }
 .lyObj.sel { background: #23395c; }
 .lyObj.dim .lyName { color: #6a717c; }
 .lyRow button, .lyObj button { padding: 0 4px; min-width: 22px; background: transparent; border: 0; color: #aab1bd; font-size: 13px; }
@@ -734,6 +736,17 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="oIso" hidden title="只看選到的：其他物件先藏起來，只留選到的。再按一次回來（只放回它藏的那些；你自己按「藏起來」的照舊藏著）">只看選到的</button>
       <button id="oShowAll" hidden title="全部顯示：把藏起來的物件全部拿回來（括號是現在藏了幾個）">全部顯示</button>
       <button id="oUnlockAll" hidden title="全部解鎖：把鎖住的物件全部解開（括號是現在鎖了幾個）">全部解鎖</button>
+    </div>
+
+    <!--
+      群組（圖層與群組 2b，kang 2026-10-28「照建議」⑦ → 規格\建模器-圖層與群組.md「2b」）：綁成一組（選兩個以上）、拆開（選到的有在組裡）、離開群組（點兩下進去之後）。
+      快速鍵 Ctrl+G、Ctrl+Shift+G（Rhino、Illustrator 都是）。
+    -->
+    <div class="grp" id="gGrp">
+      <span class="lbl">群組</span>
+      <button id="gGroup" hidden title="綁成一組（Ctrl+G）：選到的東西綁在一起 —— 之後點任一個就整組選起來、一起移動；點兩下進去改單一個（Esc 或點外面空白出來）">綁成一組</button>
+      <button id="gUngroup" hidden title="拆開（Ctrl+Shift+G）：選到的東西所在的組整組拆掉，每一個又可以單獨點">拆開</button>
+      <button id="gLeave" hidden title="離開群組：結束「只改組裡的單一個」，整組還選著（Esc 也可以）">離開群組</button>
     </div>
 
     <div class="grp" id="gArray">

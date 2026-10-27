@@ -1,10 +1,18 @@
-圖層與群組 2a：圖層結案（kang 2026-10-28「驗收OK」）—— 先驗（e234d9c 上傳後：13 個改過的檔線上都是新版、沒有「版本對不上」、這一頁 83 個檔全部載入成功；瀏覽器模擬 1600 寬、滑鼠點，照 ⏳ 清單 9 步：分頁與預設一層；新圖層變目前、圓柱放進去；換目前這一層、關掉圖層 2 ⇒「關掉的圖層裡 1」；✕ 跳三選一、移到預設、Ctrl+Z 回來；這一層全部用圖層顏色 ⇒ 方塊 9aa3ad、色塊改 3fa34d 方塊跟著變；拉出來 → 重新整理還在、放回；物件面板移到圖層 2；鎖住圖層 2 點不到、Ctrl+Z；新建只剩預設；6 則 404【推論】是這個分頁先前開不存在頁面留下的；暫存先記下、測完放回、清掉 modeler_doc 與 modeler_slice、先離開頁面再確認）寫進規格後，連同「⏳ 實測（kang）」逐字搬到 HISTORY 新一節「圖層與群組 2a：圖層結案」（20 行 md5 4dba8f551563890d8a218dedddc30b66；搬進去後重算一樣），附經過與老實話（面板收起來不自動浮是 AI 定的、浮動視窗讓開 XYZ 是本機驗才改、改壞檢查兩項測試當掉與錨點不唯一與修測試又寫壞一行、編輯工具吃掉空格看差異才抓到、bash 雙引號裡的反引號吃掉註解、先驗與結案同一個 commit）；規格分批表與 2a 標題加「kang 2026-10-28 驗收 OK」、2b 那一列寫下一步、⏳ 換成「實測：已結案」＋指到 HISTORY；設計方向加 2a 驗收 OK 一行；STATUS 拿掉 ⏳ 那一行、真待辦改成「2a 驗收 OK、下一步 2b 群組」；目次產生器重產＋檢查通過；不改程式
+圖層與群組 2b：群組（kang 2026-10-28「開始 2b 群組」；規則照第二批定案 ⑦：可以跨圖層、複製另成新組、布林分割這類變出來的留原組、點兩下進去後只點得到那一組其他變淡、Esc 或點空白出來；⑥ 不包組）—— io.js ModelObject.group（toJSON 有才存、fromJSON）、layerFrom 帶 group、Doc.groupMembers／newGroupId／groupObjects（連原本那一組一起、給新號碼）／ungroup（拆選到的所在的組）／cleanGroups（只剩一個的拆）；main.js commit() 先 cleanGroups、複製同一個舊組對到同一個新組、groupOp 綁／拆（記一步）、Ctrl+G／Ctrl+Shift+G、escapeLayer 在組裡先出來（整組還選著）、updateBar 管三顆按鈕、onGroupChange 變淡與提示、圖層清單 pickGroup；select.js inGroup、pick() 擴成整組（Shift 整組加減、點空白或組外出來）、放開滑鼠判斷點兩下 ⇒ enterGroupAt、leaveGroup、拉框擴成整組、revalidate 組不在就出來；scene.js setFocusGroup、_applyGhost 組外用 LOCKED_OPACITY；index.html 工具區 #gGrp（綁成一組、拆開、離開群組）；layerPanel.js 同一組排在一起、「🔗 群組 N」那一列點了整組選；AI.看() 寫在哪一組；功能地圖「工具：群組」；AI 自己定的小細節（快捷鍵、按鈕位置、Esc 兩段、只剩一個自動拆、清單點名字只選一個）寫在設計方向；回歸測試 5014 → 5038 全部通過（第一批鎖住半透明那一項讀程式照新寫法改）；在複本裡改壞 17 處全部抓到、每處都跑到「通過 N」；本機（埠 8826、1600 寬、滑鼠點）Ctrl+G、點一個整組、點兩下進去只選一個與離開群組、Esc 先出來整組還選著、Ctrl+D 複本另成群組 2、組外變淡 0.4、點空白出來、清單兩列「🔗 群組 N」點了整組選、Ctrl+Shift+G 拆與 Ctrl+Z、刪掉組裡一個剩下的自動不算一組與 Ctrl+Z 回來，主控台只有先前開不存在頁面留下的 404；規格 規格\建模器-圖層與群組.md 新一節「2b」（含 ⏳ 實測）；設計方向 2b 一行；STATUS ⏳ 一行、真待辦；目次產生器重產＋檢查通過
 
-動到 5 個檔：
-  M  HISTORY.md                     新一節「圖層與群組 2a：圖層結案」＋目次
-  M  規格/建模器-圖層與群組.md        先驗與 ⏳ 搬走、換成已結案、標驗收 OK
-  M  圖層與群組-設計方向.md           2a 驗收 OK 一行
-  M  STATUS.md                      拿掉 ⏳ 一行、真待辦改成 2a 驗收 OK
+動到 13 個檔：
+  M  建模器/js/core/io.js             group 欄位、存讀檔、綁／拆／清單個的組
+  M  建模器/js/main.js                commit 清組、複製另成新組、綁拆、Ctrl+G、Esc、按鈕、清單點組
+  M  建模器/js/view/select.js         點一個整組、點兩下進去、出來、拉框整組
+  M  建模器/js/view/scene.js          進到一組時組外變淡
+  M  建模器/index.html                工具區「群組」三顆、清單樣式
+  M  建模器/js/ui/layerPanel.js       同一組排在一起、「🔗 群組 N」那一列
+  M  建模器/js/ai/assist.js           AI.看() 寫在哪一組
+  M  建模器/js/ai/catalogInfo.js      功能地圖「工具：群組」
+  M  建模器/tests/run.mjs             新 24 項、第一批一項照新寫法改
+  M  規格/建模器-圖層與群組.md        新一節「2b」（含 ⏳ 實測）、分批表、識別碼
+  M  圖層與群組-設計方向.md           2b 做好、AI 定的小細節
+  M  STATUS.md                      ⏳ 一行、真待辦
   M  版控工具/commit-msg.txt
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

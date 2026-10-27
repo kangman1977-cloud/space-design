@@ -164,6 +164,9 @@ export class Selection {
     /** 已選取的 ModelObject id，有順序 */
     this.ids = [];
     this.multi = false;
+    /** 群組 2b：點兩下進到哪一組（null ＝ 沒有）—— 在裡面點的是單一個、其他變淡（`main.js` 接 `hooks.onGroupChange`）*/
+    this.inGroup = null;
+    this._lastPickTap = null;
 
     this._ray = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -2016,6 +2019,15 @@ export class Selection {
         if (el && this.hooks.onOriginPick) this.hooks.onOriginPick(el);
         return;
       }
+      /**
+       * 🔴 **群組 2b（kang 2026-10-28「照建議」⑦）：一般選取時點兩下 ⇒ 進到那一組**（只選到點的那一個、其他變淡；Esc 或點外面出來）。
+       * ⚠ 點兩下在一般選取還沒被用掉（只有鋼筆、刀具用，上面那兩段先 return 了）；判斷照鋼筆那一套（`DOUBLE_TAP_MS`、`DOUBLE_TAP_MOVE`）。
+       * 第一下照樣是一般的點（整組選起來），第二下才進去。
+       */
+      const now = performance.now(), lt = this._lastPickTap;
+      const dbl = !!lt && (now - lt.t) < DOUBLE_TAP_MS && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) <= DOUBLE_TAP_MOVE;
+      this._lastPickTap = dbl ? null : { x: e.clientX, y: e.clientY, t: now };
+      if (dbl && !(e.shiftKey || this.multi) && this.enterGroupAt(e.clientX, e.clientY)) return;
       this.pick(e.clientX, e.clientY, e.shiftKey || this.multi);
     });
   }
@@ -2065,7 +2077,9 @@ export class Selection {
 
     /** 圖層與群組第一批：藏起來、鎖住的⛔ 框（`set()` 也會擋，這裡先濾掉 ⇒「框到幾個」講的數字對）*/
     const entries = this._doc.objects.filter(o => !this._doc.isHidden(o) && !this._doc.isLocked(o)).map(o => ({ id: o.id, box: worldBounds(o) }));
-    const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
+    const raw = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
+    /** 群組 2b：框到組裡任一個 ⇒ 整組（Rhino 也是）*/
+    const hits = [...new Set(raw.flatMap(id => this._groupIds(id)))];
     this.set(additive ? [...new Set([...this.ids, ...hits])] : hits);
     if (this.hooks.onMarquee) this.hooks.onMarquee(hits.length);
   }
@@ -2935,11 +2949,45 @@ export class Selection {
     const id = this.hitTest(clientX, clientY);
 
     if (id === null) {
+      if (this.inGroup !== null) this.leaveGroup(false);      // 群組 2b：點空白 ⇒ 出來
       if (!additive) this.set([]);
       return;
     }
-    if (additive) this.toggle(id);
-    else this.set([id]);
+    /** 群組 2b：在組裡點到組外的 ⇒ 出來；點一個 ⇒ 整組（在組裡 ⇒ 只那一個）；Shift ⇒ 整組一起加或一起拿掉 */
+    const o = this._doc && this._doc.byId(id);
+    if (this.inGroup !== null && (!o || o.group !== this.inGroup)) this.leaveGroup(false);
+    const ids = this._groupIds(id);
+    if (additive) {
+      const allIn = ids.every(i => this.ids.includes(i));
+      this.set(allIn ? this.ids.filter(i => !ids.includes(i)) : [...this.ids, ...ids.filter(i => !this.ids.includes(i))]);
+    } else this.set(ids);
+  }
+
+  /** 群組 2b：點到這一個 ⇒ 要選哪幾個（有組、⛔ 在那一組裡面 ⇒ 整組；藏起來、鎖住的 `set()` 會擋）*/
+  _groupIds(id) {
+    const o = this._doc && this._doc.byId(id);
+    if (!o || o.group === null || o.group === undefined || this.inGroup === o.group) return [id];
+    return this._doc.groupMembers(o.group).map(m => m.id);
+  }
+
+  /** 群組 2b：點兩下 ⇒ 進到點到的那一組；回傳有沒有進去（沒有組 ⇒ ⛔，照一般的點）*/
+  enterGroupAt(clientX, clientY) {
+    const id = this.hitTest(clientX, clientY);
+    const o = id !== null && this._doc ? this._doc.byId(id) : null;
+    if (!o || o.group === null || o.group === undefined) return false;
+    this.inGroup = o.group;
+    this.set([id]);
+    if (this.hooks.onGroupChange) this.hooks.onGroupChange(this.inGroup);
+    return true;
+  }
+
+  /** 群組 2b：出來（Esc、點空白、點到組外）；`keepGroup` ⇒ 改選整組（Esc 出來時，跟 Illustrator 出孤立模式一樣整組還選著）*/
+  leaveGroup(keepGroup = true) {
+    if (this.inGroup === null) return;
+    const g = this.inGroup;
+    this.inGroup = null;
+    if (keepGroup && this._doc) this.set(this._doc.groupMembers(g).map(m => m.id));
+    if (this.hooks.onGroupChange) this.hooks.onGroupChange(null);
   }
 
   set(ids) {
@@ -3076,6 +3124,8 @@ export class Selection {
   /** 文件被外力改過（Undo、讀檔）之後呼叫 */
   revalidate() {
     this.ids = this.ids.filter(id => this._canPick(id));        // 復原回來藏起來、鎖住的也拿掉
+    /** 群組 2b：復原回來那一組已經不在（拆開、刪掉）⇒ 出來 */
+    if (this.inGroup !== null && this._doc && !this._doc.groupMembers(this.inGroup).length) this.leaveGroup(false);
     /**
      * ⚠ 子元素選取一定要清掉。Undo／讀檔會**換掉整個 mesh 物件**，
      * 而 editSel 抓的是舊網格裡的 Vertex／HalfEdge／Face 參考 ——

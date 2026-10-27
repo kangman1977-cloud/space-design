@@ -18,7 +18,7 @@ export function layerRows(doc, selIds = []) {
     return {
       id: L.id, name: L.name, color: L.color, off: L.off, locked: L.locked,
       current: L.id === doc.currentLayer, count: objs.length,
-      objects: objs.map(o => ({ id: o.id, name: o.name, hidden: !!o.hidden, locked: !!o.locked, selected: sel.has(o.id) }))
+      objects: objs.map(o => ({ id: o.id, name: o.name, hidden: !!o.hidden, locked: !!o.locked, selected: sel.has(o.id), group: o.group ?? null }))
     };
   });
 }
@@ -101,8 +101,29 @@ export class LayerPanel {
         b.appendChild(q);
       }
       if (!this.open.has(r.id)) continue;
+      /**
+       * 群組 2b：同一組的排在一起、上面一列「🔗 群組 N（幾個）」—— 點它 ＝ 整組選起來（組裡的那幾列點名字 ＝ 只選那一個）。
+       * 一組跨好幾層時每一層各列它在這一層的那幾個。
+       */
+      const ordered = [], seenG = new Set();
       for (const o of r.objects) {
-        const orow = el('div', 'lyObj' + (o.selected ? ' sel' : '') + (o.hidden || o.locked || r.off || r.locked ? ' dim' : ''));
+        if (o.group === null) { ordered.push(o); continue; }
+        if (seenG.has(o.group)) continue;
+        seenG.add(o.group);
+        ordered.push({ head: o.group, n: doc.groupMembers(o.group).length });
+        for (const m of r.objects) if (m.group === o.group) ordered.push({ ...m, inGrp: true });
+      }
+      for (const o of ordered) {
+        if (o.head !== undefined) {
+          const gr = el('div', 'lyObj lyGrp');
+          const gn = el('span', 'lyName', `🔗 群組 ${o.head}（${o.n} 個）`);
+          gn.title = '點一下：整組選起來（一組可以跨好幾層，這裡只列在這一層的）';
+          gn.onclick = () => this.h.pickGroup(o.head);
+          gr.append(gn);
+          b.appendChild(gr);
+          continue;
+        }
+        const orow = el('div', 'lyObj' + (o.inGrp ? ' inGrp' : '') + (o.selected ? ' sel' : '') + (o.hidden || o.locked || r.off || r.locked ? ' dim' : ''));
         const oe = btn('lyIc' + (o.hidden ? ' off' : ''), '👁', o.hidden ? '拿回來（看得到、點得到）' : '藏起來（跟「顯示」那一組的藏起來同一件事）');
         oe.onclick = () => this.h.edit(o.hidden ? `拿回「${o.name}」` : `藏起來「${o.name}」`, () => { const x = doc.byId(o.id); x.hidden = !o.hidden; if (!x.hidden) x.isoHidden = false; });
         const ol = btn('lyIc' + (o.locked ? ' lockOn' : ' off'), '🔒', o.locked ? '解開' : '鎖住（看得到、點不到）');
