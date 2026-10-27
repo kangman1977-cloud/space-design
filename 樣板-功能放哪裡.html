@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>功能放哪裡比較</title>
+<!--
+  樣板：kang 2026-10-27「目前畫面的功能部份...需要好好研究...因為是最佔空間的問題」。
+  同一個狀況（拉點線面、方塊轉成網格、全選面 ＝ 選了 6 個面），四種放法：
+    A 現在：跟著選取／工具的那幾組全部長在上方工具列，多出來的浮在畫面上
+    B 搬進右側面板：上方工具列固定一個高度；拉點線面那一大組放在右側面板最上面（像 Illustrator 的「內容」面板、Blender 的 N 側欄）
+    C 浮動的工具視窗：同樣的內容放在一個可以拖、可以收成一條的小視窗（kang 2026-10-20 提過的 Illustrator 浮動面板）
+    D 一條常用列＋更多：畫面下方一條只放最常用的幾顆，其他收進「更多」；數字等按了才出現在左下角（像 Illustrator 的快速動作列＋Blender 的「調整上一個操作」）
+  看得到的按鈕是 2026-10-27 AI 在線上版那個狀況下用 AI.功能地圖({只要看得到:true}) 抓的；工具列高度同一天量的（樣板-分割畫面.html 檔頭）。
+  B、C、D 都假設「跟著選取」的那幾組（陣列、吸附、方向、法向）也一起搬走 ⇒ 上方工具列永遠是「沒選東西」的高度。
+  D 那一條放哪幾顆是 AI 挑的【推論】，不是量的。
+-->
+<style>
+  :root { --bg: #1b1e23; --bar: #24272e; --line: #3a3f48; --ink: #e8eaed; --muted: #8b93a1; --accent: #2f6fd0; --warn: #d9a441; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #111316; color: var(--ink); font: 14px/1.5 "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  #ctl { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; background: #0d0f12; border-bottom: 1px solid #2a2e35; position: sticky; top: 0; z-index: 50; }
+  #ctl h1 { font-size: 16px; margin: 0 8px 0 0; }
+  .g { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .g > span { color: var(--muted); }
+  #ctl button { padding: 4px 10px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); cursor: pointer; font: inherit; }
+  #ctl button.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  #desc { padding: 8px 16px; color: #c9cfd8; }
+  #desc b { color: #fff; }
+  #wrap { padding: 0 16px; }
+  #scaleBox { position: relative; }
+  /* ── 假的建模器（實際像素）── */
+  #app { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: var(--bg); border: 1px solid var(--line); overflow: hidden; font-size: 13px; }
+  #bar { position: absolute; left: 0; right: 0; top: 0; background: var(--bar); border-bottom: 1px solid var(--line); z-index: 6; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; padding: 8px; }
+  #bar.over { box-shadow: 0 6px 14px rgba(0,0,0,.45); }
+  .grp { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 8px; }
+  .grp.ctx { border-color: #6b5a33; }
+  .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; white-space: nowrap; }
+  .b { flex: none; white-space: nowrap; padding: 5px 10px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); font: inherit; }
+  .f { width: 52px; padding: 4px 5px; border-radius: 6px; border: 1px solid #454b56; background: #262a31; color: var(--ink); font: inherit; }
+  .sel { padding: 4px 5px; border-radius: 6px; border: 1px solid #454b56; background: #262a31; color: var(--ink); font: inherit; }
+  #rail { position: absolute; left: 0; bottom: 0; width: 66px; background: #20232a; border-right: 1px solid var(--line); z-index: 4; }
+  #rail .t { margin: 6px 6px 0; height: 44px; border-radius: 8px; border: 1px solid #3a3f48; font-size: 10px; color: var(--muted); display: flex; align-items: flex-end; justify-content: center; padding-bottom: 3px; }
+  #rail .t.on { background: var(--accent); color: #fff; border-color: #4d8ae8; }
+  #panel { position: absolute; right: 0; bottom: 0; width: 300px; background: #20232a; border-left: 1px solid var(--line); z-index: 4; overflow-y: auto; padding: 10px 12px; }
+  .sec { margin-bottom: 12px; }
+  .sec h4 { margin: 0 0 6px; font-size: 12px; color: #c9cfd8; display: flex; justify-content: space-between; }
+  .sec h4 .muted { color: var(--muted); font-weight: 400; }
+  .row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; }
+  .fake { height: 26px; border-radius: 6px; background: #262a31; border: 1px solid #333842; margin-bottom: 6px; }
+  .collapsed { color: var(--muted); border-top: 1px solid #333842; padding-top: 8px; }
+  #stage { position: absolute; background: var(--bg); overflow: hidden; }
+  #stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #float { position: absolute; z-index: 5; width: 330px; background: #22252c; border: 1px solid #4a505b; border-radius: 10px; box-shadow: 0 10px 24px rgba(0,0,0,.5); overflow: hidden; }
+  #float .tt { cursor: move; background: #2b2f37; padding: 6px 10px; font-size: 12px; color: #c9cfd8; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+  #float .tt button { background: none; border: 0; color: #c9cfd8; font: inherit; cursor: pointer; }
+  #float .bd { padding: 8px 10px; max-height: var(--fmax, 600px); overflow-y: auto; }
+  #strip { position: absolute; z-index: 5; display: flex; gap: 5px; padding: 6px; background: #22252c; border: 1px solid #4a505b; border-radius: 10px; box-shadow: 0 8px 20px rgba(0,0,0,.5); }
+  #more { position: absolute; z-index: 7; width: 300px; background: #22252c; border: 1px solid #4a505b; border-radius: 10px; padding: 8px 10px; box-shadow: 0 10px 24px rgba(0,0,0,.5); }
+  #hud { position: absolute; z-index: 5; background: #22252c; border: 1px solid #4a505b; border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 20px rgba(0,0,0,.5); }
+  #hud h5 { margin: 0 0 6px; font-size: 12px; color: #c9cfd8; }
+  .cover { position: absolute; background: repeating-linear-gradient(135deg, rgba(217,164,65,.20) 0 14px, rgba(217,164,65,.06) 14px 28px); border: 2px dashed var(--warn); z-index: 3; pointer-events: none; }
+  table { border-collapse: collapse; margin: 14px 0 6px; font-size: 13px; }
+  th, td { border: 1px solid #2f343c; padding: 4px 10px; text-align: right; white-space: nowrap; }
+  th { background: #1a1d22; color: #c9cfd8; font-weight: 600; }
+  td:first-child, th:first-child { text-align: left; }
+  tr.cur td { background: #1d2a3d; }
+  tr.base td { color: #9aa3b0; }
+  .warn { color: var(--warn); }
+  .note { color: var(--muted); font-size: 12.5px; padding: 0 16px 24px; max-width: 1100px; }
+  h2 { font-size: 15px; margin: 18px 16px 0; }
+</style>
+</head>
+<body>
+<div id="ctl">
+  <h1>拉點線面那一大組放哪裡</h1>
+  <div class="g"><span>放法</span>
+    <button data-opt="A">A 現在</button><button data-opt="B">B 搬進右側面板</button><button data-opt="C">C 浮動工具視窗</button><button data-opt="D">D 一條常用列＋更多</button><button data-opt="E">B＋可以拉出來（AI 建議）</button>
+  </div>
+  <div class="g"><span>螢幕</span>
+    <button data-scr="1920">桌機 1920×960</button><button data-scr="1366">筆電 1366×768</button><button data-scr="1024">平板 1024×768</button>
+  </div>
+  <div class="g"><span>畫面</span><button data-quad="0">單格</button><button data-quad="1">四格</button></div>
+</div>
+<div id="desc"></div>
+<div id="wrap"><div id="scaleBox"><div id="app">
+  <div id="bar"></div>
+  <div id="rail"></div>
+  <div id="stage"></div>
+  <div id="panel"></div>
+</div></div></div>
+
+<h2>同一個狀況（拉點線面、選了 6 個面），四種放法比一次</h2>
+<div style="padding:0 16px"><table id="cmp"></table></div>
+<div class="note">
+  「蓋在畫面上」＝ 工具列多出來的、浮動視窗、常用列這些東西壓在 3D 畫面上的面積（C 的視窗可以拖走、收成一條，表上是預設位置、展開時）。
+  「四格：最上排」＝ 切成四格時，上排兩格被蓋掉多少（樣板-分割畫面.html 同一套算法）。
+  「按到一顆不在眼前的」＝ 例：「隔一個選一個」要點幾下（A、B、C 都在眼前；B 在平板要先捲面板；D 要先按「更多」）。<br>
+  B、C、D 的數字格：照現在一樣「先填再按」；D 另外示範「按了才出現、在左下角改剛才那一步」（Blender 的做法）—— 那是另一個要選的題目，不一定跟著 D 走。
+</div>
+
+<script>
+const SCR = {
+  1920: { W: 1920, H: 960, bar: { none: 103, edit: 276 } },
+  1366: { W: 1366, H: 768, bar: { none: 103, edit: 276 } },
+  1024: { W: 1024, H: 768, bar: { none: 147, edit: 401 } },
+};
+/* 常駐的 7 組（線上版看得到的字）*/
+const BASE = [
+  ['檔案', ['新建', '讀檔', '存檔']],
+  ['新增', ['▾方塊', '加入', '匯入線稿', '匯入 3D 模型']],
+  ['編輯', ['復原', '重做', '複製', '刪除']],
+  ['展開', ['展開圖', '剖面分切', '3D 列印', '匯出 OBJ']],
+  ['模式', ['加選', '框選']],
+  ['視角', ['前', '側', '上', '等角', '正交', '鎖定']],
+  ['檢視', ['顯示點', '標尺寸', '量孔', '量圓', '顯示參考線', '參考線畫成面', '稜線', '線框', '全部入鏡', '選到的入鏡']],
+];
+/* 跟著選取（拉點線面、選了面時看得到的）*/
+const SELG = [
+  ['陣列', ['排列', '環形', '鏡射']],
+  ['吸附', ['關', '1', '5', '10', '#1', '吸到參考線']],
+  ['方向', ['世界', '法向', '重心', '最後選的', '外框中心', '#數值', '#影響半徑']],
+  ['法向', ['修法向', '翻面']],
+];
+/* 拉點線面那一大組（選了 6 個面）。'#…' ＝ 數字格、'▾…' ＝ 下拉；[名字, 跟著的格子…] */
+const EDIT = {
+  過濾: [['自動'], ['點'], ['邊'], ['面']],
+  選取: [['全選邊'], ['全選面'], ['全選點'], ['選轉角', '#30°'], ['選整片曲面'], ['選相似', '▾面積'], ['隔一個選一個', '#1', '#從 0']],
+  改造型: [['擠出'], ['往內擠出'], ['壓平'], ['合成一個面'], ['變成正圓', '#半徑'], ['內縮', '#1 cm'], ['細分', '#2'], ['平滑頂點'], ['刪除面'],
+           ['補洞'], ['橋接', '#0'], ['切一刀', '▾X', '#0 cm'], ['切成實心']],
+  收工: [['完成']],
+};
+/* D：常用列（AI 挑的【推論】）*/
+const STRIP = ['擠出', '內縮', '壓平', '細分', '刪除面', '切一刀', '合成一個面'];
+
+const S = { opt: 'A', scr: '1920', quad: false, fpos: null, fcol: false, more: false, hud: '內縮', pop: false };
+const NAMES = { A: 'A 現在', B: 'B 搬進右側面板', C: 'C 浮動工具視窗', D: 'D 一條常用列＋更多', E: 'B＋可以拉出來' };
+
+const el = (t, cls, html) => { const e = document.createElement(t); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+function ctrl(s) {
+  if (s[0] === '#') return `<input class="f" value="${s.slice(1)}">`;
+  if (s[0] === '▾') return `<select class="sel"><option>${s.slice(1)}</option></select>`;
+  return `<button class="b">${s}</button>`;
+}
+function grpHtml(name, items, ctx) { return `<div class="grp${ctx ? ' ctx' : ''}"><span class="lbl">${name}</span>${items.map(ctrl).join('')}</div>`; }
+function chipHtml(it) { return `<span class="chip">${it.map(ctrl).join('')}</span>`; }
+function editHtml(sections) {
+  return sections.map(k => `<div class="sec"><h4>${k}</h4><div class="row">${EDIT[k].map(chipHtml).join('')}</div></div>`).join('');
+}
+
+/** 方塊（等角，最長邊 ＝ 看得到的區域短邊 × 0.6）*/
+function boxSvg(w, h, top) {
+  const P = [];
+  for (const sx of [-1, 1]) for (const sy of [0, 1]) for (const sz of [-1, 1]) P.push([sx * 30, sy * 45, sz * 20]);
+  const pr = P.map(p => [(p[0] - p[2]) * 0.866, p[1] * 0.82 - (p[0] + p[2]) * 0.35]);
+  const xs = pr.map(p => p[0]), ys = pr.map(p => p[1]);
+  const vh = Math.max(1, h - top);
+  const k = Math.min(w * .6 / (Math.max(...xs) - Math.min(...xs)), vh * .6 / (Math.max(...ys) - Math.min(...ys)));
+  const cx = w / 2, cy = top + vh / 2, mx = (Math.max(...xs) + Math.min(...xs)) / 2, my = (Math.max(...ys) + Math.min(...ys)) / 2;
+  const T = pr.map(p => [cx + (p[0] - mx) * k, cy - (p[1] - my) * k]);
+  const E = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+  let g = '';
+  for (let x = 0; x < w; x += 40) g += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#23272e"/>`;
+  for (let y = 0; y < h; y += 40) g += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="#23272e"/>`;
+  return `<svg viewBox="0 0 ${w} ${h}">${g}${E.map(([a, b]) => `<line x1="${T[a][0]}" y1="${T[a][1]}" x2="${T[b][0]}" y2="${T[b][1]}" stroke="#7fb0ff" stroke-width="2.5"/>`).join('')}</svg>`;
+}
+
+function render() {
+  for (const b of document.querySelectorAll('[data-opt]')) b.classList.toggle('on', b.dataset.opt === S.opt);
+  for (const b of document.querySelectorAll('[data-scr]')) b.classList.toggle('on', b.dataset.scr === S.scr);
+  for (const b of document.querySelectorAll('[data-quad]')) b.classList.toggle('on', (b.dataset.quad === '1') === S.quad);
+  const R = layout(S.opt, S.scr, S.quad, true);
+  document.getElementById('desc').innerHTML = R.desc;
+  renderTable();
+}
+
+/**
+ * 畫一種放法；draw=false 時只量（給比較表用，量完還原成目前選的那一種）。
+ * 回傳：工具列高、蓋在畫面上的面積、四格上排被蓋多少、面板內容高。
+ */
+function layout(opt, scrKey, quad, draw, pop = S.pop) {
+  const sc = SCR[scrKey];
+  /* E ＝ B＋可以拉出來：放在面板時照 B 畫、拉出來時照 C 畫 */
+  const eff = opt === 'E' ? (pop ? 'C' : 'B') : opt;
+  const app = document.getElementById('app');
+  app.style.width = sc.W + 'px'; app.style.height = sc.H + 'px';
+  const bar = document.getElementById('bar');
+  let html = BASE.map(([n, it]) => grpHtml(n, it)).join('');
+  if (eff === 'A') html += SELG.map(([n, it]) => grpHtml(n, it, true)).join('') +
+    ['過濾', '選取', '改造型', '收工'].map(k => grpHtml('拉點線面：' + k, EDIT[k].flat(), true)).join('');
+  bar.innerHTML = html;
+  /* ⚠ 高度⛔ 照假按鈕撐出來的（桌機會算成 191，線上版量到 276）⇒ 一律用線上版量到的，放不下的藏在裡面 */
+  const base = sc.bar.none;
+  const barH = eff === 'A' ? sc.bar.edit : base;
+  bar.style.height = barH + 'px'; bar.style.overflow = 'hidden';
+  bar.classList.toggle('over', barH > base + 1);
+  const rail = document.getElementById('rail'); rail.style.top = base + 'px';
+  rail.innerHTML = ['拉點線面', '鋼筆', '刀具', '貼合', '分片', '參考線', '移動', '旋轉', '縮放'].map((t, i) => `<div class="t${i === 0 ? ' on' : ''}">${t}</div>`).join('');
+  const panel = document.getElementById('panel'); panel.style.top = base + 'px';
+  const objSecs = `<div class="sec"><h4>物件 <span class="muted">方塊 1・可編輯網格</span></h4><div class="fake"></div><div class="fake"></div></div>` +
+    `<div class="sec"><h4>編輯造型 <span class="muted">6 個面（共 8 個頂點）</span></h4><div class="fake"></div><div class="fake"></div><div class="fake"></div></div>` +
+    `<div class="sec"><h4>位置 cm／旋轉 度／縮放 倍</h4><div class="fake"></div><div class="fake"></div><div class="fake"></div></div>`;
+  if (eff === 'B') {
+    panel.innerHTML = `<div class="sec"><h4>拉點線面 <span class="muted">選了 6 個面</span>` +
+      (opt === 'E' ? `<button class="b" id="popOut" style="padding:2px 8px">拉出來 ↗</button>` : '') + `</h4></div>` + editHtml(['過濾', '選取', '改造型', '收工']) +
+      SELG.map(([n, it]) => `<div class="sec"><h4>${n}</h4><div class="row">${it.map(ctrl).join('')}</div></div>`).join('') +
+      `<div class="collapsed">▸ 物件（名稱、尺寸、位置、旋轉、縮放）—— 收著，點一下打開</div>`;
+  } else panel.innerHTML = objSecs;
+  if (draw && opt === 'E' && !pop) panel.querySelector('#popOut').onclick = () => { S.pop = true; S.fpos = null; render(); };
+  const panelContentH = panel.scrollHeight;
+  const sx = 66, sw = sc.W - 66 - 300, sy = base, sh = sc.H - base;
+  const stage = document.getElementById('stage');
+  Object.assign(stage.style, { left: sx + 'px', top: sy + 'px', width: sw + 'px', height: sh + 'px' });
+
+  /* 蓋在畫面上的長方形（stage 座標）*/
+  const covers = [];
+  if (barH > base) covers.push({ x: 0, y: 0, w: sw, h: barH - base, kind: '工具列多出來的' });
+  stage.innerHTML = '';
+  for (const o of ['float', 'strip', 'more', 'hud']) { const e = document.getElementById(o); if (e) e.remove(); }
+  if (eff === 'C') {
+    const f = el('div'); f.id = 'float';
+    const pos = S.fpos || { x: 12, y: 12 };
+    f.style.left = (sx + pos.x) + 'px'; f.style.top = (sy + pos.y) + 'px';
+    f.style.setProperty('--fmax', (sh - pos.y - 60) + 'px');
+    f.innerHTML = `<div class="tt"><span>拉點線面・選了 6 個面（拖這裡移動）</span><span><button class="fold">${S.fcol ? '展開 ▾' : '收起 ▴'}</button>` +
+      (opt === 'E' ? `<button class="back">放回面板 ↘</button>` : '') + `</span></div>` +
+      (S.fcol ? '' : `<div class="bd">${editHtml(['過濾', '選取', '改造型', '收工'])}${SELG.map(([n, it]) => `<div class="sec"><h4>${n}</h4><div class="row">${it.map(ctrl).join('')}</div></div>`).join('')}</div>`);
+    app.appendChild(f);
+    const r = { x: pos.x, y: pos.y, w: f.offsetWidth, h: f.offsetHeight };
+    covers.push(Object.assign(r, { kind: '浮動視窗' }));
+    if (draw) {
+      f.querySelector('.tt .fold').onclick = e => { e.stopPropagation(); S.fcol = !S.fcol; render(); };
+      const back = f.querySelector('.tt .back');
+      if (back) back.onclick = e => { e.stopPropagation(); S.pop = false; S.fcol = false; render(); };
+      const tt = f.querySelector('.tt');
+      tt.onpointerdown = e => {
+        if (e.target.tagName === 'BUTTON') return;
+        const k = parseFloat(app.dataset.k) || 1, start = { x: e.clientX, y: e.clientY, p: Object.assign({}, pos) };
+        const mv = ev => { S.fpos = { x: Math.max(0, start.p.x + (ev.clientX - start.x) / k), y: Math.max(0, start.p.y + (ev.clientY - start.y) / k) }; render(); };
+        const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); };
+        addEventListener('pointermove', mv); addEventListener('pointerup', up);
+      };
+    }
+  }
+  if (eff === 'D') {
+    const s = el('div'); s.id = 'strip';
+    s.innerHTML = STRIP.map(t => `<button class="b">${t}</button>`).join('') + `<button class="b" id="moreBtn">更多 ▾</button>`;
+    app.appendChild(s);
+    const sWid = s.offsetWidth, sHt = s.offsetHeight;
+    const px = Math.round((sw - sWid) / 2), py = sh - sHt - 14;
+    s.style.left = (sx + px) + 'px'; s.style.top = (sy + py) + 'px';
+    covers.push({ x: px, y: py, w: sWid, h: sHt, kind: '常用列' });
+    const hud = el('div'); hud.id = 'hud';
+    hud.innerHTML = `<h5>剛才：${S.hud}（改了就重做這一步）</h5><span class="chip"><span class="lbl">內縮寬度</span><input class="f" value="1"> cm</span>`;
+    app.appendChild(hud);
+    hud.style.left = (sx + 12) + 'px'; hud.style.top = (sy + sh - hud.offsetHeight - 14) + 'px';
+    covers.push({ x: 12, y: sh - hud.offsetHeight - 14, w: hud.offsetWidth, h: hud.offsetHeight, kind: '剛才那一步' });
+    if (draw && S.more) {
+      const m = el('div'); m.id = 'more';
+      m.innerHTML = editHtml(['過濾', '選取', '改造型', '收工']) + SELG.map(([n, it]) => `<div class="sec"><h4>${n}</h4><div class="row">${it.map(ctrl).join('')}</div></div>`).join('');
+      app.appendChild(m);
+      m.style.left = (sx + px + sWid - 300) + 'px'; m.style.top = Math.max(sy + 8, sy + py - m.offsetHeight - 8) + 'px';
+    }
+    if (draw) s.querySelector('#moreBtn').onclick = () => { S.more = !S.more; render(); };
+  }
+
+  /* 畫面：單格或四格 */
+  const panes = quad ? [[0, 0, .5, .5], [.5, 0, .5, .5], [0, .5, .5, .5], [.5, .5, .5, .5]] : [[0, 0, 1, 1]];
+  let topRowCover = 0;
+  for (const [fx, fy, fw, fh] of panes) {
+    const x = Math.round(fx * sw) + (fx ? 1 : 0), y = Math.round(fy * sh) + (fy ? 1 : 0), w = Math.round(fw * sw) - (quad ? 1 : 0), h = Math.round(fh * sh) - (quad ? 1 : 0);
+    const barCover = covers.filter(c => c.kind === '工具列多出來的').reduce((m, c) => Math.max(m, Math.min(h, c.h - y)), 0);
+    if (fy === 0 && quad) topRowCover = Math.max(topRowCover, barCover / h);
+    if (draw) {
+      const d = el('div'); Object.assign(d.style, { position: 'absolute', left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px', outline: '1px solid #2c3038', overflow: 'hidden' });
+      d.innerHTML = boxSvg(w, h, Math.max(0, barCover));
+      stage.appendChild(d);
+    }
+  }
+  if (draw) for (const c of covers) { const d = el('div', 'cover'); Object.assign(d.style, { left: c.x + 'px', top: c.y + 'px', width: c.w + 'px', height: c.h + 'px' }); stage.appendChild(d); }
+  const coverArea = covers.reduce((a, c) => a + Math.max(0, Math.min(c.w, sw - c.x)) * Math.max(0, Math.min(c.h, sh - c.y)), 0);
+  const coverPct = Math.round(coverArea / (sw * sh) * 100);
+  const panelOver = panelContentH > (sc.H - base);
+
+  /* 「隔一個選一個」要點幾下 */
+  const clicks = { A: '1', B: panelOver ? '1（要先捲面板）' : '1', C: '1', D: '2（先按「更多」）' }[eff];
+
+  const desc = `<b>${NAMES[opt]}${opt === 'E' ? (pop ? '：拉出來了' : '：放在面板') : ''}・${sc.W}×${sc.H}${quad ? '・四格' : ''}</b>　` +
+    `上方工具列 <b>${barH}</b>　3D 畫面 ${sw} × ${sh}　蓋在畫面上 <b>${coverPct}%</b>` +
+    (eff === 'B' ? `　面板內容高 ${panelContentH}（面板 ${sc.H - base}）${panelOver ? ' ⇒ <span class="warn">要捲</span>' : ''}` : '') +
+    (eff === 'C' ? '　視窗的標題可以拖、右上角可以收成一條' : '') +
+    (opt === 'E' ? (pop ? '　按「放回面板」回到右側面板' : '　按面板那一段標題旁的「拉出來」變成浮動視窗') : '') +
+    (eff === 'D' ? '　按「更多」打開其他的' : '');
+  return { barH, coverPct, topRowCover, panelContentH, panelOver, clicks, desc };
+}
+
+function fit() {
+  const sc = SCR[S.scr];
+  const app = document.getElementById('app');
+  const k = Math.min(1, document.getElementById('wrap').clientWidth / sc.W);
+  app.dataset.k = k;
+  app.style.transform = `scale(${k})`;
+  document.getElementById('scaleBox').style.height = (sc.H * k + 4) + 'px';
+}
+
+function renderTable() {
+  const keep = { opt: S.opt, quad: S.quad, more: S.more };
+  const rows = [];
+  for (const opt of ['A', 'B', 'C', 'D', 'E']) {
+    const cells = [];
+    for (const scr of ['1920', '1366', '1024']) {
+      const one = layout(opt, scr, false, false, false), q = layout(opt, scr, true, false, false);
+      cells.push({ one, q });
+    }
+    const name = opt === 'A' ? 'A 現在（基準）' : opt === 'E' ? 'B＋可以拉出來（放在面板時；拉出來時同 C）' : NAMES[opt];
+    const pc = c => `<td class="${c.one.coverPct >= 20 ? 'warn' : ''}">${c.one.barH} ／ ${c.one.coverPct}%</td>`;
+    const qc = c => `<td class="${c.q.topRowCover > .3 ? 'warn' : ''}">${Math.round(c.q.topRowCover * 100)}%</td>`;
+    rows.push(`<tr class="${opt === keep.opt ? 'cur' : ''}${opt === 'A' ? ' base' : ''}"><td>${name}</td>${cells.map(pc).join('')}${cells.map(qc).join('')}<td>${cells[2].one.clicks}</td></tr>`);
+  }
+  document.getElementById('cmp').innerHTML =
+    `<tr><th rowspan="2">放法</th><th colspan="3">上方工具列高 ／ 蓋在畫面上</th><th colspan="3">四格：最上排被工具列蓋掉</th><th rowspan="2">按到「隔一個選一個」<br>（平板）</th></tr>` +
+    `<tr><th>1920</th><th>1366</th><th>1024</th><th>1920</th><th>1366</th><th>1024</th></tr>` + rows.join('');
+  S.more = keep.more;
+  fitAndDraw();
+}
+function fitAndDraw() { fit(); layout(S.opt, S.scr, S.quad, true); }
+
+for (const b of document.querySelectorAll('[data-opt]')) b.onclick = () => { S.opt = b.dataset.opt; S.more = false; render(); };
+for (const b of document.querySelectorAll('[data-scr]')) b.onclick = () => { S.scr = b.dataset.scr; S.fpos = null; render(); };
+for (const b of document.querySelectorAll('[data-quad]')) b.onclick = () => { S.quad = b.dataset.quad === '1'; render(); };
+addEventListener('resize', render);
+fit();
+render();
+</script>
+</body>
+</html>

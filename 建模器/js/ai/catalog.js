@@ -13,7 +13,7 @@
  * | `AI.功能地圖()` | 全部：每一筆 `{代號, 在哪, 種類, 字, 說明, 選項, 看得到, 不能按}`；`{只要看得到: true}` ⇒ 只列現在畫面上有的 |
  * | `AI.功能(查詢)` | 照字、說明、代號找（字一樣 → 字開頭一樣 → 字或說明裡有）；同一個字在好幾個地方 ⇒ 全部列出來、各自寫在哪 |
  *
- * 分組照 kang 眼睛看到的那一排（工具列的小標題、左邊工具、物件面板的小標題、視窗的標題）；
+ * 分組照 kang 眼睛看到的那一排（工具列的小標題、右側面板「工具」區的小標題〔介面第二輪 1a：寫「工具：…」〕、左邊工具、物件面板的小標題、視窗的標題）；
  * 「編輯」那一大組（`#gEdit`，拉點線面、鋼筆、刀具、曲線刀具、旋轉成形都在裡面）再照代號的開頭細分（`SUBGROUP`）。
  * ⚠ 這一支只讀畫面、⛔ 改模型、⛔ 按東西。
  */
@@ -59,9 +59,14 @@ export function whereOf(el) {
   if (el.closest('#rail') || (el.classList && el.classList.contains('tool'))) return '左邊工具';
   const grp = el.closest('.grp');
   if (grp) {
-    if (grp.id === 'gEdit') return '工具列：' + subgroupOf(el.id);
+    /**
+     * 介面第二輪 1a（kang 2026-10-27）：跟著選取／工具的 9 組在 #toolBox 裡 ——
+     * 平常在右側面板最上面的「工具」區、面板收起來時回到工具列 ⇒ 一律寫「工具：…」（照組，⛔ 跟著現在擺哪裡變）
+     */
+    const head = el.closest('#toolBox') ? '工具：' : '工具列：';
+    if (grp.id === 'gEdit') return head + subgroupOf(el.id);
     const l = grp.querySelector('.lbl');
-    return '工具列：' + (l ? clean(l.textContent) : grp.id || '其他');
+    return head + (l ? clean(l.textContent) : grp.id || '其他');
   }
   const box = el.parentElement && el.parentElement.closest('[id]');   // 自己的 id ⛔ 算（要的是外面那一塊）
   return '右邊面板：' + (box ? box.id : '其他');

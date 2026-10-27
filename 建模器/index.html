@@ -59,10 +59,24 @@ html, body {
    ⭐ 這個專案已經踩過一次：底下 `.uwWin[hidden] { display: none; }`
      就是為了同一件事存在的。 */
 .grp[hidden] { display: none; }
-.grp > .lbl {
+.grp > .lbl, .keep > .lbl {
   flex: none; white-space: nowrap;
   font-size: 11px; color: #8b93a1; margin-right: 2px;
 }
+/* 🔴 介面第二輪 1a（kang 2026-10-27）：跟著選取／工具的 9 組包在 #toolBox 裡（`index.html` #bar 後段那則註解）。
+   在工具列裡（面板收起來時）⇒ `display: contents`：這一層盒子⛔ 存在，9 組照舊跟前 7 組一起排、一起換行；
+   在右側面板的「工具」區（#pTools，平常）⇒ 一組一行、組名自己佔一行，面板 300 寬放得下。
+   ⚠ #pTools[hidden] 那一行跟 .grp[hidden] 同一個坑（作者樣式蓋過瀏覽器預設的 display:none）。 */
+#toolBox { display: contents; }
+#pTools[hidden] { display: none; }
+#pTools #toolBox { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; }
+#pTools .grp { width: 100%; }
+#pTools .grp > .lbl:first-child { flex-basis: 100%; color: #c9cfd8; }
+/* 🔴 1a 補（kang 2026-10-27「同意你的建議」）：按鈕（或名字）＋數字格＋單位包成一組 span.keep（`ui/keepPairs.js`）
+   ⇒ 要換行就整組一起換，⛔ 格子掉到下一行、跟按鈕分開（「鎖角度」的「度」那件也是這個）。
+   裡面全部藏起來 ⇒ 這一組也收（⛔ 留一個空的佔著間距）。 */
+.keep { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.keep:not(:has(> :not([hidden]))) { display: none; }
 button, select, input {
   font-family: inherit; font-size: 13px;
 }
@@ -614,6 +628,14 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="frameSel" title="選到的入鏡：只把選到的東西拉近、擺在畫面正中間（視角方向不變）。沒選東西時跟「全部入鏡」一樣。快速鍵 Shift＋F">選到的入鏡</button>
     </div>
 
+    <!--
+      🔴 **介面第二輪 1a（kang 2026-10-27「既然都要調整..就都一次做好處理..這樣就很清楚位置的規則」）**：
+      下面這 9 組（陣列 → 參考線，跟著選取／工具才出現的）包在 #toolBox 裡，**開場由 main.js `placeTools()` 搬到右側面板最上面的「工具」區**；
+      面板收起來時搬回這裡（工具列最後面）。上方工具列平常只剩上面一直都在的 7 組 ⇒ 高度固定、⛔ 再蓋到畫面。
+      ⚠ 這一段寫在 #bar 裡只是「原本的家」—— 畫面上平常看到它們在面板裡。新增一組跟著選取／工具出現的 ⇒ 放進 #toolBox。
+      → `介面編排-設計方向.md`「第二輪：畫面盡量大＋分割畫面」；樣板 `樣板-功能放哪裡.html`
+    -->
+    <div id="toolBox">
     <div class="grp" id="gArray">
       <span class="lbl">陣列</span>
       <button id="aLinear" hidden title="線性陣列：沿一個方向等距排開。第二方向填大於 1 就變成網格">排列</button>
@@ -1357,6 +1379,7 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
       <button id="guideDel" disabled title="刪掉下拉裡選中的那一條。⚠ 要先在下拉裡選一條">刪這條</button>
       <button id="guideClear" title="把全部三個方向的參考線都刪掉。⚠ 這是刪除不是隱藏 —— 只想暫時看不到請用「檢視」那組的「顯示參考線」">全部清掉</button>
     </div>
+    </div><!-- /#toolBox -->
   </div>
 
   <div id="main">

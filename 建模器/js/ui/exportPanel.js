@@ -371,7 +371,7 @@ export class ExportPanel {
       sw.className = 'mini';
       sw.textContent = other === 'fill' ? '改成補洞' : '改成加厚成殼';
       sw.title = other === 'fill'
-        ? '這次匯出先把洞補起來再印（模型本身不改；要永久補起來按工具列「補洞」）'
+        ? '這次匯出先把洞補起來再印（模型本身不改；要永久補起來按右邊「工具」那一區的「補洞」）'
         : '這次匯出照板厚加厚成一層殼（像碗、燈罩那種故意開口的）';
       sw.onclick = () => { this.fix.set(it.obj.id, other); this.run(); };
       openNote.appendChild(document.createTextNode(' '));
@@ -458,7 +458,7 @@ export class ExportPanel {
     if (h.choice === 'fill') {
       body = h.fillErr
         ? `補洞沒有成功：${esc(h.fillErr)}；這次照原樣、沒有加厚`
-        : `這次匯出先把 ${h.filled} 個洞補起來再印${tag('fill')}。模型本身沒有改，要永久補起來按工具列「補洞」`;
+        : `這次匯出先把 ${h.filled} 個洞補起來再印${tag('fill')}。模型本身沒有改，要永久補起來按右邊「工具」那一區的「補洞」`;
     } else {
       body = `這次匯出照板厚 ${f(it.obj.thickness)} cm 加厚成一層殼${tag('shell')}，像碗、燈罩那種故意開口的；`
         + '板厚在右邊物件面板改。如果它是缺了一面的實心零件，請改成補洞';

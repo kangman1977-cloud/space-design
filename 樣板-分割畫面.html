@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分割畫面比較</title>
+<!--
+  樣板：kang 2026-10-27「先優化操作的介面」—— ① 模型畫面盡可能大 ② 畫面可以分割成前、上、側與一般視窗。
+  kang 定的三件：版面可以自己選組合；平行的格子不另外定規則、要不轉就按「鎖定」；桌機為主、平板為輔。
+  這一頁只比「分割」：同一個假的建模器（左側直條 66、右側面板 300、上方工具列照真的量的高度），
+  切換螢幕、狀況、收合、版面，量每一格多大、被工具列蓋掉多少。
+  工具列高度是 2026-10-27 AI 在線上版量的（瀏覽器模擬那個寬度；拉點線面＝方塊轉成網格後全選面）：
+    1920×960：沒選 103、選一個 103、拉點線面 276
+    1366×768：沒選 103、選一個 147、拉點線面 276
+    1024×768：沒選 147、選一個 192、拉點線面 401
+  工具列浮在畫面上（2026-10-14 定的 B）⇒ 畫面上緣固定在「沒選東西」的高度，多出來的蓋在畫面上面。
+  收工具列：整條收掉（2026-08-31 搬到直條底下之後，收著時上面⛔ 留細條）；收面板：右邊 300 整塊收掉。
+  方塊照預設 60 × 45 × 40 cm（js/build/prim.js PRIM_DEFAULTS）。
+-->
+<style>
+  :root { --bg: #1b1e23; --bar: #24272e; --line: #3a3f48; --ink: #e8eaed; --muted: #8b93a1; --accent: #2f6fd0; --warn: #d9a441; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #111316; color: var(--ink);
+    font: 14px/1.5 "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  #ctl { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; background: #0d0f12; border-bottom: 1px solid #2a2e35; position: sticky; top: 0; z-index: 5; }
+  #ctl h1 { font-size: 16px; margin: 0 8px 0 0; }
+  .g { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .g > span { color: var(--muted); }
+  #ctl button { padding: 4px 10px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); cursor: pointer; font: inherit; }
+  #ctl button.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  #desc { padding: 8px 16px; color: #c9cfd8; }
+  #desc b { color: #fff; }
+  #wrap { padding: 0 16px; }
+  #scaleBox { position: relative; }
+  /* ── 假的建模器（實際像素，外面再縮小）── */
+  #app { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  #bar { position: absolute; left: 0; right: 0; top: 0; background: var(--bar); border-bottom: 1px solid var(--line); z-index: 3;
+    display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 22px; }
+  #bar.over { box-shadow: 0 6px 14px rgba(0,0,0,.45); }
+  #bar .extra { position: absolute; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(135deg, rgba(217,164,65,.18) 0 14px, rgba(217,164,65,.06) 14px 28px);
+    border-top: 2px dashed var(--warn); display: flex; align-items: center; justify-content: center; color: var(--warn); font-size: 22px; }
+  #rail { position: absolute; left: 0; bottom: 0; width: 66px; background: #20232a; border-right: 1px solid var(--line); z-index: 2; }
+  #panel { position: absolute; right: 0; bottom: 0; width: 300px; background: #20232a; border-left: 1px solid var(--line); z-index: 2;
+    color: var(--muted); font-size: 20px; display: flex; align-items: flex-start; justify-content: center; padding-top: 30px; }
+  #stage { position: absolute; }
+  .pane { position: absolute; background: var(--bg); outline: 1px solid #2c3038; overflow: hidden; cursor: pointer; }
+  .pane.act { outline: 3px solid #4d8ae8; outline-offset: -3px; z-index: 1; }
+  .pane svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .pane .hd { position: absolute; left: 10px; top: 8px; display: flex; gap: 8px; align-items: center; z-index: 2; font-size: 20px; }
+  .pane .hd select { font: inherit; font-size: 18px; background: #2f333c; color: var(--ink); border: 1px solid #454b56; border-radius: 6px; padding: 2px 6px; }
+  .pane .hd .lk { font-size: 18px; padding: 2px 8px; border-radius: 6px; border: 1px solid #454b56; background: #2f333c; color: var(--ink); cursor: pointer; }
+  .pane .hd .lk.on { background: var(--accent); border-color: #4d8ae8; color: #fff; }
+  .pane .sz { position: absolute; right: 10px; bottom: 8px; font-size: 20px; color: #c9cfd8; background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 6px; z-index: 2; }
+  .pane .sz.bad { color: var(--warn); }
+  /* ── 比較表 ── */
+  table { border-collapse: collapse; margin: 14px 0 6px; font-size: 13px; }
+  th, td { border: 1px solid #2f343c; padding: 4px 10px; text-align: right; white-space: nowrap; }
+  th { background: #1a1d22; color: #c9cfd8; font-weight: 600; }
+  td:first-child, th:first-child { text-align: left; }
+  tr.cur td { background: #1d2a3d; }
+  tr.base td { color: #9aa3b0; }
+  .warn { color: var(--warn); }
+  .note { color: var(--muted); font-size: 12.5px; padding: 0 16px 24px; }
+  h2 { font-size: 15px; margin: 18px 16px 0; }
+</style>
+</head>
+<body>
+<div id="ctl">
+  <h1>分割畫面：版面比較</h1>
+  <div class="g"><span>螢幕</span>
+    <button data-scr="1920">桌機 1920×960</button><button data-scr="1366">筆電 1366×768</button><button data-scr="1024">平板 1024×768</button>
+  </div>
+  <div class="g"><span>狀況</span>
+    <button data-st="none">沒選東西</button><button data-st="sel">選一個物件</button><button data-st="edit">拉點線面</button>
+  </div>
+  <div class="g"><span>收起來</span>
+    <button data-fold="bar">工具列</button><button data-fold="panel">面板</button>
+  </div>
+  <div class="g"><span>版面</span>
+    <button data-lay="1">單格（現在）</button><button data-lay="2h">左右兩格</button><button data-lay="2v">上下兩格</button>
+    <button data-lay="3l">一大兩小</button><button data-lay="4l">一大三小（左大）</button><button data-lay="4t">一大三小（上大）</button><button data-lay="4">四格</button>
+  </div>
+</div>
+<div id="desc"></div>
+<div id="wrap"><div id="scaleBox"><div id="app">
+  <div id="bar"><span id="barTxt"></span><div class="extra" id="barExtra"></div></div>
+  <div id="rail"></div>
+  <div id="stage"></div>
+  <div id="panel">右側面板 300</div>
+</div></div></div>
+
+<h2>同一個螢幕、同一個狀況，每種版面比一次</h2>
+<div id="wrap2" style="padding:0 16px"><table id="cmp"></table></div>
+<div class="note">
+  「最小那一格」＝ 扣掉被工具列蓋住的部分之後，最小那一格看得到的寬 × 高。「被蓋住」＝ 工具列多出來的那幾排蓋在幾格上面。
+  「模型看起來多大」＝ 預設方塊在最小那一格裡「全部入鏡」時，最長邊大約幾個像素（以現在的單格為 100%）。<br>
+  點一格 ＝ 換成操作那一格（藍框）；雙擊一格 ＝ 放大這一格，再雙擊回來（業界 Rhino 雙擊名稱、3ds Max Alt+W、Blender 回單格時留滑鼠那一格）。
+  每一格的「鎖」是建議做法：鎖定只鎖那一格（現在的「鎖定」只有一個、整個畫面一起）。
+</div>
+
+<script>
+const SCR = {
+  1920: { W: 1920, H: 960, bar: { none: 103, sel: 103, edit: 276 } },
+  1366: { W: 1366, H: 768, bar: { none: 103, sel: 147, edit: 276 } },
+  1024: { W: 1024, H: 768, bar: { none: 147, sel: 192, edit: 401 } },
+};
+const ST_NAME = { none: '沒選東西', sel: '選一個物件', edit: '拉點線面（全選面）' };
+/** 版面：每一格是 stage 裡的比例 [x, y, w, h] ＋ 預設看哪一面（業界 Rhino：左上 上、右上 透視、左下 前、右下 側） */
+const LAY = {
+  '1':  { name: '單格（現在）', panes: [[0, 0, 1, 1, 'persp']] },
+  '2h': { name: '左右兩格', panes: [[0, 0, .5, 1, 'persp'], [.5, 0, .5, 1, 'front']] },
+  '2v': { name: '上下兩格', panes: [[0, 0, 1, .5, 'persp'], [0, .5, 1, .5, 'top']] },
+  '3l': { name: '一大兩小', panes: [[0, 0, .6, 1, 'persp'], [.6, 0, .4, .5, 'top'], [.6, .5, .4, .5, 'front']] },
+  '4l': { name: '一大三小（左大）', panes: [[0, 0, .65, 1, 'persp'], [.65, 0, .35, 1/3, 'top'], [.65, 1/3, .35, 1/3, 'front'], [.65, 2/3, .35, 1/3, 'side']] },
+  '4t': { name: '一大三小（上大）', panes: [[0, 0, 1, .62, 'persp'], [0, .62, 1/3, .38, 'top'], [1/3, .62, 1/3, .38, 'front'], [2/3, .62, 1/3, .38, 'side']] },
+  '4':  { name: '四格', panes: [[0, 0, .5, .5, 'top'], [.5, 0, .5, .5, 'persp'], [0, .5, .5, .5, 'front'], [.5, .5, .5, .5, 'side']] },
+};
+const VIEW_NAME = { persp: '透視', iso: '等角', front: '前', top: '上', side: '側' };
+const GAP = 2;
+
+const S = { scr: '1920', st: 'none', fold: { bar: false, panel: false }, lay: '4', act: 0, max: -1, views: {}, locks: {} };
+
+/** 方塊 60 × 45 × 40，8 個點投影到 2D（cm）。透視先用等角加一點點近大遠小，只為了看起來像 */
+const BOX = { x: 60, y: 45, z: 40 };
+function project(view) {
+  const P = [];
+  for (const sx of [-1, 1]) for (const sy of [0, 1]) for (const sz of [-1, 1]) P.push([sx * BOX.x / 2, sy * BOX.y, sz * BOX.z / 2]);
+  const map = {
+    front: p => [p[0], p[1]],
+    top:   p => [p[0], -p[2]],
+    side:  p => [-p[2], p[1]],
+    iso:   p => [(p[0] - p[2]) * 0.866, p[1] * 0.82 - (p[0] + p[2]) * 0.35],
+    persp: p => { const a = 0.75, c = Math.cos(a), s = Math.sin(a); const x = p[0] * c - p[2] * s, z = p[0] * s + p[2] * c;
+                  const yy = p[1] * 0.92 - z * 0.35; const k = 340 / (340 + z * 0.9 + 0); return [x * k, yy * k]; },
+  };
+  return P.map(map[view]);
+}
+const EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+
+function boxSvg(view, w, h, visTop) {
+  const pts = project(view);
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const vh = h - visTop;
+  const k = Math.min(w * .7 / (maxx - minx), vh * .7 / (maxy - miny));
+  const cx = w / 2, cy = visTop + vh / 2;
+  const tx = p => [cx + (p[0] - (minx + maxx) / 2) * k, cy - (p[1] - (miny + maxy) / 2) * k];
+  const T = pts.map(tx);
+  let grid = '';
+  const step = 10 * k;
+  if (view !== 'persp' && view !== 'iso' && step > 4) {
+    for (let x = cx % step; x < w; x += step) grid += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#262a31" stroke-width="1"/>`;
+    for (let y = cy % step; y < h; y += step) grid += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="#262a31" stroke-width="1"/>`;
+  }
+  const lines = EDGES.map(([a, b]) => `<line x1="${T[a][0]}" y1="${T[a][1]}" x2="${T[b][0]}" y2="${T[b][1]}" stroke="#7fb0ff" stroke-width="2.5"/>`).join('');
+  const xs2 = T.map(p => p[0]), ys2 = T.map(p => p[1]);
+  const fill = `<rect x="${Math.min(...xs2)}" y="${Math.min(...ys2)}" width="${Math.max(...xs2) - Math.min(...xs2)}" height="${Math.max(...ys2) - Math.min(...ys2)}" fill="#3d6aa8" opacity="${view === 'persp' || view === 'iso' ? 0 : .35}"/>`;
+  return { svg: `<svg viewBox="0 0 ${w} ${h}">${grid}${fill}${lines}</svg>`, px: Math.round(Math.max(Math.max(...xs2) - Math.min(...xs2), Math.max(...ys2) - Math.min(...ys2))) };
+}
+
+/** 算一個狀況下：stage 的位置、工具列蓋住的範圍、每一格的像素大小 */
+function geom(scrKey, st, fold, layKey, max) {
+  const sc = SCR[scrKey];
+  const base = fold.bar ? 0 : sc.bar.none;
+  const barH = fold.bar ? 0 : sc.bar[st];
+  const sx = 66, sw = sc.W - 66 - (fold.panel ? 0 : 300), sy = base, sh = sc.H - base;
+  const overBottom = barH;            // 工具列底緣（頁面座標）
+  let panes = LAY[layKey].panes.map((p, i) => ({ i, fx: p[0], fy: p[1], fw: p[2], fh: p[3], view: p[4] }));
+  if (max >= 0 && panes[max]) panes = [Object.assign({}, panes[max], { fx: 0, fy: 0, fw: 1, fh: 1 })];
+  for (const p of panes) {
+    const x0 = Math.round(sx + p.fx * sw), x1 = Math.round(sx + (p.fx + p.fw) * sw);
+    const y0 = Math.round(sy + p.fy * sh), y1 = Math.round(sy + (p.fy + p.fh) * sh);
+    p.x = x0 - sx + (p.fx > 0 ? GAP / 2 : 0); p.y = y0 - sy + (p.fy > 0 ? GAP / 2 : 0);
+    p.w = (x1 - x0) - (p.fx > 0 ? GAP / 2 : 0) - (p.fx + p.fw < 1 ? GAP / 2 : 0);
+    p.h = (y1 - y0) - (p.fy > 0 ? GAP / 2 : 0) - (p.fy + p.fh < 1 ? GAP / 2 : 0);
+    const top = sy + p.y;
+    p.cover = Math.max(0, Math.min(p.h, overBottom - top));
+    p.visH = p.h - p.cover;
+  }
+  return { sc, base, barH, sx, sy, sw, sh, panes };
+}
+
+/** 比大小一律用「前」視圖量（各格看的面不同，量出來的像素才比得起來） */
+function modelPx(p) { return boxSvg('front', p.w, p.h, p.cover).px; }
+/** ⚠ 物件的鍵 '1'、'4' 是數字，JS 會把它們排到最前面 ⇒ 表格照這個順序 */
+const LAY_ORDER = ['1', '2h', '2v', '3l', '4l', '4t', '4'];
+
+function render() {
+  for (const b of document.querySelectorAll('[data-scr]')) b.classList.toggle('on', b.dataset.scr === S.scr);
+  for (const b of document.querySelectorAll('[data-st]')) b.classList.toggle('on', b.dataset.st === S.st);
+  for (const b of document.querySelectorAll('[data-fold]')) b.classList.toggle('on', S.fold[b.dataset.fold]);
+  for (const b of document.querySelectorAll('[data-lay]')) b.classList.toggle('on', b.dataset.lay === S.lay);
+
+  const G = geom(S.scr, S.st, S.fold, S.lay, S.max);
+  const app = document.getElementById('app');
+  app.style.width = G.sc.W + 'px'; app.style.height = G.sc.H + 'px';
+  const avail = document.getElementById('wrap').clientWidth;
+  const k = Math.min(1, avail / G.sc.W);
+  app.style.transform = `scale(${k})`;
+  document.getElementById('scaleBox').style.height = (G.sc.H * k + 4) + 'px';
+
+  const bar = document.getElementById('bar');
+  bar.style.display = S.fold.bar ? 'none' : 'flex';
+  bar.style.height = G.barH + 'px';
+  bar.classList.toggle('over', G.barH > G.base);
+  document.getElementById('barTxt').textContent = `上方工具列 ${G.base}`;
+  const ex = document.getElementById('barExtra');
+  ex.style.height = Math.max(0, G.barH - G.base) + 'px';
+  ex.style.display = G.barH > G.base ? 'flex' : 'none';
+  ex.textContent = `多出來的 ${G.barH - G.base}，蓋在畫面上`;
+  const rail = document.getElementById('rail'); rail.style.top = G.base + 'px';
+  const panel = document.getElementById('panel'); panel.style.top = G.base + 'px'; panel.style.display = S.fold.panel ? 'none' : 'flex';
+  const stage = document.getElementById('stage');
+  Object.assign(stage.style, { left: G.sx + 'px', top: G.sy + 'px', width: G.sw + 'px', height: G.sh + 'px' });
+
+  stage.innerHTML = '';
+  for (const p of G.panes) {
+    const key = S.lay + ':' + p.i;
+    const view = S.views[key] || p.view;
+    const d = document.createElement('div');
+    d.className = 'pane' + (p.i === S.act ? ' act' : '');
+    Object.assign(d.style, { left: p.x + 'px', top: p.y + 'px', width: p.w + 'px', height: p.h + 'px' });
+    const bx = boxSvg(view, p.w, p.h, p.cover);
+    const opts = Object.entries(VIEW_NAME).map(([v, n]) => `<option value="${v}"${v === view ? ' selected' : ''}>${n}</option>`).join('');
+    const multi = LAY[S.lay].panes.length > 1;
+    d.innerHTML = bx.svg +
+      `<div class="hd" style="top:${p.cover + 8}px"><select>${opts}</select>${multi ? `<button class="lk${S.locks[key] ? ' on' : ''}">鎖定</button>` : ''}${S.max >= 0 ? '<span style="color:#9fc1ff">（放大中，雙擊回來）</span>' : ''}</div>` +
+      `<div class="sz${p.cover ? ' bad' : ''}">${p.w} × ${p.visH}${p.cover ? `（上面 ${p.cover} 被蓋住）` : ''}</div>`;
+    d.querySelector('select').onchange = e => { S.views[key] = e.target.value; render(); };
+    d.querySelector('select').onclick = e => e.stopPropagation();
+    const lk = d.querySelector('.lk');
+    if (lk) lk.onclick = e => { e.stopPropagation(); S.locks[key] = !S.locks[key]; render(); };
+    d.onclick = () => { S.act = p.i; render(); };
+    d.ondblclick = () => { if (!multi) return; S.max = S.max >= 0 ? -1 : p.i; S.act = p.i; render(); };
+    stage.appendChild(d);
+  }
+
+  const totalVis = G.panes.reduce((a, p) => a + p.w * p.visH, 0);
+  const pct = Math.round(totalVis / (G.sc.W * G.sc.H) * 100);
+  document.getElementById('desc').innerHTML =
+    `<b>${G.sc.W}×${G.sc.H}・${ST_NAME[S.st]}・${LAY[S.lay].name}${S.max >= 0 ? '（放大其中一格）' : ''}</b>　` +
+    `模型區看得到的部分合計佔螢幕 <b>${pct}%</b>` +
+    (S.fold.bar ? '　⚠ 工具列收起來時，上面那些按鈕要先展開才按得到' : '') +
+    (S.fold.panel ? '　⚠ 面板收起來時，物件的尺寸、位置那些格子要先展開才看得到' : '');
+
+  renderTable();
+}
+
+function renderTable() {
+  const baseG = geom(S.scr, S.st, S.fold, '1', -1);
+  const basePx = modelPx(baseG.panes[0]);
+  const rows = LAY_ORDER.map(key => {
+    const G = geom(S.scr, S.st, S.fold, key, -1);
+    const min = G.panes.reduce((m, p) => (p.w * p.visH < m.w * m.visH ? p : m), G.panes[0]);
+    const covered = G.panes.filter(p => p.cover > 0).length;
+    const half = G.panes.filter(p => p.cover > p.h / 2).length;
+    const px = Math.min(...G.panes.map(modelPx));
+    const vis = G.panes.reduce((a, p) => a + p.w * p.visH, 0);
+    return `<tr class="${key === S.lay ? 'cur' : ''}${key === '1' ? ' base' : ''}"><td>${LAY[key].name}${key === '1' ? '（基準）' : ''}</td>` +
+      `<td>${G.panes.length}</td><td>${min.w} × ${min.visH}</td>` +
+      `<td class="${covered ? 'warn' : ''}">${covered ? covered + ' 格' + (half ? `（${half} 格蓋掉一半以上）` : '') : '—'}</td>` +
+      `<td>${px}（${Math.round(px / basePx * 100)}%）</td><td>${Math.round(vis / (G.sc.W * G.sc.H) * 100)}%</td></tr>`;
+  }).join('');
+  document.getElementById('cmp').innerHTML =
+    `<tr><th>版面</th><th>幾格</th><th>最小那一格（寬 × 看得到的高）</th><th>被工具列蓋住</th><th>模型看起來多大（最小那格）</th><th>模型區佔螢幕</th></tr>` + rows;
+}
+
+for (const b of document.querySelectorAll('[data-scr]')) b.onclick = () => { S.scr = b.dataset.scr; render(); };
+for (const b of document.querySelectorAll('[data-st]')) b.onclick = () => { S.st = b.dataset.st; render(); };
+for (const b of document.querySelectorAll('[data-fold]')) b.onclick = () => { S.fold[b.dataset.fold] = !S.fold[b.dataset.fold]; render(); };
+for (const b of document.querySelectorAll('[data-lay]')) b.onclick = () => { S.lay = b.dataset.lay; S.act = 0; S.max = -1; render(); };
+window.addEventListener('resize', render);
+render();
+</script>
+</body>
+</html>

@@ -22389,11 +22389,12 @@ section('功能地圖 a：從畫面自動抽（2026-10-26）');
   const tip = E('div', { cls: ['aiTip'] }, [E('button', { text: '知道了' })]);
   const root = E('body', {}, [
     E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '檔案' }), E('button', { id: 'newDoc', text: '新建' }), E('button', { id: 'save', text: '存檔', title: '存成檔案' })]),
+    E('div', { id: 'toolBox' }, [   // 介面第二輪 1a：跟著選取／工具的那幾組在 #toolBox 裡（平常搬到右側面板「工具」區）
     E('div', { cls: ['grp'], id: 'gEdit' }, [E('span', { cls: ['lbl'], text: '編輯' }), E('button', { id: 'penCorner', text: '尖角', hidden: true }), E('span', { cls: ['lbl'], text: 'X', id: 'penXLbl' }), E('input', { id: 'penX', type: 'number', hidden: true }),
       E('button', { id: 'curveCircle', text: '圓', hidden: true }), E('button', { id: 'efVert', text: '點' }), E('button', { id: 'selRing', text: '選一圈', disabled: true }), E('button', { id: 'extrude', text: '擠出' }),
       E('button', { id: 'toCircle', text: '變成正圓', hidden: true }), E('input', { id: 'circleR', type: 'number', title: '圓的半徑（cm）：選到東西時會自動填入', hidden: true }),
       E('span', { cls: ['lbl'], text: '導角' }), E('input', { id: 'bevelW', type: 'number', title: '導角寬度（cm）' }), E('input', { id: 'bevelSeg', type: 'number', title: '段數' })]),
-    E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '吸附' }), E('button', { text: '0.05' }), E('input', { id: 'snapNum', type: 'number', title: '吸附格距：打數字' })]),
+    E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '吸附' }), E('button', { text: '0.05' }), E('input', { id: 'snapNum', type: 'number', title: '吸附格距：打數字' })])]),
     E('div', { id: 'rail' }, [E('button', { id: 'pen', cls: ['tool'] }, [E('span', { cls: ['lab'], text: '鋼筆' })])]),
     E('div', { id: 'pForm' }, [E('div', { cls: ['sub'], text: '位置 cm' }), E('div', { cls: ['row'] }, [E('span', { text: 'X' }), E('input', { type: 'number' })]), E('input', { type: 'hidden' }), E('input', { type: 'file' })]),
     E('div', { cls: ['uwWin'], id: 'sliceWin', hidden: true }, [E('div', { cls: ['uwHead'] }, [E('b', { text: '剖面分切' })]), E('span', { cls: ['lbl'], text: '做法' }), E('select', { id: 'slMethod', options: ['疊層', '互卡（側面＋橫肋）'] }),
@@ -22409,8 +22410,8 @@ section('功能地圖 a：從畫面自動抽（2026-10-26）');
     && C.subgroupOf('efVert') === '拉點線面：過濾' && C.subgroupOf('selRing') === '拉點線面：選取' && C.subgroupOf('checkerNth') === '拉點線面：選取' && C.subgroupOf('extrude') === '拉點線面：改造型');
   ok('★★★ 每一顆都列（藏起來的也列、記看不看得到）；⛔ 列隱藏的格子、選檔的格子、Claude 自己的「知道了」',
     L.length === 21 && by('penCorner').看得到 === false && by('newDoc').看得到 === true && !L.some(x => x.字 === '知道了'), JSON.stringify(L.map(x => x.代號)));
-  ok('★★★ 在哪：工具列照小標題、「編輯」細分、左邊工具、物件面板照小標題、視窗照標題（切塊頁另外寫）、詢問視窗、其他歸右邊面板',
-    by('save').在哪 === '工具列：檔案' && by('penX').在哪 === '工具列：鋼筆' && by('extrude').在哪 === '工具列：拉點線面：改造型' && by('pen').在哪 === '左邊工具'
+  ok('★★★ 在哪：工具列照小標題、跟著選取／工具的那幾組寫「工具：…」（介面第二輪 1a）、「編輯」細分、左邊工具、物件面板照小標題、視窗照標題（切塊頁另外寫）、詢問視窗、其他歸右邊面板',
+    by('save').在哪 === '工具列：檔案' && by('penX').在哪 === '工具：鋼筆' && by('extrude').在哪 === '工具：拉點線面：改造型' && by('pen').在哪 === '左邊工具'
     && L.find(x => x.在哪 === '物件面板：位置 cm') && by('slMethod').在哪 === '視窗：剖面分切' && by('sliceWin:go').在哪 === '視窗：剖面分切／切塊頁' && by('askOk').在哪 === '詢問視窗' && by('anaRun').在哪 === '右邊面板：panel',
     JSON.stringify(L.map(x => x.代號 + '@' + x.在哪)));
   ok('★★ 名字：按鈕照字（圖示按鈕照小標「鋼筆」）、格子照同一排前面的名字（X）、下拉列出選項；說明、不能按都記',
@@ -22422,7 +22423,7 @@ section('功能地圖 a：從畫面自動抽（2026-10-26）');
     JSON.stringify(['circleR', 'snapNum', 'bevelW', 'bevelSeg'].map(k => by(k).字)));
   const X = C.lookup(L, 'X');
   ok('★★★ 找：同一個字在好幾個地方（X 在鋼筆、物件面板）⇒ 全部回、看得到的排前面（鋼筆那一格現在藏著）',
-    X.length === 2 && X[0]?.在哪 === '物件面板：位置 cm' && X[1]?.在哪 === '工具列：鋼筆', JSON.stringify(X.map(x => x.在哪)));
+    X.length === 2 && X[0]?.在哪 === '物件面板：位置 cm' && X[1]?.在哪 === '工具：鋼筆', JSON.stringify(X.map(x => x.在哪)));
   ok('★★ 找：字一樣 → 字開頭一樣 → 字或說明或代號裡有；找不到 ⇒ 空的', C.lookup(L, '存檔')[0]?.代號 === 'save' && C.lookup(L, '互卡').length === 0 && C.lookup(L, '存成')[0]?.代號 === 'save'
     && C.lookup(L, 'slMethod')[0]?.代號 === 'slMethod' && C.lookup(L, '選一')[0]?.代號 === 'selRing' && C.lookup(L, '沒有這個').length === 0 && C.lookup(L, ' ').length === 0);
 
@@ -22470,20 +22471,20 @@ section('功能地圖 b 輪：前提、規格、核對、指定是哪一個、�
   ok('★★★ 照「在哪」配最長的那一組：切塊頁、物件面板的形狀參數、平滑細分、拉點線面的各組都配到自己的',
     inf('視窗：3D 列印匯出／切塊頁').組 === '視窗：3D 列印匯出／切塊頁' && inf('視窗：3D 列印匯出').組 === '視窗：3D 列印匯出'
     && inf('物件面板：圓柱 參數').組 === '物件面板' && inf('物件面板：平滑細分').前提 === '選一個可編輯網格'
-    && inf('工具列：拉點線面：選取').組 === '工具列：拉點線面：選取' && inf('工具列：曲線刀具').規格 === '規格\\建模器-曲線刀具.md',
+    && inf('工具：拉點線面：選取').組 === '工具：拉點線面：選取' && inf('工具：曲線刀具').規格 === '規格\\建模器-曲線刀具.md',
     JSON.stringify([inf('視窗：3D 列印匯出／切塊頁').組, inf('物件面板：圓柱 參數').組]));
   ok('★★★ 一組裡前提不一樣的照代號蓋過去：環切只選一條邊、互卡那幾格（照開頭）、吸附的旋轉那幾顆、「#2」照原本的代號；展開那一排四顆各有各的規格',
-    inf('工具列：拉點線面：改造型', 'loopCut').前提 === '拉點線面裡只選一條邊' && inf('視窗：剖面分切', 'slILSpine').前提 === '「剖面分切」裡做法選「互卡」'
-    && inf('工具列：吸附', 'snapR45').前提 === '先選一個物件、按左邊「旋轉」' && inf('工具列：吸附', 'snapT5').前提.startsWith('先選一個物件（移動')
-    && inf('工具列：拉點線面：改造型', 'loopCut#2').前提 === '拉點線面裡只選一條邊'
+    inf('工具：拉點線面：改造型', 'loopCut').前提 === '拉點線面裡只選一條邊' && inf('視窗：剖面分切', 'slILSpine').前提 === '「剖面分切」裡做法選「互卡」'
+    && inf('工具：吸附', 'snapR45').前提 === '先選一個物件、按左邊「旋轉」' && inf('工具：吸附', 'snapT5').前提.startsWith('先選一個物件（移動')
+    && inf('工具：拉點線面：改造型', 'loopCut#2').前提 === '拉點線面裡只選一條邊'
     && inf('工具列：展開', 'slice').規格 === '規格\\建模器-剖面分切.md' && inf('工具列：展開', 'unfold').規格 === '規格\\建模器-展開與分片.md');
   // 走過各種狀態看到的「在哪」（本機 2026-10-27 掃描；物件面板的十四種形狀）都配得到一組，⛔ 落到「工具列」「視窗」那種大組
-  const WHERE = ['工具列：檔案', '工具列：新增', '工具列：編輯', '工具列：展開', '工具列：模式', '工具列：視角', '工具列：檢視', '工具列：陣列', '工具列：布林', '工具列：吸附',
-    '工具列：方向', '工具列：拉點線面：過濾', '工具列：拉點線面：改造型', '工具列：拉點線面：選取', '工具列：拉點線面', '工具列：曲線刀具', '工具列：刀具', '工具列：鋼筆', '工具列：法向',
-    '工具列：貼合', '工具列：參考線', '左邊工具', '物件面板', '物件面板：案件', '物件面板：方塊 參數', '物件面板：位置 cm', '物件面板：旋轉 度', '物件面板：縮放 倍', '物件面板：折彎序列',
+  const WHERE = ['工具列：檔案', '工具列：新增', '工具列：編輯', '工具列：展開', '工具列：模式', '工具列：視角', '工具列：檢視', '工具：陣列', '工具：布林', '工具：吸附',
+    '工具：方向', '工具：拉點線面：過濾', '工具：拉點線面：改造型', '工具：拉點線面：選取', '工具：拉點線面', '工具：曲線刀具', '工具：刀具', '工具：鋼筆', '工具：法向',
+    '工具：貼合', '工具：參考線', '左邊工具', '物件面板', '物件面板：案件', '物件面板：方塊 參數', '物件面板：位置 cm', '物件面板：旋轉 度', '物件面板：縮放 倍', '物件面板：折彎序列',
     '物件面板：平滑細分', '物件面板：編輯造型', '物件面板：分片', '物件面板：智慧分切', '物件面板：對齊', '物件面板：均分', '物件面板：布林運算', '右邊面板：pAna', '右邊面板：pClash',
     '右邊面板：pVer', '視窗：展開圖', '視窗：3D 列印匯出', '視窗：3D 列印匯出／切塊頁', '視窗：剖面分切', '視窗：匯入線稿', '視窗：匯入 3D 模型', '視窗：匯出 OBJ', '詢問視窗'];
-  const generic = WHERE.filter(w => ['工具列', '視窗', '右邊面板', null].includes(inf(w).組));
+  const generic = WHERE.filter(w => ['工具列', '工具', '視窗', '右邊面板', null].includes(inf(w).組));
   ok('★★★ 走過的「在哪」每一個都配得到自己那一組（⛔ 落到「工具列」「視窗」那種大組）', generic.length === 0, generic.join('、'));
   // CLUSTERS 寫的代號都真的有（⛔ 打錯字）
   const html = readFileSync(join(here, '../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
@@ -22526,7 +22527,8 @@ section('功能地圖 b 輪：前提、規格、核對、指定是哪一個、�
   const vec = sub => [E('div', { cls: ['sub'], text: sub }), E('div', { cls: ['row'], title: sub + '說明' }, [E('div', {}, [E('span', { text: 'X' }), E('input', { type: 'number' })]), E('div', {}, [E('span', { text: 'Y' }), E('input', { type: 'number' })])])];
   const win = E('div', { cls: ['uwWin'], id: 'sliceWin' }, [E('div', { cls: ['uwHead'] }, [E('b', { text: '剖面分切' })]), E('button', { id: 'slClose', text: '關閉', title: '關閉視窗' })]);
   const root = E('body', {}, [
-    E('div', { cls: ['grp'], id: 'gEdit' }, [E('span', { cls: ['lbl'], text: '編輯' }), E('span', { cls: ['lbl'], text: 'X' }), E('input', { id: 'penX', type: 'number', hidden: true }), E('button', { id: 'loopCut', text: '環切', hidden: true })]),
+    E('div', { id: 'toolBox' }, [   // 介面第二輪 1a：跟著選取／工具的那幾組在 #toolBox 裡（平常搬到右側面板「工具」區）
+    E('div', { cls: ['grp'], id: 'gEdit' }, [E('span', { cls: ['lbl'], text: '編輯' }), E('span', { cls: ['lbl'], text: 'X' }), E('input', { id: 'penX', type: 'number', hidden: true }), E('button', { id: 'loopCut', text: '環切', hidden: true })])]),
     E('div', { id: 'pForm' }, [...vec('位置 cm'), ...vec('旋轉 度'), ...vec('縮放 倍')]),
     E('div', { cls: ['grp'] }, [E('span', { cls: ['lbl'], text: '檔案' }), E('button', { id: 'save', text: '存檔', title: '存成檔案' })]),
     win
@@ -22602,9 +22604,9 @@ section('功能地圖 c 輪：做法（2026-10-27）');
   ok('★★ 做法檔寫了協作前排練、計畫書（什麼時候排練、在本機複本、計畫書的欄、用完封存 輸出\\協作計畫\\）、整理規則（先合併再新增、超過 20 條一起整理）',
     /## 協作前排練、計畫書/.test(doc) && /大步驟 5 步以上/.test(doc) && /本機複本/.test(doc) && /輸出\\協作計畫\\/.test(doc) && /先合併|⛔ 新增/.test(doc) && /超過 20 條/.test(doc));
   // b 輪那一筆「完成」：鋼筆、刀具、曲線刀具共用（c 輪重跑 T18 抓到）
-  const done = I.infoOf({ 代號: 'toolDone', 在哪: '工具列：拉點線面' });
+  const done = I.infoOf({ 代號: 'toolDone', 在哪: '工具：拉點線面' });
   ok('★★ 「完成」（toolDone）的前提寫鋼筆、刀具、曲線刀具都有 —— c 輪重跑 T18 抓到 b 輪寫成只有曲線刀具', /鋼筆/.test(done.前提) && /刀具/.test(done.前提) && /曲線刀具/.test(done.前提)
-    && I.infoOf({ 代號: 'toolState', 在哪: '工具列：拉點線面' }).前提.includes('曲線刀具'));
+    && I.infoOf({ 代號: 'toolState', 在哪: '工具：拉點線面' }).前提.includes('曲線刀具'));
 }
 
 section('AI 協作第三步：一步一步教（2026-10-27）');
@@ -22688,6 +22690,55 @@ section('AI 協作第三步：一步一步教（2026-10-27）');
   ok('★★ 讀程式守著：只記不擋（⛔ preventDefault、stopPropagation、按東西、改模型）；主程式把第三步一起掛進 window.AI',
     !/preventDefault|stopPropagation|stopImmediatePropagation|\.click\(|commit\(|sel\.set\(/.test(src)
     && /installAI\(app, \{ \.\.\.installAIDo\(app\), \.\.\.installAIMap\(\), \.\.\.installAITeach\(app\) \}\);/.test(mn));
+}
+
+section('介面第二輪 1a：跟著選取／工具的 9 組搬到右側面板「工具」區（2026-10-27）');
+{
+  /**
+   * `介面編排-設計方向.md`「第二輪：畫面盡量大＋分割畫面」；kang 2026-10-27「既然都要調整..就都一次做好處理..這樣就很清楚位置的規則」。
+   * 版面在測試環境跑不起來 ⇒ 讀程式守著：哪幾組在 #toolBox、誰負責搬、收合時搬回工具列、收空組兩邊都問、功能地圖寫「工具：…」。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const raw = rf(join(dir, '../index.html'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8'), cat = rf(join(dir, '../js/ai/catalog.js'), 'utf8');
+  const a = raw.indexOf('<div id="toolBox">'), b = raw.indexOf('</div><!-- /#toolBox -->'), barAt = raw.indexOf('<div id="bar">');
+  const box = a > 0 && b > a ? raw.slice(a, b) : '', fixed = barAt > 0 && a > barAt ? raw.slice(barAt, a) : '';
+  const IN = ['gArray', 'gBool', 'snapNum', 'gEditXf', 'gEdit', 'gNormal', 'gMate', 'gGuide'];
+  const OUT = ['newDoc', 'undo', 'unfold', 'vLock', 'frame'];
+  ok('★★★ 9 組（陣列、布林、吸附、方向、拉點線面那一大組、法向、貼合、參考線）在 #toolBox 裡；一直都在的 7 組⛔ 在',
+    IN.every(id => box.includes(`id="${id}"`)) && OUT.every(id => !box.includes(`id="${id}"`) && fixed.includes(`id="${id}"`)),
+    JSON.stringify({ 缺: IN.filter(id => !box.includes(`id="${id}"`)), 跑進去: OUT.filter(id => box.includes(`id="${id}"`)) }));
+  ok('★★★ 誰搬：placeTools() 面板開著 ⇒ 面板最上面「工具」區、面板收起來 ⇒ 回工具列；收合與開場都叫它（收合先搬再 updateBar）',
+    /function placeTools\(\)/.test(mn) && /panelEl\.prepend\(sec\)/.test(mn) && /if \(panelEl\.hidden\) \{ if \(box\.parentElement !== \$\('bar'\)\) \$\('bar'\)\.appendChild\(box\); \}/.test(mn)
+    && /saveUI\(st\);\s*placeTools\(\);\s*updateBar\(\);/.test(mn) && /\$\('panel'\)\.hidden = !!st\.panel;\s*placeTools\(\);/.test(mn));
+  ok('★★★ 「工具」區用 document.getElementById 找（⛔ 用 $()：找不到會回替身、永遠是真的 ⇒ 9 組被搬進替身、整組消失 —— 本機版撞到）',
+    /let sec = document\.getElementById\('pTools'\);/.test(mn) && /const sec = document\.getElementById\('pTools'\);/.test(mn) && !/\$\('pTools'\)/.test(mn));
+  ok('★★ 收空的組兩邊都問（#bar 與 #toolBox）；工具區一組都沒有 ⇒ 連標題一起收',
+    /querySelectorAll\('#bar \.grp, #toolBox \.grp'\)/.test(mn) && /sec\.hidden = !\[\.\.\.document\.querySelectorAll\('#toolBox \.grp'\)\]\.some\(g => !g\.hidden\)/.test(mn));
+  ok('★★ 樣式：#toolBox 在工具列裡 display: contents（照舊一起排）、#pTools[hidden] 真的收得起來',
+    /#toolBox \{ display: contents; \}/.test(raw) && /#pTools\[hidden\] \{ display: none; \}/.test(raw));
+  ok('★★ 功能地圖：#toolBox 裡的寫「工具：…」、其他照舊「工具列：…」', /el\.closest\('#toolBox'\) \? '工具：' : '工具列：'/.test(cat));
+
+  // 1a 補（kang 2026-10-27「同意你的建議」）：按鈕（或名字）＋數字格＋單位綁成一組（`ui/keepPairs.js`）
+  const { keepRuns } = await import('../js/ui/keepPairs.js');
+  const H = t => ({ tag: 'span', cls: ['lbl'], text: t }), N = t => ({ tag: 'span', cls: ['lbl'], text: t }), I = () => ({ tag: 'input', type: 'number' }),
+    S = () => ({ tag: 'select' }), B = t => ({ tag: 'button', text: t }), U = t => ({ tag: 'span', cls: ['unit'], text: t });
+  const R = k => JSON.stringify(keepRuns(k));
+  const cases = [
+    ['鎖角度＋度＋格子三個一組（8/29 那件）；厚度自己一組', [H('編輯'), B('往上長'), N('厚度'), I(), B('鎖角度'), N('度'), I(), B('智慧參考線')], [[2, 3], [4, 6]]],
+    ['每隔＋格子＋「cm 一段」；離左邊、離下邊各自一組（⛔ 黏成一長串）', [H('編輯'), N('每隔'), I(), N('cm 一段'), N('離左邊'), I(), N('離下邊'), I(), B('圓')], [[1, 3], [4, 5], [6, 7]]],
+    ['導角＋兩格；切一刀＋方向＋座標＋範圍字', [H('編輯'), B('導角'), I(), I(), B('刪除面'), B('切一刀'), S(), I(), N('Y：0 ～ 45'), B('分離')], [[1, 3], [5, 8]]],
+    ['沿面滑動＋格子＋單位按鈕「公分」', [H('編輯'), B('沿面滑動'), I(), B('公分'), B('平行複製')], [[1, 3]]],
+    ['參考線：離面＋格子＋cm、下拉自己、位置＋格子＋cm', [H('參考線'), B('點物件的面放線'), N('離面'), I(), U('cm'), S(), N('位置'), I(), U('cm'), B('加一條')], [[2, 4], [5, 5], [6, 8]]],
+    ['組名後面直接是格子 ⇒ 組名⛔ 收進去', [H('吸附'), I(), U('cm')], [[1, 2]]],
+  ];
+  const bad = cases.filter(([, k, want]) => R(k) !== JSON.stringify(want));
+  ok('★★★ 綁法：前面的名字（單位名字再帶前一顆按鈕）＋緊挨著的格子＋後面的單位；名字後面接格子 ⇒ 是下一組的', bad.length === 0,
+    bad.map(([n, k]) => n + ' 得到 ' + R(k)).join('；'));
+  ok('★★ 開場包一次（placeTools 建「工具」區時叫 bindKeep）；樣式 .keep 不換行、裡面全藏 ⇒ 收、名字照舊小字',
+    /import \{ bindKeep \} from '\.\/ui\/keepPairs\.js';/.test(mn) && /panelEl\.prepend\(sec\);[\s\S]{0,200}bindKeep\(box\);/.test(mn)
+    && /\.keep \{ display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; \}/.test(raw) && /\.keep:not\(:has\(> :not\(\[hidden\]\)\)\) \{ display: none; \}/.test(raw)
+    && /\.grp > \.lbl, \.keep > \.lbl \{/.test(raw));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

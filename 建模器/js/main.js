@@ -62,6 +62,7 @@ import { SlicePanel } from './ui/slicePanel.js';
 import { ImportPanel } from './ui/importPanel.js';
 import { Import3DPanel } from './ui/import3dPanel.js';
 import { ask, isAskOpen } from './ui/askBox.js';
+import { bindKeep } from './ui/keepPairs.js';
 
 /**
  * 🔴 **找不到的元件 ⇒ ⛔ 讓整個建模器停住**（kang 2026-10-14 選做）。
@@ -612,7 +613,7 @@ function deleteSelected() {
   if (sel.editMode) {
     toast(sel.editSel
       /** ⚠ 2026-10-19（實驗 T4：`實驗-綜合評估.md` ②-15，疑點 Q3）以前寫「刪除面還沒做」—— 其實工具列早就有「刪除面」 */
-      ? '編輯模式下 Delete 不會刪東西（它刪的是整個物件）。要拿掉選到的面，請按工具列的「刪除面」；要刪整個物件，先按一次「拉點線面」離開編輯模式'
+      ? '編輯模式下 Delete 不會刪東西（它刪的是整個物件）。要拿掉選到的面，請按右邊「工具」那一區的「刪除面」；要刪整個物件，先按一次「拉點線面」離開編輯模式'
       : '編輯模式下不能用 Delete（它刪的是整個物件）。要刪物件請先離開編輯模式', true);
     return;
   }
@@ -8638,7 +8639,7 @@ function updateHandles() {
   face('panelToggle', panelOff);
   $('panelToggle').title = panelOff
     ? '展開右邊的物件面板'
-    : '收合右邊的物件面板（畫面會變寬 300px）';
+    : '收合右邊的物件面板（畫面會變寬 300px；面板最上面「工具」那一區會搬回上面的工具列）';
 }
 
 /**
@@ -8655,11 +8656,15 @@ function updateHandles() {
  * 那些 `.lbl` 本身就是標籤，拿它當「還有東西」會讓空組永遠收不起來。
  */
 function hideEmptyGroups() {
-  for (const g of document.querySelectorAll('#bar .grp')) {
+  /** ⚠ 介面第二輪 1a：9 組平常在右側面板的 #toolBox 裡（⛔ 在 #bar 底下）⇒ 兩邊都要問 */
+  for (const g of document.querySelectorAll('#bar .grp, #toolBox .grp')) {
     const live = [...g.querySelectorAll('button, input, select')]
       .some(el => !el.hidden);
     g.hidden = !live;
   }
+  /** 「工具」區裡一組都沒有 ⇒ 連標題一起收（⛔ 留一個空標題掛在面板最上面，同上面那則「孤兒標籤」）*/
+  const sec = document.getElementById('pTools');   // ⛔ 用 $()：同 placeTools() 那一則（替身永遠是真的）
+  if (sec) sec.hidden = ![...document.querySelectorAll('#toolBox .grp')].some(g => !g.hidden);
 }
 
 // ── 提示條 ────────────────────────────────────────────
@@ -8764,10 +8769,40 @@ function saveUI(o) {
   try { localStorage.setItem(LS_UI, JSON.stringify(o)); } catch (e) { /* 無所謂 */ }
 }
 
+/**
+ * 🔴 **介面第二輪 1a（kang 2026-10-27「既然都要調整..就都一次做好處理..這樣就很清楚位置的規則」）**：
+ * 跟著選取／工具才出現的 9 組（`#toolBox`：陣列、布林、吸附、方向、拉點線面那一大組、法向、貼合、參考線）放哪裡 ——
+ * 右側面板開著 ⇒ 面板最上面的「工具」區（`#pTools`）；面板收起來 ⇒ 回到上方工具列最後面（照舊按得到）。
+ * ⇒ 上方工具列平常只剩一直都在的 7 組、高度固定，拉點線面時⛔ 再長高蓋到畫面（樣板 `樣板-功能放哪裡.html`：
+ *    1920／1366／1024 寬從 276／276／401 變成 103／103／147）。
+ * ⭐ 搬的是同一批元件（`appendChild` 會把它從原本的地方拿走）⇒ 按鈕接好的功能、`updateBar()` 管的出現／消失全部跟著走，⛔ 重寫。
+ * ⚠ 面板的內容只在建構時整個寫一次（`ui/toolbar.js` `Panel._build()`），之後只改裡面的小塊 ⇒ 插在最上面的區⛔ 會被洗掉。
+ * 1b 會把「面板收起來」那一支改成浮動視窗（kang 2026-10-27「同意」）。→ `介面編排-設計方向.md`「第二輪」
+ */
+function placeTools() {
+  const box = $('toolBox'), panelEl = $('panel');
+  /**
+   * 🔴 **`#pTools` 一定要用 `document.getElementById` 問，⛔ 用 `$()`** —— `$()` 找不到會回一個「替身」（檔頭那一則），
+   * 永遠是真的 ⇒ ⛔ 會建這一區，9 組被搬進沒放進畫面的替身裡、整組消失（本機版 2026-10-27 撞到）。
+   */
+  let sec = document.getElementById('pTools');
+  if (!sec) {
+    sec = document.createElement('section');
+    sec.id = 'pTools';
+    sec.innerHTML = '<h2>工具</h2>';
+    panelEl.prepend(sec);
+    /** 按鈕（或名字）＋數字格＋單位包成一組、整組一起換行（`ui/keepPairs.js`，kang 2026-10-27「同意你的建議」）；只包一次 */
+    bindKeep(box);
+  }
+  if (panelEl.hidden) { if (box.parentElement !== $('bar')) $('bar').appendChild(box); }
+  else if (box.parentElement !== sec) sec.appendChild(box);
+}
+
 function setCollapsed(which, on) {
   const el = $(which === 'bar' ? 'bar' : 'panel');
   el.hidden = !!on;
   const st = loadUI(); st[which] = !!on; saveUI(st);
+  placeTools();
   updateBar();
   /** ⚠ 版面改了才叫 —— 見上面那一則 */
   view.resize();
@@ -8781,6 +8816,7 @@ $('panelToggle').onclick = () => setCollapsed('panel', !$('panel').hidden);
   const st = loadUI();
   $('bar').hidden = !!st.bar;
   $('panel').hidden = !!st.panel;
+  placeTools();
 })();
 
 window.addEventListener('resize', () => view.resize());
