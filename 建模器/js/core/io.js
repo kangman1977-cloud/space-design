@@ -400,6 +400,14 @@ export class ModelObject {
     this.hidden = opts.hidden === true;
     this.locked = opts.locked === true;
     this.isoHidden = opts.isoHidden === true;
+
+    /**
+     * 🔴 **在哪一層、顏色跟不跟圖層**（圖層與群組 2a，kang 2026-10-28「照建議」）。
+     * `layer` ＝ 圖層的 id；null ⇒ `doc.add()` 放「目前這一層」（全新做的）；從舊物件變來的用 `layerFrom(來源)` 帶過來（kang ②）。
+     * `colorByLayer` ⇒ 畫面上用圖層的顏色（`doc.colorOf()`）；預設⛔（kang ④ 畫面⛔ 變）。
+     */
+    this.layer = Number.isInteger(opts.layer) ? opts.layer : null;
+    this.colorByLayer = opts.colorByLayer === true;
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -696,6 +704,9 @@ export class ModelObject {
     if (this.hidden) o.hidden = true;
     if (this.locked) o.locked = true;
     if (this.isoHidden) o.isoHidden = true;
+    /** 圖層 2a：在哪一層一律存（讀回來才放得回同一層）；顏色跟圖層有才存 */
+    if (this.layer !== null) o.layer = this.layer;
+    if (this.colorByLayer) o.colorByLayer = true;
     return o;
   }
 
@@ -716,7 +727,9 @@ export class ModelObject {
       subdKeep: d.subdKeep === true,
       hidden: d.hidden === true,
       locked: d.locked === true,
-      isoHidden: d.isoHidden === true
+      isoHidden: d.isoHidden === true,
+      layer: d.layer,
+      colorByLayer: d.colorByLayer === true
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
@@ -816,6 +829,7 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
     seen.set(k, n);
     const from = objects[p.members[0]];
     const obj = new ModelObject({
+      ...layerFrom(from),                          // 圖層 2a：跟原本那個同一層（kang ②）
       name: nameOf(p.members) + (count.get(k) > 1 ? `－${n}` : ''),
       kind: from.kind,
       src: { type: 'mesh' },
@@ -954,6 +968,7 @@ export function explodeShapes(obj) {
     full.decompose(p, q, sc);
 
     return new ModelObject({
+      ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
       name: s.name ? `${obj.name}－${s.name}` : `${obj.name} #${i + 1}`,
       kind: obj.kind,
       src: {
@@ -1257,6 +1272,7 @@ export function explodeArray(obj) {
     full.decompose(p, q, s);
 
     return new ModelObject({
+      ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
       name: `${obj.name} #${i + 1}`,
       kind: obj.kind,
       src: cloneSrc(node.child.src),
@@ -1376,9 +1392,17 @@ export class Doc {
     this.objects = [];
     /** 參考線。⚠ 它跟 `objects` 平行，⛔ 不是 objects 的一種 */
     this.guides = emptyGuides();
+    /** 圖層（圖層 2a）：`[{id, name, color, off, locked}]`；`currentLayer` ＝「目前這一層」（新物件放這裡、⛔ 能刪藏鎖）*/
+    this.layers = defaultLayers();
+    this.currentLayer = this.layers[0].id;
   }
 
-  add(obj) { this.objects.push(obj); return obj; }
+  /** 圖層 2a：還沒有圖層的（全新做的：新增形狀、鋼筆）放「目前這一層」；從舊物件變來的呼叫端已經給好（`layerFrom()`）*/
+  add(obj) {
+    if (!this.layerById(obj.layer)) obj.layer = this.currentLayer;
+    this.objects.push(obj);
+    return obj;
+  }
 
   remove(obj) {
     const i = this.objects.indexOf(obj);
@@ -1442,7 +1466,9 @@ export class Doc {
       unit: UNIT,
       head: { ...this.head },
       objects: this.objects.map(o => o.toJSON()),
-      guides: normalizeGuides(this.guides)
+      guides: normalizeGuides(this.guides),
+      layers: normalizeLayers(this.layers),        // 圖層 2a：跟參考線一樣⛔ 跳版號（舊程式讀到多出來的欄位照樣開得起來）
+      currentLayer: this.currentLayer
     };
   }
 
@@ -1458,6 +1484,10 @@ export class Doc {
      *    —— 那會讓「復原」什麼都沒還原。
      */
     this.guides = normalizeGuides(data.guides);
+    /** 圖層 2a：圖層表照樣整理；目前這一層找不到 ⇒ 第一層；物件指到不存在的圖層（舊檔沒有這一欄）⇒ 第一層（kang ③ 舊檔全部放「預設」）*/
+    this.layers = normalizeLayers(data.layers);
+    this.currentLayer = this.layerById(data.currentLayer) ? data.currentLayer : this.layers[0].id;
+    for (const o of this.objects) if (!this.layerById(o.layer)) o.layer = this.layers[0].id;
     return this;
   }
 
@@ -1467,17 +1497,82 @@ export class Doc {
    * 🔴 **看得到的物件**（圖層與群組第一批，kang 2026-10-27：沒選東西出圖時藏起來的不算 —— 看到什麼出什麼）。
    * 出圖、干涉檢查「沒選東西就全部」那一句改叫這一支；`hiddenCount` 給視窗講「有 N 個藏起來的沒算」。
    */
-  shown() { return this.objects.filter(o => !o.hidden); }
+  shown() { return this.objects.filter(o => !this.isHidden(o)); }
+  /** 自己按「藏起來」的幾個（「全部顯示（N）」那一顆的 N）—— ⛔ 含圖層關掉的（kang 2a ⑤ 分開記）*/
   get hiddenCount() { return this.objects.filter(o => o.hidden).length; }
   get lockedCount() { return this.objects.filter(o => o.locked).length; }
+  /** 圖層 2a：在關掉的圖層裡、自己沒藏的幾個（提醒「還有 N 個在關掉的圖層裡」）*/
+  get layerHiddenCount() { return this.objects.filter(o => !o.hidden && this.layerOf(o).off).length; }
   /**
    * 出圖、干涉檢查的視窗那一句（kang 2026-10-27：看到什麼出什麼，但要講）：沒選東西、又有藏起來的 ⇒「（有 N 個藏起來的沒算）」；
-   * 有選東西 ⇒ 照選的算、⛔ 講（選了就是只要那幾個）。
+   * 有選東西 ⇒ 照選的算、⛔ 講（選了就是只要那幾個）。圖層 2a：圖層關掉的也算「藏起來」（效果一樣）。
    */
   hiddenNote(picked) {
-    const n = this.hiddenCount;
+    const n = this.objects.filter(o => this.isHidden(o)).length;
     return !(picked && picked.length) && n ? `（有 ${n} 個藏起來的沒算）` : '';
   }
+
+  // ── 圖層（圖層與群組 2a，kang 2026-10-28「照建議」→ `規格\建模器-圖層與群組.md`「2a」）──
+  /** 這一層（id 找不到 ⇒ 第一層 —— 讀檔時已經補好，這裡只是保險）*/
+  layerById(id) { return this.layers.find(l => l.id === id) || null; }
+  layerOf(o) { return this.layerById(o.layer) || this.layers[0]; }
+  /** 看不到 ＝ 自己藏起來，或在關掉的圖層裡（kang ⑤：分開記、效果一樣）*/
+  isHidden(o) { return !!o.hidden || !!this.layerOf(o).off; }
+  /** 點不到 ＝ 自己鎖住，或在鎖住的圖層裡 */
+  isLocked(o) { return !!o.locked || !!this.layerOf(o).locked; }
+  /** 畫面上的顏色：「跟圖層」⇒ 圖層的顏色；⛔ ⇒ 自己的（kang ④ 預設自己的）*/
+  colorOf(o) { return o.colorByLayer ? this.layerOf(o).color : o.color; }
+
+  /** 新建一層：名字「圖層 N」、顏色照 `LAYER_PALETTE` 輪；加在最下面（kang ⑥ 先⛔ 拖拉排序）*/
+  addLayer(name) {
+    const id = Math.max(0, ...this.layers.map(l => l.id)) + 1;
+    const L = { id, name: name || `圖層 ${id}`, color: LAYER_PALETTE[(id - 1) % LAYER_PALETTE.length], off: false, locked: false };
+    this.layers.push(L);
+    return L;
+  }
+  /**
+   * 刪一層（kang ③）：目前這一層、最後一層⛔ 刪；有物件 ⇒ `how` 決定一起刪（'delete'）或移到「預設」（'move'，沒有「預設」就移到第一層）。
+   * @returns {{ok:boolean, reason?:string, n?:number}} `n` ＝ 動到幾個物件
+   */
+  removeLayer(id, how) {
+    const L = this.layerById(id);
+    if (!L) return { ok: false, reason: '找不到這一層' };
+    if (id === this.currentLayer) return { ok: false, reason: '目前這一層不能刪 —— 先點別一層當「目前這一層」' };
+    if (this.layers.length < 2) return { ok: false, reason: '至少要留一層' };
+    const mine = this.objects.filter(o => this.layerOf(o) === L);
+    if (mine.length && how !== 'delete' && how !== 'move') return { ok: false, reason: '這一層有物件 —— 要一起刪還是移走？' };
+    this.layers = this.layers.filter(x => x !== L);
+    const to = this.layers.find(x => x.name === DEFAULT_LAYER) || this.layers[0];
+    for (const o of mine) { if (how === 'delete') this.remove(o); else o.layer = to.id; }
+    return { ok: true, n: mine.length };
+  }
+  /** 回到只有「預設」一層（新建檔案用；⚠ `clear()` ⛔ 清圖層 —— 它是「刪掉所有物件」那條路）*/
+  resetLayers() { this.layers = defaultLayers(); this.currentLayer = this.layers[0].id; }
+}
+
+/** 圖層 2a：第一層的名字（舊檔、新建檔案都只有這一層，kang ③）*/
+export const DEFAULT_LAYER = '預設';
+/** 新的一層照這個輪顏色（跟物件的 `PALETTE` 錯開，一眼分得出是圖層色）*/
+export const LAYER_PALETTE = [0x9aa3ad, 0xe0a86f, 0x8fc98f, 0xd08f9e, 0xa89ad0, 0x7fc4c4, 0xd9c36a, 0x6fa8dc];
+function defaultLayers() { return [{ id: 1, name: DEFAULT_LAYER, color: LAYER_PALETTE[0], off: false, locked: false }]; }
+/**
+ * 讀檔、復原時把圖層表整理乾淨（⛔ 直接接手 —— 跟 `normalizeGuides()` 同一個理由：Undo 的快照⛔ 跟現在的 Doc 共用同一個陣列）。
+ * 舊檔沒有這一欄 ⇒ 只有「預設」一層；壞掉的（id 重複、不是數字）丟掉；一個都沒有 ⇒ 補「預設」。
+ */
+export function normalizeLayers(raw) {
+  const out = [], seen = new Set();
+  for (const l of Array.isArray(raw) ? raw : []) {
+    if (!l || !Number.isInteger(l.id) || seen.has(l.id)) continue;
+    seen.add(l.id);
+    out.push({
+      id: l.id,
+      name: typeof l.name === 'string' && l.name.trim() ? l.name.trim() : `圖層 ${l.id}`,
+      color: Number.isInteger(l.color) ? l.color : LAYER_PALETTE[0],
+      off: l.off === true,
+      locked: l.locked === true
+    });
+  }
+  return out.length ? out : defaultLayers();
 }
 
 /**
@@ -1495,7 +1590,7 @@ export function setShown(doc, how, picked = []) {
     if (how === 'hide' && keep.has(o) && !o.hidden) { o.hidden = true; n++; }
     if (how === 'lock' && keep.has(o) && !o.locked) { o.locked = true; n++; }
     /** 只看選到的：其他看得到的藏起來、記上 isoHidden（⛔ 動本來就藏著的）*/
-    if (how === 'isolate' && !keep.has(o) && !o.hidden) { o.hidden = true; o.isoHidden = true; n++; }
+    if (how === 'isolate' && !keep.has(o) && !doc.isHidden(o)) { o.hidden = true; o.isoHidden = true; n++; }     // 圖層 2a：圖層關著的本來就看不到，⛔ 記
     /** 回來：只放回「只看選到的」藏的那些 —— 自己按「藏起來」藏的照舊藏著（Rhino 的 Unisolate 也是這樣）*/
     if (how === 'unisolate' && o.isoHidden) { o.hidden = false; o.isoHidden = false; n++; }
     if (how === 'showAll' && o.hidden) { o.hidden = false; o.isoHidden = false; n++; }
@@ -1503,6 +1598,14 @@ export function setShown(doc, how, picked = []) {
   }
   return n;
 }
+/**
+ * 🔴 **從舊物件變來的新物件：跟原本那個同一層、顏色跟不跟圖層也照它**（圖層與群組 2a，kang ②）。
+ * 複製、布林、分割、陣列、打散、切穿、切塊、分離、切成實心 —— 建新物件時 `...layerFrom(來源)`（比照 `color: 來源.color`）。
+ */
+export function layerFrom(src) {
+  return src ? { layer: src.layer, colorByLayer: !!src.colorByLayer } : {};
+}
+
 /** 現在是不是「只看選到的」（有東西是被它藏起來的）*/
 export function isIsolated(doc) { return doc.objects.some(o => o.isoHidden); }
 

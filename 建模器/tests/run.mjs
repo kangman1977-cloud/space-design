@@ -17053,14 +17053,14 @@ section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 
   const here = dirname(fileURLToPath(import.meta.url));
   const rd = f => readFileSync(join(here, '..', f), 'utf8');
   const sc = rd('js/view/scene.js'), sl = rd('js/view/select.js'), mn = rd('js/main.js'), ih = rd('index.html');
-  ok('★★★ 點得到的清單濾掉藏起來、鎖住的', /this\.pickables = doc\.objects\.filter\(o => !o\.hidden && !o\.locked\)/.test(sc));
-  ok('★★★ 藏起來 ⇒ 整個不畫；鎖住 ⇒ 半透明（LOCKED_OPACITY）', /node\.visible = !obj\.hidden;/.test(sc) && /node\.userData\.locked \? LOCKED_OPACITY : 1/.test(sc));
+  ok('★★★ 點得到的清單濾掉藏起來、鎖住的', /this\.pickables = doc\.objects\.filter\(o => !doc\.isHidden\(o\) && !doc\.isLocked\(o\)\)/.test(sc));
+  ok('★★★ 藏起來 ⇒ 整個不畫；鎖住 ⇒ 半透明（LOCKED_OPACITY）', /node\.visible = !\(D \? D\.isHidden\(obj\) : obj\.hidden\);/.test(sc) && /node\.userData\.locked \? LOCKED_OPACITY : 1/.test(sc));
   ok('★★ 全部入鏡⛔ 算藏起來的', /if \(n\.visible\) box\.expandByObject\(n\)/.test(sc));
   ok('★★★ 選取一處擋全部：藏起來、鎖住的選不進來（點、拉框、全選、AI、復原回來都走這裡）',
-    /this\.ids = ids\.filter\(id => this\._canPick\(id\)\);/.test(sl) && /return !!o && !o\.hidden && !o\.locked;/.test(sl)
+    /this\.ids = ids\.filter\(id => this\._canPick\(id\)\);/.test(sl) && /return !!o && !this\._doc\.isHidden\(o\) && !this\._doc\.isLocked\(o\);/.test(sl)
     && /this\.ids = this\.ids\.filter\(id => this\._canPick\(id\)\);\s*\/\/ 復原/.test(sl));
   ok('★★ 拉框先濾掉（「框到幾個」的數字對）；鋼筆⛔ 吸藏起來的外框',
-    /this\._doc\.objects\.filter\(o => !o\.hidden && !o\.locked\)\.map\(o => \(\{ id: o\.id, box: worldBounds\(o\) \}\)\)/.test(sl) && /if \(o\.hidden\) continue;/.test(sl));
+    /this\._doc\.objects\.filter\(o => !this\._doc\.isHidden\(o\) && !this\._doc\.isLocked\(o\)\)\.map\(o => \(\{ id: o\.id, box: worldBounds\(o\) \}\)\)/.test(sl) && /if \(this\._doc\.isHidden\(o\)\) continue;/.test(sl));
   // 按鈕
   const gs = (ih.match(/<div class="grp" id="gShow">[\s\S]*?<\/div>/) || [''])[0];
   ok('★★ 「顯示」那一組在工具區（#toolBox）最前面、五顆一開始都藏著',
@@ -17071,7 +17071,7 @@ section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 
     && /\$\('oIso'\)\.hidden = !\(iso \|\| \(sel\.count >= 1 && !sel\.editMode\)\);/.test(mn)
     && /\$\('oShowAll'\)\.hidden = !nHid; \$\('oShowAll'\)\.textContent = `全部顯示（\$\{nHid\}）`;/.test(mn)
     && /\$\('oUnlockAll'\)\.hidden = !nLock;/.test(mn));
-  ok('★★ 狀態列有藏、有鎖就一直寫著', /id="sShow" hidden/.test(ih) && /\$\('sShow'\)\.hidden = !\(nHid \|\| nLock\);/.test(mn));
+  ok('★★ 狀態列有藏、有鎖就一直寫著', /id="sShow" hidden/.test(ih) && /\$\('sShow'\)\.hidden = !\(nHid \|\| nLock \|\| nLayerOff\);/.test(mn));
   ok('★★★ 按下去：改資料 → 重畫 → 選取重新過濾 → 記一步復原（kang ⑤ 可以 Ctrl+Z）',
     /const n = setShown\(doc, how, picked\);[\s\S]{0,200}view\.sync\(doc\);\s*sel\.set\(sel\.ids\);[\s\S]{0,80}commit\(SHOW_LABEL\[how\]\);/.test(mn));
   // 出圖與干涉檢查：沒選東西 ⇒ 看得到的
@@ -17085,6 +17085,127 @@ section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 
     && /toast\(r\.reason \+ \(picked \? '' : doc\.hiddenNote\(\[\]\)\), true\)/.test(mn)
     && /gearClash\(obj, this\.app\.doc\.shown\(\)\)/.test(rd('js/ui/toolbar.js')));
   ok('★★ AI.看() 照樣列藏起來、鎖住的，加標記', /\.\.\.\(o\.hidden \? \{ 藏起來: true \} : \{\}\)/.test(rd('js/ai/assist.js')) && /\.\.\.\(o\.locked \? \{ 鎖住: true \} : \{\}\)/.test(rd('js/ai/assist.js')));
+}
+
+section('圖層與群組 2a：圖層（kang 2026-10-28）');
+
+/** 規格：`規格\建模器-圖層與群組.md`「2a」。資料在 `io.js`（`Doc.layers`、`currentLayer`、`ModelObject.layer`／`colorByLayer`、`layerFrom()`）。*/
+{
+  const mk = (name, extra = {}) => new io.ModelObject({ name, src: { type: 'box', w: 10, h: 10, d: 10 }, color: 0x111111, ...extra });
+  const d = new io.Doc();
+  ok('★★★ 新文件只有一層「預設」、它是目前這一層', d.layers.length === 1 && d.layers[0].name === '預設' && d.currentLayer === d.layers[0].id);
+  const A = d.add(mk('甲'));
+  ok('★★★ 全新做的放「目前這一層」（doc.add 補上）', A.layer === d.currentLayer);
+  const L2 = d.addLayer();
+  ok('★★ 新的一層：名字「圖層 2」、顏色照圖層色輪、加在最下面', L2.name === '圖層 2' && d.layers[1] === L2 && L2.color === io.LAYER_PALETTE[1]);
+  d.currentLayer = L2.id;
+  const B = d.add(mk('乙'));
+  ok('★★ 換了目前這一層 ⇒ 新的放那一層', B.layer === L2.id);
+  const C = d.add(mk('丙', { ...io.layerFrom(A) }));
+  ok('★★★ 從舊物件變來的（layerFrom）⇒ 跟原本那個同一層（⛔ 跟著目前這一層跑）', C.layer === A.layer && C.layer !== d.currentLayer);
+
+  // 關、鎖、顏色
+  L2.off = true;
+  ok('★★★ 圖層關掉 ⇒ 那一層的物件算看不到、⛔ 改物件自己的 hidden（kang ⑤ 分開記）', d.isHidden(B) && !B.hidden && !d.isHidden(A) && d.shown().length === 2);
+  ok('★★ 在關掉的圖層裡的另外數（提醒用）；「全部顯示」的 N 只數自己藏的', d.layerHiddenCount === 1 && d.hiddenCount === 0);
+  ok('★★ 視窗那一句連圖層關掉的一起算', d.hiddenNote([]) === '（有 1 個藏起來的沒算）');
+  L2.off = false; L2.locked = true;
+  ok('★★★ 圖層鎖住 ⇒ 那一層的物件算點不到（看得到）', d.isLocked(B) && !B.locked && !d.isHidden(B));
+  L2.locked = false;
+  ok('★★★ 顏色：預設自己的；「跟圖層」⇒ 圖層的', d.colorOf(A) === 0x111111 && (A.colorByLayer = true, d.colorOf(A) === d.layerOf(A).color));
+  A.colorByLayer = false;
+
+  // 只看選到的：關掉的圖層裡的⛔ 記（本來就看不到）
+  L2.off = true;
+  const n = io.setShown(d, 'isolate', [A]);
+  ok('★★ 只看選到的：⛔ 碰關掉的圖層裡的（乙⛔ 記 isoHidden）', n === 1 && C.isoHidden && !B.isoHidden);
+  io.setShown(d, 'unisolate'); L2.off = false;
+
+  // 存讀檔
+  A.colorByLayer = true;
+  const j = JSON.parse(JSON.stringify(d.toJSON()));
+  const d2 = io.Doc.fromJSON(j);
+  ok('★★★ 存檔讀檔（Ctrl+Z 走的那一條）：圖層表、目前這一層、物件在哪一層、顏色跟圖層都留得住',
+    d2.layers.length === 2 && d2.layers[1].name === '圖層 2' && d2.currentLayer === L2.id
+    && d2.objects.find(o => o.name === '乙').layer === L2.id && d2.objects.find(o => o.name === '甲').colorByLayer);
+  A.colorByLayer = false;
+  const old = JSON.parse(JSON.stringify(d.toJSON()));
+  delete old.layers; delete old.currentLayer; for (const o of old.objects) delete o.layer;
+  const d3 = io.Doc.fromJSON(old);
+  ok('★★★ 舊檔（沒有圖層）⇒ 只有「預設」一層、全部物件放那一層（kang ③）', d3.layers.length === 1 && d3.layers[0].name === '預設' && d3.objects.every(o => o.layer === d3.layers[0].id));
+  const bad = JSON.parse(JSON.stringify(d.toJSON()));
+  (bad.layers ||= []).push({ id: 1, name: '重複' }, { id: 'x' }); bad.currentLayer = 99; bad.objects[0].layer = 77;   // ⚠ ||= ：存檔漏了圖層表時打 ✗、⛔ 整個測試當掉（改壞檢查抓到過）
+  const d4 = io.Doc.fromJSON(bad);
+  ok('★★ 壞掉的圖層表（id 重複、不是數字）丟掉；目前這一層、物件指到不存在的 ⇒ 第一層',
+    d4.layers.length === 2 && d4.currentLayer === d4.layers[0].id && d4.objects[0].layer === d4.layers[0].id);
+
+  // 刪圖層
+  const e = io.Doc.fromJSON(JSON.parse(JSON.stringify(d.toJSON())));
+  ok('★★★ 目前這一層⛔ 能刪；有物件、沒說怎麼辦 ⇒ ⛔ 刪、要問', !e.removeLayer(e.currentLayer, 'move').ok && !e.removeLayer(e.layers[0].id).ok);
+  e.currentLayer = (e.layers[1] || e.layers[0]).id;      // ⚠ 上一項沒擋住時 layers 只剩一層 ⇒ 打 ✗、⛔ 整個測試當掉（改壞檢查抓到過）
+  const r1 = e.removeLayer(e.layers[0].id, 'move');
+  ok('★★★ 移到「預設」⇒ 沒有「預設」了就移到第一層；回報動到幾個', r1.ok && r1.n === 2 && e.layers.length === 1 && e.objects.every(o => o.layer === e.layers[0].id));
+  const f = io.Doc.fromJSON(JSON.parse(JSON.stringify(d.toJSON())));
+  f.currentLayer = f.layers[0].id;          // ⚠ 要刪的那一層⛔ 能是目前這一層（上面那一項才擋得住）
+  const r2 = f.removeLayer(L2.id, 'delete');
+  ok('★★★ 一起刪掉 ⇒ 那一層的物件一起刪', r2.ok && r2.n === 1 && f.objects.length === 2 && !f.objects.some(o => o.name === '乙'));
+  ok('★ 最後一層⛔ 能刪', !(() => { const g = new io.Doc(); return g.removeLayer(g.layers[0].id, 'move').ok; })());
+  d.resetLayers();
+  ok('★★ 新建 ⇒ 回到只有「預設」一層', d.layers.length === 1 && d.currentLayer === d.layers[0].id);
+
+  // 分割（io.js 裡的那一條，⛔ 只讀程式）：碎塊跟原本那個同一層
+  if (csgOK) {
+    const g = new io.Doc(); const Lx = g.addLayer('板'); g.currentLayer = Lx.id;
+    const b1 = g.add(new io.ModelObject({ name: '方塊', src: { type: 'box', w: 60, h: 40, d: 45 } }));
+    g.currentLayer = g.layers[0].id;
+    const c1 = g.add(new io.ModelObject({ name: '圓柱', src: { type: 'cylinder', r: 10, h: 40 }, pos: new THREE.Vector3(30, 0, 0) }));
+    const sp = io.splitObjects([b1, c1]);
+    const nm = n2 => sp.made.find(o => o.name === n2);
+    ok('★★★ 分割：重疊那塊、方塊剩下的跟方塊同一層（「板」），圓柱剩下的跟圓柱同一層',
+      sp.ok && nm('方塊 ∩ 圓柱').layer === Lx.id && nm('方塊（剩下的）').layer === Lx.id && nm('圓柱（剩下的）').layer === g.layers[0].id);
+  }
+
+  // 清單（純算）
+  const { layerRows } = await import('../js/ui/layerPanel.js');
+  const h = new io.Doc(); const P = h.add(mk('P')); const Q = h.add(mk('Q')); const L9 = h.addLayer(); Q.layer = L9.id; Q.hidden = true;
+  const rows = layerRows(h, [P.id]);
+  ok('★★ 清單每一層：名字、目前、物件數；物件那一列：藏、鎖、選到',
+    rows.length === 2 && rows[0].current && rows[0].count === 1 && rows[0].objects[0].selected && rows[1].count === 1 && rows[1].objects[0].hidden);
+
+  // 讀程式守著：從舊物件變來的每一條都帶 layerFrom；匯入走 doc.add；畫面、選取照圖層
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f2 => readFileSync(join(here, '..', f2), 'utf8');
+  const mn = rd('js/main.js'), iojs = rd('js/core/io.js'), sc = rd('js/view/scene.js'), ih = rd('index.html'), tb = rd('js/ui/toolbar.js');
+  ok('★★★ 從舊物件變來的 9 條（複製、布林、陣列、切穿、切塊、分離、切成實心；分割、打散兩種在 io.js）都帶 layerFrom；插銷跟那一塊同一層',
+    (mn.match(/\.\.\.layerFrom\((o|base|obj)\),/g) || []).length === 7 && (iojs.match(/\.\.\.layerFrom\((from|obj)\),/g) || []).length === 3 && /layer: obj\.layer,\s*\/\/ 圖層 2a：插銷/.test(mn));
+  ok('★★ 匯入 SVG、匯入 3D 走 doc.add（⇒ 放目前這一層；以前直接 push）',
+    /this\.app\.doc\.add\(o\);/.test(rd('js/ui/importPanel.js')) && /this\.app\.doc\.add\(o\);/.test(rd('js/ui/import3dPanel.js')));
+  ok('★★★ 畫面：顏色照 doc.colorOf、看不看得到照 doc.isHidden、鎖照 doc.isLocked',
+    /const col = this\._lastDoc \? this\._lastDoc\.colorOf\(obj\) : obj\.color;/.test(sc) && /node\.material\.color\.setHex\(col\);/.test(sc) && /node\.userData\.locked = D \? D\.isLocked\(obj\) : !!obj\.locked;/.test(sc));
+  ok('★★ 新建 ⇒ resetLayers（clear() ⛔ 清圖層）', /doc\.clearGuides\(\);\s*Object\.assign\(doc\.head, new Doc\(\)\.head\);\s*doc\.resetLayers\(\);/.test(mn));
+  // 面板分頁、拉出來
+  ok('★★★ 面板分頁：選「圖層」⇒ 只剩分頁與圖層那一區（CSS，⛔ 動其他區的 hidden）',
+    /#panel\.showLayers > :not\(#pTabs\):not\(#pLayers\) \{ display: none !important; \}/.test(ih) && /#panel:not\(\.showLayers\) > #pLayers \{ display: none !important; \}/.test(ih)
+    && /panelEl\.classList\.toggle\('showLayers', !!st\.layerTab\);/.test(mn));
+  ok('★★★ 拉出來 ＝ 自己按了才浮（面板收起來⛔ 自動浮 —— 跟工具不一樣）；一開始在右上角；位置、收一條記住',
+    /const float = !!st\.layerPop;/.test(mn) && /placeFloat\(layerFloat\.el, st\.layerPos \|\| null, \$\('stage'\), true\);/.test(mn)
+    && /s\.layerFold = !s\.layerFold/.test(mn) && /s\.layerPos = p;/.test(mn));
+  ok('★★ 收合、開場都叫 placeLayers；updateBar 用 id 找清單重畫（⛔ 讀變數，開場很早就被叫）',
+    /placeTools\(\);\s*placeLayers\(\);\s*updateBar\(\);/.test(mn) && /placeTools\(\);\s*placeLayers\(\);\s*\}\)\(\);/.test(mn)
+    && /const lyBox = document\.getElementById\('layerBox'\);\s*if \(lyBox && lyBox\._ui\) lyBox\._ui\.render\(\);/.test(mn));
+  ok('★★ 浮動視窗帶參數（id、標題、按鈕）；⛔ 帶 ⇒ 跟 1b 的「工具」一樣',
+    /const id = o\.id \|\| 'toolFloat', title = o\.title \|\| '工具';/.test(rd('js/ui/toolFloat.js')) && /\{ id: 'layerFloat', title: '圖層', foldId: 'lfFold', dockId: 'lfDock',/.test(mn)
+    && /right \? \{ x: r\.right - \(el\.offsetWidth \|\| FLOAT_W\) - 12, y: r\.top \+ 120 \}/.test(rd('js/ui/toolFloat.js')));   // 往下讓開右上角 XYZ（本機驗看到）
+  ok('★★★ 清單上每一個動作：改資料 → 重畫 → 選取重新過濾 → 記一步復原',
+    /function layerEdit\(label, fn\) \{\s*const r = fn\(\);[\s\S]{0,120}view\.sync\(doc\);\s*sel\.set\(sel\.ids\);[\s\S]{0,60}commit\(label\);/.test(mn));
+  ok('★★ 物件面板：「顏色用 自己的／跟圖層」、「圖層」下拉（多選一起改）',
+    /together\('顏色用', all\.length\), obj\.colorByLayer \? 'layer' : 'own'/.test(tb) && /together\('圖層', all\.length\), String\(D\.layerOf\(obj\)\.id\)/.test(tb));
+  ok('★★ 狀態列也寫「關掉的圖層裡 N」；全部顯示提醒還有幾個在關掉的圖層裡',
+    /nLayerOff \? `關掉的圖層裡 \$\{nLayerOff\}` : ''/.test(mn) && /還有 \$\{doc\.layerHiddenCount\} 個在關掉的圖層裡/.test(mn));
+  ok('★★ AI.看()：文件列圖層（目前、關掉、鎖住）、每個物件寫在哪一層；功能地圖認得分頁與圖層清單',
+    /圖層: doc\.layers\.map/.test(rd('js/ai/assist.js')) && /圖層: doc\.layerOf\(o\)\.name/.test(rd('js/ai/assist.js'))
+    && /if \(el\.closest\('#pLayers, #layerFloat'\)\) return '圖層';/.test(rd('js/ai/catalog.js')));
 }
 
 section('參考線 甲：從物件的面放（2026-10-17）');
@@ -22904,7 +23025,7 @@ section('介面第二輪 1a：跟著選取／工具的 9 組搬到右側面板�
     /function placeTools\(\)/.test(mn) && /panelEl\.prepend\(sec\)/.test(mn) && /const float = panelEl\.hidden \|\| !!st\.toolPop;/.test(mn)
     && /if \(box\.parentElement !== toolFloat\.body\) toolFloat\.body\.appendChild\(box\);/.test(mn) && /if \(box\.parentElement !== sec\) sec\.appendChild\(box\);/.test(mn)
     && !/\$\('bar'\)\.appendChild\(box\)/.test(mn)
-    && /saveUI\(st\);\s*placeTools\(\);\s*updateBar\(\);/.test(mn) && /\$\('panel'\)\.hidden = !!st\.panel;\s*placeTools\(\);/.test(mn));
+    && /saveUI\(st\);\s*placeTools\(\);\s*(placeLayers\(\);\s*)?updateBar\(\);/.test(mn) && /\$\('panel'\)\.hidden = !!st\.panel;\s*placeTools\(\);/.test(mn));
   ok('★★★ 「工具」區用 document.getElementById 找（⛔ 用 $()：找不到會回替身、永遠是真的 ⇒ 9 組被搬進替身、整組消失 —— 本機版撞到）',
     /let sec = document\.getElementById\('pTools'\);/.test(mn) && /const sec = document\.getElementById\('pTools'\);/.test(mn) && !/\$\('pTools'\)/.test(mn));
   ok('★★ 收空的組兩邊都問（#bar 與 #toolBox）；工具區一組都沒有 ⇒ 連標題一起收',

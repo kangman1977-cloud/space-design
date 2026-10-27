@@ -26,18 +26,24 @@ export function clampPos(pos, size, view) {
 /**
  * 建出浮動視窗（還沒放進任何東西、先藏著）。
  * @param {{onFold:Function, onDock:Function, onMoved:Function}} h 收一條、放回面板、拖完放開（給新位置）
+ * @param {{id?:string, title?:string, foldId?:string, dockId?:string, dockTip?:string}} [o]
+ *   圖層 2a：第二個可以拉出來的（圖層清單）帶自己的 id、標題、按鈕 id；⛔ 給 ⇒ 跟 1b 的「工具」一模一樣
  */
-export function makeFloat(h) {
+export function makeFloat(h, o = {}) {
+  const id = o.id || 'toolFloat', title = o.title || '工具';
+  const foldId = o.foldId || 'tfFold', dockId = o.dockId || 'tfDock';
+  const dockTip = o.dockTip || '放回面板：工具回到右側面板最上面「工具」那一區（面板收著的話會一起打開）';
   const el = document.createElement('div');
-  el.id = 'toolFloat';
+  el.id = id;
+  if (id !== 'toolFloat') el.className = 'floatWin';      // 圖層 2a：樣式在 index.html `.floatWin`（`#toolFloat` 那一套照舊）
   el.hidden = true;
-  el.innerHTML = '<div class="tfHead"><b>工具</b><span class="tfBtns">'
-    + '<button id="tfFold" class="mini" title="收成一條：只留標題列（「工具」兩個字），畫面看得比較多；再按一次展開">收起 ▴</button>'
-    + '<button id="tfDock" class="mini" title="放回面板：工具回到右側面板最上面「工具」那一區（面板收著的話會一起打開）">放回面板 ↘</button>'
+  el.innerHTML = `<div class="tfHead"><b>${title}</b><span class="tfBtns">`
+    + `<button id="${foldId}" class="mini" title="收成一條：只留標題列（「${title}」兩個字），畫面看得比較多；再按一次展開">收起 ▴</button>`
+    + `<button id="${dockId}" class="mini" title="${dockTip}">放回面板 ↘</button>`
     + '</span></div><div class="tfBody"></div>';
   document.body.appendChild(el);
   const head = el.querySelector('.tfHead'), body = el.querySelector('.tfBody');
-  const fold = el.querySelector('#tfFold'), dock = el.querySelector('#tfDock');
+  const fold = el.querySelector('#' + foldId), dock = el.querySelector('#' + dockId);
   fold.onclick = () => h.onFold();
   dock.onclick = () => h.onDock();
 
@@ -78,10 +84,12 @@ export function fitHeight(el) {
  * @param {{x:number,y:number}|null} saved 記住的位置
  * @param {Element} stage 3D 畫面那一塊（`#stage`）
  */
-export function placeFloat(el, saved, stage) {
+export function placeFloat(el, saved, stage, right = false) {
   const r = stage.getBoundingClientRect();
   /** 2a：往下讓開 3D 畫面左上角那一格的視角選單（⛔ 一拉出來就蓋住它）—— 1b 原本是 top + 12 */
-  const want = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved : { x: r.left + 12, y: r.top + 44 };
+  const want = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved
+    : right ? { x: r.right - (el.offsetWidth || FLOAT_W) - 12, y: r.top + 120 }   // 圖層 2a：圖層清單一開始在右上角（⛔ 跟工具視窗疊）；往下 120 讓開右上角 XYZ 小方向標（本機驗看到 +44 會蓋住它）
+    : { x: r.left + 12, y: r.top + 44 };
   const p = clampPos(want, { w: el.offsetWidth || FLOAT_W }, { w: innerWidth, h: innerHeight });
   el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
   fitHeight(el);

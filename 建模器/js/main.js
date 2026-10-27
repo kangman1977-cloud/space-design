@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, setShown, isIsolated, arraySrcFrom, explodeArray,
+import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, setShown, isIsolated, layerFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
@@ -63,6 +63,7 @@ import { ImportPanel } from './ui/importPanel.js';
 import { Import3DPanel } from './ui/import3dPanel.js';
 import { ask, isAskOpen } from './ui/askBox.js';
 import { bindKeep } from './ui/keepPairs.js';
+import { LayerPanel } from './ui/layerPanel.js';
 import { makeFloat, placeFloat } from './ui/toolFloat.js';
 import { LAYOUT_NAMES, VIEW_NAMES, VIEW_DIRS, wantsOrtho } from './view/panes.js';
 
@@ -662,6 +663,7 @@ function duplicateSelected() {
   const made = [];
   for (const o of list) {
     const fresh = new ModelObject({
+      ...layerFrom(o),                             // 圖層 2a：跟原本那個同一層（kang ②）
       name: o.name + ' 複本',
       kind: o.kind,
       src: JSON.parse(JSON.stringify(o.src)),
@@ -698,6 +700,7 @@ function boolOp(op) {
 
   const base = list[0];
   const obj = new ModelObject({
+    ...layerFrom(base),                          // 圖層 2a：跟原本那個同一層（kang ②）
     name: shortName(list, op),
     kind: base.kind,
     src: boolSrcFrom(list, op),
@@ -770,7 +773,7 @@ function showOp(how) {
     lock: `鎖住 ${n} 個　看得到、點不到；要解開按「全部解鎖」`,
     isolate: `只看選到的：其他 ${n} 個先藏起來　再按一次「只看選到的」回來`,
     unisolate: `回到看全部：放回 ${n} 個`,
-    showAll: `全部顯示：拿回 ${n} 個`,
+    showAll: `全部顯示：拿回 ${n} 個` + (doc.layerHiddenCount ? `　還有 ${doc.layerHiddenCount} 個在關掉的圖層裡（到「圖層」那一頁打開）` : ''),
     unlockAll: `全部解鎖：解開 ${n} 個`
   }[how]);
   updateBar();
@@ -809,6 +812,7 @@ function arrayOp(mode) {
      * 陣列物件**只留位置**、角度歸零、縮放歸 1 ⇒ 陣列的方向就是世界的方向，箭頭照樣在零件身上。
      */
     const m = new ModelObject({
+      ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
       name: obj.name + '（' + ARRAY_LABEL[mode] + '）',
       kind: obj.kind,
       src: arraySrcFrom(obj, mode),
@@ -879,6 +883,7 @@ function newDoc() {
    */
   doc.clearGuides();
   Object.assign(doc.head, new Doc().head);
+  doc.resetLayers();                // 圖層 2a：新建 ⇒ 只剩「預設」一層（⚠ clear() ⛔ 清圖層 —— 它是「刪掉所有物件」那條路）
   /** ⑤-24（2026-10-20）：剖面分切跟著模型走的設定（方向、分段表）回到預設 —— 理由在 `slicePanel.js` `resetForNewDoc()` */
   sliceWin.resetForNewDoc();
   unfoldWin.resetForNewDoc();       // ⑤-16：展開圖「合成一行」回到照內容決定
@@ -3610,6 +3615,7 @@ function curveThroughApply(holeOnly = false) {
   const meshes = holeOnly ? [r.outside] : [r.inside, r.outside];
   for (const m of meshes) refreshAfterEdit(m);
   const made = meshes.map((m, i) => new ModelObject({
+    ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
     name: holeOnly ? obj.name : `${obj.name}－${i + 1}`,
     kind: obj.kind,
     src: { type: 'mesh' },
@@ -3660,6 +3666,7 @@ function applyBedCut(obj, pieces, specs, bb, bedMM, marginMM) {
   if (!doc.objects.includes(obj)) { toast('原本的物件已經不在了（被刪掉或換掉）—— 重新開「3D 列印」再切一次', true); return null; }
   for (const m of pieces) refreshAfterEdit(m);
   const made = pieces.map((m, i) => new ModelObject({
+    ...layerFrom(obj),                           // 圖層 2a：跟原本那個同一層（kang ②）
     name: `${obj.name}－${i + 1}`,
     kind: obj.kind,
     src: { type: 'mesh' },
@@ -3675,6 +3682,7 @@ function applyBedCut(obj, pieces, specs, bb, bedMM, marginMM) {
     const m = unionMeshes(ms);
     refreshAfterEdit(m);
     pins.push(new ModelObject({
+      layer: obj.layer,                       // 圖層 2a：插銷跟那一塊同一層（顏色照舊固定紅色）
       name: `${obj.name} 插銷 ⌀${s.dMM} × ${+s.lenMM.toFixed(1)} mm（${s.n} 根）`,
       kind: 'solid', src: { type: 'mesh' }, mesh: m, color: 0xe2483d, thickness: obj.thickness
     }));
@@ -5282,6 +5290,7 @@ function separateSelected() {
    * 物件還沒建起來就沒有那個矩陣。
    */
   const made = r.meshes.map((m, i) => new ModelObject({
+    ...layerFrom(obj),                    // 圖層 2a：跟原本那個同一層（kang ②）
     name: `${obj.name}－${i + 1}`,
     kind: obj.kind,
     src: { type: 'mesh' },
@@ -5354,6 +5363,7 @@ function solidCutSelected() {
   for (const m of r.meshes) refreshAfterEdit(m);
   /** 名字、變換、原點：跟 `分離` 一模一樣（理由見 `separateSelected()` 那一段）*/
   const made = r.meshes.map((m, i) => new ModelObject({
+    ...layerFrom(obj),                    // 圖層 2a：跟原本那個同一層（kang ②）
     name: `${obj.name}－${i + 1}`,
     kind: obj.kind,
     src: { type: 'mesh' },
@@ -8005,8 +8015,13 @@ function updateBar() {
   $('oIso').classList.toggle('on', iso);
   $('oShowAll').hidden = !nHid; $('oShowAll').textContent = `全部顯示（${nHid}）`;
   $('oUnlockAll').hidden = !nLock; $('oUnlockAll').textContent = `全部解鎖（${nLock}）`;
-  $('sShow').hidden = !(nHid || nLock);
-  $('sShow').textContent = [nHid ? `藏起來 ${nHid}` : '', nLock ? `鎖住 ${nLock}` : ''].filter(Boolean).join('　');
+  /** 圖層 2a：在關掉的圖層裡的也寫（kang ⑤ 分開記、要提醒）*/
+  const nLayerOff = doc.layerHiddenCount;
+  $('sShow').hidden = !(nHid || nLock || nLayerOff);
+  $('sShow').textContent = [nHid ? `藏起來 ${nHid}` : '', nLock ? `鎖住 ${nLock}` : '', nLayerOff ? `關掉的圖層裡 ${nLayerOff}` : ''].filter(Boolean).join('　');
+  /** 圖層 2a：圖層清單跟著重畫（⚠ 用 id 問、⛔ 讀 placeLayers 那邊的變數 —— 開場很早就被叫）*/
+  const lyBox = document.getElementById('layerBox');
+  if (lyBox && lyBox._ui) lyBox._ui.render();
 
   // 陣列一個物件就夠。板件的陣列不需要布林函式庫，所以不綁 csgReady
   for (const id of ['aLinear', 'aRadial', 'aMirror']) $(id).hidden = sel.count < 1;
@@ -9098,6 +9113,98 @@ function placeTools() {
   sec.querySelector('#toolPop').hidden = float;
 }
 
+/**
+ * 🔴 **圖層 2a（kang 2026-10-28「照建議」→ `規格\建模器-圖層與群組.md`「2a」）：面板分頁「工具與屬性｜圖層」＋圖層清單可以拉出來。**
+ * - 分頁在面板最上面（`#pTabs`）；選「圖層」⇒ 面板只剩分頁與 `#pLayers`（CSS `#panel.showLayers`，⛔ 動其他區自己的 hidden）。選哪一頁記在 `layerTab`。
+ * - 拉出來（`layerPop`）⇒ 清單（`#layerBox`）搬進浮動視窗（`makeFloat` 帶參數、預設在畫面右上角，⛔ 跟工具視窗疊）；位置 `layerPos`、收一條 `layerFold`。
+ * - ⚠ 跟「工具」不一樣：面板收起來⛔ 自動浮（清單一直蓋在畫面上會擋模型 —— kang 第二輪「畫面盡量大」）；要看就自己拉出來。
+ * - 清單本人在 `ui/layerPanel.js`；改資料一律走 `layerEdit()`（重畫、選取重新過濾、記一步復原）。
+ * ⚠ `updateBar()` 開場很早就被叫 ⇒ 那邊用 `document.getElementById('layerBox')._ui` 找清單、⛔ 讀這裡的變數（同 1b 的 TDZ 那一則）。
+ */
+let layerFloat = null;
+function placeLayers() {
+  const panelEl = $('panel');
+  let tabs = document.getElementById('pTabs');
+  if (!tabs) {
+    tabs = document.createElement('div');
+    tabs.id = 'pTabs';
+    tabs.innerHTML = '<button id="tabTools" title="工具與屬性：工具區、選到的物件、結構分析、干涉檢查">工具與屬性</button>'
+      + '<button id="tabLayers" title="圖層：每一層的開關、鎖、顏色，和每一層裡的物件">圖層</button>';
+    panelEl.prepend(tabs);
+    const sec = document.createElement('section');
+    sec.id = 'pLayers';
+    sec.innerHTML = '<h2>圖層 <button id="layerPop" class="mini" title="拉出來：圖層清單變成一個可以拖的浮動視窗（一開始在畫面右上角）；按視窗上的「放回面板」回來">拉出來 ↗</button></h2>'
+      + '<div id="layerAway" class="toolAway" hidden><span>圖層在浮動視窗</span>'
+      + '<button id="layerBack" class="mini" title="放回面板：浮動視窗收掉，圖層清單回到這裡">放回面板 ↘</button></div>'
+      + '<div id="layerBox"></div>';
+    tabs.after(sec);
+    const lb = sec.querySelector('#layerBox');
+    lb._ui = new LayerPanel(lb, {
+      doc, sel,
+      edit: (label, fn) => layerEdit(label, fn),
+      setCurrent: id => { doc.currentLayer = id; autosave(doc); updateBar(); toast(`目前這一層：「${doc.layerById(id).name}」（新做的物件放這裡）`); },
+      pick: (id, add) => {
+        if (!sel._canPick(id)) { toast('這個物件藏起來、鎖住了，或在關掉／鎖住的圖層裡 —— 選不到', true); return; }
+        sel.set(add ? [...new Set([...sel.ids, id])] : [id]);
+        panel.refresh(); updateBar();
+      },
+      toast
+    });
+    tabs.querySelector('#tabTools').onclick = () => setLayerTab(false);
+    tabs.querySelector('#tabLayers').onclick = () => setLayerTab(true);
+    sec.querySelector('#layerPop').onclick = () => setLayerPop(true);
+    sec.querySelector('#layerBack').onclick = () => setLayerPop(false);
+  }
+  const st = loadUI();
+  panelEl.classList.toggle('showLayers', !!st.layerTab);
+  tabs.querySelector('#tabTools').classList.toggle('on', !st.layerTab);
+  tabs.querySelector('#tabLayers').classList.toggle('on', !!st.layerTab);
+  const box = document.getElementById('layerBox'), sec = document.getElementById('pLayers');
+  const float = !!st.layerPop;
+  if (float) {
+    if (!layerFloat) {
+      layerFloat = makeFloat({
+        onFold: () => { const s = loadUI(); s.layerFold = !s.layerFold; saveUI(s); placeLayers(); },
+        onDock: () => setLayerPop(false),
+        onMoved: p => { const s = loadUI(); s.layerPos = p; saveUI(s); }
+      }, { id: 'layerFloat', title: '圖層', foldId: 'lfFold', dockId: 'lfDock',
+        dockTip: '放回面板：圖層清單回到右側面板「圖層」那一頁（面板收著的話會一起打開）' });
+    }
+    if (box.parentElement !== layerFloat.body) layerFloat.body.appendChild(box);
+    layerFloat.el.hidden = false;
+    layerFloat.el.classList.toggle('folded', !!st.layerFold);
+    layerFloat.fold.textContent = st.layerFold ? '展開 ▾' : '收起 ▴';
+    placeFloat(layerFloat.el, st.layerPos || null, $('stage'), true);
+  } else {
+    if (layerFloat) layerFloat.el.hidden = true;
+    if (box.parentElement !== sec) sec.appendChild(box);
+  }
+  sec.querySelector('#layerAway').hidden = !float;
+  sec.querySelector('#layerPop').hidden = float;
+  box._ui.render();
+}
+function setLayerTab(on) { const s = loadUI(); s.layerTab = !!on; saveUI(s); placeLayers(); }
+/** 拉出來／放回面板；放回時面板收著 ⇒ 一起打開、切到「圖層」那一頁（放回就是要在面板看到它）*/
+function setLayerPop(on) {
+  const s = loadUI(); s.layerPop = !!on; if (!on) s.layerTab = true; saveUI(s);
+  if (!on && $('panel').hidden) { setCollapsed('panel', false); return; }   // setCollapsed 裡會 placeLayers
+  placeLayers();
+}
+/**
+ * 圖層清單上的每一個動作：改資料 → 重畫 → 選取重新過濾（關掉、鎖住的退出選取）→ 記一步復原（kang 第一批 ⑤ 可以 Ctrl+Z）。
+ * ⚠ 沒有真的改到東西（例如改名改成一樣的）⇒ `commit()` 照快照比對、⛔ 多記一步。
+ */
+function layerEdit(label, fn) {
+  const r = fn();
+  if (r && r.ok === false) { toast(r.reason, true); return; }
+  view.sync(doc);
+  sel.set(sel.ids);
+  panel.analysisCache.clear();
+  commit(label);
+  panel.refresh();
+  updateBar();
+}
+
 /** 「拉出來」「放回面板」。放回時面板收著 ⇒ 一起打開（kang 2026-10-27 ⑤：放回面板就是要回面板）*/
 function setToolPop(on) {
   const st = loadUI(); st.toolPop = !!on; saveUI(st);
@@ -9111,6 +9218,7 @@ function setCollapsed(which, on) {
   el.hidden = !!on;
   const st = loadUI(); st[which] = !!on; saveUI(st);
   placeTools();
+  placeLayers();
   updateBar();
   /** ⚠ 版面改了才叫 —— 見上面那一則 */
   view.resize();
@@ -9125,6 +9233,7 @@ $('panelToggle').onclick = () => setCollapsed('panel', !$('panel').hidden);
   $('bar').hidden = !!st.bar;
   $('panel').hidden = !!st.panel;
   placeTools();
+  placeLayers();
 })();
 
 window.addEventListener('resize', () => view.resize());
@@ -9138,6 +9247,9 @@ window.addEventListener('resize', () => view.resize());
 const refloat = () => { if (toolFloat && !toolFloat.el.hidden) placeFloat(toolFloat.el, loadUI().toolPos || null, $('stage')); };
 window.addEventListener('resize', refloat);
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(refloat).observe($('app'));
+const reLayerFloat = () => { if (layerFloat && !layerFloat.el.hidden) placeFloat(layerFloat.el, loadUI().layerPos || null, $('stage'), true); };   // 圖層 2a：同一套
+window.addEventListener('resize', reLayerFloat);
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(reLayerFloat).observe($('app'));
 view.resize();
 setMode('translate');
 loop();

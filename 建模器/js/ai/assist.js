@@ -141,10 +141,12 @@ export function lookState(app, windows = [], toast = '', panel = null) {
   const es = sel.editSels || [];
   const picked = es.length ? { [EL_NAME[es[0].kind] || es[0].kind]: es.length } : {};
   return {
-    文件: { 名稱: (doc.head && doc.head.name) || '未命名', 物件數: doc.objects.length },
+    文件: { 名稱: (doc.head && doc.head.name) || '未命名', 物件數: doc.objects.length,
+      /** 圖層 2a：有幾層、目前這一層、哪幾層關掉／鎖住 */
+      ...(doc.layers ? { 圖層: doc.layers.map(l => ({ 名稱: l.name, ...(l.id === doc.currentLayer ? { 目前: true } : {}), ...(l.off ? { 關掉: true } : {}), ...(l.locked ? { 鎖住: true } : {}) })) } : {}) },
     模式: { 拉點線面: !!sel.editMode, 開著的視窗: windows },
     選取: { 物件: sel.objects.map(o => o.name), ...picked },
-    物件: doc.objects.map(objectInfo),
+    物件: doc.objects.map(o => ({ ...objectInfo(o), ...(doc.layerOf ? { 圖層: doc.layerOf(o).name } : {}) })),   // 圖層 2a：在哪一層
     ...(panel && sel.active ? { 物件面板: { 物件: sel.active.name, ...panel } } : {}),
     復原紀錄: { 上一步: hist.undoLabel, 下一步: hist.redoLabel },
     最近的提示: toast

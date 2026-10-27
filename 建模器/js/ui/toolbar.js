@@ -785,7 +785,23 @@ export class Panel {
     this._rowColor(together('顏色', all.length), obj.color, v => {
       for (const o of all) o.color = v;
       this._edit(all.length > 1 ? `改顏色（${all.length} 個）` : '改顏色');
-    }, '顏色：畫面上這個物件的顏色');
+    }, '顏色：畫面上這個物件的顏色（「顏色用」選「跟圖層」時改的是它自己的那一份，畫面照圖層的）');
+
+    /**
+     * 🔴 **圖層 2a（kang 2026-10-28「照建議」④）**：顏色用「自己的」（預設，畫面⛔ 變）或「跟圖層」；在哪一層（換了就移過去）。
+     * 多選照「一起改」那一套（③-8）。
+     */
+    const D = this.app.doc;
+    if (D && D.layers) {
+      this._rowSelect(together('顏色用', all.length), obj.colorByLayer ? 'layer' : 'own', [['own', '自己的'], ['layer', '跟圖層']], v => {
+        for (const o of all) o.colorByLayer = v === 'layer';
+        this._edit(v === 'layer' ? '顏色改用圖層的' : '顏色改用自己的');
+      }, '顏色用：「自己的」＝ 上面那一格的顏色；「跟圖層」＝ 這個物件所在那一層的顏色（圖層清單上改）');
+      this._rowSelect(together('圖層', all.length), String(D.layerOf(obj).id), D.layers.map(l => [String(l.id), l.name]), v => {
+        for (const o of all) o.layer = Number(v);
+        this._edit(`移到圖層「${D.layerById(Number(v)).name}」`);
+      }, '在哪一層：換了就移過去（那一層關掉或鎖住的話，移過去就看不到／點不到了）');
+    }
   }
 
   /**

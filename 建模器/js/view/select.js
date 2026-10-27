@@ -2064,7 +2064,7 @@ export class Selection {
     if (this.editMode) { this._marqueeEdit(rect, box, additive); return; }
 
     /** 圖層與群組第一批：藏起來、鎖住的⛔ 框（`set()` 也會擋，這裡先濾掉 ⇒「框到幾個」講的數字對）*/
-    const entries = this._doc.objects.filter(o => !o.hidden && !o.locked).map(o => ({ id: o.id, box: worldBounds(o) }));
+    const entries = this._doc.objects.filter(o => !this._doc.isHidden(o) && !this._doc.isLocked(o)).map(o => ({ id: o.id, box: worldBounds(o) }));
     const hits = objectsInRect(entries, rect, this.view.camera, box.width, box.height);
     this.set(additive ? [...new Set([...this.ids, ...hits])] : hits);
     if (this.hooks.onMarquee) this.hooks.onMarquee(hits.length);
@@ -2488,7 +2488,7 @@ export class Selection {
       const ghost = this.view && this.view._ghostId;
       for (const o of (this._doc && this._doc.objects) || []) {
         if (ghost && o.id === ghost) continue;
-        if (o.hidden) continue;                      // 圖層與群組第一批：藏起來的⛔ 吸（看不到的東西⛔ 該吸過去）
+        if (this._doc.isHidden(o)) continue;         // 圖層與群組第一批（圖層 2a 連圖層關掉的）：藏起來的⛔ 吸（看不到的東西⛔ 該吸過去）
         const b = worldBounds(o);
         /** 🔴 乙：外框投影到這一片上（側視看到的是 Z 與高度，⛔ 是 X 與 Z） */
         if (!b.isEmpty()) this._penFoot.push(...footprintPoints(this._penFrame().box2(b)));
@@ -2951,7 +2951,7 @@ export class Selection {
   /** 選得進來嗎：還在文件裡、⛔ 藏起來、⛔ 鎖住 */
   _canPick(id) {
     const o = this._doc && this._doc.byId(id);
-    return !!o && !o.hidden && !o.locked;
+    return !!o && !this._doc.isHidden(o) && !this._doc.isLocked(o);      // 圖層 2a：圖層關掉、鎖住的一樣選不進來
   }
 
   toggle(id) {

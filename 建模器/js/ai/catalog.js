@@ -62,6 +62,9 @@ export function whereOf(el) {
   if (!grp && el.closest('#toolFloat, #pTools')) return '工具';
   /** 2a：每一格左上角的視角選單（疊在 3D 畫面上）*/
   if (el.closest('#paneUI')) return '畫面：每一格的視角';
+  /** 圖層 2a（kang 2026-10-28）：面板分頁、圖層清單（面板那一頁或拉出來的浮動視窗）⇒ 歸「圖層」（⛔ 跟著擺哪裡變）*/
+  if (el.closest('#pTabs')) return '右邊面板：分頁';
+  if (el.closest('#pLayers, #layerFloat')) return '圖層';
   if (grp) {
     /**
      * 介面第二輪 1a（kang 2026-10-27）：跟著選取／工具的 9 組在 #toolBox 裡 ——

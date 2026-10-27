@@ -91,6 +91,45 @@ html, body {
 #toolFloat.folded .tfHead { border-radius: 10px; }
 .toolAway { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-size: 12px; color: #8b93a1; }
 .toolAway[hidden], #toolPop[hidden] { display: none; }
+/* 🔴 圖層 2a（kang 2026-10-28「照建議」→ 規格\建模器-圖層與群組.md「2a」）：
+   面板最上面兩個分頁「工具與屬性｜圖層」（main.js placeLayers()）；選「圖層」⇒ 面板只剩分頁＋圖層那一區（其他區用 CSS 收，⛔ 動它們自己的 hidden）。
+   圖層清單可以拉出來：浮動視窗 .floatWin（ui/toolFloat.js makeFloat 帶參數；樣式照 #toolFloat 那一套）。 */
+#pTabs { display: flex; position: sticky; top: 0; z-index: 2; background: #1c1f25; border-bottom: 1px solid #333842; }
+#pTabs button { flex: 1; padding: 7px 4px; background: transparent; color: #8b93a1; border: 0; border-bottom: 2px solid transparent; border-radius: 0; font-size: 13px; }
+#pTabs button.on { color: #fff; border-bottom-color: #4d8ae8; background: #20232a; }
+#panel.showLayers > :not(#pTabs):not(#pLayers) { display: none !important; }
+#panel:not(.showLayers) > #pLayers { display: none !important; }
+.floatWin {
+  position: fixed; z-index: 30; width: 300px; display: flex; flex-direction: column;
+  background: #20232a; border: 1px solid #4a505b; border-radius: 10px; box-shadow: 0 10px 24px rgba(0,0,0,.5);
+}
+.floatWin[hidden] { display: none; }
+.floatWin .tfHead {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  padding: 6px 8px 6px 12px; background: #24272e; border-radius: 10px 10px 0 0;
+  font-size: 12px; color: #c9cfd8; cursor: move; touch-action: none; user-select: none;
+}
+.floatWin .tfBtns { display: flex; gap: 4px; }
+.floatWin .tfBody { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 8px; }
+.floatWin.folded .tfBody { display: none; }
+.floatWin.folded .tfHead { border-radius: 10px; }
+#layerBox { padding: 4px 8px 8px; }
+.lyRow, .lyObj { display: flex; align-items: center; gap: 3px; padding: 2px 2px; border-radius: 4px; font-size: 13px; white-space: nowrap; }
+.lyRow.cur { background: #233047; }
+.lyObj { padding-left: 22px; }
+.lyObj.sel { background: #23395c; }
+.lyObj.dim .lyName { color: #6a717c; }
+.lyRow button, .lyObj button { padding: 0 4px; min-width: 22px; background: transparent; border: 0; color: #aab1bd; font-size: 13px; }
+.lyRow button:disabled { opacity: .25; cursor: default; }
+.lyIc.off { opacity: .35; }
+.lyIc.lockOn { color: #e0b45c; }
+.lyCol { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; flex: none; }
+.lyName { flex: 1; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+input.lyName { background: #2f333c; color: #e8eaed; border: 1px solid #4d8ae8; border-radius: 4px; padding: 1px 4px; font-size: 13px; }
+.lyCt { color: #8b93a1; font-size: 12px; min-width: 18px; text-align: right; }
+.lyCur { color: #8fb4ec; font-size: 11px; }
+.lyAsk { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 4px 6px 6px 24px; font-size: 12px; color: #e0b45c; }
+.lyBtns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 /* 🔴 2a 分割畫面（kang 2026-10-27「同意你的建議」）：每一格的框與左上角視角選單（main.js `buildPaneUI()`）。
    整層⛔ 擋滑鼠（pointer-events: none），只有選單接得到；藍框 ＝ 上面視角按鈕作用的那一格。
    第 3 層：在畫布上、在尺寸框（6）與浮動視窗（30）下面。 */

@@ -1,10 +1,29 @@
-圖層與群組第一批結案（kang 2026-10-28「驗收OK」）—— 先驗（032d00e 上傳後：index.html、main.js、io.js、scene.js、select.js、四個出圖視窗、toolbar.js、assist.js、catalogInfo.js 線上都是新版、沒有「版本對不上」、這一頁 82 個檔全部載入成功；瀏覽器模擬 1600 寬、滑鼠點，照 ⏳ 清單 8 步：加圓柱「顯示」組三顆；藏起來 ⇒「藏起來 1」、「全部顯示（1）」、Ctrl+A 只選到方塊；鎖住 ⇒ 半透明、點不到、「全部解鎖（1）」；沒選東西 3D 列印、展開圖〔1.38 m² ＝ 方塊表面積〕、剖面分切〔疊高 45 只有方塊〕、OBJ 都寫「（有 1 個藏起來的沒算）」—— 本機沒開的三個這次開了；重新整理還在；全部解鎖 → Ctrl+Z → Ctrl+Y；只看選到的「其他 1 個先藏起來」、再按「放回 1 個」、自己藏的圓柱照舊藏著；全部顯示「拿回 1 個」；清單第 8 步寫錯〔選著東西時「顯示」組不會整組收〕先驗時改；4 則 404【推論】是這個分頁先前開不存在頁面留下的；暫存先記下、測完放回、清掉測試記的 modeler_doc 等四項、先離開頁面再確認）寫進規格後，連同「⏳ 實測（kang）」逐字搬到 HISTORY 新一節「圖層與群組第一批：藏起來、鎖住、只看選到的結案」（20 行 md5 30695437c740a4d7530ec68bea72229b；搬進去後重算一樣），附經過與老實話（全部顯示／解鎖照 ⑤-2 改放「顯示」組、本機驗時改兩件、fs.cpSync 中文路徑、伺服器漏回 ribbon.js、三個視窗是線上才開、清單第 8 步寫錯、先驗與結案同一個 commit）；規格分批表與第一批標題加「kang 2026-10-28 驗收 OK」、⏳ 換成「實測：已結案」＋指到 HISTORY；設計方向加第一批驗收 OK 一行；STATUS 拿掉 ⏳ 那一行、真待辦改成「第一批驗收 OK、下一步第二批動工前先查再問 kang」；目次產生器重產＋檢查通過；不改程式
+圖層與群組 2a：圖層（kang 2026-10-28「開始第二批，照流程先查程式、列細節再問我」→ 查完 → 七題「照建議」：① 拆 2a 圖層 → 2b 群組 ② 全新做的放目前這一層、從舊物件變來的跟原本同一層 ③ 舊檔全部放「預設」、刪有東西的先問、目前這一層不能刪藏鎖 ④ 顏色「自己的／跟圖層」預設自己的、一顆「這一層全部用圖層顏色」⑤ 圖層關掉與物件藏起來分開記、效果一樣、全部顯示只管物件 ⑥ 先不做子圖層、拖拉排序、匯出圖層名 ⑦ 群組細節留 2b）—— 查完的（圖層與群組-設計方向.md「第二批動工前查到的」：Rhino 新物件放目前這一層、目前這一層不能藏鎖刪、刪有物件的圖層跳警告、顏色跟圖層或自己的〔已查證〕；複製群組 Rhino 留原組、SketchUp 各自一組〔推論〕；程式：浮動視窗寫死給「工具」、10 條變出新物件的路與 5 條全新的、匯入兩條直接 push 沒經過 doc.add、匯出都不用顏色）；io.js Doc.layers／currentLayer、add() 補目前這一層、layerById／layerOf／isHidden／isLocked／colorOf／addLayer／removeLayer／resetLayers／layerHiddenCount、toJSON／loadJSON（normalizeLayers、舊檔放第一層、不跳版號）、ModelObject.layer／colorByLayer、layerFrom()、shown()／hiddenNote() 照 isHidden、只看選到的不碰關掉圖層裡的；10 條路帶 ...layerFrom（main.js 7、io.js 3、插銷 layer: obj.layer）、匯入兩條改走 doc.add；scene.js 看不看得到、鎖、顏色照圖層；select.js 選取、拉框、鋼筆照圖層；新 ui/layerPanel.js（layerRows 純算、LayerPanel 清單：▸ 👁 🔒 顏色 名字 數 ✕、物件列、刪有東西跳三選一、底下四顆）；main.js placeLayers（面板分頁「工具與屬性｜圖層」、#pLayers、拉出來的浮動視窗、面板收起來不自動浮）、setLayerTab／setLayerPop、layerEdit（記一步）、updateBar 用 id 找清單重畫、狀態列「關掉的圖層裡 N」、全部顯示提醒、新建 resetLayers；toolFloat.js makeFloat 帶參數、placeFloat 右上角（往下 120 讓開 XYZ）；index.html 分頁與清單樣式、.floatWin；物件面板「顏色用」「圖層」兩列；AI.看() 列圖層；功能地圖「右邊面板：分頁」「圖層」；回歸測試 4981 → 5014 全部通過（第一批 5 項、1b 2 項讀程式照新寫法改）；在複本裡改壞 21 處全部抓到、每處都跑到「通過 N」（第一輪兩項測試在改壞時整個當掉、一處錨點不唯一 ⇒ 測試改成出錯照樣打 ✗、換錨點補跑）；本機（埠 8825、1600 寬、滑鼠點）分頁、新圖層、圓柱放進目前這一層、換目前這一層、關掉圖層與狀態列、刪有東西的三選一與 Ctrl+Z、這一層全部用圖層顏色、拉出來與重新整理還在與放回、物件面板兩列與移層換色、鎖住圖層點不到，主控台沒錯；驗的時候改一件（拉出來的視窗蓋住 XYZ ⇒ 往下 120）；規格 規格\建模器-圖層與群組.md 新一節「2a」（含 ⏳ 實測）；設計方向第二批查到的與定案；STATUS ⏳ 一行、真待辦；目次產生器重產＋檢查通過
 
-動到 5 個檔：
-  M  HISTORY.md                     新一節「圖層與群組第一批…結案」＋目次
-  M  規格/建模器-圖層與群組.md        先驗與 ⏳ 搬走、換成已結案、標驗收 OK
-  M  圖層與群組-設計方向.md           第一批驗收 OK 一行
-  M  STATUS.md                      拿掉 ⏳ 一行、真待辦改成第一批驗收 OK
+【這次要做什麼】
+圖層與群組 2a：每個物件屬於一層；面板分頁「圖層」清單可以拉出來；新物件放哪一層；圖層的開關、鎖、顏色；刪圖層先問；舊檔放「預設」。
+
+【依賴哪些事實】
+  1. fromJSON 只讀列出來的欄位、Doc.loadJSON 只讀 head／objects／guides  【已查證 · io.js】
+  2. 浮動視窗 makeFloat 寫死 id、標題、按鈕 id  【已查證 · ui/toolFloat.js】
+  3. 匯入 SVG、3D 直接 doc.objects.push  【已查證 · importPanel.js、import3dPanel.js】
+  4. 變出新物件的 10 條路與各自的來源物件  【已查證 · main.js、io.js 各處 new ModelObject】
+  5. 匯出都不用物件顏色  【已查證 · dxf.js、obj.js、threemf.js、stl.js】
+  6. 面板內容只建一次、「工具」區是 placeTools 另外插的  【已查證 · toolbar.js _build、main.js placeTools】
+
+【會動到哪幾個檔】
+  M  建模器/js/core/io.js、js/view/scene.js、js/view/select.js、js/main.js
+  M  建模器/js/ui/toolFloat.js、toolbar.js、importPanel.js、import3dPanel.js
+  A  建模器/js/ui/layerPanel.js
+  M  建模器/js/ai/assist.js、catalog.js、catalogInfo.js
+  M  建模器/index.html
+  M  建模器/tests/run.mjs
+  M  規格/建模器-圖層與群組.md
+  M  圖層與群組-設計方向.md
+  M  STATUS.md
   M  版控工具/commit-msg.txt
+
+【怎麼知道做對了】
+新物件、變出來的物件在對的那一層；圖層關掉／鎖住的看不到／點不到、出圖不算且分開數；存讀檔與舊檔對；刪圖層三種對；本機清單按得到、Ctrl+Z 退得回、拉出來記得住。
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

@@ -461,7 +461,7 @@ export class ImportPanel {
       for (const o of objs) { o.pos.x += spot.x; o.pos.z += spot.z; }
     }
 
-    for (const o of objs) this.app.doc.objects.push(o);
+    for (const o of objs) this.app.doc.add(o);      // 圖層 2a：走 doc.add() ⇒ 放「目前這一層」（以前直接 push，⛔ 經過它）
     this.app.sel.set(objs.map(o => o.id));
     this.app.onEdit(`匯入線稿（${objs.length} 個物件）`);
     /** ⑤-18（2026-10-20）：匯入完把鏡頭拉到匯進來的那幾個（以前⛔ 入鏡 ⇒ 大的稿常常在畫面外，T6）*/

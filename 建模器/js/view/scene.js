@@ -381,7 +381,7 @@ export class SceneView {
      * 圖層與群組第一批：藏起來、鎖住的⛔ 放進來 ⇒ 點選、拉框、找面全部點不到。
      * ⚠ three.js 的 `intersectObjects()` ⛔ 看 `visible`（藏起來的照樣打得到），所以一定要在這裡濾掉。
      */
-    this.pickables = doc.objects.filter(o => !o.hidden && !o.locked).map(o => this.byId.get(o.id)).filter(Boolean);
+    this.pickables = doc.objects.filter(o => !doc.isHidden(o) && !doc.isLocked(o)).map(o => this.byId.get(o.id)).filter(Boolean);   // 圖層 2a：圖層關掉、鎖住的一樣
     this._seamsDirty = false;      // 這一輪已經全部重畫過了
     this._geomDirty = false;
 
@@ -838,17 +838,21 @@ export class SceneView {
       node.userData.shellT = shellT;
       node.userData.liftKey = liftKey;
     }
-    node.getObjectByName('subdGhost').material.color.setHex(obj.color);
+    /** 圖層 2a：顏色「跟圖層」⇒ 用圖層的（`doc.colorOf()`，kang ④）*/
+    const col = this._lastDoc ? this._lastDoc.colorOf(obj) : obj.color;
+    node.getObjectByName('subdGhost').material.color.setHex(col);
 
     node.position.copy(obj.pos);
     node.rotation.copy(obj.rot);
     node.scale.copy(obj.scale);
     /** 圖層與群組第一批：藏起來 ⇒ 整個不畫（稜線、分片線是它的子物件，一起藏）；鎖住 ⇒ `_applyGhost()` 調半透明 */
-    node.visible = !obj.hidden;
-    node.userData.locked = !!obj.locked;
+    /** 圖層 2a：圖層關掉 ⇒ 一樣不畫；圖層鎖住 ⇒ 一樣半透明（`doc.isHidden()`／`isLocked()`）*/
+    const D = this._lastDoc;
+    node.visible = !(D ? D.isHidden(obj) : obj.hidden);
+    node.userData.locked = D ? D.isLocked(obj) : !!obj.locked;
 
-    node.material.color.setHex(obj.color);
-    node.getObjectByName('edges').material.color.setHex(edgeLineColor(obj.color));   // 物件換顏色 ⇒ 稜線跟著換深淺
+    node.material.color.setHex(col);
+    node.getObjectByName('edges').material.color.setHex(edgeLineColor(col));   // 物件換顏色 ⇒ 稜線跟著換深淺
     node.material.wireframe = this.wireframe;
     /**
      * 只有「開放而且沒加厚」的面需要雙面繪製 —— 否則從背面看會是透明的。

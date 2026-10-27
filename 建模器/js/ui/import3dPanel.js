@@ -792,7 +792,7 @@ export class Import3DPanel {
       const spot = freeSpot(unionBounds(objs), { x: t.x, z: t.z }, this.app.doc.objects.map(worldBounds));
       for (const o of objs) { o.pos.x += spot.x; o.pos.z += spot.z; }
     }
-    for (const o of objs) this.app.doc.objects.push(o);
+    for (const o of objs) this.app.doc.add(o);      // 圖層 2a：走 doc.add() ⇒ 放「目前這一層」（以前直接 push，⛔ 經過它）
     this.app.sel.set(objs.map(o => o.id));
     this.app.onEdit(`匯入 3D 模型（${objs.length} 個物件）`);
     if (this.app.view) this.app.view.frameAll(this.app.doc, objs.map(o => o.id));
