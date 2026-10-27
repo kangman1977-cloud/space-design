@@ -1,32 +1,10 @@
-圖層與群組第一批：藏起來、鎖住、只看選到的（kang 2026-10-27 開「圖層」＋「群組..也是需要處理的部分」→ 查完 → 看樣板 → 「照建議」：① 藏鎖與圖層都做、分兩批 ② 群組點一個整組選、點兩下進去 ③ 清單放面板分頁、可以拉出來 ④ 沒選東西出圖藏起來的不算 ⑤ 可以 Ctrl+Z）—— 查完的（新 圖層與群組-設計方向.md：Rhino 圖層〔關、鎖、顏色、子層〕與 Hide／Lock／Isolate、Group；SketchUp 標記與群組／元件；Blender 集合與大綱的眼睛、游標；Fusion、Illustrator 論壇與教學〔推論〕；程式現況：沒有物件清單、fromJSON 只讀列出來的欄位、three.js 點選不看 visible、多選拖曳已有 groupTransform、group 這個字被分片成群用掉）；樣板 樣板-圖層與群組.html（收納盒、第一批／第二批、清單放甲乙丙、群組點兩下或 Ctrl＋Shift）；io.js ModelObject 加 hidden／locked／isoHidden（建構子、toJSON 有才存、fromJSON）、Doc.shown()／hiddenCount／lockedCount／hiddenNote()、setShown()、isIsolated()；scene.js 藏起來不畫、鎖住半透明 LOCKED_OPACITY 0.4（併進 _applyGhost）、pickables 濾掉藏鎖、frameAll 跳過看不到的；select.js set()／revalidate() 走 _canPick()、拉框先濾、鋼筆不吸藏起來的外框；main.js showOp()、updateBar 管「顯示」組五顆與括號、狀態列 #sShow、干涉檢查只算看得到的並講幾個沒算（查不了時也講）；STL／3MF、OBJ、展開圖、剖面分切沒選東西用 doc.shown() 並寫「（有 N 個藏起來的沒算）」；齒輪檢查用 doc.shown()；AI.看() 加藏起來、鎖住標記；index.html #toolBox 最前面「顯示」組（全部顯示／解鎖照 ⑤-2 規則放這裡、不放上方檢視）、狀態列 #sShow；功能地圖「工具：顯示」；回歸測試 4956 → 4981 全部通過（舊的兩項讀程式照新寫法改）；在複本裡改壞 18 處全部抓到、每處都跑到「通過 N」（驗的時候補的干涉檢查那一句另外補跑一處）；本機（埠 8824、1600 寬、滑鼠點）藏、Ctrl+A、鎖、3D 列印「（有 1 個藏起來的沒算）」、重新整理還在、全部解鎖與 Ctrl+Z／Ctrl+Y、只看選到的與回來（自己藏的照舊藏著）、全部顯示都對，主控台沒錯；驗的時候改兩件（干涉檢查查不了也講藏起來的、提示數字講清楚藏了／放回幾個）；老實話（fs.cpSync 碰中文路徑讓 node 直接結束、改一個檔一個檔複製；中途一次伺服器沒回 ribbon.js 重新整理就好；剖面、展開、OBJ 的提醒只有測試守著）；規格 規格\建模器-圖層與群組.md（新，含 ⏳ 實測）；STATUS ⏳ 一行、真待辦一行；目次產生器重產＋檢查通過
+圖層與群組第一批結案（kang 2026-10-28「驗收OK」）—— 先驗（032d00e 上傳後：index.html、main.js、io.js、scene.js、select.js、四個出圖視窗、toolbar.js、assist.js、catalogInfo.js 線上都是新版、沒有「版本對不上」、這一頁 82 個檔全部載入成功；瀏覽器模擬 1600 寬、滑鼠點，照 ⏳ 清單 8 步：加圓柱「顯示」組三顆；藏起來 ⇒「藏起來 1」、「全部顯示（1）」、Ctrl+A 只選到方塊；鎖住 ⇒ 半透明、點不到、「全部解鎖（1）」；沒選東西 3D 列印、展開圖〔1.38 m² ＝ 方塊表面積〕、剖面分切〔疊高 45 只有方塊〕、OBJ 都寫「（有 1 個藏起來的沒算）」—— 本機沒開的三個這次開了；重新整理還在；全部解鎖 → Ctrl+Z → Ctrl+Y；只看選到的「其他 1 個先藏起來」、再按「放回 1 個」、自己藏的圓柱照舊藏著；全部顯示「拿回 1 個」；清單第 8 步寫錯〔選著東西時「顯示」組不會整組收〕先驗時改；4 則 404【推論】是這個分頁先前開不存在頁面留下的；暫存先記下、測完放回、清掉測試記的 modeler_doc 等四項、先離開頁面再確認）寫進規格後，連同「⏳ 實測（kang）」逐字搬到 HISTORY 新一節「圖層與群組第一批：藏起來、鎖住、只看選到的結案」（20 行 md5 30695437c740a4d7530ec68bea72229b；搬進去後重算一樣），附經過與老實話（全部顯示／解鎖照 ⑤-2 改放「顯示」組、本機驗時改兩件、fs.cpSync 中文路徑、伺服器漏回 ribbon.js、三個視窗是線上才開、清單第 8 步寫錯、先驗與結案同一個 commit）；規格分批表與第一批標題加「kang 2026-10-28 驗收 OK」、⏳ 換成「實測：已結案」＋指到 HISTORY；設計方向加第一批驗收 OK 一行；STATUS 拿掉 ⏳ 那一行、真待辦改成「第一批驗收 OK、下一步第二批動工前先查再問 kang」；目次產生器重產＋檢查通過；不改程式
 
-【這次要做什麼】
-圖層與群組第一批：藏起來、鎖住、只看選到的、全部顯示／解鎖；沒選東西出圖藏起來的不算並講；可以 Ctrl+Z；存檔留得住。
-
-【依賴哪些事實】
-  1. fromJSON 只讀列出來的欄位  【已查證 · io.js ModelObject.fromJSON】
-  2. 點選用 intersectObjects(this.view.pickables)，three.js 不看 visible  【已查證 · select.js 三處】
-  3. 復原是整份快照  【已查證 · history.js、main.js hist get/set】
-  4. 出圖視窗的規則是「有選照選、沒選全部」  【已查證 · exportPanel、objPanel、unfoldPanel、slicePanel】
-  5. 上方前 7 組寬度不變、會出現的放後面（⑤-2）  【已查證 · index.html 那一段註解】
-  6. 一般選取時點兩下沒被用掉（第二批要用）  【已查證 · select.js 點兩下只在鋼筆、刀具】
-
-【會動到哪幾個檔】
-  M  建模器/js/core/io.js
-  M  建模器/js/view/scene.js
-  M  建模器/js/view/select.js
-  M  建模器/js/main.js
-  M  建模器/js/ui/exportPanel.js、objPanel.js、unfoldPanel.js、slicePanel.js、toolbar.js
-  M  建模器/js/ai/assist.js、catalogInfo.js
-  M  建模器/index.html
-  M  建模器/tests/run.mjs
-  A  規格/建模器-圖層與群組.md
-  A  圖層與群組-設計方向.md
-  A  樣板-圖層與群組.html
-  M  STATUS.md
+動到 5 個檔：
+  M  HISTORY.md                     新一節「圖層與群組第一批…結案」＋目次
+  M  規格/建模器-圖層與群組.md        先驗與 ⏳ 搬走、換成已結案、標驗收 OK
+  M  圖層與群組-設計方向.md           第一批驗收 OK 一行
+  M  STATUS.md                      拿掉 ⏳ 一行、真待辦改成第一批驗收 OK
   M  版控工具/commit-msg.txt
-
-【怎麼知道做對了】
-存讀檔來回三個欄位都在、舊檔不藏不鎖；setShown 每種回報的個數對（只看選到的不碰自己藏的、回來只放它藏的）；點、框、全選選不到藏鎖的；沒選東西出圖少算藏起來的並講；本機按得到、Ctrl+Z 退得回。
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
