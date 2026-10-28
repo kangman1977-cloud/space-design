@@ -7059,9 +7059,15 @@ function currentSeamProposal(obj) {
  * 幾何與標記在 `io.js` `makeSkins()`；這裡只管放進文件：同名的一層已經有 ⇒ 放那一層（再按一次不會一直開新層）。記一步、可以 Ctrl+Z。
  */
 function makeSkinsOp(obj) {
-  const r = makeSkins(obj);
+  /**
+   * 面皮 B ⑥（kang 2026-10-28）：每複製一次 ＝ 一批，放新的一層「○○ 面皮（第 N 批）」、名字接著編
+   * ⇒ 兩批疊在一起時講得出是哪一批的哪一張、要的話整批那一層關掉或刪掉（⚠ 改掉 A ②「同名的那一層有了就放那一層」）。
+   * 同名的那一層已經有（那一批的面皮刪光了、又複製一次）⇒ 照舊放那一層。
+   */
+  const nb = doc.nextSkinBatch(obj);
+  const r = makeSkins(obj, nb);
   if (!r.ok) { toast(r.reason, true); return; }
-  const name = `${obj.name} 面皮`;
+  const name = `${obj.name} 面皮（第 ${nb.batch} 批）`;
   const L = doc.layers.find(l => l.name === name) || doc.addLayer(name);
   for (const s of r.skins) { s.layer = L.id; doc.add(s); }
   /** 那一層在圖層清單上直接展開（kang 2026-10-28 實測：看得到「○○ 面皮」那一層、看不到裡面的面皮 —— 每一層一開始是收著的）*/

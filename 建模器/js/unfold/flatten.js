@@ -104,6 +104,22 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const dart = opts.mode === 'dart';
   const geo = dart ? Object.assign(Object.create(rule), { foldable: true, canFold: () => true }) : rule;
   /**
+   * 🔴 **每一片各自的展開方式與規則**（面皮 B，kang 2026-10-28 → `規格\建模器-面皮.md`「B」）：好幾張面皮焊成一份一起攤時，
+   * `opts.faceMode`（面 id → 'exact'／'dart'）、`opts.faceRule`（面 id → 規則：板厚各自的）照「這一片是哪張面皮的」挑。
+   * ⭐ 沒給 ⇒ 每個面都回上面那一份 `geo`／`dart` ⇒ 原本的路一個字都不變。
+   * ⚠ 一片不會跨兩張面皮（交界早就標切開）⇒ 一片看它第一個面就夠。
+   */
+  const per = !!(opts.faceMode || opts.faceRule);
+  const geoCache = new Map();
+  const ruleAt = f => (opts.faceRule && opts.faceRule.get(f.id)) || rule;
+  const dartAt = f => (opts.faceMode ? (opts.faceMode.get(f.id) || opts.mode) === 'dart' : dart);
+  const geoAt = f => {
+    if (!per) return geo;
+    const r = ruleAt(f), d = dartAt(f), k = geoCache.get(r) || {};
+    if (!k[d]) { k[d] = d ? Object.assign(Object.create(r), { foldable: true, canFold: () => true }) : r; geoCache.set(r, k); }
+    return k[d];
+  };
+  /**
    * 🔴 **試算模式**（2026-10-21，智慧分切大模型加快；kang「算得對第一、算得快第二」）：`opts.probe` ＝ 只要
    * 「幾片、有沒有重疊、外框多大、程式補剪幾條」—— ⛔ 算接合編號、接縫連段、3D 位置、放射折線、圓弧面（出圖才用）；
    * 重疊找到第一對就停（只問有沒有）；`probe.side`（面 id → 0／1）有給 ⇒ 只查兩邊之間（兩邊各自早就查過、形狀不會變 —— 見 `buildPiece()`）。
@@ -117,7 +133,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
     return { pieces: [], warnings: ['這個物件沒有任何面'], autoEdges: [], keepCut: 0, stats: empty() };
   }
 
-  const patches = splitPatches(mesh, geo, tolDeg);
+  const patches = splitPatches(mesh, per ? geoAt : geo, tolDeg);
   const pieces = [];
 
   /**
@@ -145,8 +161,14 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const jointNo = wantJoints ? { map: new Map(), next: 1 } : null;
 
   for (const patch of patches) {
-    const r = flattenPatch(mesh, patch, geo, tolDeg, jointNo, dart, probe);
-    if (r.piece) pieces.push(r.piece);
+    const d = dartAt(patch[0]);
+    const r = flattenPatch(mesh, patch, geoAt(patch[0]), tolDeg, jointNo, d, probe);
+    if (r.piece) {
+      /** 面皮 B ⑤：每一片記得自己是哪一種（同一張圖混用時卡片才分得出來）；分片各自的 ⇒ 多記規則與哪幾個面（對回是哪張面皮）*/
+      r.piece.mode = d ? 'dart' : 'exact';
+      if (per) { r.piece.ownRule = ruleAt(patch[0]); r.piece.faceIds = patch.map(f => f.id); }
+      pieces.push(r.piece);
+    }
     else if (r.error && !warnings.includes(r.error)) warnings.push(r.error);
   }
 
@@ -171,13 +193,13 @@ export function unfoldMesh(mesh, rule, opts = {}) {
   const merged = groupIdentical(pieces, !wantJoints);
 
   for (const p of merged) {
-    for (const w of rule.validate(p)) p.warnings.push(w);
+    for (const w of (p.ownRule || rule).validate(p)) p.warnings.push(w);
   }
 
   const arcs = merged.reduce((n, p) => n + p.bends.filter(b => b.isArc).length, 0);
   const sharp = merged.reduce((n, p) => n + p.bends.filter(b => !b.isArc).length, 0);
 
-  if (!rule.foldable && !dart) {
+  if (!rule.foldable && (per ? merged.some(p => p.mode !== 'dart') : !dart)) {
     warnings.push(`${rule.label}折不了，所有折線已改成切割線，各片分開下料`);
   }
   for (const p of merged) {
@@ -186,7 +208,8 @@ export function unfoldMesh(mesh, rule, opts = {}) {
      * ⚠ 一般的重疊偵測抓不到它：翻過來的面跟隔壁共用一條邊，`sharesEdge()` 當成相鄰放過去了。
      * 沙箱實測：半球的開口停在 6 成高 ⇒ 上面那頂帽子太鼓，有 1 個面翻過來；不開口 ⇒ 50 個。
      */
-    if (dart && p.strain && p.strain.flips) {
+    const pd = per ? p.mode === 'dart' : dart;    // 面皮 B：這一片是不是省道（分片各自的看片自己）
+    if (pd && p.strain && p.strain.flips) {
       /**
        * ⚠ 2026-10-19（實驗 T5：`實驗-綜合評估.md` ①-14，kang「先同意你的研究與建議」）：多講一句「不想變形可以怎麼做」——
        * T5 燈罩是 AI 拿錯了工具：圓錐面用分片的智慧分切「環帶」就 0% 攤平（3 片），省道打版是給會伸縮的材料做鼓起來的形狀用的。
@@ -195,7 +218,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
       warnings.push(`「${p.name}」攤平後有 ${p.strain.flips} 個面翻過來（疊在一起）—— 這片就算能拉也做不出來。`
                   + `請多開幾道開口（開長一點），或多分幾片${DART_HINT}`);
     }
-    if (dart && p.strain && !p.strain.converged) {
+    if (pd && p.strain && !p.strain.converged) {
       warnings.push(`「${p.name}」算到上限還沒停下來 —— 上面的拉伸數字可能還會再變一點`);
     }
     /**
@@ -213,7 +236,7 @@ export function unfoldMesh(mesh, rule, opts = {}) {
      * 【實證 2026-10-12】AI 線上先驗：球只切兩條經線，每片都是兩則一樣意思的紅字。
      */
     /** 2026-10-21（分片成群第一件）：講出幾個面疊在一起、標在哪 ⇒ 知道該往哪裡切 */
-    if (p.overlap && !(dart && p.strain && p.strain.flips)) {
+    if (p.overlap && !(pd && p.strain && p.strain.flips)) {
       const nf = (p.overlapFaces || []).length;
       warnings.push(`「${p.name}」攤平後有重疊 —— ${nf} 個面疊在一起${p.overlapMore ? '（還不只）' : ''}，圖上標紅；`
                   + `這張圖不能直接下料。請用「分片」在那幾個面附近切開（分片模式的即時預覽也會在 3D 上標紅）`);
@@ -290,6 +313,8 @@ function edgeIsCut(mesh, he, rule, tolDeg) {
 
 /** 依「不切開的邊」把面分成一群一群，每一群就是展開後的一片 */
 function splitPatches(mesh, rule, tolDeg) {
+  /** 面皮 B：`rule` 也可以是「面 → 規則」（每張面皮各自的；交界早就切開，兩側一定同一張）*/
+  const ruleOf = typeof rule === 'function' ? rule : () => rule;
   const seen = new Set();
   const out = [];
 
@@ -304,7 +329,7 @@ function splitPatches(mesh, rule, tolDeg) {
       const f = stack.pop();
       group.push(f);
       for (const he of mesh.faceLoop(f)) {
-        if (edgeIsCut(mesh, he, rule, tolDeg)) continue;
+        if (edgeIsCut(mesh, he, ruleOf(f), tolDeg)) continue;
         const nb = he.twin.face;
         if (nb && !seen.has(nb.id)) { seen.add(nb.id); stack.push(nb); }
       }

@@ -418,7 +418,12 @@ export class ModelObject {
      * `{ id, name, sig }`（原本那個物件、當時的名字、當時的指紋 `skinSig()`）；null ＝ 不是面皮。
      * 有它 ⇒ 板厚往內長（外面保持原本模型的大小）、3D 列印／剖面分切／OBJ／干涉跳過（`doc.forMaking()`）、原本的改過了面板會講。
      */
-    this.skinOf = opts.skinOf && Number.isInteger(opts.skinOf.id) ? { id: opts.skinOf.id, name: String(opts.skinOf.name || ''), sig: String(opts.skinOf.sig || '') } : null;
+    this.skinOf = opts.skinOf && Number.isInteger(opts.skinOf.id) ? normSkinOf(opts.skinOf) : null;
+    /**
+     * 🔴 **展開方式**（面皮 B，kang 2026-10-28「照『顏色跟圖層』那一套」→ `規格\建模器-面皮.md`「B」）：
+     * 'layer' ＝ 跟圖層（預設；圖層也沒設 ⇒ 跟展開圖）、'exact' ＝ 精確分片、'dart' ＝ 省道打版。解析在 `doc.unfoldModeOf()`。
+     */
+    this.unfoldMode = opts.unfoldMode === 'exact' || opts.unfoldMode === 'dart' ? opts.unfoldMode : 'layer';
     /**
      * 🔴 **從面皮變成一般物件的：板厚照樣往內長**（面皮變成一般物件，kang 2026-10-28 同意 → `規格\建模器-面皮.md`「面皮變成一般物件」）。
      * 變了之後出口照常算它，但外面⛔ 跳出去半個板厚（東西一格都不動，跟原點置中同一個承諾）。
@@ -745,8 +750,9 @@ export class ModelObject {
     if (this.layer !== null) o.layer = this.layer;
     if (this.colorByLayer) o.colorByLayer = true;
     if (this.group !== null) o.group = this.group;     // 群組 2b：有才存
-    if (this.skinOf) o.skinOf = { ...this.skinOf };    // 面皮 A：有才存
+    if (this.skinOf) o.skinOf = normSkinOf(this.skinOf);   // 面皮 A：有才存（B：批次、號碼、複製那一刻的位置一起，整份複製一份）
     if (this.shellIn) o.shellIn = true;                // 從面皮變成一般物件的：有才存
+    if (this.unfoldMode !== 'layer') o.unfoldMode = this.unfoldMode;   // 面皮 B：自己設了展開方式才存
     return o;
   }
 
@@ -772,7 +778,8 @@ export class ModelObject {
       colorByLayer: d.colorByLayer === true,
       group: d.group,
       skinOf: d.skinOf,
-      shellIn: d.shellIn === true
+      shellIn: d.shellIn === true,
+      unfoldMode: d.unfoldMode
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
@@ -891,6 +898,20 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
 // ═══════════════════════════════════════════════════════
 
 /**
+ * 🔴 **面皮從哪裡來的那一份，整理成固定的樣子**（面皮 A ＋ B）：
+ * `{ id, name, sig }`（A）＋ `batch`（第幾批）、`no`（面皮幾號，跨批接著編）、`home`（複製那一刻的位置角度縮放 —— 一起展開時照它焊回去，拉開過也接得上）。
+ * B 之前的面皮沒有後三樣 ⇒ ⛔ 補（展開時照現在的位置焊、講一句）。
+ */
+function normSkinOf(s) {
+  const out = { id: s.id, name: String(s.name || ''), sig: String(s.sig || '') };
+  if (Number.isInteger(s.batch) && s.batch > 0) out.batch = s.batch;
+  if (Number.isInteger(s.no) && s.no > 0) out.no = s.no;
+  const h = s.home, ok3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+  if (h && ok3(h.pos) && ok3(h.rot) && ok3(h.scale)) out.home = { pos: [...h.pos], rot: [...h.rot], scale: [...h.scale] };
+  return out;
+}
+
+/**
  * 物件形狀的指紋：點、面、座標加總 —— 拉點、加面會變。面皮記下來，之後比對「原本的改過了沒」。
  * ⚠ **⛔ 看縫**（kang 2026-10-28）：複製完清掉原本的縫、重新分片是正常用法，面皮本身沒問題 ⇒ 算進來就是假警報；
  * 面皮複製出來就跟原本的縫無關（B 焊回去也只看面皮自己 —— `每片展開方式-設計方向.md` 頭盔沙箱）。
@@ -907,9 +928,12 @@ export function skinSig(mesh) {
  * （圓筒那一條直縫兩側在同一塊 —— 沙箱第一版沒搬，那條縫就不見了）。原本的物件⛔ 動。
  * 「一塊」跟省道打版看的一樣：只看你標的切開（`unfold/flatten.js` `splitPatches()` 的省道那一路）。
  * @param {ModelObject} obj 網格物件（參數物件要先轉成可編輯網格 —— 跟標縫同一個規矩）
+ * @param {{batch?:number, startNo?:number}} [opt] 面皮 B：第幾批、號碼從幾號接著編（`doc.nextSkinBatch()`；沒給 ⇒ 第 1 批、從 1 號）
  * @returns {{ok:boolean, reason?:string, skins?:ModelObject[]}}
  */
-export function makeSkins(obj) {
+export function makeSkins(obj, opt = {}) {
+  const batch = Number.isInteger(opt.batch) && opt.batch > 0 ? opt.batch : 1;
+  const startNo = Number.isInteger(opt.startNo) && opt.startNo > 0 ? opt.startNo : 1;
   if (!obj || obj.isParametric) return { ok: false, reason: '先按「轉成可編輯網格」，再複製成面皮（跟標縫同一個規矩）' };
   const mesh = obj.mesh();
   if (!mesh || !mesh.faces.length) return { ok: false, reason: '這個物件沒有面' };
@@ -946,18 +970,21 @@ export function makeSkins(obj) {
       if (nh && !Mesh.marksEmpty(mk)) m.applyMarks(nh, mk);
     }
     m.computeNormals();
+    const no = startNo + i;
     const s = new ModelObject({
-      name: `${obj.name} 面皮 ${i + 1}`,
+      name: `${obj.name} 面皮 ${no}`,
       kind: 'sheet', src: { type: 'mesh' }, mesh: m,
       pos: obj.pos, rot: obj.rot, scale: obj.scale,
       color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
-      skinOf: { id: obj.id, name: obj.name, sig }
+      skinOf: { id: obj.id, name: obj.name, sig, batch, no }
     });
     /**
      * 原點搬到這張面皮自己的中間、東西⛔ 動（kang 2026-10-28 實測：原點照原本的 ⇒ 選到面皮時箭頭在原本物件的正中間，
      * 方塊的側面那張離箭頭 30 cm，以為選錯）。跟「分離」出來的塊同一條（`recenterOrigin()`）。
      */
     recenterOrigin(s);
+    /** 面皮 B ①：記下複製那一刻的位置角度縮放（原點搬完之後的）⇒ 拉開過也照它焊回去 */
+    s.skinOf.home = { pos: s.pos.toArray(), rot: [s.rot.x, s.rot.y, s.rot.z], scale: s.scale.toArray() };
     return s;
   });
   return { ok: true, skins };
@@ -1649,6 +1676,37 @@ export class Doc {
     if (!src) return 'gone';
     return skinSig(src.mesh()) === o.skinOf.sig ? 'same' : 'changed';
   }
+  /**
+   * 面皮 B ⑥：這個物件下一次複製成面皮 ⇒ 第幾批、號碼從幾號接著編（kang：名字⛔ 每批從 1 重來 —— 重疊提醒才分得出誰）。
+   * B 之前的面皮沒記批次 ⇒ 當第 1 批；沒記號碼 ⇒ 從名字最後的數字讀。
+   */
+  nextSkinBatch(obj) {
+    let batch = 0, no = 0;
+    for (const o of this.objects) {
+      if (!o.skinOf || o.skinOf.id !== obj.id) continue;
+      batch = Math.max(batch, o.skinOf.batch || 1);
+      const m = /(\d+)\s*$/.exec(o.name);
+      no = Math.max(no, o.skinOf.no || (m ? +m[1] : 0));
+    }
+    return { batch: batch + 1, startNo: no + 1 };
+  }
+  /**
+   * 🔴 **展開方式照「顏色跟圖層」那一套**（面皮 B ④，kang 2026-10-28）：物件自己設了 ⇒ 照物件；⛔ ⇒ 照它那一層；圖層也沒設 ⇒ 照展開圖選的。
+   * @param {ModelObject} o
+   * @param {'exact'|'dart'} sheetMode 展開圖選的
+   * @returns {'exact'|'dart'}
+   */
+  unfoldModeOf(o, sheetMode) {
+    const f = this.unfoldModeFrom(o);
+    return f ? f.mode : (sheetMode === 'dart' ? 'dart' : 'exact');
+  }
+  /** 誰定的：`{ mode, by:'own'|'layer', layer? }`；都沒設（跟展開圖）⇒ null —— 物件面板講「展開時：○○（照…）」用 */
+  unfoldModeFrom(o) {
+    if (o.unfoldMode === 'exact' || o.unfoldMode === 'dart') return { mode: o.unfoldMode, by: 'own' };
+    const L = this.layerOf(o);
+    if (L && (L.unfold === 'exact' || L.unfold === 'dart')) return { mode: L.unfold, by: 'layer', layer: L.name };
+    return null;
+  }
 
   // ── 圖層（圖層與群組 2a，kang 2026-10-28「照建議」→ `規格\建模器-圖層與群組.md`「2a」）──
   /** 這一層（id 找不到 ⇒ 第一層 —— 讀檔時已經補好，這裡只是保險）*/
@@ -1733,13 +1791,16 @@ export function normalizeLayers(raw) {
   for (const l of Array.isArray(raw) ? raw : []) {
     if (!l || !Number.isInteger(l.id) || seen.has(l.id)) continue;
     seen.add(l.id);
-    out.push({
+    const L = {
       id: l.id,
       name: typeof l.name === 'string' && l.name.trim() ? l.name.trim() : `圖層 ${l.id}`,
       color: Number.isInteger(l.color) ? l.color : LAYER_PALETTE[0],
       off: l.off === true,
       locked: l.locked === true
-    });
+    };
+    /** 面皮 B ④：這一層的展開方式（精確／省道）；沒設 ＝ 跟展開圖 ⇒ ⛔ 寫（檔案一個字都不多）*/
+    if (l.unfold === 'exact' || l.unfold === 'dart') L.unfold = l.unfold;
+    out.push(L);
   }
   return out.length ? out : defaultLayers();
 }

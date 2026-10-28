@@ -824,6 +824,23 @@ export class Panel {
         for (const o of all) o.layer = Number(v);
         this._edit(`移到圖層「${D.layerById(Number(v)).name}」`);
       }, '在哪一層：換了就移過去（那一層關掉或鎖住的話，移過去就看不到／點不到了）');
+      /**
+       * 🔴 **展開方式**（面皮 B ④，kang 2026-10-28「照『顏色跟圖層』那一套…只要能夠清楚分辨即可」）：
+       * 跟圖層（預設；圖層也沒設 ⇒ 跟展開圖）／精確分片／省道打版；多選一起改。下面一行講「展開時照哪一個」（清楚分辨）。
+       */
+      if (D.unfoldModeFrom) {
+        this._rowSelect(together('展開方式', all.length), obj.unfoldMode || 'layer',
+          [['layer', '跟圖層'], ['exact', '精確分片'], ['dart', '省道打版']], v => {
+            for (const o of all) o.unfoldMode = v;
+            this._edit(v === 'layer' ? '展開方式改回跟圖層' : `展開方式改成${v === 'dart' ? '省道打版' : '精確分片'}`);
+          }, '展開方式：「跟圖層」＝ 照這個物件那一層設的（圖層清單上改；那一層也沒設 ⇒ 照展開圖選的）；'
+          + '「精確分片」「省道打版」＝ 這個物件自己的，不管圖層和展開圖');
+        const f = D.unfoldModeFrom(obj);
+        const nm = m => (m === 'dart' ? '省道打版' : '精確分片');
+        this.form.appendChild(note(f
+          ? `展開時：${nm(f.mode)}（${f.by === 'own' ? '這個物件自己設的' : `照圖層「${f.layer}」`}）`
+          : '展開時：照展開圖選的（物件和圖層都沒設）'));
+      }
     }
   }
 
@@ -1070,7 +1087,7 @@ export class Panel {
       this.form.appendChild(bad('⚠ 黃色這一群還沒切開 —— 先按上面的「切成一片」，再按「複製成面皮」；現在按只照橘色的縫複製（沒有縫就是整個一張）'));
     }
     this._rowBtn('複製成面皮',
-      '照你標的切開（橘色），每一片複製成一張獨立的面皮（開放的板件），放在新的一層「' + obj.name + ' 面皮」、跟原本疊在同一個位置；'
+      '照你標的切開（橘色），每一片複製成一張獨立的面皮（開放的板件），放在新的一層「' + obj.name + ' 面皮（第 N 批）」（每複製一次一批、名字接著編）、跟原本疊在同一個位置；'
       + '原本的物件不動。面皮可以各自設板厚、放圖層，只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）。按 Ctrl+Z 收得回來',
       () => this.app.makeSkins(obj));
   }
@@ -2012,7 +2029,9 @@ export class Panel {
       this.refresh();
     }, '3D 上每一片塗一個顏色、預覽裡同一片同一個顏色 —— 看得出哪裡已經分好、哪一片很大。跟著即時預覽一起算');
 
-    const st = this.app.getUnfoldSettings();
+    /** 面皮 B ④：預覽照這個物件自己的展開方式（物件 → 圖層 → 展開圖，`doc.unfoldModeOf()`）*/
+    const st0 = this.app.getUnfoldSettings(), Dm = this.app.doc;
+    const st = Dm && Dm.unfoldModeOf ? { ...st0, mode: Dm.unfoldModeOf(obj, st0.mode) } : st0;
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin:4px 0 8px';
     const info = document.createElement('div');

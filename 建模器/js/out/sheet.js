@@ -126,6 +126,17 @@ export function dartTally(pieces) {
   return { flat, pull, worst };
 }
 
+/**
+ * 🔴 **同一張圖混用精確與省道**（面皮 B ⑤，kang 2026-10-28：混用時卡片才寫、上面那一行多寫各幾片；沒混用照舊）。
+ * 照套數算（跟「共 ○ 片」同一個算法）；片的 `mode` 是展開時記的（`flatten.js`）。
+ * @returns {{exact:number, dart:number}|null} 沒混用 ⇒ null
+ */
+export function mixTally(pieces) {
+  let exact = 0, dart = 0;
+  for (const p of pieces || []) { if (p.mode === 'dart') dart += p.qty || 1; else exact += p.qty || 1; }
+  return exact && dart ? { exact, dart } : null;
+}
+
 // ═══════════════════════════════════════════════════════
 //  一、決定畫什麼（純資料，可在 Node 裡驗）
 // ═══════════════════════════════════════════════════════
@@ -911,6 +922,8 @@ export function titleLines(piece, opt = {}) {
    * 🔴 **省道打版的三個數字**（kang 2026-10-12 拍板：最多拉長、最多壓縮、縫邊長度最多差；填了上限、超過就紅字）。
    * ⚠ 上限沒填 ⇒ 只寫數字，⛔ 自己編一個預設值（各材料能拉幾 %，業界沒有一家公開 —— `外部參考-打版.md`）。
    */
+  /** 面皮 B ⑤：同一張圖混用兩種 ⇒ 精確的片也寫一行（省道的下面本來就寫「省道打版：…」）*/
+  if (opt.mixed && piece.mode !== 'dart') out.push('精確分片');
   /** 每片展開方式「乙」（kang 2026-10-28）：攤得平的片（0.1% 以內，`strainFlat()`）⇒ 講白話、⛔ 列三個 0%、⛔ 寫上限那一行 */
   if (piece.strain && strainFlat(piece.strain)) {
     out.push('省道打版：這片攤得平，沒有變形（跟精確分片一樣）');

@@ -16,7 +16,7 @@ export function layerRows(doc, selIds = []) {
   return doc.layers.map(L => {
     const objs = doc.objects.filter(o => doc.layerOf(o) === L);
     return {
-      id: L.id, name: L.name, color: L.color, off: L.off, locked: L.locked,
+      id: L.id, name: L.name, color: L.color, off: L.off, locked: L.locked, unfold: L.unfold || null,
       current: L.id === doc.currentLayer, count: objs.length,
       objects: objs.map(o => ({ id: o.id, name: o.name, hidden: !!o.hidden, locked: !!o.locked, selected: sel.has(o.id), group: o.group ?? null }))
     };
@@ -78,7 +78,14 @@ export class LayerPanel {
         nm.onclick = () => this.h.setCurrent(r.id);
       }
       const ct = el('span', 'lyCt', String(r.count));
-      row.append(tw, eye, lk, col, nm, ct);
+      row.append(tw, eye, lk, col, nm);
+      /** 面皮 B ④（kang「清楚分辨」）：這一層設了展開方式 ⇒ 名字後面一個字牌（省道橘、精確藍）；沒設（跟展開圖）⇒ ⛔ 畫 */
+      if (r.unfold) {
+        const tag = el('span', 'lyMode ' + r.unfold, r.unfold === 'dart' ? '省道' : '精確');
+        tag.title = `這一層的展開方式：${r.unfold === 'dart' ? '省道打版' : '精確分片'}（物件的展開方式選「跟圖層」的照它；在下面那一格改）`;
+        row.append(tag);
+      }
+      row.append(ct);
       if (r.current) row.append(el('span', 'lyCur', '目前'));
       else {
         const del = btn('lyDel', '✕', '刪掉這一層（有物件的話先問要一起刪還是移到「預設」）');
@@ -147,7 +154,17 @@ export class LayerPanel {
     mv.onclick = () => this.h.edit(`移到圖層「${cur.name}」（${n} 個）`, () => { for (const id of sel.ids) { const o = doc.byId(id); if (o) o.layer = cur.id; } });
     const byL = btn('mini', '這一層全部用圖層顏色', '「目前這一層」的物件顏色全部改成「跟圖層」（物件自己的顏色留著，面板上改回「自己的」就回來）');
     byL.onclick = () => this.h.edit(`「${cur.name}」全部用圖層顏色`, () => { for (const o of doc.objects) if (doc.layerOf(o) === cur) o.colorByLayer = true; });
-    bar.append(add, ren, mv, byL);
+    /** 面皮 B ④：「目前這一層」的展開方式（跟顏色一樣：物件選「跟圖層」才會用到）*/
+    const um = document.createElement('select');
+    um.className = 'lyUnfold';
+    um.title = `「${cur ? cur.name : ''}」（目前這一層）的展開方式：物件的展開方式選「跟圖層」（預設）的照這裡；選「跟展開圖」＝ 照展開圖視窗選的`;
+    for (const [v, t] of [['', '展開：跟展開圖'], ['exact', '展開：精確分片'], ['dart', '展開：省道打版']]) {
+      const op = document.createElement('option'); op.value = v; op.textContent = t; um.appendChild(op);
+    }
+    um.value = (cur && cur.unfold) || '';
+    um.onchange = () => this.h.edit(`「${cur.name}」展開方式改成${um.value === 'dart' ? '省道打版' : um.value === 'exact' ? '精確分片' : '跟展開圖'}`,
+      () => { const L = doc.layerById(cur.id); if (um.value) L.unfold = um.value; else delete L.unfold; });
+    bar.append(add, ren, mv, byL, um);
     b.appendChild(bar);
   }
 }

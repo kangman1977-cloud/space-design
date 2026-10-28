@@ -17094,8 +17094,8 @@ section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（
 
   // 讀程式守著
   const mn = rd('js/main.js'), tb = rd('js/ui/toolbar.js'), sc = rd('js/view/scene.js');
-  ok('★★★ 讀程式守著：放進新的一層「○○ 面皮」（同名的有了就放那一層）、記一步、講一句',
-    /const name = `\$\{obj\.name\} 面皮`;\s*const L = doc\.layers\.find\(l => l\.name === name\) \|\| doc\.addLayer\(name\);/.test(mn)
+  ok('★★★ 讀程式守著：每一批放新的一層「○○ 面皮（第 N 批）」（面皮 B ⑥；同名的有了就放那一層）、名字接著編、記一步、講一句',
+    /const nb = doc\.nextSkinBatch\(obj\);\s*const r = makeSkins\(obj, nb\);[\s\S]{0,80}const name = `\$\{obj\.name\} 面皮（第 \$\{nb\.batch\} 批）`;\s*const L = doc\.layers\.find\(l => l\.name === name\) \|\| doc\.addLayer\(name\);/.test(mn)
     && /commit\(`複製成面皮 \$\{r\.skins\.length\} 張`\);/.test(mn) && /makeSkins: obj => makeSkinsOp\(obj\),/.test(mn));
   ok('★★ 讀程式守著：分片面板有「複製成面皮」（面皮自己⛔ 有）、面皮的物件面板講從哪裡來與改過了',
     /this\._seamProposalBox\(obj\);\s*this\._skinBtn\(obj\);/.test(tb) && /_skinBtn\(obj\) \{\s*if \(obj\.skinOf\) return;/.test(tb)
@@ -17205,6 +17205,146 @@ section('面皮變成一般物件：加厚自動變、面板一顆、板厚照�
     && /if \(obj\.shellIn && !obj\.mesh\(\)\.isClosed\(\)\) this\.form\.appendChild\(note\('板厚往內長（從面皮變成一般物件的，外面跟原本一樣大）'\)\);/.test(tb));
   ok('★★ 讀程式守著：加厚先照面皮長、再變成一般物件', /this\._mesh = r\.ok \? r\.mesh : s;[\s\S]{0,200}const wasSkin = this\.unskin\(\);/.test(rd('js/core/io.js')));
   ok('★ 功能地圖認得「物件面板：變成一般物件」', /\['物件面板：變成一般物件',/.test(rd('js/ai/catalogInfo.js')));
+}
+
+section('面皮 B：焊回去一起展開、疊在一起先不焊、展開方式跟圖層、每批一層（kang 2026-10-28）');
+
+/**
+ * 規格：`規格\建模器-面皮.md`「B」；推導與沙箱：`每片展開方式-設計方向.md`「面皮 B」。
+ * `skinWeld.js` `weldSkins()`／`skinOverlaps()`／`homeMatrix()`；`part.js` `unfoldSkinGroup()`、`unfoldMany()` 的面皮組與 `modeOf`；
+ * `flatten.js` `faceMode`／`faceRule`；`io.js` `skinOf` 的 batch／no／home、`nextSkinBatch()`、`unfoldModeOf()`／`unfoldModeFrom()`、圖層 `unfold`；
+ * `sheet.js` `mixTally()`、卡片「精確分片」；面板、圖層清單、功能地圖讀程式守著。
+ */
+{
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  const P = await import('../js/unfold/part.js');
+  const W = await import('../js/unfold/skinWeld.js');
+  const SH = await import('../js/out/sheet.js');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  /** 圓柱（半徑 10、高 20、32 段、轉過）轉成網格；縫照給的標（上一圈、下一圈、直縫）*/
+  const mark = (o, v, t, b) => {
+    const m = o.mesh(), bb = m.bounds();
+    for (const he of m.halfEdges) {
+      if (!he.twin) continue;
+      const a = he.v.p, c = he.to.p, flat = Math.abs(a.y - c.y) < 1e-6;
+      const top = flat && Math.abs(a.y - bb.max.y) < 1e-6, bot = flat && Math.abs(a.y - bb.min.y) < 1e-6;
+      const vert = Math.abs(a.x - c.x) < 1e-6 && Math.abs(a.z - c.z) < 1e-6 && a.x > 9.99 && Math.abs(a.z) < 1e-6;
+      m.setRole(he, (t && top) || (b && bot) || (v && vert) ? EDGE_ROLE.CUT : EDGE_ROLE.FREE);
+    }
+  };
+  const mkCyl = () => {
+    const o = new io.ModelObject({ name: '筒', src: { type: 'cylinder', r: 10, h: 20, seg: 32 }, kind: 'solid', pos: V3(5, 10, -3), rot: new THREE.Euler(0.2, 0.4, 0), thickness: 0.2 });
+    o.bake(); mark(o, true, true, true);
+    return o;
+  };
+  /** 接合編號：成對的幾個、落單的幾個 */
+  const tally = pieces => {
+    const c = new Map();
+    for (const p of pieces) for (const j of p.joints || []) c.set(j.num, (c.get(j.num) || 0) + 1);
+    let pairs = 0, lonely = 0; for (const n of c.values()) n === 2 ? pairs++ : lonely++;
+    return { pieces: pieces.length, pairs, lonely };
+  };
+  const base = tally(P.unfoldObject(mkCyl(), { material: 'paper' }).pieces);
+
+  // ① 批次、號碼、複製那一刻的位置
+  const src = mkCyl(), d = new io.Doc();
+  d.add(src);
+  const nb1 = d.nextSkinBatch(src);
+  const b1 = io.makeSkins(src, nb1).skins;
+  for (const s of b1) d.add(s);
+  const lid = b1.find(s => s.mesh().faces.length === 1 && s.pos.y > 15), wall = b1.find(s => s.mesh().faces.length === 32), bot = b1.find(s => s !== lid && s !== wall);
+  ok('★★★ 第一批：batch 1、號碼 1～3、記下複製那一刻的位置（原點搬完之後的）', nb1.batch === 1 && nb1.startNo === 1
+    && b1.every((s, i) => s.skinOf.batch === 1 && s.skinOf.no === i + 1 && s.skinOf.home
+      && new THREE.Vector3(...s.skinOf.home.pos).distanceTo(s.pos) < 1e-12 && new THREE.Vector3(...s.skinOf.home.scale).distanceTo(s.scale) < 1e-12),
+    JSON.stringify(b1.map(s => [s.skinOf.batch, s.skinOf.no])));
+  const back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(wall.toJSON())));
+  ok('★★ 　 存讀檔留得住批次、號碼、位置；B 之前的面皮（只有 id、名字、指紋）照樣讀得進來', back.skinOf.batch === 1 && back.skinOf.no === wall.skinOf.no && JSON.stringify(back.skinOf.home) === JSON.stringify(wall.skinOf.home)
+    && JSON.stringify(io.ModelObject.fromJSON({ ...JSON.parse(JSON.stringify(wall.toJSON())), skinOf: { id: src.id, name: '筒', sig: 'x' } }).skinOf) === JSON.stringify({ id: src.id, name: '筒', sig: 'x' }));
+  const nb2 = d.nextSkinBatch(src);
+  ok('★★★ 再複製一次 ⇒ 第 2 批、號碼從 4 接著編（⛔ 每批從 1 重來）', nb2.batch === 2 && nb2.startNo === 4, JSON.stringify(nb2));
+  ok('★★ 　 B 之前的面皮沒記批次、號碼 ⇒ 當第 1 批、號碼從名字讀', (() => { const dd = new io.Doc(); dd.add(src); dd.add(new io.ModelObject({ name: '筒 面皮 7', src: { type: 'mesh' }, mesh: wall.mesh(), skinOf: { id: src.id, name: '筒', sig: 'x' } })); const n = dd.nextSkinBatch(src); return n.batch === 2 && n.startNo === 8; })());
+
+  // ①② 焊回去一起展開
+  const r1 = P.unfoldMany(b1, { material: 'paper' });
+  ok('★★★ 同一個原本物件的 3 張面皮一起展開 ⇒ 接合編號跟原本一模一樣（沙箱 65 對）、沒有落單的', JSON.stringify(tally(r1.pieces)) === JSON.stringify(base) && base.pairs === 65, `${JSON.stringify(tally(r1.pieces))} vs 原本 ${JSON.stringify(base)}`);
+  ok('★★ 　 片名「○○ 面皮 N－展開片 k」、記得焊過、各自的規則', r1.pieces.every(p => p.welded && /^筒 面皮 \d－展開片 1$/.test(p.name) && p.rule && p.ownRule === p.rule) && r1.pieces.map(p => p.name).sort().join('、') === '筒 面皮 1－展開片 1、筒 面皮 2－展開片 1、筒 面皮 3－展開片 1',
+    r1.pieces.map(p => p.name).join('、'));
+  wall.pos.x += 80;
+  const r2 = P.unfoldMany(b1, { material: 'paper' });
+  ok('★★★ 側面那張拉開 80 ⇒ 照複製那一刻的位置焊、照樣 65 對（照現在的位置只剩 1 對）', tally(r2.pieces).pairs === 65 && tally(r2.pieces).lonely === 0, JSON.stringify(tally(r2.pieces)));
+  /** ⚠ 找不到那一片 ⇒ 打 ✗、⛔ 當掉（改壞檢查第一輪：交界沒切開 ⇒ 片不見、整份測試當掉）*/
+  const pw = r2.pieces.find(p => p.owner === wall.name && p.faces3 && p.faces3.length && p.worldMatrix);
+  const wv = pw ? new THREE.Vector3(...pw.faces3[0][0]).applyMatrix4(pw.worldMatrix) : null;
+  const onWall = !!wv && wall.mesh().verts.some(v => v.p.clone().applyMatrix4(wall.matrix()).distanceTo(wv) < 1e-6);
+  ok('★★ 　 3D 上標片標在現在的位置（拉開之後的那張上）', onWall);
+  const old = b1.map(s => io.ModelObject.fromJSON({ ...JSON.parse(JSON.stringify(s.toJSON())), skinOf: { id: src.id, name: '筒', sig: 'x' } }));
+  const r3 = P.unfoldMany(old, { material: 'paper' });
+  ok('★★ B 之前的面皮（沒記位置）拉開過 ⇒ 照現在的位置接不起來、講是哪幾張', tally(r3.pieces).pairs < 65 && r3.warnings.some(w => /是這次之前複製的面皮，沒記下複製那一刻的位置 —— 照現在的位置接；拉開過的話接合編號會接不起來/.test(w)),
+    JSON.stringify(tally(r3.pieces)));
+  wall.pos.x -= 80;
+
+  // ③ 兩批疊在一起
+  mark(src, true, false, true);                 // 原本清縫重新分片（只剩直縫＋下面一圈）
+  const b2 = io.makeSkins(src, nb2).skins;
+  for (const s of b2) d.add(s);
+  ok('★★ 第二批名字接著編「筒 面皮 4、5」', b2.map(s => s.name).join('、') === '筒 面皮 4、筒 面皮 5' && b2.every(s => s.skinOf.batch === 2));
+  const ov = W.skinOverlaps([...b1, ...b2]);
+  ok('★★★ 兩批疊在一起查得出來：5 張都疊到、3 對', ov.bad.size === 5 && ov.pairs.length === 3, ov.pairs.map(p => `${p.a.name}×${p.b.name} ${p.n}`).join('；'));
+  const r4 = P.unfoldMany([...b1, ...b2], { material: 'paper' });
+  ok('★★★ 　 疊在一起的⛔ 焊（⛔ 安靜地出 130 對兩層）、各自展開、講第幾批的哪一張＋怎麼辦', !r4.pieces.some(p => p.welded) && tally(r4.pieces).pairs < 65
+    && r4.warnings.some(w => /^第 1 批的「筒 面皮 \d」跟第 2 批的「筒 面皮 [45]」疊在一起（\d+ 個面）—— 疊在一起的先各自展開、接合編號接不起來；要接起來請把舊的那一批那一層關掉，或刪掉其中一張$/.test(w)),
+    r4.warnings.join(' / '));
+  const bot2 = b2.find(s => s.mesh().faces.length === 1);
+  const r5 = P.unfoldMany([lid, wall, bot2], { material: 'paper' });
+  ok('★★★ 跨兩批、沒疊到（第一批上蓋＋側面、第二批的底）⇒ 照樣焊、65 對', r5.pieces.every(p => p.welded) && tally(r5.pieces).pairs === 65 && !W.skinOverlaps([lid, wall, bot2]).bad.size, JSON.stringify(tally(r5.pieces)));
+
+  // ④⑤ 每張各自的展開方式
+  const r6 = P.unfoldMany(b1, { material: 'paper', mode: 'exact', modeOf: o => (o === wall ? 'dart' : 'exact') });
+  const p6w = r6.pieces.find(p => p.owner === wall.name), p6e = r6.pieces.find(p => p.mode === 'exact'), p6d = r6.pieces.find(p => p.mode === 'dart');
+  ok('★★★ 側面省道、上下精確一起展開 ⇒ 側面那片有拉伸、上下沒有；接合編號照樣 65 對', !!(p6w && p6w.strain) && r6.pieces.filter(p => p.owner !== wall.name).every(p => !p.strain && p.mode === 'exact')
+    && tally(r6.pieces).pairs === 65, JSON.stringify(tally(r6.pieces)));
+  ok('★★ 　 混用 ⇒ mixTally 精確 2、省道 1；沒混用 ⇒ null', JSON.stringify(SH.mixTally(r6.pieces)) === '{"exact":2,"dart":1}' && SH.mixTally(r1.pieces) === null);
+  ok('★★ 　 混用時精確的卡片多寫「精確分片」；沒混用⛔ 寫', !!(p6e && p6d) && SH.titleLines(p6e, { mixed: true }).includes('精確分片')
+    && !SH.titleLines(p6e, {}).includes('精確分片') && !SH.titleLines(p6d, { mixed: true }).includes('精確分片'));
+  /** 一模一樣的複本 ＝ 同一份網格（Ctrl+D 那樣）、同種類板厚縮放 —— 以前合成一種 ×2 */
+  const c1 = mkCyl(), c2 = new io.ModelObject({ name: '筒', src: { type: 'mesh' }, mesh: c1.mesh(), kind: 'solid', thickness: 0.2 });
+  const r7 = P.unfoldMany([c1, c2], { material: 'paper', mode: 'exact', modeOf: o => (o === c2 ? 'dart' : 'exact') });
+  ok('★★ 一般物件也照自己的方式；一模一樣的複本方式不一樣⛔ 合成一種', r7.pieces.some(p => p.strain) && r7.pieces.some(p => !p.strain) && !r7.pieces.some(p => p.sameAs)
+    && P.unfoldMany([c1, c2], { material: 'paper', mode: 'exact' }).pieces.every(p => p.sameAs && p.sameAs.length === 2),   // 對照：方式一樣 ⇒ 照舊合成一種
+    r7.pieces.map(p => `${p.name}${p.strain ? '（省道）' : ''}×${p.qty}`).join('、'));
+
+  // ④ 跟圖層那一套
+  const dd = new io.Doc(), L2 = dd.addLayer('頭盔 省道');
+  const ob = new io.ModelObject({ name: 'a', src: { type: 'box' } });
+  dd.add(ob);
+  ok('★★★ 物件跟圖層、圖層也沒設 ⇒ 照展開圖選的', dd.unfoldModeOf(ob, 'exact') === 'exact' && dd.unfoldModeOf(ob, 'dart') === 'dart' && dd.unfoldModeFrom(ob) === null);
+  ob.layer = L2.id; L2.unfold = 'dart';
+  ok('★★★ 　 那一層設省道 ⇒ 省道（展開圖選精確也一樣）、講照哪一層', dd.unfoldModeOf(ob, 'exact') === 'dart' && JSON.stringify(dd.unfoldModeFrom(ob)) === JSON.stringify({ mode: 'dart', by: 'layer', layer: '頭盔 省道' }));
+  ob.unfoldMode = 'exact';
+  ok('★★★ 　 物件自己設精確 ⇒ 精確（不管圖層）', dd.unfoldModeOf(ob, 'dart') === 'exact' && dd.unfoldModeFrom(ob).by === 'own');
+  const dj = JSON.parse(JSON.stringify(dd.toJSON())), dback = io.Doc.fromJSON(dj);
+  ok('★★ 存讀檔：物件的、圖層的展開方式留得住；沒設的⛔ 寫（檔案一個字都不多）', dback.layerById(L2.id).unfold === 'dart' && dback.objects[0].unfoldMode === 'exact'
+    && !('unfold' in dj.layers[0]) && !('unfoldMode' in new io.ModelObject({ name: 'b', src: { type: 'box' } }).toJSON())
+    && io.normalizeLayers([{ id: 1, name: 'x', unfold: 'weird' }])[0].unfold === undefined);
+
+  // 讀程式守著
+  const tb = rd('js/ui/toolbar.js'), lp = rd('js/ui/layerPanel.js'), up = rd('js/ui/unfoldPanel.js'), sh = rd('js/out/sheet.js'), ix = rd('index.html'), fl = rd('js/unfold/flatten.js');
+  ok('★★★ 讀程式守著：物件面板「展開方式：跟圖層／精確分片／省道打版」、多選一起改、下面講「展開時：…（照圖層「…」／這個物件自己設的）」',
+    /this\._rowSelect\(together\('展開方式', all\.length\), obj\.unfoldMode \|\| 'layer',\s*\[\['layer', '跟圖層'\], \['exact', '精確分片'\], \['dart', '省道打版'\]\], v => \{\s*for \(const o of all\) o\.unfoldMode = v;/.test(tb)
+    && /`展開時：\$\{nm\(f\.mode\)\}（\$\{f\.by === 'own' \? '這個物件自己設的' : `照圖層「\$\{f\.layer\}」`\}）`/.test(tb) && /'展開時：照展開圖選的（物件和圖層都沒設）'/.test(tb));
+  ok('★★★ 讀程式守著：圖層清單設了的那一層後面「省道」「精確」字牌（清楚分辨）、最下面一格改目前這一層、記一步',
+    /if \(r\.unfold\) \{\s*const tag = el\('span', 'lyMode ' \+ r\.unfold, r\.unfold === 'dart' \? '省道' : '精確'\);/.test(lp)
+    && /\[\['', '展開：跟展開圖'\], \['exact', '展開：精確分片'\], \['dart', '展開：省道打版'\]\]/.test(lp) && /this\.h\.edit\(`「\$\{cur\.name\}」展開方式改成/.test(lp)
+    && /\.lyMode\.dart \{[^}]*\}/.test(ix) && /\.lyMode\.exact \{[^}]*\}/.test(ix));
+  ok('★★★ 讀程式守著：展開圖照每個物件挑（modeOf ＝ doc.unfoldModeOf）、混用多寫各幾片、卡片照 mixed；分片預覽也照物件的',
+    /modeOf: D && D\.unfoldModeOf \? o => D\.unfoldModeOf\(o, this\.mode\) : undefined/.test(up) && /const mixWords = mx \? `　精確 \$\{mx\.exact\} 片、省道 \$\{mx\.dart\} 片` : '';/.test(up)
+    && /mixed: !!\(this\.result && mixTally\(this\.result\.pieces\)\),/.test(up) && /if \(opt\.mixed && piece\.mode !== 'dart'\) out\.push\('精確分片'\);/.test(sh)
+    && /const st = Dm && Dm\.unfoldModeOf \? \{ \.\.\.st0, mode: Dm\.unfoldModeOf\(obj, st0\.mode\) \} : st0;/.test(tb));
+  ok('★★ 讀程式守著：展開引擎每一片照它的面挑方式與規則；沒給 ⇒ 原本那一份', /const r = flattenPatch\(mesh, patch, geoAt\(patch\[0\]\), tolDeg, jointNo, d, probe\);/.test(fl)
+    && /if \(!per\) return geo;/.test(fl) && /const patches = splitPatches\(mesh, per \? geoAt : geo, tolDeg\);/.test(fl));
+  ok('★ 功能地圖認得「物件面板：展開方式」「圖層：展開方式」', /\['物件面板：展開方式',/.test(rd('js/ai/catalogInfo.js')) && /\['圖層：展開方式',/.test(rd('js/ai/catalogInfo.js')));
 }
 
 section('網格核心第六批：布林切出來的固定形狀整理一次（kang 2026-10-28）');
@@ -18663,7 +18803,7 @@ if (!csgOK) {
   ok('★★ 　 精確分片沒有拉伸 ⇒ 總帳 0／0（上面那一行⛔ 多寫）', dartTally(re.pieces).flat === 0 && dartTally(re.pieces).pull === 0);
   ok('★★ 讀程式守著：上面那一行省道打版多寫「攤得平 N 片、要拉 M 片（最多 ○%）」',
     /const dt = dartTally\(r\.pieces\);/.test(rd('js/ui/unfoldPanel.js')) && /`　攤得平 \$\{dt\.flat\} 片、要拉 \$\{dt\.pull\} 片` \+ \(dt\.pull \? `（最多 \$\{fmt\(dt\.worst \* 100\)\}%）` : ''\)/.test(rd('js/ui/unfoldPanel.js'))
-    && /\+ `折彎 \$\{s\.arcBends \+ s\.sharpBends\} 道` \+ dartWords\s*: only \+ '沒有可以展開的東西';/.test(rd('js/ui/unfoldPanel.js')));   // 改壞檢查抓到：只組字、沒接上去也會過
+    && /\+ `折彎 \$\{s\.arcBends \+ s\.sharpBends\} 道` \+ mixWords \+ dartWords\s*: only \+ '沒有可以展開的東西';/.test(rd('js/ui/unfoldPanel.js')));   // 改壞檢查抓到：只組字、沒接上去也會過（面皮 B：中間多混用各幾片）
 }
 
 section('綜合評估 ② 第一批：說錯的數字與提示（2026-10-19）');

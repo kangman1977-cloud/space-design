@@ -15,7 +15,7 @@
 
 import { MATERIALS, PICKABLE_MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
-import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs, qtyWords, dartTally } from '../out/sheet.js';
+import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs, qtyWords, dartTally, mixTally } from '../out/sheet.js';
 import { packBoards, boardProgram, boardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { seamCount } from '../unfold/seam.js';
 import { toDXF, boardDXF, UNITS } from '../out/dxf.js';
@@ -374,6 +374,8 @@ export class UnfoldPanel {
       notch: this.opt.notchOn ? { style: this.opt.notchStyle || 'slit', spacing: this.opt.notchGap || 10 } : null,
       /** 畫縫份／黏合片（`out/sheet.js` `marginGeometry()`）：材質沒有縫份／黏合片時給了也不畫 */
       margin: this.opt.marginOn && this._marginDefault() > 0 ? { on: true, w: this._marginWidth() } : null,
+      /** 面皮 B ⑤：混用兩種 ⇒ 精確的卡片也寫「精確分片」（省道的本來就寫「省道打版：…」）*/
+      mixed: !!(this.result && mixTally(this.result.pieces)),
       ...extra
     };
   }
@@ -394,7 +396,10 @@ export class UnfoldPanel {
   run() {
     saveOpt(this.opt);
     const objs = this._targets();
-    const r = unfoldMany(objs, { material: this.opt.material, mode: this.mode });
+    /** 面皮 B ④：每個物件照「顏色跟圖層」那一套挑展開方式（物件自己 → 圖層 → 這裡選的）*/
+    const D = this.app.doc;
+    const r = unfoldMany(objs, { material: this.opt.material, mode: this.mode,
+      modeOf: D && D.unfoldModeOf ? o => D.unfoldModeOf(o, this.mode) : undefined });
     this.result = r;
     this.objs = objs;
     this._render(r, objs);
@@ -415,9 +420,12 @@ export class UnfoldPanel {
     const dt = dartTally(r.pieces);
     const dartWords = dt.flat + dt.pull
       ? `　攤得平 ${dt.flat} 片、要拉 ${dt.pull} 片` + (dt.pull ? `（最多 ${fmt(dt.worst * 100)}%）` : '') : '';
+    /** 面皮 B ⑤：同一張圖混用兩種 ⇒ 多寫各幾片（沒混用照舊）*/
+    const mx = mixTally(r.pieces);
+    const mixWords = mx ? `　精確 ${mx.exact} 片、省道 ${mx.dart} 片` : '';
     this.sum.textContent = r.pieces.length
       ? only + `${s.pieces} 種、共 ${s.total} 片　總面積 ${fmt(s.area / 10000)} m²　`
-        + `折彎 ${s.arcBends + s.sharpBends} 道` + dartWords
+        + `折彎 ${s.arcBends + s.sharpBends} 道` + mixWords + dartWords
       : only + '沒有可以展開的東西';
 
     if (this._matNote) { this.body.appendChild(box('uwSkip', this._matNote)); this._matNote = null; }

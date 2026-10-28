@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { makeRule, DEFAULT_MATERIAL } from './rules.js';
 import { unfoldMesh } from './flatten.js';
+import { weldSkins, skinOverlaps, homeMatrix } from './skinWeld.js';
 import { Mesh } from '../core/mesh.js';
 import { mergeCoplanarFaces, cleanRebuild } from '../core/edit.js';
 import { PRIM_DEFAULTS } from '../build/prim.js';
@@ -26,6 +27,8 @@ import { PRIM_DEFAULTS } from '../build/prim.js';
  */
 export function unfoldObject(obj, opt = {}) {
   const material = opt.material || DEFAULT_MATERIAL;
+  /** 面皮 B ④：每個物件自己的展開方式（`opt.modeOf` ＝ 「顏色跟圖層」那一套，`doc.unfoldModeOf()`）；沒給 ⇒ 整份那一個 */
+  opt = opt.modeOf ? { ...opt, mode: opt.modeOf(obj) } : opt;
   /**
    * ⚠ 〔2026-08-23 不再傳 `k`〕展開流程已經沒有任何東西會用到 K 因子。
    * 詳見 `js/unfold/rules.js` 檔頭與 `PROJECT_LOG.md`「尺寸的依據」。
@@ -417,6 +420,47 @@ function mapEdgesBack(hes, from, to, orig) {
   return out;
 }
 
+/** 面皮的稱呼：「第 2 批的「筒 面皮 4」」（B 之前的沒記批次 ⇒ 只寫名字）*/
+function skinLabel(s) {
+  return (s.skinOf && s.skinOf.batch ? `第 ${s.skinOf.batch} 批的` : '') + `「${s.name}」`;
+}
+
+/**
+ * 🔴 **一組面皮焊回去一起攤**（面皮 B ①②④，`skinWeld.js`）：交界標切開 ⇒ 接合編號、對位記號照現成那一套接得起來；
+ * 每一片照它是哪張面皮的挑展開方式（④「顏色跟圖層」那一套）、板厚；片名「○○ 面皮 N－展開片 k」（k 每張面皮各自數）。
+ * 3D 上標片：焊的那一份是複製那一刻的位置 ⇒ `worldMatrix` ＝ 現在的 × 複製那一刻的反矩陣（拉開過的標在現在的位置）。
+ * @returns {{pieces:object[], warnings:string[], rule:object}}
+ */
+export function unfoldSkinGroup(skins, opt = {}, modeOf = () => opt.mode) {
+  const material = opt.material || DEFAULT_MATERIAL;
+  const { mesh, owner } = weldSkins(skins);
+  const rules = new Map(skins.map(s => [s, makeRule(material, s.thickness)]));
+  const faceMode = new Map(), faceRule = new Map();
+  for (const f of mesh.faces) {
+    const s = owner.get(f.id);
+    faceMode.set(f.id, modeOf(s) === 'dart' ? 'dart' : 'exact');
+    faceRule.set(f.id, rules.get(s));
+  }
+  const r = unfoldMesh(mesh, rules.get(skins[0]), { flatTolDeg: opt.flatTolDeg, mode: opt.mode, faceMode, faceRule });
+  const count = new Map();
+  for (const p of r.pieces) {
+    const s = owner.get(p.faceIds[0]);
+    const k = (count.get(s) || 0) + 1;
+    count.set(s, k);
+    p.name = `${s.name}－展開片 ${k}`;
+    p.owner = s.name;
+    p.rule = rules.get(s);
+    p.worldMatrix = s.matrix().multiply(homeMatrix(s).invert());
+    p.welded = true;
+  }
+  const warnings = [...r.warnings];
+  const old = skins.filter(s => !s.skinOf.home);
+  if (old.length) {
+    warnings.push(`${old.map(skinLabel).join('、')}是這次之前複製的面皮，沒記下複製那一刻的位置 —— 照現在的位置接；拉開過的話接合編號會接不起來`);
+  }
+  return { pieces: r.pieces, warnings, rule: rules.get(skins[0]) };
+}
+
 /**
  * 一次展開多個物件，並把結果併成一份。
  * 不同物件之間不合併相同的片 —— 名稱要對得回原件，
@@ -437,15 +481,38 @@ export function unfoldMany(objs, opt = {}) {
   let rule = null;
 
   const meshIds = new Map();
+  const modeOf = opt.modeOf || (() => opt.mode);
   const keyOf = o => {
-    const base = [o.kind, o.thickness, o.scale.x, o.scale.y, o.scale.z].join('|');
+    /** 面皮 B ④：展開方式不一樣的⛔ 合成一種（攤出來不一樣）*/
+    const base = [o.kind, o.thickness, o.scale.x, o.scale.y, o.scale.z, modeOf(o) === 'dart' ? 'dart' : 'exact'].join('|');
     if (o.isParametric) return base + '|' + JSON.stringify(o.src);
     const m = o.mesh();
     if (!meshIds.has(m)) meshIds.set(m, meshIds.size);
     return base + '|mesh#' + meshIds.get(m);
   };
+  /**
+   * 🔴 **面皮 B：同一個原本物件的面皮焊回去一起攤**（② 跨批也焊；③ 疊在一起的那幾張先不焊、各自攤、講）。
+   * 焊好的那一組在它第一張面皮的位置出片；⛔ 參加下面「一模一樣的複本合成一種」（每片接的地方不一樣）。
+   */
+  const welded = new Map();          // 面皮 → 它那一組（第一張出片、其他跳過）
+  const bySrc = new Map();
+  for (const o of objs) if (o.skinOf) { if (!bySrc.has(o.skinOf.id)) bySrc.set(o.skinOf.id, []); bySrc.get(o.skinOf.id).push(o); }
+  for (const list of bySrc.values()) {
+    if (list.length < 2) continue;
+    const ov = skinOverlaps(list);
+    for (const p of ov.pairs) {
+      warnings.push(`${skinLabel(p.a)}跟${skinLabel(p.b)}疊在一起（${p.n} 個面）—— 疊在一起的先各自展開、接合編號接不起來；`
+        + '要接起來請把舊的那一批那一層關掉，或刪掉其中一張');
+    }
+    const ok = list.filter(s => !ov.bad.has(s));
+    if (ok.length < 2) continue;
+    const grp = { skins: ok, done: false };
+    for (const s of ok) welded.set(s, grp);
+  }
+
   const groups = [];
   for (const o of objs) {
+    if (welded.has(o)) { groups.push({ weld: welded.get(o) }); continue; }
     const k = keyOf(o);
     const g = groups.find(q => q.key === k);
     if (g) g.objs.push(o); else groups.push({ key: k, objs: [o] });
@@ -455,6 +522,15 @@ export function unfoldMany(objs, opt = {}) {
     : `${list.slice(0, 2).map(o => o.name).join('、')} 等 ${list.length} 個`;
 
   for (const g of groups) {
+    if (g.weld) {
+      if (g.weld.done) continue;
+      g.weld.done = true;
+      const r = unfoldSkinGroup(g.weld.skins, opt, modeOf);
+      rule = rule || r.rule;
+      pieces.push(...r.pieces);
+      for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);
+      continue;
+    }
     const o = g.objs[0], n = g.objs.length;
     const r = unfoldObject(o, opt);
     rule = rule || r.rule;
