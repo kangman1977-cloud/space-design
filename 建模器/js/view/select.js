@@ -16,7 +16,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { nearestMarkableEdge, nearestFace, nearestVertex, canMarkSeams, markableEdges,
          distPointSeg }
   from '../unfold/seam.js';
-import { objectsInRect, elementsInRect, normRect } from '../core/screen.js';
+import { objectsInRect, elementsInRect, normRect, stackPickChoice } from '../core/screen.js';
 /**
  * ⭐ **預覽用的拉直走的是生成時同一支函式** —— 預覽跟結果因此不可能不一樣。
  * ⚠ **單向相依**：`prim.js` ⛔ 沒有 import 這一支（它不認識畫面）。
@@ -2931,6 +2931,12 @@ export class Selection {
 
   /** 螢幕座標 → 打到哪個物件 */
   hitTest(clientX, clientY) {
+    const st = this.hitStack(clientX, clientY);
+    return st.length ? st[0].id : null;
+  }
+
+  /** 螢幕座標 → 滑鼠底下的每一個物件（近的先、同一個只算一次）＋打到的距離 */
+  hitStack(clientX, clientY) {
     /** 2a：照現在那一格（`_toCanvasPx()`），⛔ 照整個畫布 */
     const r = this._toCanvasPx(clientX, clientY);
     this._ndc.x = (r.x / r.w) * 2 - 1;
@@ -2938,15 +2944,42 @@ export class Selection {
     this._ray.setFromCamera(this._ndc, this.view.camera);
 
     const hits = this._ray.intersectObjects(this.view.pickables, true);
+    const out = [], seen = new Set();
     for (const h of hits) {
       const id = this.view.modelIdOf(h.object);
-      if (id !== null) return id;
+      if (id !== null && !seen.has(id)) { seen.add(id); out.push({ id, d: h.distance }); }
     }
-    return null;
+    return out;
+  }
+
+  /**
+   * 🔴 **疊在一起的：同一個位置再點一下 ⇒ 換選下面那一個**（面皮 A 補，kang 2026-10-28 同意）。
+   * 面皮外面貼在原本的面上、打到的距離一樣 ⇒ 第一個永遠是原本的，畫面上點不到面皮（kang 實測卡住）。
+   * 這一下跟上一下在同一個位置（`DOUBLE_TAP_MOVE` 以內，快慢不管）、現在選的剛好是**貼在一起**的其中一個 ⇒ 換下一個，最後一個再回第一個。
+   * ⭐ **只在貼在一起的之間換**（打到的距離差 ≤ 0.05＋第一個是板件時它的板厚 —— 板件原本往外長半個板厚，面皮往內長）：
+   * 只是前後疊著（方塊放在板子前面）照舊，再點一下⛔ 跳到後面那個（Blender 是全部輪流；這裡⛔ 改大家原本的手感）。
+   * ⚠ 點兩下進群組照舊先走（`enterGroupAt()` 在前面）；Shift／加選⛔ 換。
+   * 講一句（`onPickStack`）：換了 ⇒ 講換到誰；沒換、但滑鼠底下有貼在一起的 ⇒ 講可以再點一下。
+   */
+  _stackPick(clientX, clientY, additive) {
+    const st = this.hitStack(clientX, clientY);
+    const lp = this._lastPickAt;
+    this._lastPickAt = { x: clientX, y: clientY };
+    if (!st.length) return { id: null };
+    const units = [];
+    for (const h of st) {
+      const k = this._groupIds(h.id).slice().sort((a, b) => a - b).join(',');
+      if (!units.some(u => u.k === k)) units.push({ k, id: h.id, d: h.d });
+    }
+    const o0 = this._doc && this._doc.byId(units[0].id);
+    const tol = 0.05 + (o0 && o0.kind === 'sheet' ? (+o0.thickness || 0) : 0);
+    const again = !additive && !!lp && Math.hypot(clientX - lp.x, clientY - lp.y) <= DOUBLE_TAP_MOVE;
+    return stackPickChoice(units, this.ids.slice().sort((a, b) => a - b).join(','), again, tol);
   }
 
   pick(clientX, clientY, additive) {
-    const id = this.hitTest(clientX, clientY);
+    const sp = this._stackPick(clientX, clientY, additive);
+    const id = sp.id;
 
     if (id === null) {
       if (this.inGroup !== null) this.leaveGroup(false);      // 群組 2b：點空白 ⇒ 出來
@@ -2961,6 +2994,7 @@ export class Selection {
       const allIn = ids.every(i => this.ids.includes(i));
       this.set(allIn ? this.ids.filter(i => !ids.includes(i)) : [...this.ids, ...ids.filter(i => !this.ids.includes(i))]);
     } else this.set(ids);
+    if (this.hooks.onPickStack && (sp.cycled || sp.n > 1)) this.hooks.onPickStack({ n: sp.n, cycled: !!sp.cycled, id });
   }
 
   /** 群組 2b：點到這一個 ⇒ 要選哪幾個（有組、⛔ 在那一組裡面 ⇒ 整組；藏起來、鎖住的 `set()` 會擋）*/

@@ -1060,6 +1060,14 @@ export class Panel {
    */
   _skinBtn(obj) {
     if (obj.skinOf) return;
+    /**
+     * 「選面」選好黃色、還沒「切成一片」⇒ 先講一句（kang 2026-10-28 半球實測：黃色 4 塊直接按 ⇒ 整個半球一張；
+     * 複製只看橘色的縫，⛔ 看黃色 —— kang 同意只加提醒、⛔ 改成只複製黃色那一群）。
+     */
+    const g = this.app.getGroupState ? this.app.getGroupState(obj) : null;
+    if (g && g.kind === 'group' && g.count) {
+      this.form.appendChild(bad('⚠ 黃色這一群還沒切開 —— 先按上面的「切成一片」，再按「複製成面皮」；現在按只照橘色的縫複製（沒有縫就是整個一張）'));
+    }
     this._rowBtn('複製成面皮',
       '照你標的切開（橘色），每一片複製成一張獨立的面皮（開放的板件），放在新的一層「' + obj.name + ' 面皮」、跟原本疊在同一個位置；'
       + '原本的物件不動。面皮可以各自設板厚、放圖層，只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）。按 Ctrl+Z 收得回來',
@@ -1068,14 +1076,15 @@ export class Panel {
 
   /**
    * 🔴 **面皮的物件面板講它從哪裡來**（面皮 A ⑦，kang 2026-10-28）：一直講「是○○的面皮、給展開用」；
-   * 原本的刪掉了、或形狀／縫改過了 ⇒ 黃字講這張是舊的（只提醒、⛔ 自動重做）。
+   * 原本的刪掉了、或形狀改過了 ⇒ 黃字講這張是舊的（只提醒、⛔ 自動重做）。
+   * ⚠ 只看形狀、⛔ 看縫（kang 2026-10-28：複製完清掉原本的縫、重新分片是正常用法；面皮複製出來就跟原本的縫無關，B 焊回去也只看面皮自己）。
    */
   _skinNote(obj) {
     const st = this.app.doc.skinState ? this.app.doc.skinState(obj) : null;
     if (!st) return;
     const nm = obj.skinOf.name;
     this.form.appendChild(note(`這是「${nm}」的面皮：給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）；板厚往內長，外面跟原本一樣大`));
-    if (st === 'changed') this.form.appendChild(bad(`⚠ 原本的「${nm}」改過了（形狀或縫），這張面皮是舊的 —— 要的話刪掉重新複製`));
+    if (st === 'changed') this.form.appendChild(bad(`⚠ 原本的「${nm}」形狀改過了，這張面皮是舊的 —— 要的話刪掉重新複製`));
     if (st === 'gone') this.form.appendChild(bad(`⚠ 原本的「${nm}」已經不在了，這張面皮留著當獨立的板件用`));
   }
 

@@ -205,3 +205,23 @@ export function objectsInRect(entries, rect, camera, w, h, opt = {}) {
   }
   return out;
 }
+
+/**
+ * 🔴 **疊在一起的：同一個位置再點一下 ⇒ 換選下面那一個**（面皮 A 補，kang 2026-10-28 同意）。純算：`select.js` `_stackPick()` 叫、測試直接叫。
+ * 只在**貼在一起**的之間換（打到的距離差 ≤ `tol`）；只是前後疊著的⛔ 換（⛔ 改大家原本「再點一下還是它」的手感）。
+ *
+ * @param {{k:string, id:number, d:number}[]} units 滑鼠底下的每一個（近的先；`k` ＝ 點下去會選到的那幾個 id 排好接起來）
+ * @param {string} cur 現在選的（同樣排好接起來）
+ * @param {boolean} again 這一下跟上一下在同一個位置、⛔ 是加選
+ * @param {number} tol 打到的距離差多少以內算貼在一起
+ * @returns {{id:number|null, cycled:boolean, n:number}} `n` ＝ 貼在一起的有幾個（只有 1 個 ⇒ 0）
+ */
+export function stackPickChoice(units, cur, again, tol) {
+  if (!units.length) return { id: null, cycled: false, n: 0 };
+  const tied = units.filter(u => u.d - units[0].d <= tol);
+  if (again && tied.length > 1) {
+    const at = tied.findIndex(u => u.k === cur);
+    if (at >= 0) return { id: tied[(at + 1) % tied.length].id, cycled: true, n: tied.length };
+  }
+  return { id: tied[0].id, cycled: false, n: tied.length > 1 ? tied.length : 0 };
+}

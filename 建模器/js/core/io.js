@@ -865,13 +865,14 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
 // ═══════════════════════════════════════════════════════
 
 /**
- * 物件形狀與分片的指紋：點、面、座標加總、你標的切開幾條 —— 拉點、改縫都會變。面皮記下來，之後比對「原本的改過了沒」。
+ * 物件形狀的指紋：點、面、座標加總 —— 拉點、加面會變。面皮記下來，之後比對「原本的改過了沒」。
+ * ⚠ **⛔ 看縫**（kang 2026-10-28）：複製完清掉原本的縫、重新分片是正常用法，面皮本身沒問題 ⇒ 算進來就是假警報；
+ * 面皮複製出來就跟原本的縫無關（B 焊回去也只看面皮自己 —— `每片展開方式-設計方向.md` 頭盔沙箱）。
  */
 export function skinSig(mesh) {
-  let s = 0, cut = 0;
+  let s = 0;
   mesh.verts.forEach((v, i) => { const w = 1 + (i % 97) * 0.013; s += (v.p.x * 1.000003 + v.p.y * 1.7 + v.p.z * 2.3) * w; });
-  for (const he of mesh.halfEdges) if (he.role === EDGE_ROLE.CUT) cut++;
-  return `${mesh.verts.length}|${mesh.faces.length}|${s.toFixed(6)}|${cut}`;
+  return `${mesh.verts.length}|${mesh.faces.length}|${s.toFixed(6)}`;
 }
 
 /**
@@ -919,13 +920,19 @@ export function makeSkins(obj) {
       if (nh && !Mesh.marksEmpty(mk)) m.applyMarks(nh, mk);
     }
     m.computeNormals();
-    return new ModelObject({
+    const s = new ModelObject({
       name: `${obj.name} 面皮 ${i + 1}`,
       kind: 'sheet', src: { type: 'mesh' }, mesh: m,
       pos: obj.pos, rot: obj.rot, scale: obj.scale,
       color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
       skinOf: { id: obj.id, name: obj.name, sig }
     });
+    /**
+     * 原點搬到這張面皮自己的中間、東西⛔ 動（kang 2026-10-28 實測：原點照原本的 ⇒ 選到面皮時箭頭在原本物件的正中間，
+     * 方塊的側面那張離箭頭 30 cm，以為選錯）。跟「分離」出來的塊同一條（`recenterOrigin()`）。
+     */
+    recenterOrigin(s);
+    return s;
   });
   return { ok: true, skins };
 }

@@ -1,19 +1,14 @@
-面皮 A：複製成面皮、往內長、出口跳過、改過提醒（kang 2026-10-28「開始面皮」→ 查完、頭盔沙箱〔拆成面皮各自展開接合編號 0 個；照 3D 位置焊回去、交界當縫一起展開 297 個跟原本一模一樣〕→ 8 題「照建議」：① 分片面板一顆、選到的物件每片一張 ② 原本不動、放新的一層「○○ 面皮」③ 板厚往內長 ④ 3D 列印／剖面分切／OBJ／干涉跳過 ⑤ 一起展開照位置焊回去（B）⑥ 每張自己的展開方式（B）⑦ 原本改過了只提醒 ⑧ 分 A／B）—— 查完的（每片展開方式-設計方向.md「面皮」：splitPatches 照切開分塊、Mesh.fromFaceList／merge／marksOf 現成、塊裡面的縫要一起搬〔沙箱第一版沒搬圓筒那條縫就不見〕、接合編號照同一網格的兩側配所以分開就斷、板件往兩邊各長一半、四個出口沒選東西用 shown()；Rhino ExtractSrf Copy=Yes 複製面再攤〔已查證〕）；io.js ModelObject.skinOf（建構子、toJSON 有才存、fromJSON）、skinSig()、makeSkins()（照切開分塊、每塊一張開放板件、同位置角度縮放顏色板厚、裡面的標記連同縫照搬）、sheetShell 面皮往內長、Doc.forMaking()／skinNote()／skinState()（same／changed／gone）；mesh.js shell(t, { inward })；main.js makeSkinsOp()（找或開「○○ 面皮」那一層、記一步、講一句）、干涉走 forMaking 並講面皮；exportPanel／objPanel／slicePanel 走 forMaking、提醒接 skinNote；toolbar.js _skinBtn()（分片面板、面皮自己沒有）、_skinNote()（這是「○○」的面皮、改過了／不在了黃字）；scene.js 面皮往內長、不往上抬；AI.看() 多「面皮」；功能地圖「物件面板：複製成面皮」；回歸測試 5070 → 5091 全部通過（舊的 5 項讀程式照新寫法改）；在複本裡改壞 15 處全部抓到、每處都跑到「通過 N」；本機（埠 8830、1600 寬、滑鼠點）方塊智慧分切 3 片 →「複製成面皮」3 張進「方塊 1 面皮」那一層、目前這一層不變、外框跟方塊一樣（往內 0.2）、面皮面板那一句、面皮沒有複製按鈕、3D 列印「1 個物件…（面皮 3 張是給展開用的，沒算）」、清掉方塊的縫 ⇒ 面皮黃字改過了、Ctrl+Z 收回、再 Ctrl+Z 面皮與那一層一起收回，主控台沒有錯誤；沙箱面皮展開形狀跟方塊的片一樣（跨面皮的接合編號是 B）；新 規格\建模器-面皮.md（A，含 ⏳ 實測）；設計方向「面皮：動工前查到的」與定案；STATUS ⏳ 一行、真待辦；目次產生器重產＋檢查通過
+面皮 A 補：實測卡住的五件（kang 2026-10-28 實測「有看到面皮圖層…但是我無法單獨針對面皮做處理」→ AI 本機陪著重現：畫面上點面皮選到的都是原本的〔貼在同一個面上、打到的距離一樣〕、圖層那一層收著看不到面皮、箭頭在原本物件的正中間；kang 線上半球再測「選面」黃色 4 塊直接按複製 ⇒ 整個半球一張〔本機重現：257 面 vs 先「切成一片」2 張 4／253 面〕→ kang「同意你的建議」：選面只加提醒〔⛔ 改成只複製黃色那一群 —— kang：要只拿一塊，複製後留要的那張、原本的清縫重新分片就好，有圖層保護〕→ AI 提出提醒只看形狀 → kang「依據你的專業判斷」⇒ 照建議〔查證：B 焊回去只看面皮自己、⛔ 用原本的縫；kang ⑦ 原文是「原本的改過了」〕）—— toolbar.js _skinBtn() 選面有選還沒切 ⇒ 按鈕上面黃字「⚠ 黃色這一群還沒切開…」、_skinNote() 改「形狀改過了」；io.js makeSkins() 每張 recenterOrigin()（原點在面皮中間、東西⛔ 動）、skinSig() 拿掉切開幾條；main.js makeSkinsOp() 那一層在圖層清單上展開、上面那句講怎麼選面皮、onPickStack 講疊著／換到誰；select.js hitStack()（hitTest 改走它）、_stackPick()（同一個位置 16 px 內、⛔ 加選、板件加板厚）、pick() 走它；screen.js stackPickChoice()（純算：只在貼在一起的之間換 —— 前後疊著照舊、⛔ 改原本的手感；Blender 是全部輪流）；回歸測試 5091 → 5103 全部通過（新 12 項、舊的 4 項照新規則改）；在複本裡改壞 14 處全部抓到、每處都跑到「通過 N」；本機（埠 8832、1600 寬、滑鼠點）方塊選面點正面 ⇒ 黃字、切成一片 ⇒ 不見、複製 2 張、那一層展開、面皮 2 原點在自己中間世界外框不變、點正面「疊著 2 個」→ 同一個位置再點 ⇒ 面皮 2 箭頭在正面 → 再點回方塊、清光縫 ⇒ 面皮照舊沒改過，主控台沒有錯誤；規格\建模器-面皮.md 新一節「A 補」（含新的 ⏳ 實測）、6368a73 的線上先驗寫進規格（清單第 2 步寫錯先驗時改）、實測卡住與選面的經過、給 B 的兩件（拉開過的照複製時的位置配、前後兩批可能重疊）；每片展開方式-設計方向.md 補一段；STATUS ⏳ 與真待辦；目次、模組解析、兩端檢查、STATUS 行數通過
 
-動到 16 個檔：
-  M  建模器/js/core/io.js             skinOf、skinSig、makeSkins、往內長、forMaking／skinNote／skinState
-  M  建模器/js/core/mesh.js           shell(t, { inward })
-  M  建模器/js/main.js                makeSkinsOp、干涉跳過面皮
-  M  建模器/js/ui/toolbar.js          「複製成面皮」、面皮的物件面板
-  M  建模器/js/ui/exportPanel.js      跳過面皮、講幾張
-  M  建模器/js/ui/objPanel.js         跳過面皮、講幾張
-  M  建模器/js/ui/slicePanel.js       跳過面皮、講幾張
-  M  建模器/js/view/scene.js          面皮往內長、不往上抬
-  M  建模器/js/ai/assist.js           AI.看() 多「面皮」
-  M  建模器/js/ai/catalogInfo.js      功能地圖「物件面板：複製成面皮」
-  M  建模器/tests/run.mjs             新 21 項、舊的 5 項照新寫法改
-  A  規格/建模器-面皮.md              新：A（含 ⏳ 實測）、B 預告
-  M  每片展開方式-設計方向.md         面皮動工前查到的、8 題、定案
+動到 10 個檔：
+  M  建模器/js/core/io.js             skinSig 只看形狀、makeSkins 原點置中
+  M  建模器/js/core/screen.js         stackPickChoice（疊著的換法，純算）
+  M  建模器/js/view/select.js         hitStack、_stackPick、pick 走它
+  M  建模器/js/main.js                那一層展開、上面那句、onPickStack
+  M  建模器/js/ui/toolbar.js          選面還沒切的黃字、「形狀改過了」
+  M  建模器/tests/run.mjs             新 12 項、舊的 4 項照新規則改
+  M  規格/建模器-面皮.md              6368a73 線上先驗、實測卡住、A 補（含 ⏳ 實測）、給 B
+  M  每片展開方式-設計方向.md         A 補一段
   M  STATUS.md                      ⏳ 一行、真待辦
   M  版控工具/commit-msg.txt
 

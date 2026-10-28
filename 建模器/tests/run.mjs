@@ -17036,17 +17036,27 @@ section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（
   const cuts = m => m.halfEdges.filter(h => h.role === EDGE_ROLE.CUT && h.face && h.twin && h.twin.face).length;
   const area = m => m.faces.reduce((s, f) => { const p = m.faceVerts(f).map(v => v.p); let a = 0; for (let i = 1; i + 1 < p.length; i++) a += p[i].clone().sub(p[0]).cross(p[i + 1].clone().sub(p[0])).length() / 2; return s + a; }, 0);
 
-  const src = cylObj(), sig0 = io.skinSig(src.mesh());
+  const src = cylObj(), sig0 = io.skinSig(src.mesh()), cut0 = cuts(src.mesh());
   const r = io.makeSkins(src);
   const side = r.ok ? r.skins.find(s => s.mesh().faces.length === 32) : null;
   ok('★★★ 圓柱（上、下、一條直縫）⇒ 3 張面皮：側面 32 面、上下各 1 面；面加起來 ＝ 原本', r.ok && r.skins.length === 3 && !!side
     && r.skins.reduce((n, s) => n + s.mesh().faces.length, 0) === src.mesh().faces.length, r.ok ? r.skins.map(s => s.mesh().faces.length).join('、') : r.reason);
   near('★★ 　 面積加起來 ＝ 原本', r.ok ? r.skins.reduce((s, k) => s + area(k.mesh()), 0) : 0, area(src.mesh()), 1e-6);
-  ok('★★★ 　 每張都是開放的板件、同樣的位置角度縮放、顏色板厚照原本、記得從哪裡來', r.ok && r.skins.every(s => s.kind === 'sheet' && !s.mesh().isClosed()
-    && s.pos.equals(src.pos) && s.scale.equals(src.scale) && s.thickness === 0.5 && s.skinOf && s.skinOf.id === src.id && s.skinOf.name === '筒' && s.skinOf.sig === sig0)
+  ok('★★★ 　 每張都是開放的板件、同樣的角度縮放、顏色板厚照原本、記得從哪裡來', r.ok && r.skins.every(s => s.kind === 'sheet' && !s.mesh().isClosed()
+    && s.scale.equals(src.scale) && s.thickness === 0.5 && s.skinOf && s.skinOf.id === src.id && s.skinOf.name === '筒' && s.skinOf.sig === sig0)
     && r.skins.map(s => s.name).join('、') === '筒 面皮 1、筒 面皮 2、筒 面皮 3');
+  /** 補（kang 2026-10-28 實測：箭頭在原本的正中間、不在面皮上）⇒ 原點在面皮自己的中間、東西⛔ 動 —— 轉過、拉長過的也一樣 */
+  const ctr = s => { const b = s.mesh().bounds(); return b.min.clone().add(b.max).multiplyScalar(0.5).length(); };
+  ok('★★★ 　 每張的原點在自己的中間（箭頭在面皮身上）', r.ok && r.skins.every(s => ctr(s) < 1e-6), r.ok ? r.skins.map(s => ctr(s).toFixed(4)).join('、') : '');
+  {
+    const rs = cylObj(); rs.rot.set(0.3, 0.7, 0.2); rs.scale.set(1, 1.5, 1);
+    const wp = o => o.mesh().verts.map(v => v.p.clone().applyMatrix4(o.matrix()));
+    const W = wp(rs), rr = io.makeSkins(rs);
+    const worst = rr.ok ? Math.max(...rr.skins.flatMap(s => wp(s).map(p => Math.min(...W.map(q => q.distanceTo(p)))))) : 1;
+    ok('★★★ 　 原點搬了、東西一格都沒動：轉過又拉長的圓柱，面皮每個點都還在原本的點上', worst < 1e-6, `差最多 ${worst.toExponential(2)}`);
+  }
   ok('★★★ 　 塊裡面的縫照搬：側面那一條直縫兩側都在同一張 ⇒ 面皮上照樣是切開（沙箱第一版沒搬就不見了）', !!side && cuts(side.mesh()) === 2, side ? `${cuts(side.mesh())} 條半邊` : '');
-  ok('★★ 　 原本的物件⛔ 動（形狀、縫一樣）', io.skinSig(src.mesh()) === sig0);
+  ok('★★ 　 原本的物件⛔ 動（形狀、縫一樣）', io.skinSig(src.mesh()) === sig0 && cut0 > 0 && cuts(src.mesh()) === cut0, `縫 ${cut0} → ${cuts(src.mesh())}`);
   ok('★★ 參數物件 ⇒ 先轉成可編輯網格（跟標縫同一個規矩）', !io.makeSkins(new io.ModelObject({ name: '方', src: { type: 'box' } })).ok
     && /轉成可編輯網格/.test(io.makeSkins(new io.ModelObject({ name: '方', src: { type: 'box' } })).reason));
 
@@ -17073,9 +17083,12 @@ section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（
   src.mesh().verts[0].p.x += 1;
   ok('★★★ 原本的拉了一個點 ⇒ changed', d.skinState(r.skins[0]) === 'changed');
   src.mesh().verts[0].p.x -= 1;
+  /** 補（kang 2026-10-28）：只看形狀、⛔ 看縫 —— 複製完清掉原本的縫、重新分片是正常用法，算進來就是假警報 */
   const he0 = src.mesh().halfEdges.find(h => h.twin && h.role !== EDGE_ROLE.CUT);
   src.mesh().setRole(he0, EDGE_ROLE.CUT);
-  ok('★★ 原本的多標一條縫 ⇒ changed（片會不一樣）', d.skinState(r.skins[0]) === 'changed');
+  ok('★★★ 原本的多標一條縫 ⇒ 照舊 same（縫不算改過）', d.skinState(r.skins[0]) === 'same');
+  for (const h of src.mesh().halfEdges) if (h.role === EDGE_ROLE.CUT) src.mesh().setRole(h, EDGE_ROLE.FREE);
+  ok('★★★ 原本的縫全部清掉 ⇒ 照舊 same', cuts(src.mesh()) === 0 && d.skinState(r.skins[0]) === 'same', `還有 ${cuts(src.mesh())} 條`);
   d.remove(src);
   ok('★★ 原本的刪掉了 ⇒ gone', d.skinState(r.skins[0]) === 'gone');
 
@@ -17086,7 +17099,36 @@ section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（
     && /commit\(`複製成面皮 \$\{r\.skins\.length\} 張`\);/.test(mn) && /makeSkins: obj => makeSkinsOp\(obj\),/.test(mn));
   ok('★★ 讀程式守著：分片面板有「複製成面皮」（面皮自己⛔ 有）、面皮的物件面板講從哪裡來與改過了',
     /this\._seamProposalBox\(obj\);\s*this\._skinBtn\(obj\);/.test(tb) && /_skinBtn\(obj\) \{\s*if \(obj\.skinOf\) return;/.test(tb)
-    && /⚠ 原本的「\$\{nm\}」改過了（形狀或縫），這張面皮是舊的 —— 要的話刪掉重新複製/.test(tb) && /if \(st === 'gone'\)/.test(tb));
+    && /⚠ 原本的「\$\{nm\}」形狀改過了，這張面皮是舊的 —— 要的話刪掉重新複製/.test(tb) && /if \(st === 'gone'\)/.test(tb));
+  ok('★★★ 讀程式守著：「選面」選好黃色、還沒切 ⇒ 複製按鈕上面講先按「切成一片」（kang 半球實測：直接按 ⇒ 整個一張）',
+    /if \(g && g\.kind === 'group' && g\.count\) \{\s*this\.form\.appendChild\(bad\('⚠ 黃色這一群還沒切開 —— 先按上面的「切成一片」，再按「複製成面皮」；現在按只照橘色的縫複製（沒有縫就是整個一張）'\)\);\s*\}\s*this\._rowBtn\('複製成面皮',/.test(tb));
+  ok('★★★ 讀程式守著：複製完「○○ 面皮」那一層在圖層清單上直接展開（kang 實測：看得到那一層、看不到裡面的）、上面那句講怎麼選面皮',
+    /if \(lyBox && lyBox\._ui\) lyBox\._ui\.open\.add\(L\.id\);\s*view\.sync\(doc\);/.test(mn) && /要選面皮：右邊「圖層」點它的名字，或畫面上同一個位置再點一下/.test(mn));
+
+  // 疊在一起的：同一個位置再點一下換選下面那一個（純算 `screen.js` `stackPickChoice()`）
+  {
+    const { stackPickChoice: C } = await import('../js/core/screen.js');
+    const U = [{ k: '1', id: 1, d: 10 }, { k: '2', id: 2, d: 10 }, { k: '3', id: 3, d: 30 }];
+    const a = C(U, '', false, 0.05), b = C(U, '1', true, 0.05), c = C(U, '2', true, 0.05);
+    ok('★★★ 面皮貼在原本的面上：第一下選原本的、講「疊著 2 個」；同一個位置再點 ⇒ 面皮；再點 ⇒ 回原本的', a.id === 1 && !a.cycled && a.n === 2
+      && b.id === 2 && b.cycled && b.n === 2 && c.id === 1 && c.cycled, JSON.stringify([a, b, c]));
+    const fb = C([{ k: '1', id: 1, d: 10 }, { k: '3', id: 3, d: 30 }], '1', true, 0.05);
+    ok('★★★ 　 只是前後疊著（方塊在板子前面）⇒ 再點一下照舊是它、⛔ 講（⛔ 改原本的手感）', fb.id === 1 && !fb.cycled && fb.n === 0, JSON.stringify(fb));
+    ok('★★ 　 不在同一個位置（或按著 Shift 加選）⇒ ⛔ 換', C(U, '1', false, 0.05).id === 1 && !C(U, '1', false, 0.05).cycled);
+    ok('★★ 　 現在選的不在底下 ⇒ 選最前面那一個；底下沒東西 ⇒ null', C(U, '9', true, 0.05).id === 1 && C([], '1', true, 0.05).id === null);
+    ok('★★ 　 板件原本往外長半個板厚：差 0.1 在「0.05＋板厚 0.2」以內 ⇒ 算貼在一起', C([{ k: '1', id: 1, d: 10 }, { k: '2', id: 2, d: 10.1 }], '1', true, 0.25).id === 2
+      && C([{ k: '1', id: 1, d: 10 }, { k: '2', id: 2, d: 10.1 }], '1', true, 0.05).id === 1);
+    const sl = rd('js/view/select.js');
+    ok('★★★ 讀程式守著：一般的點走 _stackPick（同一個位置、⛔ 加選、板件加板厚）、點兩下進群組照舊先走、換了或疊著就講',
+      /const sp = this\._stackPick\(clientX, clientY, additive\);\s*const id = sp\.id;/.test(sl)
+      && /const tol = 0\.05 \+ \(o0 && o0\.kind === 'sheet' \? \(\+o0\.thickness \|\| 0\) : 0\);/.test(sl)
+      && /const again = !additive && !!lp && Math\.hypot\(clientX - lp\.x, clientY - lp\.y\) <= DOUBLE_TAP_MOVE;/.test(sl)
+      && /if \(dbl && !\(e\.shiftKey \|\| this\.multi\) && this\.enterGroupAt\(e\.clientX, e\.clientY\)\) return;\s*this\.pick\(/.test(sl)
+      && /if \(this\.hooks\.onPickStack && \(sp\.cycled \|\| sp\.n > 1\)\) this\.hooks\.onPickStack\(\{ n: sp\.n, cycled: !!sp\.cycled, id \}\);/.test(sl)
+      && /return st\.length \? st\[0\]\.id : null;/.test(sl));
+    ok('★★ 讀程式守著：上面那句講換到誰／可以再點一下', /換選疊在下面的：「\$\{o \? o\.name : ''\}」（這裡疊著 \$\{n\} 個，同一個位置再點一下換下一個）/.test(mn)
+      && /這裡疊著 \$\{n\} 個（例：面皮貼在原本的面上）—— 同一個位置再點一下，換選下面那一個/.test(mn));
+  }
   ok('★★ 讀程式守著：畫面往內長、面皮⛔ 往上抬', /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.skinOf \}\)/.test(sc) && /obj\.floorLift && !obj\.skinOf/.test(sc)
     && /if \(this\.skinOf\) return mesh\.shell\(t, \{ inward: true \}\);/.test(rd('js/core/io.js')));
   ok('★★★ 讀程式守著：3D 列印、OBJ、剖面分切、干涉都走 forMaking、都講跳過幾張面皮',
@@ -23481,7 +23523,8 @@ section('介面第二輪 2a：分割畫面（2026-10-27）');
     /const r = this\.paneRect\(p\);\s*const aspect = r\.h \? r\.w \/ r\.h : 1;/.test(sc) && /const h = this\.paneRect\(\)\.h \|\| 0;/.test(sc));
   ok('★★★ 滑鼠座標照現在那一格：_toCanvasPx 減掉那一格的位置、w h 用那一格；hitTest 走它；框選畫回畫布加 ox oy、放開照那一格大小',
     /return \{ x: clientX - r\.left - p\.x, y: clientY - r\.top - p\.y, w: p\.w, h: p\.h, ox: p\.x, oy: p\.y \};/.test(se)
-    && /hitTest\(clientX, clientY\) \{[\s\S]{0,200}const r = this\._toCanvasPx\(clientX, clientY\);/.test(se)
+    && /hitStack\(clientX, clientY\) \{[\s\S]{0,200}const r = this\._toCanvasPx\(clientX, clientY\);/.test(se)   // 面皮 A 補：hitTest 改走 hitStack（滑鼠底下每一個）
+    && /hitTest\(clientX, clientY\) \{\s*const st = this\.hitStack\(clientX, clientY\);/.test(se)
     && /el\.style\.left = \(r\.x0 \+ \(m\.ox \|\| 0\)\) \+ 'px';/.test(se) && /this\._marq = \{ ax: r\.x, ay: r\.y, bx: r\.x, by: r\.y, ox: r\.ox, oy: r\.oy \};/.test(se)
     && /const box = pr \? \{ width: pr\.w, height: pr\.h \}/.test(se));
   ok('★★★ 滑鼠在哪一格就操作哪一格：#stage 的 capture 先換格（⛔ 轉視角與點選拿到上一格的相機）、按著拖⛔ 換、點下去換藍框、離開畫面換回藍框',

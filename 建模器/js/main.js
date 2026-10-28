@@ -164,6 +164,12 @@ const sel = new Selection(view, {
     if (g !== null) toast(`正在改「群組 ${g}」裡面的一個 —— 其他東西變淡；按 Esc 或點外面空白出來`);
     updateBar();
   },
+  /** 疊在一起的（面皮貼在原本的面上）：講「同一個位置再點一下換選下面那一個」、換了講換到誰（kang 2026-10-28 同意）*/
+  onPickStack: ({ n, cycled, id }) => {
+    const o = doc.byId(id);
+    if (cycled) toast(`換選疊在下面的：「${o ? o.name : ''}」（這裡疊著 ${n} 個，同一個位置再點一下換下一個）`);
+    else toast(`這裡疊著 ${n} 個（例：面皮貼在原本的面上）—— 同一個位置再點一下，換選下面那一個`);
+  },
   /**
    * 量測讀數變了 → 重畫左下角那一塊。
    * ⚠ `select.js` 刻意**不碰 DOM**（它是 view 層），所以字從這裡進 HTML。
@@ -7058,13 +7064,16 @@ function makeSkinsOp(obj) {
   const name = `${obj.name} 面皮`;
   const L = doc.layers.find(l => l.name === name) || doc.addLayer(name);
   for (const s of r.skins) { s.layer = L.id; doc.add(s); }
+  /** 那一層在圖層清單上直接展開（kang 2026-10-28 實測：看得到「○○ 面皮」那一層、看不到裡面的面皮 —— 每一層一開始是收著的）*/
+  const lyBox = document.getElementById('layerBox');
+  if (lyBox && lyBox._ui) lyBox._ui.open.add(L.id);
   view.sync(doc);
   panel.analysisCache.clear();
   commit(`複製成面皮 ${r.skins.length} 張`);
   panel.refresh();
   updateBar();
   toast(`複製成面皮 ${r.skins.length} 張，放在「${name}」這一層（跟原本疊在同一個位置，原本的沒動）`
-    + '　要看哪個就到右邊「圖層」開關　面皮只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）　按 Ctrl+Z 收得回來');
+    + '　要選面皮：右邊「圖層」點它的名字，或畫面上同一個位置再點一下　面皮只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）　按 Ctrl+Z 收得回來');
 }
 
 function acceptSeamProposal() {
