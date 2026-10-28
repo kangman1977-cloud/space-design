@@ -807,7 +807,29 @@ export class Mesh {
       faces.push([a, b, b + n, a + n]);
     }
 
-    return Mesh.fromFaceList(points, faces);
+    const out = Mesh.fromFaceList(points, faces);
+    /**
+     * 🔴 **你畫的線（`hard`）上下兩面都帶過去**（kang 2026-10-29「先處理甲」→ `規格\建模器-網格核心.md`「板件上的線」）。
+     * 以前加厚是點和面重新組一個網格、標記一條都沒跟過去 ⇒ 平板／折板／面皮上細分、切一刀、內縮、環切加的線
+     * 跟原本的面共面 ⇒ 畫面上看不見（點得到、畫不出來 —— 網格核心第二批「畫的 ＝ 點得到的」破了），
+     * 「加厚後轉成網格」之後格線真的沒了（`mergeCoplanarFaces()` 只停在 `hard`）。
+     * 前 n 個點是外側、後 n 個是內側（上面那一段）⇒ 同一條線在兩側各標一次；側壁照它自己的形狀判斷。
+     * ⚠ 只帶 `hard`：折線、縫、平滑都是看原本那一片網格的（展開、分片、平滑細分⛔ 讀加厚後的）。
+     */
+    const hard = [];
+    for (const he of this.edges()) if (he.hard) hard.push([vi.get(he.v.id), vi.get(he.to.id)]);
+    if (hard.length) {
+      const oi = out._vertIndex(), byPair = new Map();
+      for (const he of out.edges()) {
+        const a = oi.get(he.v.id), b = oi.get(he.to.id);
+        byPair.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he);
+      }
+      for (const [a, b] of hard) for (const k of [0, n]) {
+        const he = byPair.get(`${Math.min(a, b) + k}-${Math.max(a, b) + k}`);
+        if (he) out.setHard(he, true);
+      }
+    }
+    return out;
   }
 
   /**

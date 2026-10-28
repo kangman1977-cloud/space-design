@@ -23776,6 +23776,73 @@ section('介面第二輪 2b：放大一格、每一格各自鎖定、記住版�
     && /view\.frameAll\(doc\);\s*restorePanes\(\);/.test(mn) && /if \(!\(o\.layout in LAYOUT_NAMES\)\) return;/.test(mn), 'savePanes 叫了 ' + hits + ' 次');
 }
 
+section('板件上的線：加厚時把你畫的線帶到上下兩面（kang 2026-10-29 甲）');
+{
+  /**
+   * kang 2026-10-29 做面具時看到：平板、面皮細分後看不到格線（方塊看得到）。原因：板件畫的是 `shell()` 加厚出來的網格，
+   * 以前它一條標記都沒帶 ⇒ 你畫的線（`hard`）跟原本的面共面 ⇒ 看不見；「加厚後轉成網格」之後格線真的沒了。
+   * kang「先處理甲」：加厚時 `hard` 上下兩面都帶過去；側壁照它自己的形狀。
+   */
+  const T = 0.3;
+  const plate = () => { const m = edit.tidyMesh(buildPrim('plate', { w: 100, d: 60 })); m.computeNormals(); return m; };
+  const visible = m => { m.computeNormals(); let n = 0; for (const he of m.edges()) if (!m.isHiddenEdge(he)) n++; return n; };
+  const hardN = m => { let n = 0; for (const he of m.edges()) if (he.hard) n++; return n; };
+  const hardYs = m => { const ys = new Set(); for (const he of m.edges()) if (he.hard) { ys.add(+he.v.p.y.toFixed(4)); ys.add(+he.to.p.y.toFixed(4)); } return [...ys].sort((a, b) => a - b); };
+
+  const p0 = plate(), s0 = p0.shell(T);
+  eq('★ 對照：沒畫線的平板加厚照舊 —— 看得見的邊 12、面 6、沒有 hard', [visible(s0), planarRegions(s0).length, hardN(s0)].join(','), '12,6,0');
+
+  const pc = plate(), sub = edit.subdivideFaces(pc, pc.faces.slice(), 5);
+  const p5 = sub.mesh; p5.computeNormals();
+  const s5 = p5.shell(T);
+  ok('★ 細分 5 等分：原本那一片內部的線 40 條都標了（前提）', hardN(p5) === 40 && sub.ok, 'hard ' + hardN(p5));
+  eq('★★★ 加厚後上下兩面各 40 條 ⇒ 80 條都看得見（以前 0 條）', hardN(s5), 80);
+  eq('★★★ 加厚後的面：上 25 ＋ 下 25 ＋ 四個側面 ＝ 54（以前 6 —— 上下各一整片）', planarRegions(s5).length, 54);
+  eq('★★ 看得見的邊 ＝ 以前的 44 條外框 ＋ 80 條格線', visible(s5), 124);
+  ok('★★★ 畫的 ＝ 點得到的：原本那一片每一條看得見的內部線，加厚後上下兩條都看得見', (() => {
+    const vi = p5._vertIndex(), oi = s5._vertIndex(), n = p5.verts.length, by = new Map();
+    for (const he of s5.edges()) { const a = oi.get(he.v.id), b = oi.get(he.to.id); by.set(`${Math.min(a, b)}-${Math.max(a, b)}`, he); }
+    for (const he of p5.edges()) {
+      if (!he.twin || !he.twin.face || !he.face || p5.isHiddenEdge(he)) continue;
+      const a = vi.get(he.v.id), b = vi.get(he.to.id);
+      for (const k of [0, n]) { const h = by.get(`${Math.min(a, b) + k}-${Math.max(a, b) + k}`); if (!h || s5.isHiddenEdge(h)) return false; }
+    }
+    return true;
+  })());
+  near('★★ 形狀⛔ 變：體積照樣 ＝ 100 × 60 × 0.3', s5.volume(), 100 * 60 * T, 1e-6);
+  ok('★ 　 　 照樣封閉', s5.isClosed());
+  eq('★★ 線在上下兩面：板厚正中間 ± 半個板厚', hardYs(s5).join(','), [-T / 2, T / 2].map(x => +x.toFixed(4)).join(','));
+  eq('★★ 面皮往內長：外側就在原本的面上、內側往內一整個板厚', hardYs(p5.shell(T, { inward: true })).join(','), [-T, 0].map(x => +x.toFixed(4)).join(','));
+
+  /** 切一刀、內縮、環切加的線一樣 */
+  const cut = edit.bisect(plate(), { n: new THREE.Vector3(1, 0, 0), d: -20 });
+  ok('★★ 切一刀那條線加厚後上下兩條都看得見', cut.ok && hardN(cut.mesh) === 1 && hardN(cut.mesh.shell(T)) === 2, cut.ok ? hardN(cut.mesh.shell(T)) : cut.reason);
+  const pi = plate(), ins = edit.insetFaces(pi, pi.faces[0], 5);
+  ok('★★ 內縮那一圈加厚後上下兩圈都看得見（4 → 8）', !!ins.mesh && hardN(ins.mesh) === 4 && hardN(ins.mesh.shell(T)) === 8, ins.mesh ? hardN(ins.mesh.shell(T)) : ins.reason);
+  const pq = plate(), p2 = edit.subdivideFaces(pq, pq.faces.slice(), 2).mesh; p2.computeNormals();
+  const lc = edit.loopCut(p2, [...p2.edges()].find(h => h.twin && h.twin.face && h.face && h.hard));
+  ok('★★ 環切的線加厚後上下兩面都看得見', !!lc.mesh && hardN(lc.mesh.shell(T)) === 2 * hardN(lc.mesh), lc.mesh ? hardN(lc.mesh) + ' → ' + hardN(lc.mesh.shell(T)) : lc.reason);
+
+  /** 加厚後轉成網格：格線留著（以前上下各一整片） */
+  const o = new io.ModelObject({ name: '平板', kind: io.KIND.SHEET, src: { type: 'plate', w: 100, d: 60, segW: 1, segD: 1 }, thickness: T });
+  o.bake(); o.setMesh(p5.clone());
+  const rb = o.bakeShelled(); const bm = o.mesh(); bm.computeNormals();
+  ok('★★★ 加厚後轉成網格：格線留著 —— 面 54、hard 80（以前 6、0）', rb.ok && planarRegions(bm).length === 54 && hardN(bm) === 80, rb.ok ? planarRegions(bm).length + '／' + hardN(bm) : rb.reason);
+  near('★ 　 　 體積照樣 1800', bm.volume(), 1800, 1e-6);
+
+  /** 折板沒畫線 ⇒ 一模一樣 */
+  const bend = buildPrim('bend', defaultSrc('bend'), T); bend.computeNormals();
+  ok('★ 折板：加厚後 hard ＝ 原本的兩倍（沒畫線就是 0）、照樣封閉', hardN(bend.shell(T)) === 2 * hardN(bend) && bend.shell(T).isClosed(), 'bend hard ' + hardN(bend) + ' → ' + hardN(bend.shell(T)));
+
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const ms = rf(join(dir, '../js/core/mesh.js'), 'utf8'), sc = rf(join(dir, '../js/view/scene.js'), 'utf8');
+  ok('★★ 讀程式：shell() 收集原本的 hard、上下兩側各標一次；畫面照舊照 isHiddenEdge() 畫加厚後的',
+    /for \(const he of this\.edges\(\)\) if \(he\.hard\) hard\.push\(\[vi\.get\(he\.v\.id\), vi\.get\(he\.to\.id\)\]\);/.test(ms)
+    && /for \(const \[a, b\] of hard\) for \(const k of \[0, n\]\) \{/.test(ms) && /if \(he\) out\.setHard\(he, true\);\s*\}\s*\}\s*return out;/.test(ms)
+    && /if \(shown\.isHiddenEdge\(he\)\) continue;/.test(sc));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

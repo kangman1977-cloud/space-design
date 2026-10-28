@@ -785,13 +785,14 @@ export class SceneView {
        * 🔴 **畫的稜線 ＝ 看得見的邊，跟「點得到」問同一支 `isHiddenEdge()`**（2026-10-22，網格核心第二批
        * → `規格\建模器-網格核心.md` 第 5 節）。以前用 `EdgesGeometry(geometry, 1)`（轉折 > 1° 才畫）再把 `hard` 疊上去，
        * 而「點得到」是 0.5° ⇒ 夾角 0.5°～1° 的邊點得到卻畫不出來 —— 畫面在騙人。
-       * ⚠ 加厚（板件）時畫的是 `shell()` 出來的網格：它沒有標記（`hard` 不跟過去），照它自己的形狀判斷。
+       * ⚠ 加厚（板件）時畫的是 `shell()` 出來的網格：你畫的線（`hard`）上下兩面都帶過去（kang 2026-10-29 甲 ——
+       * 以前沒帶，板件上細分的格線看不見），其他標記沒帶、側壁照它自己的形狀判斷。
        */
       shown.computeNormals();
       const segs = [];
       /**
        * 平滑後只畫保持尖的邊（磨出來的小邊都標了 `smooth`，`subd.js`）—— 不然整片曲面是密密的網。
-       * ⚠ 加厚過的（`shell()` 不帶標記）照轉折判斷：大於保持尖角度的一半才畫。
+       * ⚠ 加厚過的（`shell()` 不帶 `smooth`）照轉折判斷：大於保持尖角度的一半才畫。
        */
       const cosHalf = Math.cos((obj.subdDeg || 30) * Math.PI / 360);
       for (const he of shown.edges()) {
