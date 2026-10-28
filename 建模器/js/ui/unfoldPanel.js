@@ -15,7 +15,7 @@
 
 import { MATERIALS, PICKABLE_MATERIAL_KEYS, DEFAULT_MATERIAL } from '../unfold/rules.js';
 import { unfoldMany, bomCSV } from '../unfold/part.js';
-import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs, qtyWords } from '../out/sheet.js';
+import { drawProgram, renderCanvas, titleLines, toSVG, printPieces, sameFolds, progSVG, printSVGs, qtyWords, dartTally } from '../out/sheet.js';
 import { packBoards, boardProgram, boardTitle, NEST_DEFAULTS } from '../out/nest.js';
 import { seamCount } from '../unfold/seam.js';
 import { toDXF, boardDXF, UNITS } from '../out/dxf.js';
@@ -411,9 +411,13 @@ export class UnfoldPanel {
     const all = this.app.doc.objects.length, n = (objs || []).length;
     const hid = this.app.doc.hiddenNote(this.app.sel.objects);    // 圖層與群組第一批：沒選東西、有藏起來的 ⇒ 講沒算
     const only = this.app.sel.objects.length && n < all ? `只展開選到的 ${n} 個（共 ${all} 個；沒選東西就是全部）　` : hid ? hid + '　' : '';
+    /** 每片展開方式「乙」（kang 2026-10-28）：省道打版多講幾片攤得平、幾片要拉（`dartTally()`）*/
+    const dt = dartTally(r.pieces);
+    const dartWords = dt.flat + dt.pull
+      ? `　攤得平 ${dt.flat} 片、要拉 ${dt.pull} 片` + (dt.pull ? `（最多 ${fmt(dt.worst * 100)}%）` : '') : '';
     this.sum.textContent = r.pieces.length
       ? only + `${s.pieces} 種、共 ${s.total} 片　總面積 ${fmt(s.area / 10000)} m²　`
-        + `折彎 ${s.arcBends + s.sharpBends} 道`
+        + `折彎 ${s.arcBends + s.sharpBends} 道` + dartWords
       : only + '沒有可以展開的東西';
 
     if (this._matNote) { this.body.appendChild(box('uwSkip', this._matNote)); this._matNote = null; }

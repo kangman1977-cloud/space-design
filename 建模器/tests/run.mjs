@@ -18377,6 +18377,93 @@ section('省道打版變形太大時指路（2026-10-19 綜合評估 ①-14）')
   ok('★★★ 半球只切開底、不開口：「…個面翻過來…」那一則多講同一句', !!flipW && flipW.endsWith(DART_HINT), flipW || rd.warnings.join('｜'));
 }
 
+section('每片展開方式 乙：省道打版講清楚攤得平／要拉多少（kang 2026-10-28）');
+
+/**
+ * 規格：`規格\建模器-省道打版.md`「追加：攤得平的片講清楚」；推導與沙箱：`每片展開方式-設計方向.md`。
+ * `flatten.js` `FLAT_STRAIN`／`strainFlat()`、`DART_HINT`；`out/sheet.js` 卡片、`dartTally()`；`ui/unfoldPanel.js` 上面那一行。
+ */
+if (!csgOK) {
+  ok('（略過：布林函式庫沒載入）', true);
+} else {
+  const { FLAT_STRAIN, strainFlat, DART_HINT, unfoldMesh: unfoldM } = await import('../js/unfold/flatten.js');
+  const { dartTally } = await import('../js/out/sheet.js');
+  const { makeRule: mkRule } = await import('../js/unfold/rules.js');
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  ok('★★ 0.1% 以內算攤得平', FLAT_STRAIN === 0.001 && strainFlat({ max: 0.001, min: -0.0005 }) && !strainFlat({ max: 0.0011, min: 0 }) && !strainFlat({ max: 0, min: -0.002 }) && !strainFlat(null));
+
+  /** 頭盔：圓筒（半徑 12、高 14）＋半球蓋（半徑 12），底開口；縫：交界一圈、筒一條直縫、蓋 N 片花瓣（沙箱同一個）*/
+  const helmet = petals => {
+    const cyl = new io.ModelObject({ name: '筒', src: { type: 'cylinder', r: 12, h: 14 }, kind: 'solid', pos: V3(0, 7, 0) });
+    const dome = new io.ModelObject({ name: '蓋', src: { type: 'dome', r: 12, seg: 32, segH: 8 }, kind: 'solid', pos: V3(0, 14, 0) });
+    dome.pos.y = 14 - dome.mesh().bounds().min.y;
+    const u = new io.ModelObject({ name: '頭盔', src: io.boolSrcFrom([cyl, dome], 'union'), kind: 'solid', pos: V3(0, 0, 0) });
+    u.bake();
+    const m = u.mesh(), b = m.bounds(), y0 = b.min.y, yJ = y0 + 14, step = 2 * Math.PI / petals;
+    for (const he of m.halfEdges) {
+      if (!he.twin) continue;
+      const a = he.v.p, c = he.to.p;
+      if (Math.abs(a.y - c.y) < 1e-6 && (Math.abs(a.y - yJ) < 1e-3 || Math.abs(a.y - y0) < 1e-3)) { m.setRole(he, EDGE_ROLE.CUT); continue; }
+      if (Math.abs(a.x - c.x) < 1e-6 && Math.abs(a.z - c.z) < 1e-6 && a.x > 11.9 && Math.abs(a.z) < 1e-3 && Math.max(a.y, c.y) <= yJ + 1e-6) { m.setRole(he, EDGE_ROLE.CUT); continue; }
+      if (a.y >= yJ - 1e-6 && c.y >= yJ - 1e-6 && Math.abs(a.y - c.y) > 1e-6) {
+        const r1 = Math.hypot(a.x, a.z), r2 = Math.hypot(c.x, c.z);
+        const t = r1 > 1e-3 ? Math.atan2(a.z, a.x) : Math.atan2(c.z, c.x), t2 = r2 > 1e-3 ? Math.atan2(c.z, c.x) : t;
+        if (Math.abs(Math.sin(t - t2)) > 1e-4) continue;
+        const k = (t + 4 * Math.PI) % step;
+        if (Math.min(k, step - k) < 1e-3) m.setRole(he, EDGE_ROLE.CUT);
+      }
+    }
+    return m;
+  };
+  const rule = mkRule('paper', 0.02);
+  const r8 = unfoldM(helmet(8), rule, { mode: 'dart' });
+  const tube = r8.pieces.find(p => p.faces.length === 32 && strainFlat(p.strain));      // 筒 32 面；花瓣也是 32 面 ⇒ 用攤不攤得平分
+  const petal = r8.pieces.find(p => p.faces.length === 32 && !strainFlat(p.strain));
+  ok('★★★ 頭盔的圓筒用省道打版 ⇒ 攤得平（整個物件選省道，攤得平的片照樣零變形）', !!tube && strainFlat(tube.strain), tube ? `${tube.strain.max} ／ ${tube.strain.min}` : '沒找到筒');
+  const tl = tube ? titleLines(tube, { limit: 3 }) : [];
+  ok('★★★ 　 卡片寫「這片攤得平，沒有變形（跟精確分片一樣）」、⛔ 列三個 0%、⛔ 寫上限那一行',
+    tl.includes('省道打版：這片攤得平，沒有變形（跟精確分片一樣）') && !tl.some(s => s.startsWith('省道打版：最多拉長')) && !tl.some(s => s.includes('你填的上限')), tl.join('｜'));
+  const pl = petal ? titleLines(petal, { limit: 3 }) : [];
+  ok('★★ 要拉的片（花瓣）照舊三個數字＋上限那一行', !!petal && !strainFlat(petal.strain) && pl.some(s => s.startsWith('省道打版：最多拉長')) && pl.some(s => s.includes('你填的上限')), pl.join('｜'));
+
+  // 參考數字守著：提示裡寫的「8 片約 4%、16 片不到 2%」要跟算出來的對得起來
+  const worstOf = r => dartTally(r.pieces).worst;
+  const w8 = worstOf(r8), w16 = worstOf(unfoldM(helmet(16), rule, { mode: 'dart' }));
+  const dome8 = (() => { const d = new io.ModelObject({ name: '蓋', src: { type: 'dome', r: 12, seg: 32, segH: 8 }, kind: 'solid' }); d.bake(); return d.mesh(); })();
+  {
+    const b = dome8.bounds(), step = Math.PI / 4;
+    for (const he of dome8.halfEdges) {
+      if (!he.twin) continue;
+      const a = he.v.p, c = he.to.p;
+      if (Math.abs(a.y - b.min.y) < 1e-3 && Math.abs(c.y - b.min.y) < 1e-3) { dome8.setRole(he, EDGE_ROLE.CUT); continue; }
+      if (Math.abs(a.y - c.y) < 1e-6) continue;
+      const r1 = Math.hypot(a.x, a.z), t = r1 > 1e-3 ? Math.atan2(a.z, a.x) : Math.atan2(c.z, c.x), t2 = Math.hypot(c.x, c.z) > 1e-3 ? Math.atan2(c.z, c.x) : t;
+      if (Math.abs(Math.sin(t - t2)) > 1e-4) continue;
+      const k = (t + 4 * Math.PI) % step;
+      if (Math.min(k, step - k) < 1e-3) dome8.setRole(he, EDGE_ROLE.CUT);
+    }
+  }
+  const wd = worstOf(unfoldM(dome8, rule, { mode: 'dart' }));
+  ok('★★★ 提示的參考數字是真的：半球切 8 片花瓣單獨 4～5%、接在頭盔上 4～9%；16 片不到 2%',
+    wd > 0.04 && wd < 0.05 && w8 > 0.04 && w8 < 0.09 && w16 < 0.02, `單獨 ${(wd * 100).toFixed(2)}%、頭盔 8 片 ${(w8 * 100).toFixed(2)}%、16 片 ${(w16 * 100).toFixed(2)}%`);
+  ok('★★ 　 DART_HINT 開頭就是參考數字（兩個地方都接在「…或多分幾片」後面）', DART_HINT.startsWith('（參考：半球切 8 片花瓣約拉 4～8%、切 16 片不到 2%）') && DART_HINT.includes('EVA'));
+
+  // 總帳
+  const t8 = dartTally(r8.pieces);
+  ok('★★★ 總帳：頭盔切 8 片花瓣 ⇒ 攤得平 2 片（筒、底面）、要拉 8 片、最多那一片的數字', t8.flat === 2 && t8.pull === 8 && Math.abs(t8.worst - w8) < 1e-12, JSON.stringify(t8));
+  ok('★★ 　 最多那一片看拉長、也看壓縮（壓得比拉得多 ⇒ 用壓縮的數字）', Math.abs(dartTally([{ strain: { max: 0.01, min: -0.03 } }]).worst - 0.03) < 1e-12);
+  ok('★★ 　 照套數算（一樣的片 ×N 算 N 片）', dartTally([{ qty: 3, strain: { max: 0, min: 0 } }, { qty: 2, strain: { max: 0.03, min: -0.01 } }]).flat === 3
+    && dartTally([{ qty: 3, strain: { max: 0, min: 0 } }, { qty: 2, strain: { max: 0.03, min: -0.01 } }]).pull === 2);
+  const re = unfoldM(helmet(8), rule, { mode: 'exact' });
+  ok('★★ 　 精確分片沒有拉伸 ⇒ 總帳 0／0（上面那一行⛔ 多寫）', dartTally(re.pieces).flat === 0 && dartTally(re.pieces).pull === 0);
+  ok('★★ 讀程式守著：上面那一行省道打版多寫「攤得平 N 片、要拉 M 片（最多 ○%）」',
+    /const dt = dartTally\(r\.pieces\);/.test(rd('js/ui/unfoldPanel.js')) && /`　攤得平 \$\{dt\.flat\} 片、要拉 \$\{dt\.pull\} 片` \+ \(dt\.pull \? `（最多 \$\{fmt\(dt\.worst \* 100\)\}%）` : ''\)/.test(rd('js/ui/unfoldPanel.js'))
+    && /\+ `折彎 \$\{s\.arcBends \+ s\.sharpBends\} 道` \+ dartWords\s*: only \+ '沒有可以展開的東西';/.test(rd('js/ui/unfoldPanel.js')));   // 改壞檢查抓到：只組字、沒接上去也會過
+}
+
 section('綜合評估 ② 第一批：說錯的數字與提示（2026-10-19）');
 {
   /** kang 2026-10-19「同意你的安排與建議」—— 畫面上的部分（抓最新版、加厚提示、參考線下拉、列印被擋、各按鈕提示）在本機／線上版用畫面驗 */

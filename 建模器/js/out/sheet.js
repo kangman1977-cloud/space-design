@@ -106,9 +106,25 @@ export const STYLE = {
  * 又是同一條原則：要送出去的格式，用最保守的寫法。
  */
 import { csgReady, offsetLoop } from '../build/bool.js';
-import { DART_HINT } from '../unfold/flatten.js';
+import { DART_HINT, strainFlat } from '../unfold/flatten.js';
 
 export const FONT = 'Noto Sans TC, Microsoft JhengHei, PingFang TC, sans-serif';
+
+/**
+ * 🔴 **省道打版的總帳：幾片攤得平、幾片要拉**（每片展開方式「乙」，kang 2026-10-28「照建議」② → `規格\建模器-省道打版.md`「追加：攤得平的片講清楚」）。
+ * 展開圖視窗上面那一行用（`ui/unfoldPanel.js`）；照套數算（一樣的片 ×N 算 N 片，跟「共 ○ 片」同一個算法）。精確分片的片沒有 `strain` ⇒ 不算。
+ * @returns {{flat:number, pull:number, worst:number}} `worst` ＝ 要拉的片裡最大的拉長或壓縮（0.05 ＝ 5%）
+ */
+export function dartTally(pieces) {
+  let flat = 0, pull = 0, worst = 0;
+  for (const p of pieces || []) {
+    if (!p.strain) continue;
+    const q = p.qty || 1;
+    if (strainFlat(p.strain)) flat += q;
+    else { pull += q; worst = Math.max(worst, p.strain.max, -p.strain.min); }
+  }
+  return { flat, pull, worst };
+}
 
 // ═══════════════════════════════════════════════════════
 //  一、決定畫什麼（純資料，可在 Node 裡驗）
@@ -895,7 +911,10 @@ export function titleLines(piece, opt = {}) {
    * 🔴 **省道打版的三個數字**（kang 2026-10-12 拍板：最多拉長、最多壓縮、縫邊長度最多差；填了上限、超過就紅字）。
    * ⚠ 上限沒填 ⇒ 只寫數字，⛔ 自己編一個預設值（各材料能拉幾 %，業界沒有一家公開 —— `外部參考-打版.md`）。
    */
-  if (piece.strain) {
+  /** 每片展開方式「乙」（kang 2026-10-28）：攤得平的片（0.1% 以內，`strainFlat()`）⇒ 講白話、⛔ 列三個 0%、⛔ 寫上限那一行 */
+  if (piece.strain && strainFlat(piece.strain)) {
+    out.push('省道打版：這片攤得平，沒有變形（跟精確分片一樣）');
+  } else if (piece.strain) {
     const s = piece.strain, pc = v => `${fmt(v * 100)}%`;
     out.push(`省道打版：最多拉長 ${pc(s.max)}　最多壓縮 ${pc(-s.min)}　縫邊長度最多差 ${pc(s.seamErr)}`);
     const d = outlineSegments(piece, opt).darts;
