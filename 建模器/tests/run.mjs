@@ -17129,13 +17129,82 @@ section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（
     ok('★★ 讀程式守著：上面那句講換到誰／可以再點一下', /換選疊在下面的：「\$\{o \? o\.name : ''\}」（這裡疊著 \$\{n\} 個，同一個位置再點一下換下一個）/.test(mn)
       && /這裡疊著 \$\{n\} 個（例：面皮貼在原本的面上）—— 同一個位置再點一下，換選下面那一個/.test(mn));
   }
-  ok('★★ 讀程式守著：畫面往內長、面皮⛔ 往上抬', /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.skinOf \}\)/.test(sc) && /obj\.floorLift && !obj\.skinOf/.test(sc)
-    && /if \(this\.skinOf\) return mesh\.shell\(t, \{ inward: true \}\);/.test(rd('js/core/io.js')));
+  ok('★★ 讀程式守著：畫面往內長、面皮⛔ 往上抬（從面皮變成一般物件的也是）', /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.growsInward \}\)/.test(sc) && /obj\.floorLift && !obj\.growsInward/.test(sc)
+    && /if \(this\.growsInward\) return mesh\.shell\(t, \{ inward: true \}\);/.test(rd('js/core/io.js'))
+    && /get growsInward\(\) \{ return !!this\.skinOf \|\| this\.shellIn; \}/.test(rd('js/core/io.js')));
   ok('★★★ 讀程式守著：3D 列印、OBJ、剖面分切、干涉都走 forMaking、都講跳過幾張面皮',
     ['js/ui/exportPanel.js', 'js/ui/objPanel.js', 'js/ui/slicePanel.js'].every(f => /this\.app\.doc\.forMaking\(picked\)/.test(rd(f)) && /skinNote\(/.test(rd(f)))
     && /const objs = doc\.forMaking\(picked \? sel\.objects\.slice\(\) : \[\]\);/.test(mn) && /const skinW = doc\.skinNote\(/.test(mn));
   ok('★★ 展開⛔ 跳過面皮（面皮就是給展開用的）', !/forMaking/.test(rd('js/ui/unfoldPanel.js')));
   ok('★ 功能地圖、AI.看() 認得面皮', /\['物件面板：複製成面皮',/.test(rd('js/ai/catalogInfo.js')) && /面皮: `「\$\{o\.skinOf\.name\}」的面皮（給展開用）`/.test(rd('js/ai/assist.js')));
+}
+
+section('面皮變成一般物件：加厚自動變、面板一顆、板厚照樣往內長（kang 2026-10-28）');
+
+/**
+ * kang 驗收面皮 A 時提：刻意拉出來、加厚後轉成網格的面皮就是模型物件 —— 3D 列印、剖面分切⛔ 管它是不是面皮來的
+ * （實測：加厚後剖面分切「目前文件裡沒有物件」）→ kang 同意「加厚時自動＋面板一顆」。規格：`規格\建模器-面皮.md`「面皮變成一般物件」。
+ * `io.js` `unskin()`／`shellIn`／`growsInward`／`bakeShelled()` 的 `wasSkin`；`toolbar.js` `_skinNote()` 那一顆、加厚那句；`scene.js` 照 `growsInward`。
+ */
+{
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  /** 方塊（60×45×40）正面外圈標切開 ⇒ 2 張面皮：正面 1 面、其他 5 面 */
+  const mk = () => {
+    const box = new io.ModelObject({ name: '方塊 1', src: { type: 'box', w: 60, h: 45, d: 40 }, kind: 'solid', thickness: 0.2 });
+    box.bake();
+    const m = box.mesh(), zmax = m.bounds().max.z;
+    for (const he of m.halfEdges) if (he.twin && Math.abs(he.v.p.z - zmax) < 1e-6 && Math.abs(he.to.p.z - zmax) < 1e-6) m.setRole(he, EDGE_ROLE.CUT);
+    const r = io.makeSkins(box), d = new io.Doc();
+    d.add(box); for (const s of r.skins) d.add(s);
+    return { box, d, front: r.skins.find(s => s.mesh().faces.length === 1), rest: r.skins.find(s => s.mesh().faces.length === 5) };
+  };
+  const names = a => a.map(o => o.name).join('、');
+
+  // 加厚後轉成網格 ⇒ 自動變成一般物件（kang 的實測：拉出來、加厚、原本的刪掉）
+  {
+    const { box, d, front } = mk();
+    front.pos.x += 80; front.thickness = 2;
+    const b = front.bakeShelled();
+    const bb = front.mesh().bounds();
+    ok('★★★ 面皮加厚後轉成網格 ⇒ 自動變成一般物件（講原本是誰的面皮）、封閉實體', b.ok && b.wasSkin === '方塊 1' && front.skinOf === null && front.shellIn === true && front.mesh().isClosed(), JSON.stringify({ ok: b.ok, wasSkin: b.wasSkin }));
+    near('★★ 　 照面皮往內長：外面在原本的面上（本地 z 0）、往內 2（z −2）—— 體積 60×45×2', front.mesh().volume(), 5400, 1e-6);
+    ok('★★ 　 外面 z 0、裡面 z −2', Math.abs(bb.max.z) < 1e-9 && Math.abs(bb.min.z + 2) < 1e-9, `${bb.min.z}～${bb.max.z}`);
+    ok('★★★ 　 3D 列印、剖面分切、OBJ、干涉算它：沒選 ⇒ 方塊＋它；選了它 ⇒ 它', names(d.forMaking([])) === `方塊 1、${front.name}` && names(d.forMaking([front])) === front.name, names(d.forMaking([])));
+    ok('★★ 　 不是面皮了 ⇒ ⛔ 講改過了；還是面皮的那張照舊跳過、照舊講', d.skinState(front) === null && d.skinNote([]) === '（面皮 1 張是給展開用的，沒算）');
+    d.remove(box);
+    ok('★★★ 　 原本的刪掉（kang 截圖：文件裡只剩它）⇒ 照樣算它（以前「目前文件裡沒有物件」）', d.forMaking([]).includes(front));
+  }
+  // 面板那一顆：不加厚也能變
+  {
+    const { d, front } = mk();
+    const before = front.sheetShell(front.mesh(), 1).bounds();
+    const nm = front.unskin();
+    const after = front.sheetShell(front.mesh(), 1).bounds();
+    ok('★★★ 面板「變成一般物件」（不加厚）⇒ 不是面皮、出口算它、照樣是開放的板件', nm === '方塊 1' && front.skinOf === null && front.shellIn && d.forMaking([]).includes(front) && front.kind === 'sheet' && !front.mesh().isClosed());
+    ok('★★★ 　 板厚照樣往內長：加厚出來的外框一模一樣（畫面上⛔ 跳半個板厚）', before.min.equals(after.min) && before.max.equals(after.max), `${before.min.z}～${before.max.z} → ${after.min.z}～${after.max.z}`);
+    ok('★★ 　 再按一次 ⇒ null、什麼都不改', front.unskin() === null && front.shellIn === true);
+    const j = front.toJSON(), back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(j)));
+    ok('★★★ 存讀檔留得住「往內長」；不是面皮來的⛔ 存（檔案一個字都不多）', j.shellIn === true && !('skinOf' in j) && back.shellIn === true && back.growsInward && back.skinOf === null
+      && !('shellIn' in new io.ModelObject({ name: '板', src: { type: 'plate' }, kind: 'sheet' }).toJSON()));
+  }
+  // 一般的不受影響
+  {
+    const p = new io.ModelObject({ name: '板', src: { type: 'box', w: 10, h: 10, d: 10 }, kind: 'solid' });
+    p.bake();
+    ok('★★ 不是面皮的：unskin ⇒ null、⛔ 變成往內長', p.unskin() === null && p.shellIn === false && !p.growsInward);
+  }
+
+  // 讀程式守著
+  const tb = rd('js/ui/toolbar.js');
+  ok('★★★ 讀程式守著：面皮的面板「變成一般物件」⇒ unskin、記一步、講一句；加厚那句多講不是面皮了；從面皮變來的講往內長',
+    /if \(st === 'gone'\) this\.form\.appendChild\(bad\([^\n]*\n\s*\/\*\*[^]*?\*\/\n\s*this\._rowBtn\('變成一般物件',[\s\S]{0,260}\(\) => \{\s*obj\.unskin\(\);\s*this\._edit\('變成一般物件'\);/.test(tb)   // ⚠ 要直接接在那段說明後面（改壞檢查：前面插「if (false)」第一版沒抓到）
+    && /已經不是面皮了 —— 3D 列印、剖面分切、OBJ、干涉會算它；板厚照樣往內長　按 Ctrl\+Z 收得回來/.test(tb)
+    && /\(r\.wasSkin \? `　已經不是「\$\{r\.wasSkin\}」的面皮了：3D 列印、剖面分切會算它` : ''\)/.test(tb)
+    && /if \(obj\.shellIn && !obj\.mesh\(\)\.isClosed\(\)\) this\.form\.appendChild\(note\('板厚往內長（從面皮變成一般物件的，外面跟原本一樣大）'\)\);/.test(tb));
+  ok('★★ 讀程式守著：加厚先照面皮長、再變成一般物件', /this\._mesh = r\.ok \? r\.mesh : s;[\s\S]{0,200}const wasSkin = this\.unskin\(\);/.test(rd('js/core/io.js')));
+  ok('★ 功能地圖認得「物件面板：變成一般物件」', /\['物件面板：變成一般物件',/.test(rd('js/ai/catalogInfo.js')));
 }
 
 section('網格核心第六批：布林切出來的固定形狀整理一次（kang 2026-10-28）');
@@ -22388,7 +22457,7 @@ if (csgOK) {
   const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
   const sc = src('view/scene.js'), ex = src('ui/exportPanel.js'), sl = src('ui/slicePanel.js'), ob = src('ui/objPanel.js'), itf = src('core/interfere.js'), ioS = src('core/io.js');
   ok('★★ 讀程式守著（③）：畫面照 floorLift 平移、快取多看 liftKey；3D 列印板件、OBJ、干涉檢查、加厚後轉成網格都叫 sheetShell',
-    /const lift = shellT > 0 && obj\.floorLift && !obj\.skinOf \? obj\.floorLift\(base, shellT\) : null;/.test(sc) && /node\.userData\.liftKey !== liftKey/.test(sc) && /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.skinOf \}\)/.test(sc)   // 面皮 A：面皮往內長、⛔ 往上抬
+    /const lift = shellT > 0 && obj\.floorLift && !obj\.growsInward \? obj\.floorLift\(base, shellT\) : null;/.test(sc) && /node\.userData\.liftKey !== liftKey/.test(sc) && /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.growsInward \}\)/.test(sc)   // 面皮 A：面皮往內長、⛔ 往上抬（從面皮變成一般物件的也是）
     && /mesh = o\.sheetShell\(mesh, o\.thickness\)/.test(ex) && /mesh = o\.sheetShell\(mesh, t\)/.test(ob) && /obj\.sheetShell\(m, t\)/.test(itf) && /s = this\.sheetShell\(m, t\)/.test(ioS));
   ok('★★ 讀程式守著（②）：剖面視窗「板件 空心（照板厚）／實心」、預設空心、跟人走；板件先 sheetShell 再切；藍框疊層、互卡都放',
     /<select id="slSheet"[^>]*><option value="hollow">空心（照板厚）<\/option><option value="solid">實心<\/option>/.test(sl) && /const hollow = this\.opt\.sheet !== 'solid';/.test(sl)

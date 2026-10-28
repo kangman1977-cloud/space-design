@@ -419,6 +419,28 @@ export class ModelObject {
      * 有它 ⇒ 板厚往內長（外面保持原本模型的大小）、3D 列印／剖面分切／OBJ／干涉跳過（`doc.forMaking()`）、原本的改過了面板會講。
      */
     this.skinOf = opts.skinOf && Number.isInteger(opts.skinOf.id) ? { id: opts.skinOf.id, name: String(opts.skinOf.name || ''), sig: String(opts.skinOf.sig || '') } : null;
+    /**
+     * 🔴 **從面皮變成一般物件的：板厚照樣往內長**（面皮變成一般物件，kang 2026-10-28 同意 → `規格\建模器-面皮.md`「面皮變成一般物件」）。
+     * 變了之後出口照常算它，但外面⛔ 跳出去半個板厚（東西一格都不動，跟原點置中同一個承諾）。
+     */
+    this.shellIn = opts.shellIn === true;
+  }
+
+  /** 板厚往內長：面皮、或從面皮變成一般物件的（畫面 `scene.js` 與 `sheetShell()` 同一條）*/
+  get growsInward() { return !!this.skinOf || this.shellIn; }
+
+  /**
+   * 🔴 **面皮變成一般物件**（kang 2026-10-28：刻意拉出來、編輯、加厚的面皮就是模型物件 —— 3D 列印、剖面分切⛔ 管它是不是面皮來的）。
+   * 拿掉「面皮」的身分 ⇒ `forMaking()` 照常算它、之後一起展開（B）它不算面皮；板厚照樣往內長（`shellIn`）。
+   * 面皮的面板那一顆、`bakeShelled()`（加厚後轉成網格）都走這一支。
+   * @returns {string|null} 原本是誰的面皮；不是面皮 ⇒ null
+   */
+  unskin() {
+    if (!this.skinOf) return null;
+    const name = this.skinOf.name;
+    this.skinOf = null;
+    this.shellIn = true;
+    return name;
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -602,8 +624,8 @@ export class ModelObject {
    * @param {Mesh} mesh 本地座標的網格（通常是 `smoothMesh()`）
    */
   sheetShell(mesh, t = Number(this.thickness) || 0) {
-    /** 面皮 A（kang 2026-10-28 ③）：面皮往內長 —— 外面保持原本模型的大小（⛔ 胖半個板厚）*/
-    if (this.skinOf) return mesh.shell(t, { inward: true });
+    /** 面皮 A（kang 2026-10-28 ③）：面皮往內長 —— 外面保持原本模型的大小（⛔ 胖半個板厚）；從面皮變成一般物件的也一樣 */
+    if (this.growsInward) return mesh.shell(t, { inward: true });
     return mesh.shell(t, { offset: this.floorLift(mesh, t) });
   }
 
@@ -649,7 +671,7 @@ export class ModelObject {
    * 而 `shell()` 出來的**是封閉的**，所以**⛔ 不會被加厚第二次**。
    * 〔坑第 8、30 條：判斷依據用**幾何事實**，⛔ 不用使用者可改的標籤〕
    *
-   * @returns {{ok:boolean, reason?:string, volume?:number, faces?:number}}
+   * @returns {{ok:boolean, reason?:string, volume?:number, faces?:number, wasSkin?:string|null}} `wasSkin` ＝ 原本是誰的面皮（加厚就變成一般物件）
    */
   bakeShelled() {
     const t = Number(this.thickness) || 0;
@@ -672,7 +694,9 @@ export class ModelObject {
     this.src = { type: 'mesh' };
     const r = mergeCoplanarFaces(s);
     this._mesh = r.ok ? r.mesh : s;
-    return { ok: true, volume: this._mesh.volume(), faces: this._mesh.faces.length };
+    /** 面皮加厚 ⇒ 已經是模型物件了：自動變成一般物件（kang 2026-10-28；⚠ 要在 `sheetShell()` 之後 —— 它還要照面皮往內長）*/
+    const wasSkin = this.unskin();
+    return { ok: true, volume: this._mesh.volume(), faces: this._mesh.faces.length, wasSkin };
   }
 
   matrix() {
@@ -722,6 +746,7 @@ export class ModelObject {
     if (this.colorByLayer) o.colorByLayer = true;
     if (this.group !== null) o.group = this.group;     // 群組 2b：有才存
     if (this.skinOf) o.skinOf = { ...this.skinOf };    // 面皮 A：有才存
+    if (this.shellIn) o.shellIn = true;                // 從面皮變成一般物件的：有才存
     return o;
   }
 
@@ -746,7 +771,8 @@ export class ModelObject {
       layer: d.layer,
       colorByLayer: d.colorByLayer === true,
       group: d.group,
-      skinOf: d.skinOf
+      skinOf: d.skinOf,
+      shellIn: d.shellIn === true
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;

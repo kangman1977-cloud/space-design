@@ -613,7 +613,8 @@ export class Panel {
           const sc = obj.scale, vol = r.volume * Math.abs(sc.x * sc.y * sc.z);
           this.app.toast(`已經加厚成實體：面數 ${before} → ${r.faces}、`
             + `體積 ${f(vol)} cm³（＝ 面積 × 板厚${vol !== r.volume ? '，含物件的縮放' : ''}）　`
-            + '⚠ 展開現在會攤成盒子，不再是原本那一片板');   // 畫面上的字⛔ 用「⛔」（2026-10-19 順手改）
+            + '⚠ 展開現在會攤成盒子，不再是原本那一片板'   // 畫面上的字⛔ 用「⛔」（2026-10-19 順手改）
+            + (r.wasSkin ? `　已經不是「${r.wasSkin}」的面皮了：3D 列印、剖面分切會算它` : ''));
         });
     }
 
@@ -1081,11 +1082,27 @@ export class Panel {
    */
   _skinNote(obj) {
     const st = this.app.doc.skinState ? this.app.doc.skinState(obj) : null;
-    if (!st) return;
+    if (!st) {
+      /** 從面皮變成一般物件的：講一句板厚為什麼往內長（⛔ 講的話跟一般板件往兩邊長對不起來）；已經加厚成封閉實體的⛔ 講（板厚用不到了）*/
+      if (obj.shellIn && !obj.mesh().isClosed()) this.form.appendChild(note('板厚往內長（從面皮變成一般物件的，外面跟原本一樣大）'));
+      return;
+    }
     const nm = obj.skinOf.name;
     this.form.appendChild(note(`這是「${nm}」的面皮：給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）；板厚往內長，外面跟原本一樣大`));
     if (st === 'changed') this.form.appendChild(bad(`⚠ 原本的「${nm}」形狀改過了，這張面皮是舊的 —— 要的話刪掉重新複製`));
     if (st === 'gone') this.form.appendChild(bad(`⚠ 原本的「${nm}」已經不在了，這張面皮留著當獨立的板件用`));
+    /**
+     * 🔴 **變成一般物件**（kang 2026-10-28 同意：加厚時自動〔`bakeShelled()`〕＋這一顆自己按 —— 不加厚也想拿去 3D 列印、剖面分切時用）。
+     * 收得回來（記一步）；板厚照樣往內長，畫面上⛔ 動。
+     */
+    this._rowBtn('變成一般物件',
+      '不再是面皮：3D 列印、剖面分切、OBJ、干涉會算它；之後好幾張面皮一起展開時它不算面皮。'
+      + '板厚照樣往內長（外面跟原本一樣大）。按 Ctrl+Z 收得回來',
+      () => {
+        obj.unskin();
+        this._edit('變成一般物件');
+        this.app.toast(`「${obj.name}」已經不是面皮了 —— 3D 列印、剖面分切、OBJ、干涉會算它；板厚照樣往內長　按 Ctrl+Z 收得回來`);
+      });
   }
 
   /**

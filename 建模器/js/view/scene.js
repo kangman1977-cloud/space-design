@@ -770,7 +770,7 @@ export class SceneView {
     const ghostSrc = obj.smoothed && this._cageOn ? obj.smoothMesh({ fast: true }) : null;
 
     /** 第三輪第一批 ③：平躺在地板上的板件往上長（`sheetShell()`）—— 搬上搬下會變 ⇒ 也算進「要不要重畫」*/
-    const lift = shellT > 0 && obj.floorLift && !obj.skinOf ? obj.floorLift(base, shellT) : null;
+    const lift = shellT > 0 && obj.floorLift && !obj.growsInward ? obj.floorLift(base, shellT) : null;
     const liftKey = lift ? lift.toArray().map(x => x.toFixed(6)).join(',') : '';
 
     // _geomDirty ＝ 編輯就地改了頂點座標。mesh 物件沒換，所以前兩個條件
@@ -778,7 +778,7 @@ export class SceneView {
     if (node.userData.geomKey !== base || node.userData.shellT !== shellT
         || node.userData.ghostKey !== ghostSrc || node.userData.liftKey !== liftKey || this._geomDirty) {
       node.geometry.dispose();
-      const shown = shellT > 0 ? base.shell(shellT, { offset: lift, inward: !!obj.skinOf }) : base;   // 面皮 A：往內長（`sheetShell()` 同一條）
+      const shown = shellT > 0 ? base.shell(shellT, { offset: lift, inward: !!obj.growsInward }) : base;   // 面皮 A：往內長（`sheetShell()` 同一條；從面皮變成一般物件的也是）
       node.geometry = shown.toGeometry();
 
       /**
@@ -829,7 +829,7 @@ export class SceneView {
 
       const ghost = node.getObjectByName('subdGhost');
       ghost.geometry.dispose();
-      ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT, { offset: lift, inward: !!obj.skinOf }) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
+      ghost.geometry = ghostSrc ? (shellT > 0 ? ghostSrc.shell(shellT, { offset: lift, inward: !!obj.growsInward }) : ghostSrc).toGeometry() : new THREE.BufferGeometry();
       ghost.visible = !!ghostSrc;
       const cr = node.getObjectByName('subdCreases');
       cr.geometry.dispose();
