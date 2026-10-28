@@ -23843,6 +23843,30 @@ section('板件上的線：加厚時把你畫的線帶到上下兩面（kang 202
     && /if \(shown\.isHiddenEdge\(he\)\) continue;/.test(sc));
 }
 
+section('不平的面（琥珀色斜線）開關（kang 2026-10-29「同意你的建議」）');
+{
+  /**
+   * kang 做面具時拉彎的格子整片琥珀色斜線、擋操作 ⇒ 上方「檢視」那一列多一顆「不平的面」：預設亮著、重新整理回到亮著、
+   * 關掉只是畫面不畫（拉點時的提示、展開圖上方的清單照舊）。Blender 的 Mesh Analysis 也是放在 Overlays 自己開關。讀程式守著。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const raw = rf(join(dir, '../index.html'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8'), sc = rf(join(dir, '../js/view/scene.js'), 'utf8');
+  ok('★★ 按鈕在「檢視」那一列、「線框」後面，預設亮著，說明講只是畫面、提示與清單照舊、重新整理回到開著',
+    /<button id="wire"[^>]*>線框<\/button>\s*<button id="unflat" class="on" title="不平的面：[^"]*關掉只是畫面上不畫[^"]*清單照舊；重新整理回到開著">不平的面<\/button>/.test(raw));
+  ok('★★★ 畫面：預設畫、重建時照開關（⛔ 一律畫）、關掉／打開時每個物件跟著換、沒有不平的面照樣不畫',
+    /this\.showUnflat = true;/.test(sc) && /unflat\.visible = this\.showUnflat && tri\.length > 0;/.test(sc)
+    && /setShowUnflat\(on\) \{\s*this\.showUnflat = on;\s*for \(const n of this\.byId\.values\(\)\) \{[\s\S]{0,200}if \(u\) u\.visible = on && !!pos && pos\.count > 0;/.test(sc));
+  ok('★★ 按下去：按鈕亮不亮跟著換、叫 setShowUnflat、講一句（關掉時講提示與清單照舊）',
+    /\$\('unflat'\)\.onclick = function \(\) \{\s*const on = this\.classList\.toggle\('on'\);\s*view\.setShowUnflat\(on\);\s*toast\(on \? '不平的面畫回琥珀色斜線'\s*: '不平的面的琥珀色斜線先不畫 —— 只是畫面上看不到；拉點時的提示、展開圖上方的清單照舊'\);/.test(mn));
+  ok('★★ 只管畫面：拉點時的提示照樣講（⛔ 看開關）、展開圖清單照舊算（nonPlanarFaces 不看開關）',
+    /if \(r\.nonPlanar\) bits\.push\(unflatNote\(r\)\);/.test(mn) && /if \(rf\.nonPlanar\) bits\.push\(unflatNote\(rf\)\);/.test(mn)
+    && !/showUnflat/.test(rf(join(dir, '../js/core/edit.js'), 'utf8')) && !/showUnflat/.test(rf(join(dir, '../js/ui/unfoldPanel.js'), 'utf8')));
+  ok('★★ 關著時那句提示⛔ 講「標成琥珀色」（本機驗時看到：畫面沒標卻說標了）—— 改講「琥珀色斜線關著」',
+    /const look = view\.showUnflat \? '標成琥珀色' : '琥珀色斜線關著';\s*return `\$\{r\.nonPlanar\} 個面不平了（最遠離平面 \$\{r\.nonPlanarWorst\.toFixed\(3\)\} cm，\$\{look\}；展開前會列出來）`;/.test(mn));
+  ok('★ ⛔ 記在瀏覽器（重新整理回到開著，跟稜線、線框一樣）', !/localStorage[^\n]*unflat/i.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

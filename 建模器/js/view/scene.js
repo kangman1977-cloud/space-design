@@ -232,6 +232,8 @@ export class SceneView {
 
     this.showEdges = true;
     this.wireframe = false;
+    /** 不平的面畫琥珀色斜線（網格核心第三批 b）；上方「不平的面」那一顆關掉 ⇒ 只是不畫（kang 2026-10-29：做面具時整片斜線擋操作）*/
+    this.showUnflat = true;
     /**
      * 參考線畫不畫。⚠ **預設開** —— 加了一條線卻看不到，
      * ⛔ 跟「這顆按鈕壞了」分不出來（坑第 21 條）。
@@ -820,7 +822,7 @@ export class SceneView {
       unflat.geometry.dispose();
       unflat.geometry = new THREE.BufferGeometry();
       unflat.geometry.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
-      unflat.visible = tri.length > 0;
+      unflat.visible = this.showUnflat && tri.length > 0;
 
       /**
        * 環切加出來的邊（`hard`）以前要另外補畫（`EdgesGeometry` 只畫轉折 > 1° 的，共面的環切線一條都畫不出來，
@@ -905,6 +907,16 @@ export class SceneView {
     this.showEdges = on;
     for (const n of this.byId.values()) {
       n.getObjectByName('edges').visible = on && !this.wireframe;
+    }
+  }
+
+  /** 不平的面那一層畫不畫（kang 2026-10-29）；⚠ 只管畫面 —— 拉點時的提示、展開圖上方的清單照舊（`nonPlanarFaces()` 照算）*/
+  setShowUnflat(on) {
+    this.showUnflat = on;
+    for (const n of this.byId.values()) {
+      const u = n.getObjectByName('unflat');
+      const pos = u && u.geometry.getAttribute('position');
+      if (u) u.visible = on && !!pos && pos.count > 0;
     }
   }
 

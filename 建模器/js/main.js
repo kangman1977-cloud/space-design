@@ -4484,7 +4484,9 @@ function unflatNote(r) {
    * 🔴 **面被拉到不平 —— 講最遠偏離多少、畫面上是琥珀色、展開前會列出來**（網格核心第三批 b，規格第 6 節）。
    * ⚠ 平滑頂點每按一次都會跳 ⇒ ⛔ 寫太長（本機先驗抓過整句被切掉一截）。拖曳、平滑頂點共用這一句。
    */
-  return `${r.nonPlanar} 個面不平了（最遠離平面 ${r.nonPlanarWorst.toFixed(3)} cm，標成琥珀色；展開前會列出來）`;
+  /** 上方「不平的面」關著（kang 2026-10-29）⇒ 畫面上沒標，⛔ 再講「標成琥珀色」（照樣講、照樣列）*/
+  const look = view.showUnflat ? '標成琥珀色' : '琥珀色斜線關著';
+  return `${r.nonPlanar} 個面不平了（最遠離平面 ${r.nonPlanarWorst.toFixed(3)} cm，${look}；展開前會列出來）`;
 }
 
 function keptApartNote(n) {
@@ -7823,6 +7825,13 @@ $('wire').onclick = function () {
 $('edges').onclick = function () {
   this.classList.toggle('on');
   view.setShowEdges(this.classList.contains('on'));
+};
+/** 不平的面（琥珀色斜線）開關（kang 2026-10-29「同意你的建議」：預設開、重新整理回到開、只管畫面）*/
+$('unflat').onclick = function () {
+  const on = this.classList.toggle('on');
+  view.setShowUnflat(on);
+  toast(on ? '不平的面畫回琥珀色斜線'
+    : '不平的面的琥珀色斜線先不畫 —— 只是畫面上看不到；拉點時的提示、展開圖上方的清單照舊');
 };
 $('frame').onclick = () => view.frameAll(doc);
 /** ④-3：只把選到的拉近（沒選 ⇒ 跟全部入鏡一樣，並且講出來）*/
