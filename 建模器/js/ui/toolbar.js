@@ -558,6 +558,7 @@ export class Panel {
       }
     } else {
       this.form.appendChild(note('這個物件已經是網格，沒有參數可以改'));
+      this._skinNote(obj);
       this._tidyBtn(obj);
       this._subdBox(obj);
     }
@@ -1051,6 +1052,31 @@ export class Panel {
   _edit(label) {
     this.app.onEdit(label);
     this.refresh();
+  }
+
+  /**
+   * 🔴 **複製成面皮**（面皮 A，kang 2026-10-28「照建議」① → `規格\建模器-面皮.md`）：分片模式、標縫那一頁、提案下面。
+   * 選到的物件照你標的切開每一片各複製一張；面皮自己⛔ 再出這一顆（面皮的面皮沒有意義）。
+   */
+  _skinBtn(obj) {
+    if (obj.skinOf) return;
+    this._rowBtn('複製成面皮',
+      '照你標的切開（橘色），每一片複製成一張獨立的面皮（開放的板件），放在新的一層「' + obj.name + ' 面皮」、跟原本疊在同一個位置；'
+      + '原本的物件不動。面皮可以各自設板厚、放圖層，只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）。按 Ctrl+Z 收得回來',
+      () => this.app.makeSkins(obj));
+  }
+
+  /**
+   * 🔴 **面皮的物件面板講它從哪裡來**（面皮 A ⑦，kang 2026-10-28）：一直講「是○○的面皮、給展開用」；
+   * 原本的刪掉了、或形狀／縫改過了 ⇒ 黃字講這張是舊的（只提醒、⛔ 自動重做）。
+   */
+  _skinNote(obj) {
+    const st = this.app.doc.skinState ? this.app.doc.skinState(obj) : null;
+    if (!st) return;
+    const nm = obj.skinOf.name;
+    this.form.appendChild(note(`這是「${nm}」的面皮：給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）；板厚往內長，外面跟原本一樣大`));
+    if (st === 'changed') this.form.appendChild(bad(`⚠ 原本的「${nm}」改過了（形狀或縫），這張面皮是舊的 —— 要的話刪掉重新複製`));
+    if (st === 'gone') this.form.appendChild(bad(`⚠ 原本的「${nm}」已經不在了，這張面皮留著當獨立的板件用`));
   }
 
   /**
@@ -1719,6 +1745,7 @@ export class Panel {
     }
 
     this._seamProposalBox(obj);
+    this._skinBtn(obj);
     this._seamPreview(obj);
   }
 

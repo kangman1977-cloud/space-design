@@ -15,7 +15,7 @@ import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, setShown, isIsolated
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
-         revRecenterBound }
+         revRecenterBound, makeSkins }
   from './core/io.js';
 import { defaultSrc, PRIM_SPECS, isSheetPrim, flattenPenPath } from './build/prim.js';
 import { initCSG, csgReady, csgError, canBool, BOOL_OPS, BOOL_LABEL, BOOL_SYMBOL, splitByCutter, unionMeshes, dowelMesh }
@@ -494,6 +494,8 @@ const app = {
   getSeamMarkKind: () => seamMarkKind,
   setSeamMarkKind: k => { seamMarkKind = k === 'keep' ? 'keep' : 'cut'; dropSeamSpan(); },
   proposeSeams: obj => makeSeamProposal(obj),
+  /** 面皮 A（kang 2026-10-28）：分片模式「複製成面皮」*/
+  makeSkins: obj => makeSkinsOp(obj),
   /** 第三件（2026-10-21，`分片成群-設計方向.md` 第 8 節）：智慧分切的三個設定 —— 片裡的切口、細切口角度、切的先後 */
   getProposeOpt: () => ({ ...proposeOpt }),
   setProposeOpt: o => setProposeOpt(o),
@@ -7046,6 +7048,25 @@ function currentSeamProposal(obj) {
 }
 
 /** 全部接受：提案的邊一條一條標成縫 ⇒ **一步** Undo 全部退回 */
+/**
+ * 🔴 **複製成面皮**（面皮 A，kang 2026-10-28「照建議」① 選到的物件每一片各一張 ② 原本⛔ 動、放新的一層「○○ 面皮」→ `規格\建模器-面皮.md`）。
+ * 幾何與標記在 `io.js` `makeSkins()`；這裡只管放進文件：同名的一層已經有 ⇒ 放那一層（再按一次不會一直開新層）。記一步、可以 Ctrl+Z。
+ */
+function makeSkinsOp(obj) {
+  const r = makeSkins(obj);
+  if (!r.ok) { toast(r.reason, true); return; }
+  const name = `${obj.name} 面皮`;
+  const L = doc.layers.find(l => l.name === name) || doc.addLayer(name);
+  for (const s of r.skins) { s.layer = L.id; doc.add(s); }
+  view.sync(doc);
+  panel.analysisCache.clear();
+  commit(`複製成面皮 ${r.skins.length} 張`);
+  panel.refresh();
+  updateBar();
+  toast(`複製成面皮 ${r.skins.length} 張，放在「${name}」這一層（跟原本疊在同一個位置，原本的沒動）`
+    + '　要看哪個就到右邊「圖層」開關　面皮只給展開用（3D 列印、剖面分切、OBJ、干涉會跳過）　按 Ctrl+Z 收得回來');
+}
+
 function acceptSeamProposal() {
   const p = seamProposal;
   if (!p) return;
@@ -7805,15 +7826,16 @@ $('frameSel').onclick = frameSelected;
 let clashResult = null;
 function runClash() {
   const picked = sel.objects.length >= 2;
-  const objs = picked ? sel.objects.slice() : doc.shown();         // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
+  const objs = doc.forMaking(picked ? sel.objects.slice() : []);   // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算；面皮 A：面皮跳過
   const r = findClashes(objs);
   clashResult = r.ok ? { ...r, scope: picked ? 'sel' : 'all', stale: false } : null;
   view.setClash(r.ok ? r.list.map(c => c.mesh) : null);
   /** 圖層與群組第一批：查不了的時候也要講有藏起來的（本機驗看到：兩個藏一個 ⇒ 只說「至少要有兩個」會以為壞了）*/
-  if (!r.ok) { toast(r.reason + (picked ? '' : doc.hiddenNote([])), true); return r; }
+  const skinW = doc.skinNote(picked ? sel.objects : []);             // 面皮 A：跳過了幾張面皮 ⇒ 講
+  if (!r.ok) { toast(r.reason + (picked ? '' : doc.hiddenNote([])) + skinW, true); return r; }
   const skip = r.skipped.length ? `；${r.skipped.length} 個沒辦法算（${r.skipped.slice(0, 2).map(s => `「${s.name}」${s.reason}`).join('、')}）` : '';
   const touch = (r.touching ? `；${r.touching} 對只是貼在一起（不算）` : '')
-    + (picked || !doc.hiddenCount ? '' : `；${doc.hiddenCount} 個藏起來的沒算`);
+    + (picked || !doc.hiddenCount ? '' : `；${doc.hiddenCount} 個藏起來的沒算`) + skinW;
   toast(r.list.length
     ? `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：${r.list.length} 對穿進去了，重疊的地方畫成紅色${touch}${skip}`
     : `干涉檢查（${picked ? '選到的' : '全部'} ${r.checked} 個）：沒有零件穿進彼此裡面${touch}${skip}`, !!r.list.length);

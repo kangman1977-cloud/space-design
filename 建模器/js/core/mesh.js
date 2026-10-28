@@ -777,13 +777,17 @@ export class Mesh {
       push.set(v.id, half * Math.min(5, 1 / Math.max(cos, 1e-6)));
     }
 
-    // 前 n 個是外側，後 n 個是內側
+    /**
+     * 前 n 個是外側，後 n 個是內側。
+     * 面皮 A（kang 2026-10-28 ③）：`opt.inward` ⇒ 外側就在原本的面上、內側往內一整個板厚（面皮從實心的外皮複製出來，⛔ 胖半個板厚）。
+     */
+    const kOut = opt.inward ? 0 : 1, kIn = opt.inward ? -2 : -1;
     const points = [];
     for (const v of this.verts) {
-      points.push(v.p.clone().addScaledVector(vn.get(v.id), push.get(v.id)));
+      points.push(v.p.clone().addScaledVector(vn.get(v.id), kOut * push.get(v.id)));
     }
     for (const v of this.verts) {
-      points.push(v.p.clone().addScaledVector(vn.get(v.id), -push.get(v.id)));
+      points.push(v.p.clone().addScaledVector(vn.get(v.id), kIn * push.get(v.id)));
     }
     if (off) for (const p of points) p.add(off);
 

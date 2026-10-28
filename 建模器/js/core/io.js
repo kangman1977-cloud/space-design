@@ -20,7 +20,7 @@
  */
 
 import * as THREE from 'three';
-import { Mesh } from './mesh.js';
+import { Mesh, EDGE_ROLE } from './mesh.js';
 import { mergeCoplanarFaces, recenterMesh, shiftMeshOrigin, tidyMesh } from './edit.js';
 import { buildPrim, PRIM_DEFAULTS, shapeBounds, shiftShape, penBounds, shiftPenPaths,
          penRevolve } from '../build/prim.js';
@@ -413,6 +413,12 @@ export class ModelObject {
      * 群組跟圖層無關（同一組可以跨好幾層）；名字照 id 叫「群組 N」。只剩一個的組在 `commit()` 時自動拆掉（`doc.cleanGroups()`）。
      */
     this.group = Number.isInteger(opts.group) ? opts.group : null;
+    /**
+     * 🔴 **面皮從哪裡複製來的**（面皮 A，kang 2026-10-28「照建議」→ `每片展開方式-設計方向.md`「面皮」、`規格\建模器-面皮.md`）：
+     * `{ id, name, sig }`（原本那個物件、當時的名字、當時的指紋 `skinSig()`）；null ＝ 不是面皮。
+     * 有它 ⇒ 板厚往內長（外面保持原本模型的大小）、3D 列印／剖面分切／OBJ／干涉跳過（`doc.forMaking()`）、原本的改過了面板會講。
+     */
+    this.skinOf = opts.skinOf && Number.isInteger(opts.skinOf.id) ? { id: opts.skinOf.id, name: String(opts.skinOf.name || ''), sig: String(opts.skinOf.sig || '') } : null;
   }
 
   /** 這個物件現在有沒有疊一層平滑細分（⑦ 只有網格物件）*/
@@ -596,6 +602,8 @@ export class ModelObject {
    * @param {Mesh} mesh 本地座標的網格（通常是 `smoothMesh()`）
    */
   sheetShell(mesh, t = Number(this.thickness) || 0) {
+    /** 面皮 A（kang 2026-10-28 ③）：面皮往內長 —— 外面保持原本模型的大小（⛔ 胖半個板厚）*/
+    if (this.skinOf) return mesh.shell(t, { inward: true });
     return mesh.shell(t, { offset: this.floorLift(mesh, t) });
   }
 
@@ -713,6 +721,7 @@ export class ModelObject {
     if (this.layer !== null) o.layer = this.layer;
     if (this.colorByLayer) o.colorByLayer = true;
     if (this.group !== null) o.group = this.group;     // 群組 2b：有才存
+    if (this.skinOf) o.skinOf = { ...this.skinOf };    // 面皮 A：有才存
     return o;
   }
 
@@ -736,7 +745,8 @@ export class ModelObject {
       isoHidden: d.isoHidden === true,
       layer: d.layer,
       colorByLayer: d.colorByLayer === true,
-      group: d.group
+      group: d.group,
+      skinOf: d.skinOf
     });
     if (d.mesh) o._mesh = Mesh.fromJSON(d.mesh);
     if (d.id >= _oid) _oid = d.id + 1;
@@ -848,6 +858,76 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
     return obj;
   });
   return { ok: true, made, overlap, dropped: r.dropped };
+}
+
+// ═══════════════════════════════════════════════════════
+//  面皮（每片展開方式 面皮 A）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 物件形狀與分片的指紋：點、面、座標加總、你標的切開幾條 —— 拉點、改縫都會變。面皮記下來，之後比對「原本的改過了沒」。
+ */
+export function skinSig(mesh) {
+  let s = 0, cut = 0;
+  mesh.verts.forEach((v, i) => { const w = 1 + (i % 97) * 0.013; s += (v.p.x * 1.000003 + v.p.y * 1.7 + v.p.z * 2.3) * w; });
+  for (const he of mesh.halfEdges) if (he.role === EDGE_ROLE.CUT) cut++;
+  return `${mesh.verts.length}|${mesh.faces.length}|${s.toFixed(6)}|${cut}`;
+}
+
+/**
+ * 🔴 **複製成面皮**（面皮 A，kang 2026-10-28「照建議」→ `規格\建模器-面皮.md`）：照你標的切開（橘色）把物件切成一塊一塊，
+ * **每一塊複製成一張面皮** —— 開放的板件、同樣的位置角度縮放、裡面的折線／平滑／看得見／不准切／保持尖、**連同塊裡面的縫**照搬
+ * （圓筒那一條直縫兩側在同一塊 —— 沙箱第一版沒搬，那條縫就不見了）。原本的物件⛔ 動。
+ * 「一塊」跟省道打版看的一樣：只看你標的切開（`unfold/flatten.js` `splitPatches()` 的省道那一路）。
+ * @param {ModelObject} obj 網格物件（參數物件要先轉成可編輯網格 —— 跟標縫同一個規矩）
+ * @returns {{ok:boolean, reason?:string, skins?:ModelObject[]}}
+ */
+export function makeSkins(obj) {
+  if (!obj || obj.isParametric) return { ok: false, reason: '先按「轉成可編輯網格」，再複製成面皮（跟標縫同一個規矩）' };
+  const mesh = obj.mesh();
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '這個物件沒有面' };
+  const isCut = he => he.role === EDGE_ROLE.CUT;
+  const seen = new Set(), patches = [];
+  for (const s of mesh.faces) {
+    if (seen.has(s.id)) continue;
+    const g = [], st = [s]; seen.add(s.id);
+    while (st.length) {
+      const f = st.pop(); g.push(f);
+      for (const he of mesh.faceLoop(f)) {
+        if (isCut(he)) continue;
+        const nb = he.twin && he.twin.face;
+        if (nb && !seen.has(nb.id)) { seen.add(nb.id); st.push(nb); }
+      }
+    }
+    patches.push(g);
+  }
+  const sig = skinSig(mesh);
+  const skins = patches.map((faces, i) => {
+    const idx = new Map(), pts = [], fl = [];
+    for (const f of faces) fl.push(mesh.faceVerts(f).map(v => { if (!idx.has(v.id)) { idx.set(v.id, pts.length); pts.push(v.p.clone()); } return idx.get(v.id); }));
+    const m = Mesh.fromFaceList(pts, fl);
+    // 標記照搬：兩頭都在這張面皮裡、而且這張面皮裡也有這條邊 ⇒ 搬（邊界那一圈是剪開的地方，沒有對面）
+    const nvi = m._vertIndex(), byKey = new Map();
+    const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+    for (const he of m.halfEdges) if (he.face) byKey.set(kOf(nvi.get(he.v.id), nvi.get(he.to.id)), he);
+    const inPatch = new Set(faces.map(f => f.id)), done = new Set();
+    for (const f of faces) for (const he of mesh.faceLoop(f)) {
+      if (!he.twin || !he.twin.face || !inPatch.has(he.twin.face.id)) continue;
+      const a = idx.get(he.v.id), b = idx.get(he.to.id), k = kOf(a, b);
+      if (done.has(k)) continue; done.add(k);
+      const mk = mesh.marksOf(he), nh = byKey.get(k);
+      if (nh && !Mesh.marksEmpty(mk)) m.applyMarks(nh, mk);
+    }
+    m.computeNormals();
+    return new ModelObject({
+      name: `${obj.name} 面皮 ${i + 1}`,
+      kind: 'sheet', src: { type: 'mesh' }, mesh: m,
+      pos: obj.pos, rot: obj.rot, scale: obj.scale,
+      color: obj.color, thickness: obj.thickness, lockScale: obj.lockScale,
+      skinOf: { id: obj.id, name: obj.name, sig }
+    });
+  });
+  return { ok: true, skins };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1517,6 +1597,24 @@ export class Doc {
   hiddenNote(picked) {
     const n = this.objects.filter(o => this.isHidden(o)).length;
     return !(picked && picked.length) && n ? `（有 ${n} 個藏起來的沒算）` : '';
+  }
+
+  /**
+   * 🔴 **做實物的出口要的物件**（面皮 A，kang 2026-10-28 ④）：3D 列印、剖面分切、OBJ、干涉檢查 ⇒ 有選照選的、沒選照看得到的，**跳過面皮**（選了也跳 ——
+   * 面皮是給展開用的開放板件，混進去會被加厚成殼印出來）。展開⛔ 走這裡（展開要面皮）。
+   */
+  forMaking(picked) { return (picked && picked.length ? picked : this.shown()).filter(o => !o.skinOf); }
+  /** 跳過了幾張面皮 ⇒ 那一句（沒有 ⇒ ''）*/
+  skinNote(picked) {
+    const n = (picked && picked.length ? picked : this.shown()).filter(o => o.skinOf).length;
+    return n ? `（面皮 ${n} 張是給展開用的，沒算）` : '';
+  }
+  /** 面皮的原本那個物件：'gone' 刪掉了、'changed' 形狀或縫改過了、'same' 一樣、null 不是面皮（面皮 A ⑦：只提醒、⛔ 自動重做）*/
+  skinState(o) {
+    if (!o || !o.skinOf) return null;
+    const src = this.byId(o.skinOf.id);
+    if (!src) return 'gone';
+    return skinSig(src.mesh()) === o.skinOf.sig ? 'same' : 'changed';
   }
 
   // ── 圖層（圖層與群組 2a，kang 2026-10-28「照建議」→ `規格\建模器-圖層與群組.md`「2a」）──

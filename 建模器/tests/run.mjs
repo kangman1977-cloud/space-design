@@ -17007,6 +17007,95 @@ if (!csgOK) {
     /for \(const o of list\) doc\.remove\(o\);\s*for \(const o of r\.made\) doc\.add\(o\);[\s\S]{0,80}sel\.set\(r\.made\.map\(o => o\.id\)\);[\s\S]{0,60}commit\(knifeOnly \? '分割（後面的當刀）' : '分割'\)/.test(mn));
 }
 
+section('面皮 A：複製成面皮、往內長、出口跳過、改過提醒（kang 2026-10-28）');
+
+/**
+ * 規格：`規格\建模器-面皮.md`「A」；推導與沙箱：`每片展開方式-設計方向.md`「面皮」。
+ * `io.js` `makeSkins()`／`skinSig()`／`ModelObject.skinOf`／`Doc.forMaking()`／`skinNote()`／`skinState()`；`mesh.js` `shell(t, { inward })`；
+ * `main.js` `makeSkinsOp()`、干涉；`ui/toolbar.js` `_skinBtn()`／`_skinNote()`；三個出口視窗；`scene.js` 往內長。
+ */
+{
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rd = f => readFileSync(join(here, '..', f), 'utf8');
+  const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+  /** 圓柱（半徑 10、高 20、32 段）轉成網格；縫：上一圈、下一圈、側面一條直縫 ⇒ 3 片（側面、上、下）*/
+  const cylObj = () => {
+    const o = new io.ModelObject({ name: '筒', src: { type: 'cylinder', r: 10, h: 20, seg: 32 }, kind: 'solid', pos: V3(5, 10, -3), thickness: 0.5 });
+    o.bake();
+    const m = o.mesh(), b = m.bounds();
+    for (const he of m.halfEdges) {
+      if (!he.twin) continue;
+      const a = he.v.p, c = he.to.p;
+      if (Math.abs(a.y - c.y) < 1e-6 && (Math.abs(a.y - b.min.y) < 1e-6 || Math.abs(a.y - b.max.y) < 1e-6)) m.setRole(he, EDGE_ROLE.CUT);
+      else if (Math.abs(a.x - c.x) < 1e-6 && Math.abs(a.z - c.z) < 1e-6 && a.x > 9.99 && Math.abs(a.z) < 1e-6) m.setRole(he, EDGE_ROLE.CUT);
+    }
+    return o;
+  };
+  /** 裡面的切開（兩側都有面；邊界那一圈本來就算切開，⛔ 算）*/
+  const cuts = m => m.halfEdges.filter(h => h.role === EDGE_ROLE.CUT && h.face && h.twin && h.twin.face).length;
+  const area = m => m.faces.reduce((s, f) => { const p = m.faceVerts(f).map(v => v.p); let a = 0; for (let i = 1; i + 1 < p.length; i++) a += p[i].clone().sub(p[0]).cross(p[i + 1].clone().sub(p[0])).length() / 2; return s + a; }, 0);
+
+  const src = cylObj(), sig0 = io.skinSig(src.mesh());
+  const r = io.makeSkins(src);
+  const side = r.ok ? r.skins.find(s => s.mesh().faces.length === 32) : null;
+  ok('★★★ 圓柱（上、下、一條直縫）⇒ 3 張面皮：側面 32 面、上下各 1 面；面加起來 ＝ 原本', r.ok && r.skins.length === 3 && !!side
+    && r.skins.reduce((n, s) => n + s.mesh().faces.length, 0) === src.mesh().faces.length, r.ok ? r.skins.map(s => s.mesh().faces.length).join('、') : r.reason);
+  near('★★ 　 面積加起來 ＝ 原本', r.ok ? r.skins.reduce((s, k) => s + area(k.mesh()), 0) : 0, area(src.mesh()), 1e-6);
+  ok('★★★ 　 每張都是開放的板件、同樣的位置角度縮放、顏色板厚照原本、記得從哪裡來', r.ok && r.skins.every(s => s.kind === 'sheet' && !s.mesh().isClosed()
+    && s.pos.equals(src.pos) && s.scale.equals(src.scale) && s.thickness === 0.5 && s.skinOf && s.skinOf.id === src.id && s.skinOf.name === '筒' && s.skinOf.sig === sig0)
+    && r.skins.map(s => s.name).join('、') === '筒 面皮 1、筒 面皮 2、筒 面皮 3');
+  ok('★★★ 　 塊裡面的縫照搬：側面那一條直縫兩側都在同一張 ⇒ 面皮上照樣是切開（沙箱第一版沒搬就不見了）', !!side && cuts(side.mesh()) === 2, side ? `${cuts(side.mesh())} 條半邊` : '');
+  ok('★★ 　 原本的物件⛔ 動（形狀、縫一樣）', io.skinSig(src.mesh()) === sig0);
+  ok('★★ 參數物件 ⇒ 先轉成可編輯網格（跟標縫同一個規矩）', !io.makeSkins(new io.ModelObject({ name: '方', src: { type: 'box' } })).ok
+    && /轉成可編輯網格/.test(io.makeSkins(new io.ModelObject({ name: '方', src: { type: 'box' } })).reason));
+
+  // 存讀檔
+  const j = side ? side.toJSON() : {};
+  const back = io.ModelObject.fromJSON(JSON.parse(JSON.stringify(j)));
+  ok('★★★ 存檔讀檔留得住從哪裡來；不是面皮的⛔ 存（檔案一個字都不多）', !!back.skinOf && back.skinOf.id === src.id && back.skinOf.sig === sig0 && !('skinOf' in src.toJSON()));
+
+  // 往內長
+  if (side) {
+    side.thickness = 1;
+    const sh = side.sheetShell(side.mesh(), 1), plain = side.mesh().shell(1);
+    const rOf = m => Math.max(...m.verts.map(v => Math.hypot(v.p.x, v.p.z)));
+    ok('★★★ 面皮往內長：外面 ＝ 原本的半徑 10（一般板件往兩邊長 ⇒ 10.5）', Math.abs(rOf(sh) - 10) < 0.05 && Math.abs(rOf(plain) - 10.5) < 0.05, `面皮 ${rOf(sh).toFixed(3)}、一般 ${rOf(plain).toFixed(3)}`);
+    ok('★★ 　 往內長照樣封閉、厚度不少（體積 ≈ 面積 × 板厚，內圈小一點所以略少）', sh.isClosed() && sh.volume() > 0.9 * area(side.mesh()) && sh.volume() < area(side.mesh()));
+  }
+
+  // 出口跳過、提醒
+  const d = new io.Doc();
+  d.add(src); for (const s of r.skins || []) d.add(s);
+  ok('★★★ 做實物的出口跳過面皮：沒選 ⇒ 只剩原本的；選了面皮也跳', d.forMaking([]).length === 1 && d.forMaking([]).includes(src) && d.forMaking(r.skins).length === 0);
+  ok('★★ 　 講跳過幾張：「（面皮 3 張是給展開用的，沒算）」；沒有面皮 ⇒ 不講', d.skinNote([]) === '（面皮 3 張是給展開用的，沒算）' && new io.Doc().skinNote([]) === '');
+  ok('★★★ 原本的沒改 ⇒ same；不是面皮 ⇒ null', d.skinState(r.skins[0]) === 'same' && d.skinState(src) === null);
+  src.mesh().verts[0].p.x += 1;
+  ok('★★★ 原本的拉了一個點 ⇒ changed', d.skinState(r.skins[0]) === 'changed');
+  src.mesh().verts[0].p.x -= 1;
+  const he0 = src.mesh().halfEdges.find(h => h.twin && h.role !== EDGE_ROLE.CUT);
+  src.mesh().setRole(he0, EDGE_ROLE.CUT);
+  ok('★★ 原本的多標一條縫 ⇒ changed（片會不一樣）', d.skinState(r.skins[0]) === 'changed');
+  d.remove(src);
+  ok('★★ 原本的刪掉了 ⇒ gone', d.skinState(r.skins[0]) === 'gone');
+
+  // 讀程式守著
+  const mn = rd('js/main.js'), tb = rd('js/ui/toolbar.js'), sc = rd('js/view/scene.js');
+  ok('★★★ 讀程式守著：放進新的一層「○○ 面皮」（同名的有了就放那一層）、記一步、講一句',
+    /const name = `\$\{obj\.name\} 面皮`;\s*const L = doc\.layers\.find\(l => l\.name === name\) \|\| doc\.addLayer\(name\);/.test(mn)
+    && /commit\(`複製成面皮 \$\{r\.skins\.length\} 張`\);/.test(mn) && /makeSkins: obj => makeSkinsOp\(obj\),/.test(mn));
+  ok('★★ 讀程式守著：分片面板有「複製成面皮」（面皮自己⛔ 有）、面皮的物件面板講從哪裡來與改過了',
+    /this\._seamProposalBox\(obj\);\s*this\._skinBtn\(obj\);/.test(tb) && /_skinBtn\(obj\) \{\s*if \(obj\.skinOf\) return;/.test(tb)
+    && /⚠ 原本的「\$\{nm\}」改過了（形狀或縫），這張面皮是舊的 —— 要的話刪掉重新複製/.test(tb) && /if \(st === 'gone'\)/.test(tb));
+  ok('★★ 讀程式守著：畫面往內長、面皮⛔ 往上抬', /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.skinOf \}\)/.test(sc) && /obj\.floorLift && !obj\.skinOf/.test(sc)
+    && /if \(this\.skinOf\) return mesh\.shell\(t, \{ inward: true \}\);/.test(rd('js/core/io.js')));
+  ok('★★★ 讀程式守著：3D 列印、OBJ、剖面分切、干涉都走 forMaking、都講跳過幾張面皮',
+    ['js/ui/exportPanel.js', 'js/ui/objPanel.js', 'js/ui/slicePanel.js'].every(f => /this\.app\.doc\.forMaking\(picked\)/.test(rd(f)) && /skinNote\(/.test(rd(f)))
+    && /const objs = doc\.forMaking\(picked \? sel\.objects\.slice\(\) : \[\]\);/.test(mn) && /const skinW = doc\.skinNote\(/.test(mn));
+  ok('★★ 展開⛔ 跳過面皮（面皮就是給展開用的）', !/forMaking/.test(rd('js/ui/unfoldPanel.js')));
+  ok('★ 功能地圖、AI.看() 認得面皮', /\['物件面板：複製成面皮',/.test(rd('js/ai/catalogInfo.js')) && /面皮: `「\$\{o\.skinOf\.name\}」的面皮（給展開用）`/.test(rd('js/ai/assist.js')));
+}
+
 section('網格核心第六批：布林切出來的固定形狀整理一次（kang 2026-10-28）');
 
 /**
@@ -17166,14 +17255,16 @@ section('圖層與群組第一批：藏起來、鎖住、只看選到的（kang 
   ok('★★★ 按下去：改資料 → 重畫 → 選取重新過濾 → 記一步復原（kang ⑤ 可以 Ctrl+Z）',
     /const n = setShown\(doc, how, picked\);[\s\S]{0,200}view\.sync\(doc\);\s*sel\.set\(sel\.ids\);[\s\S]{0,80}commit\(SHOW_LABEL\[how\]\);/.test(mn));
   // 出圖與干涉檢查：沒選東西 ⇒ 看得到的
-  const shownIn = f => /picked\.length \? picked : this\.app\.doc\.shown\(\)/.test(rd(f));
+  /** 面皮 A：3D 列印、OBJ、剖面分切改走 `doc.forMaking()`（裡面就是「有選照選的、沒選照 shown()」再跳過面皮 —— io.js 那一支守著）*/
+  const shownIn = f => /picked\.length \? picked : this\.app\.doc\.shown\(\)/.test(rd(f)) || (/this\.app\.doc\.forMaking\(picked\)/.test(rd(f))
+    && /forMaking\(picked\) \{ return \(picked && picked\.length \? picked : this\.shown\(\)\)\.filter\(o => !o\.skinOf\); \}/.test(rd('js/core/io.js')));
   ok('★★★ 沒選東西出圖 ⇒ 藏起來的不算（STL／3MF、OBJ、展開圖、剖面分切）',
     shownIn('js/ui/exportPanel.js') && shownIn('js/ui/objPanel.js') && shownIn('js/ui/unfoldPanel.js') && shownIn('js/ui/slicePanel.js'));
   ok('★★ 四個視窗都講「有 N 個藏起來的沒算」',
     ['js/ui/exportPanel.js', 'js/ui/objPanel.js', 'js/ui/unfoldPanel.js', 'js/ui/slicePanel.js'].every(f => /doc\.hiddenNote\(/.test(rd(f))));
   ok('★★ 干涉檢查、齒輪檢查也只算看得到的；干涉檢查講幾個沒算',
-    /const objs = picked \? sel\.objects\.slice\(\) : doc\.shown\(\);/.test(mn) && /個藏起來的沒算`\);/.test(mn)
-    && /toast\(r\.reason \+ \(picked \? '' : doc\.hiddenNote\(\[\]\)\), true\)/.test(mn)
+    /const objs = doc\.forMaking\(picked \? sel\.objects\.slice\(\) : \[\]\);/.test(mn) && /個藏起來的沒算`\) \+ skinW;/.test(mn)   // 面皮 A：改走 forMaking、多講面皮
+    && /toast\(r\.reason \+ \(picked \? '' : doc\.hiddenNote\(\[\]\)\) \+ skinW, true\)/.test(mn)
     && /gearClash\(obj, this\.app\.doc\.shown\(\)\)/.test(rd('js/ui/toolbar.js')));
   ok('★★ AI.看() 照樣列藏起來、鎖住的，加標記', /\.\.\.\(o\.hidden \? \{ 藏起來: true \} : \{\}\)/.test(rd('js/ai/assist.js')) && /\.\.\.\(o\.locked \? \{ 鎖住: true \} : \{\}\)/.test(rd('js/ai/assist.js')));
 }
@@ -20349,7 +20440,7 @@ section('網格核心第五批 a：匯出 OBJ（2026-10-23）');
   const pn = readFileSync(join(here, '../js/ui/objPanel.js'), 'utf8'), sc = readFileSync(join(here, '../js/view/scene.js'), 'utf8');
   const mn = readFileSync(join(here, '../js/main.js'), 'utf8'), ih = readFileSync(join(here, '../index.html'), 'utf8');
   ok('★★★ 照畫面上的樣子：加厚問畫面同一支 shellThickness()；有選只匯出選到的、沒選就全部', /this\.app\.view\.shellThickness\(o\)/.test(pn)
-    && /shellThickness\(obj\) \{ return this\._shellThickness\(obj\); \}/.test(sc) && /const objs = picked\.length \? picked : this\.app\.doc\.shown\(\);/.test(pn));
+    && /shellThickness\(obj\) \{ return this\._shellThickness\(obj\); \}/.test(sc) && /const objs = this\.app\.doc\.forMaking\(picked\);/.test(pn));   // 面皮 A：改走 forMaking（有選照選的、沒選照看得到的、跳過面皮）
   ok('★★ 預設 mm、多邊形照原樣；Blender 那句講要選 m', /unit: 'mm', triangulate: false/.test(pn) && /給 Blender 用選 m/.test(pn));
   ok('★★ 工具列「匯出 OBJ」、開著時快速鍵不穿過去、模型變了跟著重算', /id="exportObj"/.test(ih) && /\$\('exportObj'\)\.onclick = \(\) => objWin\.open\(\);/.test(mn)
     && /import3dWin\.isOpen \|\| objWin\.isOpen \|\| isAskOpen\(\)/.test(mn) && /if \(objWin\.isOpen\) objWin\.run\(\);/.test(mn));
@@ -21666,7 +21757,7 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
     && /: he\.smooth\)\) continue;/.test(sc) && /if \(!smooth\) for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
     && /const onCage = !\(obj\.smoothed && !this\._cageOn\);/.test(sc) && /ghost\.raycast = \(\) => \{\};/.test(sc));
   ok('★★ 讀程式守著（面板）：網格物件才有、勾起來預設 2 次、磨幾次 1～3、保持尖的角度、平滑前後尺寸、面太多少磨、翻過來的講出來＋標出來',
-    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb)   // 網格核心第六批：中間多「整理網格」
+    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._skinNote\(obj\);\s*this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb)   // 網格核心第六批：中間多「整理網格」；面皮 A：再多面皮那一句
     && /obj\.subd = v \? SUBD_DEFAULT : 0;/.test(tb) && /\['3', '3 次（面 ×64）'\]/.test(tb) && /this\._rowNum\('保持尖的轉折（°）'/.test(tb)
     && /平滑前 \$\{a\.map\(f2\)\.join\(' × '\)\}　→　平滑後/.test(tb) && /if \(info\.capped\)/.test(tb)
     && /有 \$\{info\.flipped\} 個小面翻過來了/.test(tb) && /setFacePreview\(info\.flipSegs\.map/.test(tb));
@@ -22255,7 +22346,7 @@ if (csgOK) {
   const src = p => readFileSync(join(here, '../js/' + p), 'utf8');
   const sc = src('view/scene.js'), ex = src('ui/exportPanel.js'), sl = src('ui/slicePanel.js'), ob = src('ui/objPanel.js'), itf = src('core/interfere.js'), ioS = src('core/io.js');
   ok('★★ 讀程式守著（③）：畫面照 floorLift 平移、快取多看 liftKey；3D 列印板件、OBJ、干涉檢查、加厚後轉成網格都叫 sheetShell',
-    /const lift = shellT > 0 && obj\.floorLift \? obj\.floorLift\(base, shellT\) : null;/.test(sc) && /node\.userData\.liftKey !== liftKey/.test(sc) && /base\.shell\(shellT, \{ offset: lift \}\)/.test(sc)
+    /const lift = shellT > 0 && obj\.floorLift && !obj\.skinOf \? obj\.floorLift\(base, shellT\) : null;/.test(sc) && /node\.userData\.liftKey !== liftKey/.test(sc) && /base\.shell\(shellT, \{ offset: lift, inward: !!obj\.skinOf \}\)/.test(sc)   // 面皮 A：面皮往內長、⛔ 往上抬
     && /mesh = o\.sheetShell\(mesh, o\.thickness\)/.test(ex) && /mesh = o\.sheetShell\(mesh, t\)/.test(ob) && /obj\.sheetShell\(m, t\)/.test(itf) && /s = this\.sheetShell\(m, t\)/.test(ioS));
   ok('★★ 讀程式守著（②）：剖面視窗「板件 空心（照板厚）／實心」、預設空心、跟人走；板件先 sheetShell 再切；藍框疊層、互卡都放',
     /<select id="slSheet"[^>]*><option value="hollow">空心（照板厚）<\/option><option value="solid">實心<\/option>/.test(sl) && /const hollow = this\.opt\.sheet !== 'solid';/.test(sl)

@@ -221,8 +221,8 @@ export class ExportPanel {
   _runNow() {
     saveOpt(this.opt);
     const picked = this.app.sel.objects;
-    const objs = picked.length ? picked : this.app.doc.shown();      // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算
-    this._hidNote = this.app.doc.hiddenNote(picked);
+    const objs = this.app.doc.forMaking(picked);      // 圖層與群組第一批：沒選東西 ⇒ 藏起來的不算；面皮 A：面皮跳過
+    this._hidNote = this.app.doc.hiddenNote(picked) + this.app.doc.skinNote(picked);
     const s = STL_UNITS[this.opt.unit].scale;
 
     if (!this.fix) this.fix = new Map();
