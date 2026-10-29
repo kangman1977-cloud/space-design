@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, setShown, isIsolated, layerFrom, arraySrcFrom, explodeArray,
+import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, joinObjects, setShown, isIsolated, layerFrom, arraySrcFrom, explodeArray,
          explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
@@ -723,7 +723,12 @@ function boolOp(op) {
   const list = sel.objects;
 
   const chk = canBool(list.map(o => o.mesh()), list.map(o => o.name));
-  if (!chk.ok) { toast(chk.reason, true); return; }
+  if (!chk.ok) {
+    /** 板件被擋時指路「合成一個物件」（kang 2026-10-29 第 ① 題）—— 只有聯集；差集、交集對板件沒有對應的做法 */
+    const toJoin = op === BOOL_OPS.UNION && /開放的板件/.test(chk.reason) ? ' —— 板件要合成一個，請用旁邊的「合成一個物件」' : '';
+    toast(chk.reason + toJoin, true);
+    return;
+  }
 
   const base = list[0];
   const obj = new ModelObject({
@@ -750,6 +755,31 @@ function boolOp(op) {
   panel.analysisCache.clear();
   commit(BOOL_LABEL[op]);
   toast(`${BOOL_LABEL[op]}完成：${list.length} 個物件 → 1 個`);
+}
+
+/**
+ * 🔴 **合成一個物件**（kang 2026-10-29 做面具第 ① 題 →「同意你的建議」）：板件放進同一個物件、⛔ 布林。
+ * 幾何與規則在 `io.js` `joinObjects()`；這裡換物件、記一步、講結果與接下來怎麼接。
+ */
+function joinOp() {
+  const list = sel.objects;
+  const r = joinObjects(list);
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  for (const o of list) doc.remove(o);
+  doc.add(r.obj);
+  view.sync(doc);
+  sel.set([r.obj.id]);
+  panel.analysisCache.clear();
+  commit(`合成一個物件（${list.length} 個）`);
+
+  const bits = [`已把 ${list.length} 個板件合成一個物件「${r.obj.name}」　形狀、位置都沒動，各自還是分開的；`
+              + '要接起來：拉點線面 → 點 → 選兩邊的點按「點連成面」'];
+  if (r.thickDiffer) bits.push(`板厚不一樣，用「${list[0].name}」的 ${r.obj.thickness} cm`);
+  if (r.params) bits.push(`${r.params} 個參數物件變成固定形狀（長寬參數回不去，要改請先 Ctrl+Z）`);
+  if (r.skins) bits.push(`${r.skins} 張面皮變成一般板件`);
+  if (r.inwardMixed) bits.push(`板厚長的方向照「${list[0].name}」`);
+  toast(bits.join('　'));
 }
 
 /**
@@ -984,6 +1014,7 @@ $('del').onclick = deleteSelected;
 $('dup').onclick = duplicateSelected;
 
 $('bUnion').onclick = () => boolOp(BOOL_OPS.UNION);
+$('bJoin').onclick = () => joinOp();
 $('bSub').onclick   = () => boolOp(BOOL_OPS.SUBTRACT);
 $('bInt').onclick   = () => boolOp(BOOL_OPS.INTERSECT);
 $('bSplit').onclick = splitOp;
@@ -8188,6 +8219,8 @@ function updateBar() {
   // 布林要兩個以上的物件；陣列一個就夠。兩者都要函式庫已載好
   const canDoBool = sel.count >= 2 && csgReady();
   for (const id of ['bUnion', 'bSub', 'bInt', 'bSplit', 'bKnife']) $(id).hidden = !canDoBool;
+  /** 合成一個物件：選兩個以上就出現（⛔ 布林函式庫，板件本來就不走布林）*/
+  $('bJoin').hidden = sel.count < 2;
 
   /**
    * 圖層與群組第一批（→ `規格\建模器-圖層與群組.md`）：藏起來、鎖住 ⇒ 選了東西才有；只看選到的 ⇒ 選了東西、或正開著（要能按回來）；

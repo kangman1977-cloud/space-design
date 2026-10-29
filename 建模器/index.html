@@ -765,6 +765,8 @@ table.exTab td:last-child { color: #e8eaed; font-variant-numeric: tabular-nums; 
     <div class="grp" id="gBool">
       <span class="lbl">布林</span>
       <button id="bUnion" hidden title="聯集：把選取的物件合成一個">∪ 聯集</button>
+      <!-- 合成一個物件（kang 2026-10-29 做面具第 ① 題 →「同意你的建議」）：板件放進同一個物件、不做布林；接起來用「點連成面」 -->
+      <button id="bJoin" hidden title="合成一個物件：把選到的板件放進同一個物件，不做布林 —— 形狀、位置都不動，各自還是分開的；要接起來：拉點線面 → 點 → 選兩邊的點按「點連成面」。板厚、名字、圖層照第一個選的。⚠ 只給板件用（實體請用「∪ 聯集」）；平板的長寬參數、面皮的身分會拿掉">合成一個物件</button>
       <button id="bSub" hidden title="差集：從第一個選取的物件挖掉其餘的">− 差集</button>
       <button id="bInt" hidden title="交集：只留下互相重疊的部分">∩ 交集</button>
       <!-- 分割（kang 2026-10-27「照建議」→ 規格\建模器-布林分割.md）：預設每一塊都留；「只當刀」按亮 ⇒ 後面選的切完不留 -->

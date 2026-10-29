@@ -24081,6 +24081,63 @@ section('摺：沿直的摺線把一邊轉一個角度（kang 2026-10-29「可�
     && /摺線標成「折」，展開會攤回原本那一片/.test(mn) && /要摺另一邊：按亮「換一邊」再按「摺」/.test(mn));
 }
 
+section('合成一個物件：板件放進同一個物件、不做布林（kang 2026-10-29 做面具第 ①「同意你的建議」）');
+{
+  /**
+   * kang：「當有兩個物件時,而且這是"面網格"尚未加厚狀態..要如何讓兩個物件接合起來?」⇒ 聯集擋板件、點連成面只在同一個物件裡 ⇒
+   * 先「合成一個物件」（＝ Blender Ctrl+J），再用點連成面接。kang 同意的 4 點：只給板件、板厚名字圖層照第一個、參數與面皮身分拿掉要講、標記照帶。
+   */
+  const { eqz, grid } = ripFold;
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const mn = rf(join(dir, '../js/main.js'), 'utf8'), raw = rf(join(dir, '../index.html'), 'utf8');
+  const { unfoldMesh: unf } = await import('../js/unfold/flatten.js');
+  const world = o => o.mesh().transformed(o.matrix()).verts.map(v => v.p.toArray().map(x => +x.toFixed(6)).join(',')).sort();
+  const hardN = m => { let n = 0; for (const he of m.edges()) if (he.hard) n++; return n; };
+  const sheetOf = (name, mesh, x, extra = {}) => new io.ModelObject({ name, kind: io.KIND.SHEET, src: { type: 'mesh' }, mesh, pos: new THREE.Vector3(x, 0, 0), ...extra });
+
+  const a = sheetOf('左片', grid(60, 60, 3), -35), b = sheetOf('右片', grid(60, 60, 3), 35);
+  b.rot.set(0, 0, 0.3);                                   // 右片轉個角度也要原地不動
+  const before = [...world(a), ...world(b)].sort();
+  const r = io.joinObjects([a, b]), j = r.obj, jm = j.mesh();
+  eq('★★★ 兩片 ⇒ 一個物件：點、面加起來，還是分開的 2 塊、板件、固定形狀', [r.ok, jm.verts.length, jm.faces.length, jm.validate().components, j.kind, j.src.type].join(','), 'true,32,18,2,sheet,mesh');
+  ok('★★★ 形狀、位置一格都沒動（第二片轉了角度也一樣）：合成前後每一個點在世界座標上一模一樣', JSON.stringify(world(j)) === JSON.stringify(before));
+  eq('★★ 名字、位置、板厚照第一個選的', [j.name, j.pos.x, j.thickness].join(','), '左片,-35,0.2');
+  eq('★★ 你畫的線（兩片各 12 條格線）照帶 ⇒ 24 條', hardN(jm), 24);
+
+  // 接著用點連成面把中間接起來（兩片都不轉，比較好對點）
+  const a2 = sheetOf('左片', grid(60, 60, 3), -35), b2 = sheetOf('右片', grid(60, 60, 3), 35);
+  const j2 = io.joinObjects([a2, b2]).obj, m2 = j2.mesh();
+  const at = (x, z) => m2.verts.find(v => eqz(v.p.x, x) && eqz(v.p.z, z));   // 合成後在左片的座標裡：左片右緣 x 30、右片左緣 x 40
+  const pts = [at(30, -10), at(40, -10), at(40, 10), at(30, 10)];
+  /** ⚠ 位置跑掉時找不到點 ⇒ 算失敗，⛔ 讓整支測試當掉（改壞檢查要跑到「通過 N」）*/
+  const f = pts.every(Boolean) ? edit.faceFromVerts(m2, pts) : { ok: false, reason: '找不到縫兩邊的點（合成後位置跑掉了）' };
+  ok('★★★ 合成之後點連成面接得起來：變 1 塊、法向一致', f.ok && f.mesh.validate().components === 1 && (f.mesh.computeNormals(), f.mesh.faces.every(x => f.mesh.computeFaceNormal(x).y > 0.99)), f.reason);
+  const u = f.ok ? unf(f.mesh, makeRule('paper', 0.2)) : { pieces: [] };
+  eq('★★★ 接好後展開 1 片、7400 cm²（兩片 7200 ＋ 補的 200）', [u.pieces.length, u.pieces[0] ? u.pieces[0].area.toFixed(1) : '—'].join(','), '1,7400.0');
+
+  const box = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID });
+  const rs = io.joinObjects([a2, box]);
+  ok('★★★ 選到實體 ⇒ 擋下來、指去「∪ 聯集」', !rs.ok && /「方塊」是實體/.test(rs.reason) && /請用「∪ 聯集」/.test(rs.reason), rs.reason);
+  ok('★ 只選一個 ⇒ 擋下來', !io.joinObjects([a2]).ok);
+  const t1 = sheetOf('薄', grid(30, 30, 2), 0, { thickness: 0.3 }), t2 = sheetOf('厚', grid(30, 30, 2), 50, { thickness: 0.5 });
+  const rt = io.joinObjects([t1, t2]);
+  eq('★★ 板厚不一樣 ⇒ 用第一個的、回報不一樣', [rt.thickDiffer, rt.obj.thickness].join(','), 'true,0.3');
+  const p1 = new io.ModelObject({ name: '平板 1', kind: io.KIND.SHEET, src: { type: 'plate', w: 40, d: 30 } });
+  const p2 = new io.ModelObject({ name: '平板 2', kind: io.KIND.SHEET, src: { type: 'plate', w: 40, d: 30 }, pos: new THREE.Vector3(50, 0, 0) });
+  const rp = io.joinObjects([p1, p2]);
+  eq('★★ 兩個平板（參數物件）⇒ 回報 2 個變成固定形狀、合成後是網格', [rp.params, rp.obj.isParametric].join(','), '2,false');
+  const sk = sheetOf('面皮 1', grid(30, 30, 2), 0, { skinOf: { id: 7, name: '頭盔', sig: 'x' } });
+  const rk = io.joinObjects([sk, sheetOf('平板', grid(30, 30, 2), 50)]);
+  eq('★★ 面皮在第一個 ⇒ 面皮身分拿掉（回報 1 張）、板厚照樣往內長、兩邊長的方向不一樣要講', [rk.skins, rk.obj.skinOf, rk.obj.shellIn, rk.inwardMixed].join(','), '1,,true,true');
+
+  ok('★★ 按鈕：「合成一個物件」在「∪ 聯集」後面，說明講不做布林、形狀不動、點連成面、照第一個、只給板件',
+    /<button id="bUnion"[^>]*>∪ 聯集<\/button>[\s\S]{0,200}<button id="bJoin" hidden title="合成一個物件：[^"]*不做布林[^"]*形狀、位置都不動[^"]*點連成面[^"]*照第一個選的[^"]*只給板件用[^"]*">合成一個物件<\/button>/.test(raw));
+  ok('★★ 選兩個以上就出現（⛔ 等布林函式庫）；按下去換物件、記一步、講怎麼接', /\$\('bJoin'\)\.hidden = sel\.count < 2;/.test(mn) && /const r = joinObjects\(list\);/.test(mn)
+    && /commit\(`合成一個物件（\$\{list\.length\} 個）`\);/.test(mn) && /要接起來：拉點線面 → 點 → 選兩邊的點按「點連成面」/.test(mn));
+  ok('★★ 「∪ 聯集」擋板件時指路「合成一個物件」，只有聯集（差集、交集⛔）', /const toJoin = op === BOOL_OPS\.UNION && \/開放的板件\/\.test\(chk\.reason\) \? ' —— 板件要合成一個，請用旁邊的「合成一個物件」' : '';/.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

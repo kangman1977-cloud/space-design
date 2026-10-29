@@ -893,6 +893,56 @@ export function splitObjects(objects, { knifeOnly = false } = {}) {
   return { ok: true, made, overlap, dropped: r.dropped };
 }
 
+/**
+ * 🔴 **合成一個物件**（kang 2026-10-29 做面具第 ① 題「兩片還沒加厚的面…要如何讓兩個物件接合起來?」→「同意你的建議」）：
+ * 幾個板件放進**同一個物件**，⛔ 做布林 —— 形狀、位置一格都不動，各自還是分開的幾塊；
+ * 要接起來接著用「點連成面」（同一個物件裡才選得到兩邊的點）。＝ Blender 的 Ctrl+J（Join）。
+ *
+ * ── 規則（kang 同意的 4 點）──────────────────────────────
+ * ① **只給板件**：實體⛔ 布林只放在一起，重疊的地方會算兩次 ⇒ 擋下來、指去「∪ 聯集」。
+ * ② 板厚、名字、圖層、位置角度縮放 **照第一個選的**；板厚不一樣要講。
+ * ③ 參數物件（平板的長寬）變固定形狀；面皮的身分拿掉（變一般板件，跟 `unskin()` 同一件事）—— 都要講。
+ * ④ 標記（線、折、縫、平滑…）照帶：`Mesh.merge()`（陣列也走它，走 `marksOf()`／`applyMarks()`）。
+ *
+ * 其他的照第一個選的放進第一個的座標裡（跟 `splitObjects()` 同一招：`inv(第一個) × 自己`）。
+ * @param {ModelObject[]} objects 照選的順序
+ * @returns {{ok:boolean, reason?:string, obj?:ModelObject, thickDiffer?:boolean, params?:number, skins?:number, inwardMixed?:boolean}}
+ */
+export function joinObjects(objects) {
+  if (!objects || objects.length < 2) return { ok: false, reason: '合成一個物件至少要選兩個板件' };
+  const solid = objects.find(o => o.kind !== KIND.SHEET);
+  if (solid) {
+    return {
+      ok: false,
+      reason: `「${solid.name}」是實體 ——「合成一個物件」只給板件用（實體不做布林只放在一起，重疊的地方會算兩次）。實體要合成一個請用「∪ 聯集」`
+    };
+  }
+  const base = objects[0];
+  const inv = base.matrix().invert();
+  const mesh = Mesh.merge(objects.map(o => o.mesh().transformed(new THREE.Matrix4().multiplyMatrices(inv, o.matrix()))));
+  mesh.computeNormals();
+  const inward = base.growsInward;
+  const obj = new ModelObject({
+    ...layerFrom(base),                            // 圖層 2a、群組 2b：跟第一個同一層、同一組（跟布林一樣）
+    name: base.name,
+    kind: KIND.SHEET,
+    src: { type: 'mesh' },
+    mesh,
+    pos: base.pos, rot: base.rot, scale: base.scale,
+    color: base.color, thickness: base.thickness, lockScale: base.lockScale,
+    subd: base.subd, subdDeg: base.subdDeg, subdKeep: base.subdKeep,
+    unfoldMode: base.unfoldMode,
+    shellIn: inward                               // 面皮或從面皮變來的 ⇒ 板厚照樣往內長（③：面皮的身分拿掉）
+  });
+  return {
+    ok: true, obj,
+    thickDiffer: objects.some(o => (Number(o.thickness) || 0) !== (Number(base.thickness) || 0)),
+    params: objects.filter(o => o.isParametric).length,
+    skins: objects.filter(o => o.skinOf).length,
+    inwardMixed: objects.some(o => o.growsInward !== inward)
+  };
+}
+
 // ═══════════════════════════════════════════════════════
 //  面皮（每片展開方式 面皮 A）
 // ═══════════════════════════════════════════════════════
