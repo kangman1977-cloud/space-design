@@ -5395,6 +5395,46 @@ function clearBoundaryOnlySeams(src, dst, remap) {
   return n;
 }
 
+/**
+ * 🔴 **補上去之後，原本是邊緣的線照樣看得見**（kang 2026-10-29「同意你的建議」，做面具時
+ * 「點連成面」補兩個凸塊中間的缺口，補出來的面跟凸塊、下面那格合成一大塊）。
+ *
+ * 補之前那幾條是邊緣（看得見）；補完變成內部邊，如果兩側剛好同一平面又沒標 `hard`，
+ * `isHiddenEdge()` 就說看不見 ⇒ 新面跟旁邊的面**悄悄合成一個面**。
+ * ⛔ 那違反網格核心第 3 節：會刻意合的只有「合成一個面」與「壓平」（kang 2026-10-22）。
+ *
+ * ⭐ 跟 `clearBoundaryOnlySeams()` 同一套「原本是邊界、現在變成內部」，只是這裡**加 `hard`**：
+ * - 只標**現在會變看不見**的那幾條 —— 有轉折的本來就看得見，⛔ 多標（方塊刪頂再補回去照舊）。
+ * - ⛔ 給「修法向」用：那裡的邊界是繞向錯了配不起來，⛔ 是真的邊緣。
+ * - 前置：`dst` 的法向要先算好（`isHiddenEdge()` 讀 `face.normal`）。
+ *
+ * @returns {number} 留住幾條
+ */
+function keepFilledEdgesVisible(src, dst, remap) {
+  const si = src._vertIndex(), di = dst._vertIndex();
+  const key = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+  const to = i => (remap ? remap.get(i) : i);
+
+  const wasBoundary = new Set();
+  for (const he of src.halfEdges) {
+    if (he.face && he.twin && he.twin.face) continue;
+    const a = to(si.get(he.v.id)), b = to(si.get(he.to.id));
+    if (a !== undefined && b !== undefined) wasBoundary.add(key(a, b));
+  }
+  if (!wasBoundary.size) return 0;
+
+  let n = 0;
+  for (const he of dst.edges()) {
+    if (!he.face || !he.twin || !he.twin.face) continue;
+    if (!dst.isHiddenEdge(he)) continue;
+    if (wasBoundary.has(key(di.get(he.v.id), di.get(he.to.id)))) {
+      dst.setHard(he, true);
+      n++;
+    }
+  }
+  return n;
+}
+
 // ═══════════════════════════════════════════════════════
 //  刪除面 ／ 補洞（一對）
 // ═══════════════════════════════════════════════════════
@@ -5646,10 +5686,12 @@ export function fillHoles(mesh) {
    * 不清的話**畫面上會憑空多出幾條分片線**（見 `clearBoundaryOnlySeams`）。
    */
   const fakeSeams = clearBoundaryOnlySeams(mesh, out, clean.remap);
+  /** 洞的邊緣補完照樣看得見，⛔ 跟旁邊同一平面的面悄悄合成一個（見 `keepFilledEdgesVisible()`）*/
+  const kept = keepFilledEdgesVisible(mesh, out, clean.remap);
 
   return {
     ok: true, mesh: out, remap: clean.remap,
-    holes: sizes.length, sizes, nowClosed: out.isClosed(), fakeSeams
+    holes: sizes.length, sizes, nowClosed: out.isClosed(), fakeSeams, kept
   };
 }
 
@@ -5806,10 +5848,12 @@ export function bridgeLoops(mesh, loopA, loopB, opt = {}) {
    * ⛔ 不清的話**畫面上會憑空多出兩圈分片線**（跟 `fillHoles()` 同一件事）。
    */
   const fakeSeams = clearBoundaryOnlySeams(mesh, out, clean.remap);
+  /** 兩圈的邊緣接完照樣看得見（見 `keepFilledEdgesVisible()`）*/
+  const kept = keepFilledEdgesVisible(mesh, out, clean.remap);
 
   return {
     ok: true, mesh: out, remap: clean.remap,
-    walls, n, turn, nowClosed: out.isClosed(), fakeSeams
+    walls, n, turn, nowClosed: out.isClosed(), fakeSeams, kept
   };
 }
 
@@ -5850,8 +5894,9 @@ export function bridgeLoops(mesh, loopA, loopB, opt = {}) {
  * @param {Mesh} mesh
  * @param {Vert[]} verts **有順序**（＝ 使用者點選的順序）
  * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:number[],
- *            n?:number, flatness?:number}}
- *          `flatness` ＝ 最遠的點離最佳擬合平面多遠（cm），0 就是平的
+ *            n?:number, flatness?:number, kept?:number}}
+ *          `flatness` ＝ 最遠的點離最佳擬合平面多遠（cm），0 就是平的；
+ *          `kept` ＝ 跟旁邊同一平面的面之間留住幾條線（`keepFilledEdgesVisible()`）
  */
 export function faceFromVerts(mesh, verts) {
   if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
@@ -5951,11 +5996,16 @@ export function faceFromVerts(mesh, verts) {
    * （2026-10-08 查 bug 加的，跟 `fillHoles()`／`extrudeBoundaryEdges()` 同一件事）。
    */
   clearBoundaryOnlySeams(mesh, out, clean.remap);
+  /**
+   * 🔴 補上的那幾條邊緣照樣看得見 ⇒ 新面跟旁邊同一平面的面各自一個面
+   * （kang 2026-10-29 做面具時補缺口，補出來跟凸塊合成一大塊；見 `keepFilledEdgesVisible()`）。
+   */
+  const kept = keepFilledEdgesVisible(mesh, out, clean.remap);
 
   /** ⚠ 不平就講出來，⛔ 不擋（想弄平接著按 `壓平`）*/
   const flatness = fitPlane(verts.map(v => v.p)).dev;
 
-  return { ok: true, mesh: out, remap: clean.remap, n: idx.length, flatness };
+  return { ok: true, mesh: out, remap: clean.remap, n: idx.length, flatness, kept };
 }
 
 // ═══════════════════════════════════════════════════════

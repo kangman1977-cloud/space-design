@@ -5694,6 +5694,14 @@ function connectVertsSelected() {
 }
 
 /**
+ * 點連成面、補洞、橋接補完時，原本的邊緣跟旁邊同一平面的面之間留著線（`edit.js` `keepFilledEdgesVisible()`，
+ * kang 2026-10-29「同意你的建議」）—— 講出為什麼沒合成一個面，並指路「合成一個面」。
+ */
+function keptNote(n) {
+  return `跟旁邊同一平面的面之間留著 ${n} 條線（各自一個面）；要合成一個面，選起來按「合成一個面」`;
+}
+
+/**
  * 🔴 **點連成面：選好幾個點，照選取順序圍出一個面**（＝ Blender 的 `F`）。
  *
  * ⭐ 它跟旁邊兩顆是一組，但各做各的：
@@ -5738,6 +5746,7 @@ function faceFromVertsSelected() {
    * 容許值用 0.01 cm（＝ 0.1mm，可切容許值），⛔ 不用 1e-6（那是浮點數的尺度）。
    */
   const bits = [`已建好一個 ${r.n} 邊的面`];
+  if (r.kept) bits.push(keptNote(r.kept));
   if (r.flatness > 0.01) {
     bits.push(`⚠ 這個面不是平的（最大偏離 ${fmtCm(r.flatness)} cm）—— 想弄平就接著按「壓平」`);
   }
@@ -6548,6 +6557,7 @@ function fillHolesOnSelected() {
   const bits = [`已補 ${r.holes} 個洞（${r.sizes.map(n => `${n} 邊形`).join('、')}）`];
   if (r.nowClosed) bits.push('表面現在是封閉的');
   if (r.fakeSeams) bits.push(`順手清掉 ${r.fakeSeams} 條假的分片線（那是洞的邊界自動標的）`);
+  if (r.kept) bits.push(keptNote(r.kept));
   /**
    * 🔴 **把體積講出來** —— 板件（本來就是一張沒有厚度的面）按了會被封起來，
    * 那時體積是 0，而**畫面上看起來跟原本一模一樣**。
@@ -6612,6 +6622,7 @@ function bridgeOnSelected() {
   if (turn) bits.push(`轉了 ${turn} 格`);
   if (r.nowClosed) bits.push('表面現在是封閉的');
   if (r.fakeSeams) bits.push(`順手清掉 ${r.fakeSeams} 條假的分片線（那是洞的邊界自動標的）`);
+  if (r.kept) bits.push(keptNote(r.kept));
   /**
    * 🔴 **體積只印「接完的」，⛔ 不印「接之前 → 接完」。**
    *

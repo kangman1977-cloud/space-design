@@ -23867,6 +23867,84 @@ section('不平的面（琥珀色斜線）開關（kang 2026-10-29「同意你�
   ok('★ ⛔ 記在瀏覽器（重新整理回到開著，跟稜線、線框一樣）', !/localStorage[^\n]*unflat/i.test(mn));
 }
 
+section('補上去的面跟旁邊平的面各自一個面（kang 2026-10-29「同意你的建議」）');
+{
+  /**
+   * kang 做面具：平板細分、上緣「擠出邊」長兩個凸塊，「點連成面」補中間的缺口 ⇒ 補出來的面跟兩個凸塊、下面那格合成一大塊。
+   * 原因：補之前那幾條是邊緣，補完變內部邊、同一平面、沒標 hard ⇒ 看不見。⛔ 違反網格核心第 3 節（會刻意合的只有合成一個面、壓平）。
+   * ⇒ 點連成面、補洞、橋接補完，原本是邊緣、現在會變看不見的那幾條標 hard。
+   */
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const src = rf(join(dir, '../js/core/edit.js'), 'utf8'), mn = rf(join(dir, '../js/main.js'), 'utf8');
+  const hardN = m => { let n = 0; for (const he of m.edges()) if (he.hard) n++; return n; };
+  const regSizes = m => planarRegions(m).map(r => r.faces.length).sort((a, b) => b - a).join(',');
+  const cen = (m, f) => { const vs = m.faceVerts(f), c = new THREE.Vector3(); for (const v of vs) c.add(v.p); return c.divideScalar(vs.length); };
+  const faceAt = (m, x, z) => m.faces.find(f => { const c = cen(m, f); return Math.abs(c.x - x) < 1e-6 && Math.abs(c.z - z) < 1e-6; });
+  const vAt = (m, x, z) => m.verts.find(v => Math.abs(v.p.x - x) < 1e-6 && Math.abs(v.p.z - z) < 1e-6 && Math.abs(v.p.y) < 1e-6);
+
+  // kang 的例子：90 × 60 平板細分 3、上緣左右兩格各長一片 15 的凸塊、補中間缺口
+  const m0 = edit.tidyMesh(buildPrim('plate', { w: 90, d: 60 })); m0.computeNormals();
+  const g = edit.subdivideFaces(m0, m0.faces.slice(), 3).mesh; g.computeNormals();
+  const tabsAt = [];
+  for (const he of g.edges()) {
+    if (he.face && he.twin && he.twin.face) continue;
+    const a = he.v.p, b = he.to.p;
+    if (Math.abs(a.z + 30) < 1e-6 && Math.abs(b.z + 30) < 1e-6 && Math.abs((a.x + b.x) / 2) > 20) tabsAt.push(he.face ? he : he.twin);
+  }
+  const t = edit.extrudeBoundaryEdges(g, tabsAt, 15).mesh; t.computeNormals();
+  ok('★ 前提：兩個凸塊長好，11 個小面各自一個面（凸塊跟平板之間那條擠出邊本來就標了）', tabsAt.length === 2 && t.faces.length === 11 && planarRegions(t).length === 11, `${tabsAt.length} ${t.faces.length} ${planarRegions(t).length}`);
+  const pts = [vAt(t, -15, -45), vAt(t, -15, -30), vAt(t, 15, -30), vAt(t, 15, -45)];
+  const r = edit.faceFromVerts(t, pts), k = r.mesh; k.computeNormals();
+  eq('★★★ 點連成面補缺口：12 個小面 ⇒ 12 個面（以前 9 個：新面、兩個凸塊、下面那格合成一塊）', [r.ok, k.faces.length, planarRegions(k).length].join(','), 'true,12,12');
+  eq('★★ 留住 3 條（兩個凸塊的內側邊、下面那格的上緣），回報 kept', [r.kept, hardN(k) - hardN(t)].join(','), '3,3');
+  ok('★★ 新面自己一個面，面積 30 × 15 ＝ 450', (() => { const f = faceAt(k, 0, -37.5); const R = f && planarRegions(k).find(x => x.faces.includes(f)); return R && R.faces.length === 1 && Math.abs(R.area - 450) < 1e-6; })());
+  ok('★★ 對照：把那 3 條拿掉 ⇒ 又合成一塊（4 個小面）—— 證明分開靠的就是這 3 條', (() => {
+    const c = Mesh.fromFaceList(k.verts.map(v => v.p.clone()), k.faces.map(f => k.faceVerts(f).map(v => k._vertIndex().get(v.id))));
+    c.computeNormals(); const ci = c._vertIndex(), ki = k._vertIndex(), was = new Set();
+    for (const he of k.edges()) if (he.hard) was.add(`${Math.min(ki.get(he.v.id), ki.get(he.to.id))}-${Math.max(ki.get(he.v.id), ki.get(he.to.id))}`);
+    for (const he of c.edges()) { const a = ci.get(he.v.id), b = ci.get(he.to.id); if (was.has(`${Math.min(a, b)}-${Math.max(a, b)}`)) c.setHard(he, true); }
+    for (const he of c.edges()) { const p = he.v.p, q = he.to.p; if (he.hard && Math.abs(p.y) < 1e-9 && (Math.abs(Math.abs(p.x) - 15) < 1e-6 && Math.abs(p.x - q.x) < 1e-6 && Math.min(p.z, q.z) < -30.0001 || Math.abs(p.z + 30) < 1e-6 && Math.abs(q.z + 30) < 1e-6 && Math.abs(p.x + q.x) < 1e-6)) c.setHard(he, false); }
+    return regSizes(c).startsWith('4,');
+  })());
+  ok('★★ 想要一大塊照樣做得到：選新面＋兩個凸塊按「合成一個面」⇒ 12 → 10 個面', (() => {
+    const k2 = edit.faceFromVerts(t, pts).mesh; k2.computeNormals();      // 另做一份（合成一個面是就地改）
+    const fs = [faceAt(k2, 0, -37.5), faceAt(k2, -30, -37.5), faceAt(k2, 30, -37.5)];
+    const mg = edit.mergeFaces(k2, fs); if (!mg.ok) return false; return planarRegions(k2).length === 10 && mg.cleared === 2;
+  })());
+  eq('★★ 加厚後兩面都有線：hard 17 條 ⇒ 34 條', [hardN(k), hardN(k.shell(0.3))].join(','), '17,34');
+
+  // 補洞：洞的邊沒有線（像匯入的模型：一圈 8 格中間一個方洞）
+  const P = []; for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) P.push(new THREE.Vector3(i * 30 - 45, 0, j * 30 - 45));
+  const id = (i, j) => j * 4 + i, F = [];
+  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) if (!(i === 1 && j === 1)) F.push([id(i, j), id(i, j + 1), id(i + 1, j + 1), id(i + 1, j)]);
+  const ring = Mesh.fromFaceList(P, F); ring.computeNormals();
+  const fh = edit.fillHoles(ring), fk = fh.mesh; fk.computeNormals();
+  eq('★★★ 補洞（洞的邊沒有線）：補上的那片自己一個面（以前跟那一圈合成 9 格一塊）；外緣蓋的那片照舊另一個', [planarRegions(ring).length, fh.holes, regSizes(fk), fh.kept].join('|'), '1|2|8,1,1|4');
+  // 補洞：刪掉一格再補（洞的邊原本就是畫的線）⇒ 照舊，⛔ 多標
+  const p9 = edit.tidyMesh(buildPrim('plate', { w: 90, d: 90 })); p9.computeNormals();
+  const g9 = edit.subdivideFaces(p9, p9.faces.slice(), 3).mesh; g9.computeNormals();
+  const d9 = edit.deleteFaces(g9, [{ kind: 'face', face: faceAt(g9, 0, 0) }]).mesh; d9.computeNormals();
+  const f9 = edit.fillHoles(d9); f9.mesh.computeNormals();
+  eq('★ 刪一格再補：洞的邊本來就是畫的線 ⇒ 不用留（kept 0）、9 格各自一個面 ＋ 外緣那片', [f9.kept, planarRegions(f9.mesh).length, hardN(f9.mesh)].join(','), '0,10,12');
+  // 有轉折的：方塊刪掉頂面再補回去 ⇒ 照舊，⛔ 多標
+  const bx = edit.tidyMesh(buildPrim('box', { w: 40, h: 30, d: 20 })); bx.computeNormals();
+  const top = bx.faces.find(f => bx.computeFaceNormal(f).y > 0.9);
+  const bd = edit.deleteFaces(bx, [{ kind: 'face', face: top }]).mesh; bd.computeNormals();
+  const bf = edit.fillHoles(bd); bf.mesh.computeNormals();
+  eq('★★ 方塊刪頂再補：有轉折本來就看得見 ⇒ kept 0、hard 跟原本一樣、6 個面', [bf.kept, hardN(bf.mesh) === hardN(bx), planarRegions(bf.mesh).length].join(','), '0,true,6');
+  const fv = edit.faceFromVerts(bd, (() => { const vs = []; let he = bd.halfEdges.find(h => !h.face); const s = he; do { vs.push(he.v); he = he.next; } while (he && he !== s && vs.length < 10); return vs; })());
+  ok('★ 方塊刪頂後用點連成面補回去也一樣：kept 0', fv.ok && fv.kept === 0, fv.reason || fv.kept);
+
+  ok('★★ 三支都接上（補洞、橋接、點連成面），⛔ 接到修法向（那裡的邊界是繞向錯、不是真的邊緣）',
+    (src.match(/const kept = keepFilledEdgesVisible\(mesh, out, clean\.remap\);/g) || []).length === 3
+    && !/keepFilledEdgesVisible\(mesh, out, null\)/.test(src));
+  ok('★★ 只標「現在會變看不見」的：先問 isHiddenEdge 再看原本是不是邊緣', /function keepFilledEdgesVisible\(src, dst, remap\) \{[\s\S]{0,700}if \(!dst\.isHiddenEdge\(he\)\) continue;\s*if \(wasBoundary\.has\(key\(di\.get\(he\.v\.id\), di\.get\(he\.to\.id\)\)\)\) \{\s*dst\.setHard\(he, true\);/.test(src));
+  ok('★★ 提示：三顆按鈕留住線時都講一句、指路「合成一個面」',
+    (mn.match(/if \(r\.kept\) bits\.push\(keptNote\(r\.kept\)\);/g) || []).length === 3
+    && /function keptNote\(n\) \{\s*return `跟旁邊同一平面的面之間留著 \$\{n\} 條線（各自一個面）；要合成一個面，選起來按「合成一個面」`;/.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');
