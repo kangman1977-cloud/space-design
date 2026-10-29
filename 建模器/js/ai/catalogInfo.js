@@ -108,6 +108,7 @@ export const CLUSTERS = [
   { ids: ['loopCut', 'loopCutN', 'selRing', 'selRingFaces'], 前提: '拉點線面裡只選一條邊' },
   { ids: ['selLoop'], 前提: '拉點線面裡只選一條、或兩條邊' },
   { ids: ['bevel', 'bevelW', 'bevelSeg', 'separate', 'subdivEdge', 'subdivN'], 前提: '拉點線面裡只選邊（一條以上）' },
+  { ids: ['ripEdge', 'foldEdge', 'foldDeg', 'foldFlip', 'foldOther'], 前提: '拉點線面裡選了邊（一條以上）' },
   { ids: ['selAllEdges', 'selAllFaces', 'selAllVerts', 'selSharp', 'sharpDeg', 'bisect', 'bisectAxis', 'bisectAt', 'bisectRange'], 前提: '拉點線面裡（不用先選）' },
   { ids: ['selSurface'], 前提: '拉點線面裡選一個面（最後選的是面）' },
   { ids: ['selSimilar', 'similarMode'], 前提: '拉點線面裡選了東西' },

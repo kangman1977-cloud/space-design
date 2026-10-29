@@ -23945,6 +23945,142 @@ section('補上去的面跟旁邊平的面各自一個面（kang 2026-10-29「�
     && /function keptNote\(n\) \{\s*return `跟旁邊同一平面的面之間留著 \$\{n\} 條線（各自一個面）；要合成一個面，選起來按「合成一個面」`;/.test(mn));
 }
 
+/** 剪開、摺兩節共用：平板細分、照座標挑邊與面 */
+const ripFold = (() => {
+  const eqz = (a, b) => Math.abs(a - b) < 1e-6;
+  const grid = (w, d, n) => {
+    const m0 = edit.tidyMesh(buildPrim('plate', { w, d })); m0.computeNormals();
+    const g = edit.subdivideFaces(m0, m0.faces.slice(), n).mesh; g.computeNormals(); return g;
+  };
+  const edgesWhere = (m, fn) => { const out = []; for (const he of m.edges()) if (fn(he.v.p, he.to.p)) out.push(he); return out; };
+  const seg = (x1, z1, x2, z2) => (a, b) => (eqz(a.x, x1) && eqz(a.z, z1) && eqz(b.x, x2) && eqz(b.z, z2))
+                                       || (eqz(a.x, x2) && eqz(a.z, z2) && eqz(b.x, x1) && eqz(b.z, z1));
+  const faceAt = (m, x, z) => m.faces.find(f => { const vs = m.faceVerts(f), c = new THREE.Vector3(); for (const v of vs) c.add(v.p); c.divideScalar(vs.length); return eqz(c.x, x) && eqz(c.z, z); });
+  const area = m => planarRegions(m).reduce((s, r) => s + r.area, 0);
+  /** kang 的例子：90 × 60 細分 3，中間那格（x −15～15、z −10～10）剪上、右、下 */
+  const door = g => [...edgesWhere(g, seg(-15, -10, 15, -10)), ...edgesWhere(g, seg(15, -10, 15, 10)), ...edgesWhere(g, seg(-15, 10, 15, 10))];
+  return { eqz, grid, edgesWhere, seg, faceAt, area, door };
+})();
+
+section('剪開：選到的線兩側各自分開（kang 2026-10-29 做面具第 ③ 題「剪刀…剪邊」）');
+{
+  /**
+   * kang：「我想要有一個刀具事項"剪刀依樣...可以剪邊..然後再運用選邊的方式..指定"摺邊"..這樣就可以如同摺紙依樣」
+   * ⇒ 剪開 ＝ 每個點照「被剪開的線與外緣隔開的扇形」各複製一份；形狀不變、還是同一個物件。
+   */
+  const { eqz, grid, edgesWhere, seg, area, door } = ripFold;
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const mn = rf(join(dir, '../js/main.js'), 'utf8'), raw = rf(join(dir, '../index.html'), 'utf8');
+  const hardN = m => { let n = 0; for (const he of m.edges()) if (he.hard) n++; return n; };
+
+  const g = grid(90, 60, 3);
+  /** ⚠ 剪不開時拿原本那片頂著（改壞檢查：⛔ 讓整支測試當掉、跑不到「通過 N」）*/
+  const r = edit.ripEdges(g, door(g)), m = r.mesh || g, v = m.validate();
+  eq('★★★ kang 的例子（中間那格剪上、右、下）：剪開 3 條、右邊兩個角各多一份（點 16 → 18）、還是 1 塊', [r.ok, r.opened, r.added, g.verts.length, m.verts.length, r.pieces].join(','), 'true,3,2,16,18,1');
+  eq('★★ 網格正常、面數不變、外緣變 2 圈（外框 ＋ 那一格的口子）', [v.ok, m.faces.length, v.boundaryLoops].join(','), 'true,9,2');
+  ok('★★ 形狀不變：每一個點都在原本某一個點的位置上、面積照舊 5400', m.verts.every(p => g.verts.some(q => q.p.distanceTo(p.p) < 1e-9)) && Math.abs(area(m) - 5400) < 1e-6);
+  eq('★★ 你畫的線（細分的格線 12 條）：剪開的 3 條變外緣、其他 9 條照樣在', [hardN(g), hardN(m)].join(','), '12,9');
+  ok('★★ 剪開的線兩側都是外緣、標「切開」（展開時從這裡分開）', (() => {
+    let n = 0;
+    for (const he of m.edges()) {
+      const on = seg(-15, -10, 15, -10)(he.v.p, he.to.p) || seg(15, -10, 15, 10)(he.v.p, he.to.p) || seg(-15, 10, 15, 10)(he.v.p, he.to.p);
+      if (!on) continue;
+      if (he.face && he.twin && he.twin.face) return false;
+      if (he.role !== EDGE_ROLE.CUT) return false;
+      n++;
+    }
+    return n === 6;
+  })());
+  const s1 = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, edgesWhere(q, seg(15, -30, 15, -10))); })();
+  eq('★★ 從外緣剪進來一條 ⇒ 一道口子：外緣那個點多一份、還是 1 塊', [s1.ok, s1.opened, s1.added, s1.pieces].join(','), 'true,1,1,1');
+  const s2 = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, [...edgesWhere(q, seg(-15, -10, 15, -10)), ...edgesWhere(q, seg(15, -10, 15, 10))]); })();
+  eq('★★ 中間連著剪兩條（L 形）⇒ 一條縫：轉角那個點多一份、兩頭⛔', [s2.ok, s2.opened, s2.added, s2.pieces].join(','), 'true,2,1,1');
+  const s3 = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, edgesWhere(q, (a, b) => eqz(a.x, 15) && eqz(b.x, 15))); })();
+  eq('★★ 從外緣剪到外緣 ⇒ 剪成 2 塊（還是同一個物件）', [s3.ok, s3.opened, s3.added, s3.pieces].join(','), 'true,3,4,2');
+  const s4 = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, edgesWhere(q, seg(-15, -10, 15, -10))); })();
+  ok('★★ 兩頭都在面中間的單獨一條 ⇒ 擋下來、講張不開與怎麼剪', !s4.ok && /張不開/.test(s4.reason) && /從外緣剪進來/.test(s4.reason), s4.reason);
+  const s5 = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, edgesWhere(q, (a, b) => eqz(a.z, -30) && eqz(b.z, -30))); })();
+  ok('★ 只選外緣 ⇒ 擋下來、講外緣本來就開著', !s5.ok && /外緣本來就是開的/.test(s5.reason), s5.reason);
+  const s6 = (() => { const q = grid(100, 100, 5); return edit.ripEdges(q, [...edgesWhere(q, seg(-30, -50, -30, -30)), ...edgesWhere(q, seg(10, 10, 30, 10))]); })();
+  eq('★★ 一條剪得開、一條張不開 ⇒ 照剪、回報張不開 1 條', [s6.ok, s6.opened, s6.stuck].join(','), 'true,1,1');
+  const bx = edit.tidyMesh(buildPrim('box', { w: 40, h: 30, d: 20 })); bx.computeNormals();
+  const top = Math.max(...bx.verts.map(p => p.p.y)), back = Math.min(...bx.verts.map(p => p.p.z));
+  const lid = edgesWhere(bx, (a, b) => eqz(a.y, top) && eqz(b.y, top) && !(eqz(a.z, back) && eqz(b.z, back)));
+  const s7 = edit.ripEdges(bx, lid);
+  eq('★★ 方塊剪開蓋子三邊：本來封閉 ⇒ 現在開放（提示要講）、還是 1 塊', [s7.ok, lid.length, s7.opened, s7.wasClosed, s7.nowClosed, s7.pieces].join(','), 'true,3,3,true,false,1');
+  ok('★★ 按鈕：「剪開」在擠出邊後面、說明講形狀不變還是同一個物件、口子／縫／小門、張不開', /<button id="extrudeEdge"[^>]*>擠出邊<\/button>[\s\S]{0,600}<button id="ripEdge" hidden title="剪開：[^"]*形狀先不變，還是同一個物件[^"]*一道口子[^"]*一條縫[^"]*小門[^"]*張不開[^"]*">剪開<\/button>/.test(raw));
+  ok('★★ 提示：剪了幾條、形狀沒變、剪成幾塊、張不開、外緣略過、封閉變開放', /已剪開 \$\{r\.opened\} 條線　形狀沒有變/.test(mn) && /剪成 \$\{r\.pieces\} 塊（還是同一個物件）/.test(mn)
+    && /有 \$\{r\.stuck\} 條張不開/.test(mn) && /\$\{r\.outer\} 條是外緣，本來就開著，略過/.test(mn) && /if \(r\.wasClosed && !r\.nowClosed\) bits\.push\('⚠ 現在是開放的（有開口）/.test(mn));
+}
+
+section('摺：沿直的摺線把一邊轉一個角度（kang 2026-10-29「可以」：預設 90°、沒點面摺比較小的那一邊）');
+{
+  const { eqz, grid, edgesWhere, seg, faceAt, area, door } = ripFold;
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const mn = rf(join(dir, '../js/main.js'), 'utf8'), raw = rf(join(dir, '../index.html'), 'utf8');
+  const { unfoldMesh: unf } = await import('../js/unfold/flatten.js');
+  const cutDoor = () => { const q = grid(90, 60, 3); return edit.ripEdges(q, door(q)).mesh || q; };   // ⚠ 剪不開時拿原本那片頂著，⛔ 當掉
+  /** ⚠ 要看 Y 0：摺起來之後那一格的右邊剛好轉到 x −15 正上方（Y 30），只看 x、z 會把它也抓進來 */
+  const hingeOf = m => edgesWhere(m, (a, b) => seg(-15, -10, -15, 10)(a, b) && eqz(a.y, 0) && eqz(b.y, 0));
+  const ys = m => m.verts.map(p => p.p.y);
+
+  const m = cutDoor();
+  const r = edit.foldAlongEdges(m, hingeOf(m), null, 90);
+  eq('★★★ kang 的例子：剪三邊、沿第四邊摺 90° ⇒ 摺比較小的那一邊（那一格 1 個小面、600 cm²）', [r.ok, r.picked, r.faces, r.area].join(','), 'true,smaller,1,600');
+  eq('★★★ 往正面（平板躺著 ＝ 往上）立起來：最高 Y 30（那一格寬 30）、只動 2 個點', [Math.max(...ys(m)).toFixed(6), (Math.round(Math.min(...ys(m)) * 1e6) / 1e6 + 0).toFixed(6), m.verts.filter(p => !eqz(p.p.y, 0)).length].join(','), '30.000000,0.000000,2');
+  const rf2 = edit.refreshAfterEdit(m, { keepApart: r.keepApart });
+  ok('★★★ 摺線自動標成「折」、面積不變、沒有不平的面', (() => { const h = hingeOf(m); return h.length === 1 && h[0].role === EDGE_ROLE.FOLD; })() && Math.abs(area(m) - 5400) < 1e-6 && rf2.nonPlanar === 0);
+  const u = unf(m, makeRule('paper', 0.2));
+  eq('★★★ 展開：1 片、5400 cm² ⇒ 攤回原本那一片（對照：沒剪沒摺的平板也是 1 片 5400）', [u.pieces.length, u.pieces[0].area.toFixed(2)].join(','), '1,5400.00');
+
+  const mb = cutDoor(); edit.foldAlongEdges(mb, hingeOf(mb), null, -90);
+  eq('★★ 負的角度（＝「反向」）⇒ 往背面：最低 Y −30', Math.min(...ys(mb)).toFixed(6), '-30.000000');
+  const ms = cutDoor(); const rs = edit.foldAlongEdges(ms, hingeOf(ms), faceAt(ms, -30, 0), 90);
+  eq('★ 給了外圍那一邊的面（核心留著的路）⇒ 摺外圍（8 個小面、4800 cm²），那一格留在原地', [rs.ok, rs.picked, rs.faces, rs.area, faceAt(ms, 0, 0) ? 'flat' : 'moved'].join(','), 'true,seed,8,4800,flat');
+  const mo = cutDoor(); const ro = edit.foldAlongEdges(mo, hingeOf(mo), null, 90, { other: true });
+  eq('★★ 「換一邊」⇒ 摺比較大的那一邊（8 個小面、4800 cm²），那一格留在原地', [ro.ok, ro.picked, ro.faces, ro.area, faceAt(mo, 0, 0) ? 'flat' : 'moved'].join(','), 'true,larger,8,4800,flat');
+  const m2 = cutDoor(); edit.foldAlongEdges(m2, hingeOf(m2), null, 90); edit.foldAlongEdges(m2, hingeOf(m2), null, 90);
+  ok('★★ 再按一次就再摺一次：90 + 90 ⇒ 那一格翻過去平貼在左邊那格上（x −45、Y 0）', m2.verts.every(p => eqz(p.p.y, 0)) && m2.verts.filter(p => eqz(p.p.x, -45)).length === 6);
+
+  const m3 = cutDoor(); edit.foldAlongEdges(m3, hingeOf(m3), null, 135); edit.foldAlongEdges(m3, hingeOf(m3), null, 30);
+  eq('★★ 過了 90° 再摺：135° 再 30° ⇒ 照同一個方向到 165°（最高 Y ＝ 30 × sin 15° ＝ 7.76；⛔ 倒回 105° 的 28.98）', Math.max(...ys(m3)).toFixed(2), '7.76');
+  const g = grid(90, 60, 3), rn = edit.foldAlongEdges(g, hingeOf(g), null, 90);
+  ok('★★★ 沒剪就摺 ⇒ 擋下來、講還沒剪斷、⛔ 動任何點', !rn.ok && /還沒剪斷/.test(rn.reason) && g.verts.every(p => eqz(p.p.y, 0)), rn.reason);
+  const gf = grid(90, 60, 3), rfull = edit.foldAlongEdges(gf, edgesWhere(gf, (a, b) => eqz(a.x, -15) && eqz(b.x, -15)), null, 90);
+  eq('★★ 摺線從外緣到外緣（不用剪）⇒ 直接對摺：摺左邊那一欄（3 個小面 1800 cm²）', [rfull.ok, rfull.faces, rfull.area].join(','), 'true,3,1800');
+  const gl = cutDoor(), rl = edit.foldAlongEdges(gl, [...hingeOf(gl), ...edgesWhere(gl, seg(-45, 10, -15, 10))], null, 90);
+  ok('★★ 摺線彎了（L 形）⇒ 擋下來、講要直線', !rl.ok && /直線/.test(rl.reason), rl.reason);
+  const gb = cutDoor(), rb = edit.foldAlongEdges(gb, edgesWhere(gb, seg(15, -10, 15, 10)), null, 90);
+  ok('★★ 拿剪開的線（一邊沒有東西）當摺線 ⇒ 擋下來', !rb.ok && /兩邊都有面/.test(rb.reason), rb.reason);
+  const gx = (() => { const q = grid(90, 60, 3); return edit.ripEdges(q, edgesWhere(q, (a, b) => eqz(a.x, 15) && eqz(b.x, 15))).mesh || q; })();
+  const rx = edit.foldAlongEdges(gx, edgesWhere(gx, (a, b) => eqz(a.x, -15) && eqz(b.x, -15)), faceAt(gx, 30, 0), 90);
+  ok('★ 點的面不在摺線兩邊（剪下來的另一塊）⇒ 擋下來', !rx.ok && /不在摺線兩邊/.test(rx.reason), rx.reason);
+  {
+    /** 只靠一個點黏著（剪開不會做出這種，但匯入的網格可能有）：A｜B 共用摺線，C 只碰到 B 的一個角 */
+    const P = [[0, 0], [10, 0], [10, 10], [0, 10], [20, 0], [20, 10], [30, 10], [30, 20]].map(([x, z]) => new THREE.Vector3(x, 0, z));
+    const mv = Mesh.fromFaceList(P, [[0, 3, 2, 1], [1, 2, 5, 4], [5, 7, 6]]); mv.computeNormals();
+    const rv = edit.foldAlongEdges(mv, edgesWhere(mv, seg(10, 0, 10, 10)), mv.faces[1], 90);
+    ok('★★ 只靠一個點還黏著別的面 ⇒ 擋下來、講還連著幾個點、⛔ 動', !rv.ok && /有 1 個點還連著另一邊/.test(rv.reason) && mv.verts.every(p => eqz(p.p.y, 0)), rv.reason);
+  }
+  const r0 = edit.foldAlongEdges(cutDoor(), hingeOf(cutDoor()), null, 0);
+  ok('★ 角度 0 ⇒ 擋下來', !r0.ok && /不是 0/.test(r0.reason));
+  const bx = edit.tidyMesh(buildPrim('box', { w: 40, h: 30, d: 20 })); bx.computeNormals();
+  const top = Math.max(...bx.verts.map(p => p.p.y)), back = Math.min(...bx.verts.map(p => p.p.z));
+  const bm = edit.ripEdges(bx, edgesWhere(bx, (a, b) => eqz(a.y, top) && eqz(b.y, top) && !(eqz(a.z, back) && eqz(b.z, back)))).mesh || bx;
+  const rbx = edit.foldAlongEdges(bm, edgesWhere(bm, (a, b) => eqz(a.y, top) && eqz(b.y, top) && eqz(a.z, back) && eqz(b.z, back)), null, 90);
+  eq('★★ 方塊剪開蓋子三邊、沿第四邊摺 90° ⇒ 蓋子往外立起來（最高 Y ＝ 頂 ＋ 深 20）', [rbx.ok, rbx.faces, (Math.max(...ys(bm)) - top).toFixed(6)].join(','), 'true,1,20.000000');
+
+  ok('★★ 按鈕：「摺」、角度預設 90、「反向」、「換一邊」在剪開後面；說明講預設摺小的、換一邊、要先剪開、外緣到外緣不用剪、標成折',
+    /<button id="ripEdge"[^>]*>剪開<\/button>\s*<button id="foldEdge" hidden title="摺：[^"]*預設摺比較小的那一邊；要摺另一邊按亮「換一邊」[^"]*先「剪開」[^"]*外緣到外緣就不用剪[^"]*標成「折」[^"]*">摺<\/button>\s*<input id="foldDeg" type="number" step="1" value="90" hidden[^>]*>\s*<button id="foldFlip" hidden[^>]*>反向<\/button>\s*<button id="foldOther" hidden[^>]*>換一邊<\/button>/.test(raw));
+  ok('★★ 選取裡有邊就出現五個；反向亮著 ⇒ 角度變負的；換一邊亮著 ⇒ other',
+    /const someEdge = sel\.editMode && sel\.editSels\.some\(e => e\.kind === 'edge'\);\s*for \(const id of \['ripEdge', 'foldEdge', 'foldDeg', 'foldFlip', 'foldOther'\]\) \$\(id\)\.hidden = !someEdge;/.test(mn)
+    && /null, back \? -deg : deg, \{ other \}\);/.test(mn) && /const other = \$\('foldOther'\)\.classList\.contains\('on'\);/.test(mn));
+  ok('★★ 摺完：規則 2（keepApart）、講摺哪一邊、標成折、怎麼摺另一邊', /refreshAfterEdit\(mesh, \{ keepApart: r\.keepApart \}\)/.test(mn) && /other \? '比較大的那一邊' : '比較小的那一邊'/.test(mn)
+    && /摺線標成「折」，展開會攤回原本那一片/.test(mn) && /要摺另一邊：按亮「換一邊」再按「摺」/.test(mn));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

@@ -44,7 +44,7 @@ import { elementVerts, refreshAfterEdit, visibleAround, splitUnflat, nonPlanarFa
          flattenElements, mergeFaces, mergeCoplanarFaces, tidyMesh, loopCut, slideEdges, offsetEdgeLoop, edgeRing,
          recalcNormalsOutside, flipNormals, insetFaces, bevelEdges,
          deleteFaces, fillHoles, bridgeLoops, bisect, worldAxisPlane, connectVertsPath,
-         splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut,
+         splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut, ripEdges, foldAlongEdges,
          sampleCurve, sampleCurveInfo, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
          knifePath, planeCrossSegments, toCircle, faceFromVerts,
@@ -1222,6 +1222,10 @@ $('edit').onclick = () => toggleEditMode();
 $('extrude').onclick = () => extrudeSelected();
 $('extrudeIn').onclick = () => extrudeSelected(-1);
 $('extrudeEdge').onclick = () => extrudeEdgesSelected();
+$('ripEdge').onclick = () => ripEdgesSelected();
+$('foldEdge').onclick = () => foldSelected();
+$('foldFlip').onclick = function () { this.classList.toggle('on'); updateBar(); };
+$('foldOther').onclick = function () { this.classList.toggle('on'); updateBar(); };
 /**
  * 🔴 **框邊：整條**（第三輪第五批 5b，kang 2026-10-26「同意你的建議」② 乙）：預設開；關掉 ＝ 框選邊碰到就算（以前的做法）。
  * 跟人走（記在瀏覽器）；判法在 `core/screen.js` `elementsInRect()`。
@@ -4724,6 +4728,77 @@ function extrudeEdgesSelected() {
     bits.push('⚠ 轉角會留一個缺口 —— 那是對的，各摺 90 度立起來剛好碰在一起');
   }
   bits.push('接下來用「拉點線面」把它折到想要的角度');
+  toast(bits.join('　'));
+}
+
+/**
+ * 🔴 **剪開**（kang 2026-10-29 做面具第 ③ 題，名字 kang「可以」）：選到的線兩側各自分開，形狀先不變。
+ * 幾何全在 `edit.js` `ripEdges()`；這裡只管流程與回報。剪完還是同一個物件（剪成兩塊也是）。
+ */
+function ripEdgesSelected() {
+  const edges = sel.editSels.filter(e => e.kind === 'edge' && e.he);
+  if (!sel.editMode || !edges.length) {
+    toast('先在編輯模式下選要剪開的線（過濾器切到「邊」），再按「剪開」', true);
+    return;
+  }
+  const obj = edges[0].obj;
+  const r = ripEdges(obj.mesh(), edges.filter(e => e.obj === obj).map(e => e.he));
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(r.opened > 1 ? `剪開 ${r.opened} 條線` : '剪開');
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已剪開 ${r.opened} 條線　形狀沒有變；接著選摺線按「摺」`];
+  if (r.pieces > 1) bits.push(`剪成 ${r.pieces} 塊（還是同一個物件）`);
+  if (r.stuck) bits.push(`⚠ 有 ${r.stuck} 條張不開（兩頭都在面中間、又沒連著別的剪開的線）`);
+  if (r.outer) bits.push(`${r.outer} 條是外緣，本來就開著，略過`);
+  /** 跟「刪除面」同一句：從封閉變成開放畫面上看不出來，一定要講 */
+  if (r.wasClosed && !r.nowClosed) bits.push('⚠ 現在是開放的（有開口）→ 不能再做布林運算，展開與 STL 的行為也會變');
+  toast(bits.join('　'), !!r.stuck);
+}
+
+/**
+ * 🔴 **摺**（kang 2026-10-29「可以」：預設 90°、摺比較小的那一邊）：沿直的摺線把一邊那一塊轉一個角度。
+ * 幾何在 `edit.js` `foldAlongEdges()`（就地改點）；這裡管角度、「反向」、「換一邊」、回報。
+ * ⚠ 原本說「Shift 點那一邊的面」—— 選取規則「同一次只能選同一種」，選了邊再點面會重新開始（本機驗時抓到）
+ * ⇒ 改成「換一邊」：暗著摺比較小的、亮著摺比較大的。
+ * 選取原封不動留著 ⇒ 再按一次就是再摺一次。
+ */
+function foldSelected() {
+  const edges = sel.editSels.filter(e => e.kind === 'edge' && e.he);
+  if (!sel.editMode || !edges.length) {
+    toast('先選摺線（過濾器切到「邊」，一條或連成一直線的幾條），再按「摺」', true);
+    return;
+  }
+  const deg = +$('foldDeg').value;
+  if (!Number.isFinite(deg) || deg === 0) { toast('角度要打一個不是 0 的數字（預設 90）', true); return; }
+  const back = $('foldFlip').classList.contains('on');
+  const other = $('foldOther').classList.contains('on');
+  const obj = edges[0].obj;
+  const mesh = obj.mesh();
+  const r = foldAlongEdges(mesh, edges.filter(e => e.obj === obj).map(e => e.he), null, back ? -deg : deg, { other });
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  const rf = refreshAfterEdit(mesh, { keepApart: r.keepApart });
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(`摺 ${deg}°${back ? '（往背面）' : ''}`);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [`已摺 ${deg}°（往${back ? '背面' : '正面'}）：${other ? '比較大的那一邊' : '比較小的那一邊'}，`
+              + `${r.faces} 個小面、${r.area.toFixed(2)} cm²`];
+  bits.push('摺線標成「折」，展開會攤回原本那一片');
+  if (rf.nonPlanar) bits.push(unflatNote(rf));
+  if (rf.keptApart) bits.push(keptApartNote(rf.keptApart));
+  bits.push(other ? '要摺比較小的那一邊：把「換一邊」按暗；摺錯按 Ctrl+Z' : '要摺另一邊：按亮「換一邊」再按「摺」；摺錯按 Ctrl+Z');
   toast(bits.join('　'));
 }
 
@@ -8241,6 +8316,16 @@ function updateBar() {
     ? `從選到的外緣各長出一片面，寬 ${ew} cm（＝吸附現在的值）。長完可以再用「拉點線面」調`
     : (sel.editMode ? '先選至少一條板子外緣的邊（把過濾器切到「邊」）'
                     : '先按「拉點線面」進入編輯模式，再選外緣的邊');
+
+  /** 🔴 **剪開、摺：選到邊就出現**（kang 2026-10-29）*/
+  const someEdge = sel.editMode && sel.editSels.some(e => e.kind === 'edge');
+  for (const id of ['ripEdge', 'foldEdge', 'foldDeg', 'foldFlip', 'foldOther']) $(id).hidden = !someEdge;
+  $('foldOther').title = $('foldOther').classList.contains('on')
+    ? '換一邊：亮著 ＝ 摺比較大的那一邊。再按一次回到摺比較小的'
+    : '換一邊：暗著 ＝ 摺比較小的那一邊（預設）。按一下改成摺比較大的那一邊';
+  $('foldFlip').title = $('foldFlip').classList.contains('on')
+    ? '反向：亮著 ＝ 往背面摺（面的反方向）。再按一次回到往正面'
+    : '反向：暗著 ＝ 往正面摺（平板躺著就是往上）。按一下改成往背面';
 
   /**
    * 編輯模式下選到「點」時，旋轉與縮放要灰掉。

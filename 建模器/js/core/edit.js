@@ -2418,6 +2418,300 @@ export function separateAlongEdges(mesh, hes) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  剪開 ／ 摺（一對）—— 規格：`規格\建模器-網格核心.md`「追加：剪開與摺」
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **剪開：選到的線兩側各自擁有自己的點，形狀先不變**（＝ Blender 的 Rip／Split）。
+ *
+ * ── kang 2026-10-29（做面具，第 ③ 題）────────────────────
+ * > 「我想要有一個刀具事項"剪刀依樣...可以剪邊..然後再運用選邊的方式..指定"摺邊"..
+ * > 　這樣就可以如同摺紙依樣」→ 名字「剪開」「摺」kang「可以」。
+ *
+ * ── 它跟「分離」差在哪 ──────────────────────────────────
+ * `分離` 要一整圈、拆成**兩個物件**；這一支剪一段也行（從外緣剪進來 ＝ 一道口子、中間剪兩條以上 ＝ 一條縫），
+ * 剪完**還是同一個物件**（剪成兩塊也是）。
+ *
+ * ── 做法：每個點照「扇形」各複製一份 ──────────────────────
+ * 一個點周圍的面，用「不跨過剪開的線」分組（外緣本來就把扇形隔開）。
+ * 第一組用原本的點，其他組各複製一份 ⇒ 原本的點**索引不動**、新點接在後面。
+ * ⇒ 兩頭都在面中間、只剪一條的線：兩端都只有一組 ⇒ 張不開（Blender 也一樣），講出來。
+ * ⭐ 順手解掉蝴蝶結：碰到的點每一組各自一份，⛔ 會留下「兩片只靠一個點黏著」。
+ *
+ * ── 標記 ──────────────────────────────────────────────
+ * 新點對回原本的點，其他邊照原本的帶（`marksOf()`／`applyMarks()`）；
+ * 剪開的線變成外緣 ⇒ 自動標「切開」（`_buildBoundaryLoops()`），⛔ 帶原本的。
+ *
+ * @param {Mesh} mesh
+ * @param {HalfEdge[]} hes 選到的邊（哪一半都可以）
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, opened?:number, stuck?:number, outer?:number,
+ *            added?:number, pieces?:number, wasClosed?:boolean, nowClosed?:boolean}}
+ *          `opened` 真的剪開的線；`stuck` 張不開的；`outer` 選到外緣（本來就開著）略過的
+ */
+export function ripEdges(mesh, hes) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(hes) || !hes.length) return { ok: false, reason: '先選要剪開的線' };
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const cut = new Set();
+  let outer = 0;
+  for (const he of hes) {
+    if (!he || !he.v || !he.to) continue;
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if (a === undefined || b === undefined) return { ok: false, reason: '選到的邊不在這個物件上' };
+    if (!he.face || !he.twin || !he.twin.face) { outer++; continue; }
+    cut.add(kOf(a, b));
+  }
+  if (!cut.size) {
+    return {
+      ok: false,
+      reason: outer ? '選到的都是外緣 —— 外緣本來就是開的，不用剪。要剪的是兩邊都有面的線'
+                    : '沒有選到可以剪的線'
+    };
+  }
+
+  const n0 = mesh.verts.length;
+  const points = mesh.verts.map(v => v.p.clone());
+  const faces = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+  const origin = [];                                   // 新點 → 原本的點
+  const orig = i => (i < n0 ? i : origin[i - n0]);
+
+  const corners = new Map();                           // 點 → [[第幾個面, 第幾個角]]
+  faces.forEach((f, fi) => f.forEach((v, ci) => {
+    if (!corners.has(v)) corners.set(v, []);
+    corners.get(v).push([fi, ci]);
+  }));
+  const touched = new Set();
+  for (const k of cut) for (const x of k.split('-')) touched.add(+x);
+
+  for (const v of touched) {
+    const cs = corners.get(v) || [];
+    /** 一個角的兩個鄰點（同一個面裡、前後那兩個）；兩個角共用一條經過 v、沒剪開的邊 ⇒ 同一組 */
+    const nb = ([fi, ci]) => {
+      const f = faces[fi], n = f.length;
+      return [f[(ci + 1) % n], f[(ci - 1 + n) % n]];
+    };
+    const group = new Array(cs.length).fill(-1);
+    let g = 0;
+    for (let i = 0; i < cs.length; i++) {
+      if (group[i] >= 0) continue;
+      group[i] = g;
+      const stack = [i];
+      while (stack.length) {
+        const a = stack.pop();
+        for (const w of nb(cs[a])) {
+          if (cut.has(kOf(v, orig(w)))) continue;
+          for (let j = 0; j < cs.length; j++) {
+            if (group[j] < 0 && nb(cs[j]).includes(w)) { group[j] = g; stack.push(j); }
+          }
+        }
+      }
+      g++;
+    }
+    for (let k = 1; k < g; k++) {
+      const nv = points.length;
+      points.push(points[v].clone());
+      origin.push(v);
+      cs.forEach(([fi, ci], j) => { if (group[j] === k) faces[fi][ci] = nv; });
+    }
+  }
+
+  if (!origin.length) {
+    return {
+      ok: false,
+      reason: '這幾條線剪了也張不開 —— 兩頭都在面中間的一條線，兩邊還是靠那兩個點連著。'
+            + '要剪出口子：從外緣剪進來，或在中間連著剪兩條以上'
+    };
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `剪出壞掉的網格：${pre.fatal[0]}` };
+  const out = Mesh.fromFaceList(points, faces);
+  out.computeNormals();
+
+  const want = new Map();
+  for (const he of mesh.edges()) want.set(kOf(vi.get(he.v.id), vi.get(he.to.id)), mesh.marksOf(he));
+  const oi = out._vertIndex();
+  const stillJoined = new Set();
+  for (const he of out.edges()) {
+    const k = kOf(orig(oi.get(he.v.id)), orig(oi.get(he.to.id)));
+    const inside = he.face && he.twin && he.twin.face;
+    if (cut.has(k)) { if (inside) stillJoined.add(k); continue; }
+    out.applyMarks(he, want.get(k));
+  }
+
+  const opened = cut.size - stillJoined.size;
+  const v = out.validate();
+  return {
+    ok: true, mesh: out, opened, stuck: stillJoined.size, outer, added: origin.length,
+    pieces: v.components, wasClosed: mesh.isClosed(), nowClosed: out.isClosed()
+  };
+}
+
+/** 一個面的面積（扇形三角形加總，平的面精確；不平的近似）*/
+function faceArea(mesh, f) {
+  const ps = mesh.faceVerts(f).map(v => v.p);
+  const s = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (let i = 1; i + 1 < ps.length; i++) {
+    a.subVectors(ps[i], ps[0]);
+    b.subVectors(ps[i + 1], ps[0]);
+    s.add(a.cross(b));
+  }
+  return s.length() / 2;
+}
+
+/**
+ * 🔴 **摺：沿一條直的摺線，把一邊那一塊轉一個角度**（kang 2026-10-29「可以」：預設 90°、⛔ 點面時摺比較小的那一邊）。
+ *
+ * ── 哪一塊跟著轉 ───────────────────────────────────────
+ * 從摺線一側的面出發，**⛔ 跨過摺線**走得到的全部（剪開的線、外緣本來就走不過去）。
+ * 有給面（`seed`）⇒ 轉那一邊；沒給 ⇒ 面積比較小的那一邊，`opt.other` ⇒ 比較大的那一邊
+ * （介面用「換一邊」：選取規則「同一次只能選同一種」，選了邊⛔ 能再加選面 —— 本機驗時抓到的）。
+ * 🔴 兩邊走得到彼此 ⇒ **還沒剪斷**，⛔ 硬轉（硬轉會把連著的面拉歪），講出來。
+ *
+ * ── 方向 ──────────────────────────────────────────────
+ * `deg` 正 ＝ 那一塊往**它自己的正面**（面的法向那一側）轉；負 ＝ 往背面。
+ * 平板躺著（正面朝上）⇒ 正的就是往上摺；再按一次照同一個方向繼續摺下去。
+ *
+ * ── ⛔ 換網格 ─────────────────────────────────────────
+ * 只動點的座標（跟拉點、壓平同一類）⇒ 標記、選取都留著；摺線轉了角度之後
+ * `refreshAfterEdit()` 自己會把它標成「折」⇒ 展開時攤回原本那一片。
+ * 規則 2（拉到同一平面⛔ 自動合）：轉之前 `visibleAround()` 記下來，回傳 `keepApart` 給呼叫端。
+ *
+ * @param {Mesh} mesh **就地修改**
+ * @param {HalfEdge[]} hes 摺線（一條或連成一直線的好幾條）
+ * @param {Face|null} seed 要轉的那一邊上的任一個面；null ＝ 照 `opt.other`
+ * @param {number} deg 角度（度）
+ * @param {{other?:boolean}} opt `other` ＝ 沒給面時改轉比較大的那一邊
+ * @returns {{ok:boolean, reason?:string, faces?:number, moved?:number, area?:number,
+ *            picked?:'seed'|'smaller'|'larger', keepApart?:Set}}
+ */
+export function foldAlongEdges(mesh, hes, seed = null, deg = 90, opt = {}) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  if (!Array.isArray(hes) || !hes.length) return { ok: false, reason: '先選摺線（邊）' };
+  if (!Number.isFinite(deg) || deg === 0) return { ok: false, reason: '角度要打一個不是 0 的數字' };
+
+  const vi = mesh._vertIndex();
+  const kOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const hinge = new Map();                              // key → 半邊
+  for (const he of hes) {
+    if (!he || !he.v || !he.to) continue;
+    const a = vi.get(he.v.id), b = vi.get(he.to.id);
+    if (a === undefined || b === undefined) return { ok: false, reason: '選到的邊不在這個物件上' };
+    if (!he.face || !he.twin || !he.twin.face) {
+      return { ok: false, reason: '摺線要選兩邊都有面的線 —— 外緣、剪開的線一邊沒有東西，不能當摺線' };
+    }
+    hinge.set(kOf(a, b), he);
+  }
+  if (!hinge.size) return { ok: false, reason: '沒有選到可以當摺線的邊' };
+
+  /** 摺線要連成一條、⛔ 分岔、⛔ 繞成一圈，而且是直的 */
+  const deg1 = new Map();
+  for (const he of hinge.values()) for (const v of [he.v, he.to]) deg1.set(v, (deg1.get(v) || 0) + 1);
+  const ends = [...deg1].filter(([, n]) => n === 1).map(([v]) => v);
+  if ([...deg1.values()].some(n => n > 2) || ends.length !== 2) {
+    return { ok: false, reason: '摺線要是一條頭尾分開的線（不能分岔、不能繞成一圈）' };
+  }
+  {
+    const seen = new Set([ends[0]]);
+    let cur = ends[0], moved = true;
+    while (moved) {
+      moved = false;
+      for (const he of hinge.values()) {
+        const nx = he.v === cur ? he.to : he.to === cur ? he.v : null;
+        if (nx && !seen.has(nx)) { seen.add(nx); cur = nx; moved = true; break; }
+      }
+    }
+    if (seen.size !== deg1.size) return { ok: false, reason: '摺線要連成一條，不能斷成好幾段' };
+  }
+  const A = ends[0].p.clone(), B = ends[1].p.clone();
+  const dir = B.clone().sub(A);
+  if (dir.lengthSq() < 1e-12) return { ok: false, reason: '摺線太短' };
+  dir.normalize();
+  for (const v of deg1.keys()) {
+    const d = v.p.clone().sub(A);
+    if (d.sub(dir.clone().multiplyScalar(d.dot(dir))).length() > PLANAR_TOL_CM) {
+      return { ok: false, reason: '摺線要是一條直線（選到的這幾條彎了）—— 摺紙只能沿直線摺' };
+    }
+  }
+
+  /** 從一個面出發、⛔ 跨過摺線走得到的面 */
+  const flood = f0 => {
+    const got = new Set([f0]), stack = [f0];
+    while (stack.length) {
+      for (const he of mesh.faceLoop(stack.pop())) {
+        if (hinge.has(kOf(vi.get(he.v.id), vi.get(he.to.id)))) continue;
+        const nb = he.twin && he.twin.face;
+        if (nb && !got.has(nb)) { got.add(nb); stack.push(nb); }
+      }
+    }
+    return got;
+  };
+  const first = hinge.values().next().value;
+  const side1 = flood(first.face);
+  if (side1.has(first.twin.face)) {
+    return {
+      ok: false,
+      reason: '還沒剪斷：摺線兩邊繞一圈還連在一起 —— 先用「剪開」把要摺的那一塊跟其他地方剪開，只留摺線連著'
+    };
+  }
+  const side2 = flood(first.twin.face);
+  for (const he of hinge.values()) {
+    const in1 = side1.has(he.face) || side1.has(he.twin.face), in2 = side2.has(he.face) || side2.has(he.twin.face);
+    if (!(in1 && in2)) return { ok: false, reason: '摺線有一段兩邊是同一塊 —— 摺線要剛好把要摺的那一塊跟其他地方隔開' };
+  }
+
+  const areaOf = set => { let s = 0; for (const f of set) s += faceArea(mesh, f); return s; };
+  let moving, still, picked;
+  if (seed) {
+    if (side1.has(seed)) { moving = side1; still = side2; }
+    else if (side2.has(seed)) { moving = side2; still = side1; }
+    else return { ok: false, reason: '點的那個面不在摺線兩邊 —— 要點摺線旁邊、要摺起來的那一邊' };
+    picked = 'seed';
+  } else {
+    const a1 = areaOf(side1), a2 = areaOf(side2);
+    [moving, still] = a1 <= a2 ? [side1, side2] : [side2, side1];
+    picked = 'smaller';
+    if (opt.other) { [moving, still] = [still, moving]; picked = 'larger'; }
+  }
+
+  const hingeVerts = new Set(deg1.keys());
+  const verts = new Set();
+  for (const f of moving) for (const v of mesh.faceVerts(f)) if (!hingeVerts.has(v)) verts.add(v);
+  /** 🔴 不動的面（摺線另一邊與別塊）還用到要轉的點 ⇒ 只靠一個點連著，也算沒剪斷 */
+  const joined = new Set();
+  for (const f of mesh.faces) {
+    if (moving.has(f)) continue;
+    for (const v of mesh.faceVerts(f)) if (verts.has(v)) joined.add(v);
+  }
+  if (joined.size) {
+    return { ok: false, reason: `還沒剪斷：有 ${joined.size} 個點還連著另一邊 —— 從摺線兩端把那一塊剪開，只留摺線連著` };
+  }
+
+  /**
+   * 方向：正的角度 ＝ 要轉的那一塊**往它自己的正面**轉（看摺線旁邊那幾個面的法向）。
+   * 平的時候它跟不動那一邊同一個正面 ⇒ 平板躺著就是往上立起來；
+   * ⚠ ⛔ 看不動那一邊：立到 90° 之後再摺一次，往上已經分不出往哪邊倒，會倒回原位（本機測試抓到的）。
+   */
+  mesh.computeNormals();
+  const n = new THREE.Vector3();
+  for (const he of hinge.values()) n.add(mesh.computeFaceNormal(moving.has(he.face) ? he.face : he.twin.face));
+  const c = new THREE.Vector3();
+  for (const v of verts) c.add(v.p);
+  c.divideScalar(verts.size || 1);
+  const probe = c.clone().sub(A).applyAxisAngle(dir, 0.01).add(A);
+  if (probe.sub(c).dot(n) < 0) dir.negate();
+
+  const keepApart = visibleAround(mesh, [...verts]);
+  const rad = THREE.MathUtils.degToRad(deg);
+  for (const v of verts) v.p.sub(A).applyAxisAngle(dir, rad).add(A);
+  mesh.computeNormals();
+
+  return { ok: true, faces: moving.size, moved: verts.size, area: areaOf(moving), picked, keepApart };
+}
+
+// ═══════════════════════════════════════════════════════
 //  切成實心（切蛋糕）—— 規格：`規格\建模器-切成實心.md`
 // ═══════════════════════════════════════════════════════
 
