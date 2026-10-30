@@ -116,6 +116,7 @@ export const CLUSTERS = [
   { ids: ['toCircle', 'circleR'], 前提: '拉點線面裡選了東西、合起來有三個以上的點（一圈點、邊或面）' },
   { ids: ['connectVerts'], 前提: '拉點線面裡只選點（兩個以上）' },
   { ids: ['faceFromVerts'], 前提: '拉點線面裡只選點（三個以上）' },
+  { ids: ['mergeVerts', 'mergeLast', 'mergeDist', 'mergeTol'], 前提: '拉點線面裡只選點（兩個以上）' },
   { ids: ['splitFace', 'splitFaceT'], 前提: '拉點線面裡只選兩條邊' },
   // toolDone、toolState 代號開頭是 tool（歸到「拉點線面」那一組），⚠ 其實是工具的：
   // 「完成」鋼筆、刀具、曲線刀具共用（字跟著換：完成／切下去…）—— c 輪重跑 T18 抓到 b 輪寫成只有曲線刀具才有

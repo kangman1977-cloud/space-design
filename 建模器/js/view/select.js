@@ -2249,6 +2249,36 @@ export class Selection {
    *        編輯模式的選取過濾器走這個 —— **平板沒有鍵盤可以按 1/2/3
    *        切換元素類型，只能做成按鈕**（跟分片、框選同一個做法）。
    */
+  /**
+   * 🔴 **沒打到面時，照樣點得到正在編輯的那個物件的點**（kang 2026-10-30「同意你的建議」，做面具第 ① 題第二次）。
+   *
+   * `pickElement()` 要先打到面才找點 ⇒ 板子外緣的角，滑鼠一偏出板子就什麼都沒選到
+   * （「合成一個物件」線上先驗第 4 步實際撞到：點正好點在角上選不到，點在板子裡面一點才選到）。
+   * ⇒ 只在編輯模式、只找**正在編輯的那一個物件**（`active`）、只找點、14 px（觸控 26 px）以內最近的。
+   * ⚠ 代價【推論】：形狀外面點下去，有可能選到背面輪廓上的點 —— 只有打不到面時才走這裡。
+   */
+  _pickVertexOffSurface(clientX, clientY) {
+    const obj = this.active;
+    if (!obj || !canMarkSeams(obj)) return null;
+    if (this._doc && (this._doc.isHidden(obj) || this._doc.isLocked(obj))) return null;
+    const node = this.view.nodeOf(obj.id);
+    if (!node) return null;
+    node.updateMatrixWorld(true);
+    const r = this._toCanvasPx(clientX, clientY);
+    const grab = isTouch() ? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;
+    let best = null, bestD = grab;
+    for (const v of obj.mesh().verts) {
+      if (!v.he) continue;
+      const w = node.localToWorld(v.p.clone());
+      const n = w.clone().project(this.view.camera);
+      if (n.z < -1 || n.z > 1) continue;                 // 在鏡頭後面或太遠
+      const s = this._project(w, r);
+      const d = Math.hypot(r.x - s.x, r.y - s.y);
+      if (d <= bestD && (!best || d < bestD)) { best = v; bestD = d; }
+    }
+    return best ? { obj, kind: 'vertex', vert: best } : null;
+  }
+
   pickElement(clientX, clientY, opt = {}) {
     const r = this._toCanvasPx(clientX, clientY);
     this._ndc.x = (r.x / r.w) * 2 - 1;
@@ -3400,11 +3430,13 @@ export class Selection {
    */
   pickEdit(clientX, clientY, additive) {
     const f = this.editFilter;
-    const el = this.pickElement(clientX, clientY, {
+    let el = this.pickElement(clientX, clientY, {
       vertex: f === 'auto' || f === 'vertex',
       requireMarkable: true,
       only: f === 'auto' ? null : f,
     });
+    /** 角上點得到（kang 2026-10-30「同意你的建議」）：滑鼠在形狀外面、沒打到面時，照樣找正在編輯的那個物件 14 px 內最近的點 */
+    if (!el && (f === 'auto' || f === 'vertex')) el = this._pickVertexOffSurface(clientX, clientY);
 
     if (!el) {
       /**

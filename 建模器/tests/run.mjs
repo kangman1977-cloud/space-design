@@ -23940,8 +23940,9 @@ section('補上去的面跟旁邊平的面各自一個面（kang 2026-10-29「�
     (src.match(/const kept = keepFilledEdgesVisible\(mesh, out, clean\.remap\);/g) || []).length === 3
     && !/keepFilledEdgesVisible\(mesh, out, null\)/.test(src));
   ok('★★ 只標「現在會變看不見」的：先問 isHiddenEdge 再看原本是不是邊緣', /function keepFilledEdgesVisible\(src, dst, remap\) \{[\s\S]{0,700}if \(!dst\.isHiddenEdge\(he\)\) continue;\s*if \(wasBoundary\.has\(key\(di\.get\(he\.v\.id\), di\.get\(he\.to\.id\)\)\)\) \{\s*dst\.setHard\(he, true\);/.test(src));
-  ok('★★ 提示：三顆按鈕留住線時都講一句、指路「合成一個面」',
-    (mn.match(/if \(r\.kept\) bits\.push\(keptNote\(r\.kept\)\);/g) || []).length === 3
+  /** 2026-10-30 合併點／按距離合併接縫留住線也講同一句 ⇒ 3 → 4 處 */
+  ok('★★ 提示：三顆按鈕（＋ 合併點那一支）留住線時都講一句、指路「合成一個面」',
+    (mn.match(/if \(r\.kept\) bits\.push\(keptNote\(r\.kept\)\);/g) || []).length === 4
     && /function keptNote\(n\) \{\s*return `跟旁邊同一平面的面之間留著 \$\{n\} 條線（各自一個面）；要合成一個面，選起來按「合成一個面」`;/.test(mn));
 }
 
@@ -24136,6 +24137,124 @@ section('合成一個物件：板件放進同一個物件、不做布林（kang 
   ok('★★ 選兩個以上就出現（⛔ 等布林函式庫）；按下去換物件、記一步、講怎麼接', /\$\('bJoin'\)\.hidden = sel\.count < 2;/.test(mn) && /const r = joinObjects\(list\);/.test(mn)
     && /commit\(`合成一個物件（\$\{list\.length\} 個）`\);/.test(mn) && /要接起來：拉點線面 → 點 → 選兩邊的點按「點連成面」/.test(mn));
   ok('★★ 「∪ 聯集」擋板件時指路「合成一個物件」，只有聯集（差集、交集⛔）', /const toJoin = op === BOOL_OPS\.UNION && \/開放的板件\/\.test\(chk\.reason\) \? ' —— 板件要合成一個，請用旁邊的「合成一個物件」' : '';/.test(mn));
+}
+
+section('合併點／按距離合併（kang 2026-10-30 做面具第 ① 題第二次「同意你的建議」）');
+{
+  /**
+   * 合併點 ＝ 選到的點收成一點（到中間／到最後選的）—— 收尖、黏個別的點；按距離合併 ＝ 疊在一起的各自收成一點 —— 兩片碰在一起接起來。
+   * kang 同意的 6 點：兩顆＋切換＋距離（預設 0.01 cm）、只合選到的、接縫線看得見、翻面自動統一／三片擋、要講的、角上點得到。
+   */
+  const { eqz, grid } = ripFold;
+  const { readFileSync: rf } = await import('node:fs');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const mn = rf(join(dir, '../js/main.js'), 'utf8'), raw = rf(join(dir, '../index.html'), 'utf8');
+  const sl = rf(join(dir, '../js/view/select.js'), 'utf8'), cat = rf(join(dir, '../js/ai/catalogInfo.js'), 'utf8');
+  const { unfoldMesh: unf } = await import('../js/unfold/flatten.js');
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const two = (gap, flip = false) => {
+    const m = Mesh.merge([grid(60, 60, 3).transformed(T(-30 - gap / 2, 0, 0)),
+      grid(60, 60, 3).transformed(flip ? new THREE.Matrix4().makeRotationZ(Math.PI).premultiply(T(30 + gap / 2, 0, 0)) : T(30 + gap / 2, 0, 0))]);
+    m.computeNormals();
+    return m;
+  };
+  const at = (m, x, z) => m.verts.find(v => eqz(v.p.x, x) && eqz(v.p.z, z));
+  const pieces = m => unf(m, makeRule('paper', 0.2)).pieces.map(p => p.area.toFixed(0)).join(',');
+  const hardN = m => { let n = 0; for (const he of m.edges()) if (he.hard) n++; return n; };
+
+  // ① 兩片碰在一起（x = 0 那條線各 4 個點疊著）
+  const J = two(0);
+  const r1 = edit.mergeByDistance(J, J.verts);
+  eq('★★★ 兩片碰在一起、全部按距離合併（預設 0.01 cm）⇒ 合 4 組、少 4 個點、2 塊接成 1 塊', r1.ok && [r1.groups, r1.merged, r1.mesh.verts.length, r1.wasPieces, r1.pieces].join(','), '4,4,28,2,1');
+  eq('★★★ 接好後展開 1 片、7200 cm²（兩片相加）', r1.ok && pieces(r1.mesh), '7200');
+  const seam = r1.ok ? [...r1.mesh.edges()].filter(he => eqz(he.v.p.x, 0) && eqz(he.to.p.x, 0)) : [];
+  ok('★★★ 接縫那 3 條線看得見（各自一個面）、自動標的「切開」拿掉（展開才接得起來）',
+    seam.length === 3 && seam.every(he => he.face && he.twin && he.twin.face && he.hard && he.role !== EDGE_ROLE.CUT) && r1.kept === 3, seam.length);
+  eq('★★ 你畫的線照帶：兩片各 12 條格線 ＋ 接縫 3 條 ＝ 27', r1.ok && hardN(r1.mesh), 27);
+  eq('★★ 點重新編號 ⇒ 交出原本每一個點換到哪（remap 32 個、疊著的那幾對換到同一個）', r1.ok && [r1.remap.size, new Set(r1.remap.values()).size].join(','), '32,28');
+
+  // ② 一片翻過來（正面朝下）
+  const Jf = two(0, true), r2b = edit.mergeByDistance(Jf, Jf.verts);
+  ok('★★★ 一片翻面 ⇒ 翻 9 個面（比較少的那一邊）、接成 1 塊、正面全部朝同一邊、展開 1 片 7200',
+    r2b.ok && r2b.flipped === 9 && r2b.pieces === 1 && r2b.mesh.faces.every(f => Math.abs(r2b.mesh.computeFaceNormal(f).y) > 0.99 && Math.sign(r2b.mesh.computeFaceNormal(f).y) === Math.sign(r2b.mesh.computeFaceNormal(r2b.mesh.faces[0]).y)) && pieces(r2b.mesh) === '7200',
+    r2b.reason || [r2b.flipped, r2b.pieces].join(','));
+  ok('★ 那一份網格沒有半邊配不起來的問題', r2b.ok && !r2b.mesh.issues.length, r2b.ok && r2b.mesh.issues[0]);
+  const row = Mesh.merge([grid(60, 60, 3).transformed(T(-60, 0, 0)), grid(60, 60, 3).transformed(new THREE.Matrix4().makeRotationZ(Math.PI)),
+    grid(60, 60, 3).transformed(T(60, 0, 0))]); row.computeNormals();
+  const rw = edit.mergeByDistance(row, row.verts);
+  eq('★★ 三片排一排、中間那片翻面 ⇒ 只翻中間那 9 個面（比較少的那一邊）、正面全部朝上', rw.ok && [rw.flipped, rw.pieces, rw.mesh.faces.every(f => rw.mesh.computeFaceNormal(f).y > 0.99)].join(','), '9,1,true');
+
+  // ③ 三片接在同一條邊（T 字）⇒ 擋
+  const W = grid(60, 60, 3).transformed(new THREE.Matrix4().makeRotationZ(Math.PI / 2).premultiply(T(0, 30, 0)));
+  const J3 = Mesh.merge([grid(60, 60, 3).transformed(T(-30, 0, 0)), grid(60, 60, 3).transformed(T(30, 0, 0)), W]); J3.computeNormals();
+  const r3 = edit.mergeByDistance(J3, J3.verts);
+  ok('★★★ 三片接在同一條邊 ⇒ 擋下來、講三個以上的面共用、3D 列印會失敗', !r3.ok && /被三個以上的面共用/.test(r3.reason) && /3D 列印會失敗/.test(r3.reason), r3.reason);
+
+  // ④ 中間隔 10 cm
+  const G = two(10);
+  const r4 = edit.mergeByDistance(G, G.verts);
+  ok('★★ 隔 10 cm 按距離合併 ⇒ 擋下來、講最近的兩個點差 10 cm（讓人知道要不要放大距離）', !r4.ok && eqz(r4.nearest, 10) && /最近的兩個點差 10 cm/.test(r4.reason), r4.reason);
+  const g4 = [at(G, -5, -30), at(G, 5, -30), at(G, 5, 30), at(G, -5, 30)];
+  const r5 = g4.every(Boolean) ? edit.mergeVerts(G, g4) : { ok: false, reason: '找不到縫兩邊的角' };
+  ok('★★★ 縫兩邊 4 個角收成一點 ⇒ 合得成、但還是 2 塊、回報只靠點黏著（pointOnly）', r5.ok && r5.pieces === 2 && r5.pointOnly === true, r5.reason || [r5.pieces, r5.pointOnly].join(','));
+  ok('★ 碰在一起接成 1 塊的 ⇒ ⛔ 說只靠點黏著', r1.ok && r1.pointOnly === false);
+
+  // ⑤ 到中間／到最後選的
+  const P = grid(60, 60, 3);
+  const pa = at(P, -10, -10), pb = at(P, 10, -10);
+  const r6 = edit.mergeVerts(P, [pa, pb]);
+  const r7 = edit.mergeVerts(P, [pa, pb], 'last');
+  const has = (m, x, z) => !!m.verts.find(v => v.he && eqz(v.p.x, x) && eqz(v.p.z, z));
+  ok('★★★ 到中間 ⇒ 兩點收到 (0, −10)；到最後選的 ⇒ 收到最後那一個 (10, −10)、(−10, −10) 那個點不見了',
+    r6.ok && r7.ok && has(r6.mesh, 0, -10) && !has(r6.mesh, -10, -10) && has(r7.mesh, 10, -10) && !has(r7.mesh, -10, -10) && !has(r7.mesh, 0, -10));
+  eq('★★ 相鄰兩點合併 ⇒ 少 1 個點、面不少（那兩格變三角形）、還是 1 塊', r6.ok && [r6.merged, r6.mesh.verts.length, r6.mesh.faces.length, r6.pieces, r6.dropped].join(','), '1,15,9,1,0');
+  const nose = [at(P, -10, -10), at(P, 10, -10), at(P, 10, 10), at(P, -10, 10)];
+  const r8 = edit.mergeVerts(P, nose);
+  eq('★★ 收尖：中間那格 4 個點合到中間 ⇒ 收掉 1 個面、剩 8 面、還是 1 塊', r8.ok && [r8.merged, r8.dropped, r8.mesh.faces.length, r8.pieces].join(','), '3,1,8,1');
+  const r9 = edit.mergeVerts(P, [at(P, -10, -10), at(P, 10, 10)]);
+  eq('★ 對角兩點 ⇒ 那一格收掉（拆開後剩兩條線）、剩 8 面', r9.ok && [r9.dropped, r9.mesh.faces.length].join(','), '1,8');
+
+  // ⑥ 方塊頂面 4 點 ⇒ 金字塔
+  const box = edit.tidyMesh(buildPrim('box', { w: 60, h: 45, d: 40 })); box.computeNormals();
+  const ymax = Math.max(...box.verts.map(v => v.p.y));
+  const rb = edit.mergeVerts(box, box.verts.filter(v => eqz(v.p.y, ymax)));
+  eq('★★ 方塊頂面 4 點合到中間 ⇒ 金字塔：5 面、還是封閉、體積 36000（＝ 60 × 40 × 45 ÷ 3）',
+    rb.ok && [rb.mesh.faces.length, rb.wasClosed, rb.nowClosed, Math.round(rb.mesh.volume())].join(','), '5,true,true,36000');
+
+  // ⑦ 剪開再按距離合併 ⇒ 接回去
+  const R = grid(60, 60, 3);
+  const on = (he, x0, z0, x1, z1) => { const a = he.v.p, b = he.to.p; return (eqz(a.x, x0) && eqz(a.z, z0) && eqz(b.x, x1) && eqz(b.z, z1)) || (eqz(a.x, x1) && eqz(a.z, z1) && eqz(b.x, x0) && eqz(b.z, z0)); };
+  const cut = [...R.edges()].filter(he => on(he, -10, -10, 10, -10) || on(he, 10, -10, 10, 10) || on(he, -10, 10, 10, 10));
+  const rr = edit.ripEdges(R, cut);
+  const m10 = rr.ok ? rr.mesh : R;
+  const r10 = edit.mergeByDistance(m10, m10.verts);
+  ok('★★ 剪開中間那格三邊、再全部按距離合併 ⇒ 點數、面數回到原本、展開 1 片 3600',
+    rr.ok && r10.ok && r10.mesh.verts.length === R.verts.length && r10.mesh.faces.length === R.faces.length && pieces(r10.mesh) === '3600', r10.reason);
+
+  // ⑧ 一串離得近的一起合、擋下來的情形
+  const C = grid(60, 60, 3);
+  const c0 = at(C, 30, 30), c1 = at(C, 30, 10);
+  c1.p.set(30.006, 0, 30); at(C, 30, -10).p.set(30.012, 0, 30);
+  const rc = edit.mergeByDistance(C, [c0, c1, at(C, 30.012, 30)], 0.01);
+  eq('★★ 一串離得近的（a 靠 b、b 靠 c，a 到 c 超過距離）⇒ 三個一組合在一起', rc.ok && [rc.groups, rc.merged].join(','), '1,2');
+  ok('★ 只選 1 個點 ⇒ 擋', !edit.mergeVerts(P, [pa]).ok && !edit.mergeByDistance(P, [pa]).ok);
+  ok('★ 距離 0 ⇒ 擋', !edit.mergeByDistance(P, [pa, pb], 0).ok);
+
+  // 畫面
+  ok('★★ 按鈕：「點連成面」後面「合併點」「到最後選的」「按距離合併」距離 0.01，說明講收尖、有縫用點連成面、框選或全選點',
+    /<button id="faceFromVerts"[^>]*>點連成面<\/button>[\s\S]{0,600}<button id="mergeVerts" hidden title="合併點：[^"]*收尖[^"]*有縫用「點連成面」[^"]*">合併點<\/button>\s*<button id="mergeLast" hidden title="到最後選的：[^"]*">到最後選的<\/button>\s*<button id="mergeDist" hidden title="按距離合併：[^"]*框選或「全選點」[^"]*">按距離合併<\/button>\s*<input id="mergeTol" type="number" step="0\.01" min="0" value="0\.01" hidden/.test(raw));
+  ok('★★ 只選點、兩個以上就出現四個', /const twoVerts = sel\.editMode && sel\.editCount >= 2 && sel\.editSels\.every\(e => e\.kind === 'vertex'\);\s*for \(const id of \['mergeVerts', 'mergeLast', 'mergeDist', 'mergeTol'\]\) \$\(id\)\.hidden = !twoVerts;/.test(mn));
+  ok('★★ 按下去：照「到最後選的」選中間或最後、距離照那一格；換網格、清掉選取、記一步',
+    /r = mergeByDistance\(obj\.mesh\(\), verts, tol\);/.test(mn) && /r = mergeVerts\(obj\.mesh\(\), verts, last \? 'last' : 'center'\);/.test(mn)
+    && /obj\.setMesh\(r\.mesh\);\s*refreshAfterEdit\(r\.mesh\);\s*sel\.clearEditSel\(\);/.test(mn) && /commit\(byDistance \? `按距離合併（\$\{r\.groups\} 組）` : `合併點（\$\{verts\.length\} 個）`\);/.test(mn));
+  ok('★★ 提示：講少了幾個點、接成幾塊、只靠點黏著指路點連成面、翻了幾個面、收掉幾個面、選取清掉了',
+    /已按距離合併 \$\{r\.groups\} 組（少了 \$\{r\.merged\} 個點）/.test(mn) && /原本 \$\{r\.wasPieces\} 塊接成 \$\{r\.pieces\} 塊/.test(mn)
+    && /只靠點黏著，展開還是分開的。`\s*\+ '有縫要接：用「點連成面」/.test(mn) && /翻了 \$\{r\.flipped\} 個面/.test(mn) && /收掉 \$\{r\.dropped\} 個面/.test(mn) && /選取清掉了（點重新編號）/.test(mn));
+  ok('★★ 角上點得到：沒打到面、過濾器是「點」或自動時，才找正在編輯的那一個物件 14 px 內最近的點',
+    /if \(!el && \(f === 'auto' \|\| f === 'vertex'\)\) el = this\._pickVertexOffSurface\(clientX, clientY\);/.test(sl)
+    && /_pickVertexOffSurface\(clientX, clientY\) \{\s*const obj = this\.active;\s*if \(!obj \|\| !canMarkSeams\(obj\)\) return null;/.test(sl)
+    && /const grab = isTouch\(\) \? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;\s*let best = null, bestD = grab;/.test(sl));
+  ok('★ AI 目錄有這四個的前提', /ids: \['mergeVerts', 'mergeLast', 'mergeDist', 'mergeTol'\], 前提: '拉點線面裡只選點（兩個以上）'/.test(cat));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -2712,6 +2712,257 @@ export function foldAlongEdges(mesh, hes, seed = null, deg = 90, opt = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  合併點 ／ 按距離合併（一對）—— 規格：`規格\建模器-網格核心.md`「追加：合併點」
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 🔴 **合併點：選到的點收成一點**（＝ Blender 的 Merge At Center／At Last）。
+ *
+ * ── kang 2026-10-30「同意你的建議」（做面具第 ① 題第二次）──────────
+ * 用在收尖（鼻尖）、把個別的點黏起來。⚠ 兩片中間有縫 ⛔ 用這一顆接：4 個角收成一點會捏成一個尖、
+ * 只合兩對角邊中間的點沒接到還是 2 片（沙箱）⇒ 有縫用「點連成面」，或先移過去碰到再「按距離合併」。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[]} verts **有順序**（＝ 點選的順序；`'last'` 合到最後一個）
+ * @param {'center'|'last'} [mode] 預設合到中間
+ * @returns 見 `weldVerts()`
+ */
+export function mergeVerts(mesh, verts, mode = 'center') {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  const vs = [...new Set(verts || [])];
+  if (vs.length < 2) return { ok: false, reason: '至少要選 2 個點才合得起來' };
+  const vi = mesh._vertIndex();
+  if (vs.some(v => vi.get(v.id) === undefined)) return { ok: false, reason: '有點不屬於這個物件' };
+  const at = mode === 'last' ? vs[vs.length - 1].p.clone()
+    : vs.reduce((s, v) => s.add(v.p), new THREE.Vector3()).divideScalar(vs.length);
+  return weldVerts(mesh, [vs], () => at);
+}
+
+/**
+ * 🔴 **按距離合併：選到的點裡，離得夠近的（≤ `tol` cm）各自收成一點**（＝ Blender 的 Merge by Distance）。
+ *
+ * 疊在一起的點點一下只選得到其中一個（每次回同一個）⇒ 用框選或「全選點」選起來再按。
+ * ⭐ 預設 0.01 cm（0.1 mm，跟 Maya 的預設一樣、可以改）。每一組合到那一組的中間。
+ * 離得近的會連成一串一起合（a 靠 b、b 靠 c ⇒ 三個一組）。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[]} verts 範圍（選到的點；要整個物件先「全選點」）
+ * @param {number} [tol] cm
+ * @returns 見 `weldVerts()`；另有 `groups` 合了幾組；一組都沒有時 `nearest` ＝ 最近的兩個點差幾 cm
+ */
+export function mergeByDistance(mesh, verts, tol = 0.01) {
+  if (!mesh || !mesh.faces.length) return { ok: false, reason: '沒有網格' };
+  const vs = [...new Set(verts || [])].filter(v => v.he);
+  if (vs.length < 2) return { ok: false, reason: '至少要選 2 個點 —— 疊在一起的點用框選或「全選點」選起來' };
+  if (!(tol > 0)) return { ok: false, reason: '距離要大於 0' };
+
+  /** 格子 ＝ tol 大小，只比自己跟旁邊 26 格 ⇒ 大網格也快（沙箱 7442 點 72 ms）*/
+  const cellOf = p => [Math.floor(p.x / tol), Math.floor(p.y / tol), Math.floor(p.z / tol)];
+  const grid = new Map();
+  vs.forEach((v, i) => {
+    const k = cellOf(v.p).join(',');
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(i);
+  });
+  const up = vs.map((_, i) => i);
+  const root = i => { while (up[i] !== i) i = up[i] = up[up[i]]; return i; };
+  vs.forEach((v, i) => {
+    const [cx, cy, cz] = cellOf(v.p);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      for (const j of grid.get(`${cx + dx},${cy + dy},${cz + dz}`) || []) {
+        if (j > i && v.p.distanceTo(vs[j].p) <= tol) up[root(j)] = root(i);
+      }
+    }
+  });
+  const byRoot = new Map();
+  vs.forEach((v, i) => {
+    const r = root(i);
+    if (!byRoot.has(r)) byRoot.set(r, []);
+    byRoot.get(r).push(v);
+  });
+  const groups = [...byRoot.values()].filter(g => g.length > 1);
+  if (!groups.length) {
+    /** 一組都沒合到 ⇒ 講最近的兩個點差多少，讓人知道要不要放大距離（⛔ 只說「沒有」）*/
+    let nearest = Infinity;
+    for (let i = 0; i < vs.length; i++) for (let j = i + 1; j < vs.length; j++) {
+      nearest = Math.min(nearest, vs[i].p.distanceTo(vs[j].p));
+    }
+    return { ok: false, groups: 0, nearest, reason: `選到的點之間沒有 ${tol} cm 以內的 —— 最近的兩個點差 ${+nearest.toFixed(3)} cm` };
+  }
+  const center = g => g.reduce((s, v) => s.add(v.p), new THREE.Vector3()).divideScalar(g.length);
+  const r = weldVerts(mesh, groups, center);
+  if (r.ok) r.groups = groups.length;
+  return r;
+}
+
+/**
+ * 合併點、按距離合併共用的那一段：每一組點收成一點、拆掉重建。
+ *
+ * ── 走的路 ──────────────────────────────────────────────
+ * 每組留最後一個點、搬到 `posOf(組)` → 面照換過的點 → 一個面裡同一個點出現兩次就從那裡拆開、
+ * 少於 3 個點的那段拿掉（收尖、收邊）→ `preflightRebuild` → `cleanRebuild`（⚠ 點會重新編號，
+ * 選取由呼叫端清掉）→ `fromFaceList` → 標記走 `copyMarksThroughRemap`（兩次換號接起來的 remap）。
+ *
+ * ── ⚠ 三件要講或要擋的 ──────────────────────────────────
+ * 1. **方向**：一片翻面的兩片接在一起，共用的那條邊兩個面走同一個方向 ⇒ 半邊配不起來（沙箱：展開錯）。
+ *    ⇒ 只有合完真的撞到時才統一：沿共用的邊走、撞到就翻；每一塊翻比較少的那一邊，回 `flipped`。
+ *    翻完還撞（像莫比烏斯帶）⇒ 擋。
+ * 2. **三個面共用一條邊**（T 字）⇒ 擋（3D 列印會失敗）；原本就有的不算新撞的。
+ * 3. **接起來的那條線照樣看得見**：原本兩邊都是外緣、合完變成內部 ⇒ 自動標的「切開」拿掉
+ *    （`clearBoundaryOnlySeams()`，展開才接得起來）、會變看不見的標 `hard`（`keepFilledEdgesVisible()`，
+ *    跟補上去的面同一條：會刻意合成一個面的只有「合成一個面」「壓平」，kang 2026-10-22）。
+ *
+ * @param {Mesh} mesh
+ * @param {Vertex[][]} groups
+ * @param {(g:Vertex[]) => THREE.Vector3} posOf
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, remap?:Map<number,number>, merged?:number,
+ *            dropped?:number, flipped?:number, kept?:number, pieces?:number, wasPieces?:number,
+ *            wasClosed?:boolean, nowClosed?:boolean}}
+ *          `merged` 少了幾個點；`dropped` 收掉幾個面；`kept` 接縫留住幾條線
+ */
+function weldVerts(mesh, groups, posOf) {
+  const vi = mesh._vertIndex();
+  const points = mesh.verts.map(v => v.p.clone());
+  const to = points.map((_, i) => i);
+  let merged = 0;
+  for (const g of groups) {
+    const idx = [...new Set(g.map(v => vi.get(v.id)))];
+    if (idx.length < 2) continue;
+    const keep = idx[idx.length - 1];
+    points[keep] = posOf(g).clone();
+    for (const i of idx) to[i] = keep;
+    merged += idx.length - 1;
+  }
+  if (!merged) return { ok: false, reason: '沒有要合的點' };
+
+  /**
+   * 合的點來自不同塊嗎（照共用的邊走出來的塊）—— 合完塊數沒變 ⇒ 只靠點黏著、展開還是分開的，要講
+   * （沙箱：兩片隔 10 cm、4 個角收成一點 ⇒ 還是 2 塊）。
+   */
+  const pieceOf = new Map();
+  let nPiece = 0;
+  for (const f of mesh.faces) {
+    if (pieceOf.has(f)) continue;
+    const q = [f];
+    pieceOf.set(f, nPiece);
+    while (q.length) {
+      for (const he of mesh.faceLoop(q.pop())) {
+        const g = he.twin && he.twin.face;
+        if (g && !pieceOf.has(g)) { pieceOf.set(g, nPiece); q.push(g); }
+      }
+    }
+    nPiece++;
+  }
+  const across = groups.some(g => new Set(g.filter(v => v.he).map(v => pieceOf.get(v.he.face || (v.he.twin && v.he.twin.face)))).size > 1);
+
+  const key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const countEdges = fs => {
+    const m = new Map();
+    for (const f of fs) for (let i = 0; i < f.length; i++) {
+      const k = key(f[i], f[(i + 1) % f.length]);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  };
+  const before = mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id)));
+  let overBefore = 0;
+  for (const n of countEdges(before).values()) if (n > 2) overBefore++;
+
+  /** 換點 → 連續重複的拿掉 → 同一個點出現兩次就拆開，少於 3 個點的段落拿掉 */
+  const faces = [];
+  let dropped = 0;
+  for (const f0 of before) {
+    let f = f0.map(i => to[i]).filter((x, i, a) => x !== a[(i + 1) % a.length]);
+    const parts = [];
+    const split = loop => {
+      for (let i = 0; i < loop.length; i++) {
+        const j = loop.indexOf(loop[i], i + 1);
+        if (j > 0) { split(loop.slice(i, j)); split([...loop.slice(j), ...loop.slice(0, i)]); return; }
+      }
+      if (loop.length >= 3) parts.push(loop);
+    };
+    split(f);
+    if (!parts.length) dropped++;
+    faces.push(...parts);
+  }
+
+  let over = 0;
+  for (const n of countEdges(faces).values()) if (n > 2) over++;
+  if (over > overBefore) {
+    return {
+      ok: false,
+      reason: `合完會有 ${over - overBefore} 條邊被三個以上的面共用（像三片接在同一條邊上）—— 3D 列印會失敗，所以不合`
+    };
+  }
+
+  /** 方向：合完同一條邊兩個面走同一個方向 ⇒ 統一 */
+  const dirClash = fs => {
+    const seen = new Set();
+    let n = 0;
+    for (const f of fs) for (let i = 0; i < f.length; i++) {
+      const d = `${f[i]}>${f[(i + 1) % f.length]}`;
+      if (seen.has(d)) n++; else seen.add(d);
+    }
+    return n;
+  };
+  let flipped = 0;
+  if (dirClash(faces)) {
+    const adj = new Map();
+    faces.forEach((f, fi) => f.forEach((a, i) => {
+      const k = key(a, f[(i + 1) % f.length]);
+      if (!adj.has(k)) adj.set(k, []);
+      adj.get(k).push(fi);
+    }));
+    const same = (f, a, b) => f.some((x, i) => x === a && f[(i + 1) % f.length] === b);
+    const flip = new Array(faces.length).fill(false), seen = new Array(faces.length).fill(false);
+    for (let s = 0; s < faces.length; s++) {
+      if (seen[s]) continue;
+      seen[s] = true;
+      const comp = [s], q = [s];
+      while (q.length) {
+        const fi = q.shift(), f = flip[fi] ? faces[fi].slice().reverse() : faces[fi];
+        f.forEach((a, i) => {
+          const b = f[(i + 1) % f.length], fs = adj.get(key(a, b));
+          if (fs.length !== 2) return;
+          const gj = fs[0] === fi ? fs[1] : fs[0];
+          if (seen[gj]) return;
+          seen[gj] = true;
+          flip[gj] = same(faces[gj], a, b);
+          comp.push(gj); q.push(gj);
+        });
+      }
+      /** 每一塊翻比較少的那一邊 */
+      const n = comp.filter(i => flip[i]).length;
+      if (n * 2 > comp.length) for (const i of comp) flip[i] = !flip[i];
+    }
+    for (let i = 0; i < faces.length; i++) if (flip[i]) { faces[i] = faces[i].slice().reverse(); flipped++; }
+    if (dirClash(faces)) {
+      return { ok: false, reason: '合完正反面對不起來（像莫比烏斯帶那樣扭一圈），所以不合' };
+    }
+  }
+
+  const pre = preflightRebuild(points, faces);
+  if (!pre.ok) return { ok: false, reason: `合出壞掉的網格：${pre.fatal[0]}` };
+  const clean = cleanRebuild(points, faces);
+  if (!clean.faces.length) return { ok: false, reason: '合完一個面都不剩' };
+  dropped += clean.dropped.degenerate + clean.dropped.dup;
+  const remap = new Map();
+  to.forEach((t, i) => { if (clean.remap.has(t)) remap.set(i, clean.remap.get(t)); });
+
+  const out = Mesh.fromFaceList(clean.points, clean.faces);
+  out.computeNormals();
+  copyMarksThroughRemap(mesh, out, remap);
+  clearBoundaryOnlySeams(mesh, out, remap);
+  const kept = keepFilledEdgesVisible(mesh, out, remap);
+  const pieces = out.validate().components, wasPieces = mesh.validate().components;
+  return {
+    ok: true, mesh: out, remap, merged, dropped, flipped, kept, pieces, wasPieces,
+    pointOnly: across && pieces >= wasPieces,
+    wasClosed: mesh.isClosed(), nowClosed: out.isClosed()
+  };
+}
+
+// ═══════════════════════════════════════════════════════
 //  切成實心（切蛋糕）—— 規格：`規格\建模器-切成實心.md`
 // ═══════════════════════════════════════════════════════
 

@@ -47,7 +47,7 @@ import { elementVerts, refreshAfterEdit, visibleAround, splitUnflat, nonPlanarFa
          splitFaceByEdges, subdivideEdges, subdivideFaces, smoothVerts, separateAlongEdges, solidCut, ripEdges, foldAlongEdges,
          sampleCurve, sampleCurveInfo, curveCutFace, curveCutFaceLoop, CURVE_STEP_CM, faceDimFrame, faceDimInfo, faceDimMove, circleAnchors, curveRegionOutline,
          notchAt, notchAnchors, notchClamp, notchFits, polyStep, polyWhere, polyRayHit, curveCutterPrism,
-         knifePath, planeCrossSegments, toCircle, faceFromVerts,
+         knifePath, planeCrossSegments, toCircle, faceFromVerts, mergeVerts, mergeByDistance,
          extrudeBoundaryEdges, regionOf, remapElements,
          BEVEL_MAX_SEG, PLANAR_TOL_CM } from './core/edit.js';
 import { fmtCm, fmtDragReadout } from './core/measure.js';
@@ -1257,6 +1257,9 @@ $('ripEdge').onclick = () => ripEdgesSelected();
 $('foldEdge').onclick = () => foldSelected();
 $('foldFlip').onclick = function () { this.classList.toggle('on'); updateBar(); };
 $('foldOther').onclick = function () { this.classList.toggle('on'); updateBar(); };
+$('mergeVerts').onclick = () => mergeVertsSelected(false);
+$('mergeDist').onclick = () => mergeVertsSelected(true);
+$('mergeLast').onclick = function () { this.classList.toggle('on'); updateBar(); };
 /**
  * 🔴 **框邊：整條**（第三輪第五批 5b，kang 2026-10-26「同意你的建議」② 乙）：預設開；關掉 ＝ 框選邊碰到就算（以前的做法）。
  * 跟人走（記在瀏覽器）；判法在 `core/screen.js` `elementsInRect()`。
@@ -5808,6 +5811,58 @@ function keptNote(n) {
 }
 
 /**
+ * 🔴 **合併點／按距離合併**（kang 2026-10-30 做面具第 ① 題第二次「同意你的建議」）。
+ * 幾何全在 `edit.js` `mergeVerts()`／`mergeByDistance()`；這裡管流程與回報。
+ * ⚠ 合完點會重新編號 ⇒ 選取清掉（跟其他拆掉重建的一樣，講一句）。
+ */
+function mergeVertsSelected(byDistance) {
+  const els = sel.editSels;
+  const label = byDistance ? '按距離合併' : '合併點';
+  if (!sel.editMode || els.length < 2 || els.some(e => e.kind !== 'vertex')) {
+    toast(`先按「拉點線面」、把過濾器切到「點」，選 2 個以上的點再按「${label}」（疊在一起的點用框選或「全選點」）`, true);
+    return;
+  }
+  const obj = els[0].obj;
+  const verts = els.filter(e => e.obj === obj).map(e => e.vert);
+  const last = $('mergeLast').classList.contains('on');
+  let r;
+  if (byDistance) {
+    const tol = +$('mergeTol').value;
+    if (!(tol > 0)) { toast('「按距離合併」的距離要大於 0（cm）', true); return; }
+    r = mergeByDistance(obj.mesh(), verts, tol);
+  } else {
+    r = mergeVerts(obj.mesh(), verts, last ? 'last' : 'center');
+  }
+  if (!r.ok) { toast(r.reason, true); return; }
+
+  obj.setMesh(r.mesh);
+  refreshAfterEdit(r.mesh);
+  sel.clearEditSel();
+  view.markGeomDirty();
+  view.markSeamsDirty();
+  commit(byDistance ? `按距離合併（${r.groups} 組）` : `合併點（${verts.length} 個）`);
+  panel.refresh();
+  updateBar();
+  updateEditNum();
+
+  const bits = [byDistance
+    ? `已按距離合併 ${r.groups} 組（少了 ${r.merged} 個點）`
+    : `已把 ${r.merged + 1} 個點合成一點（${last ? '到最後選的那一個' : '到中間'}）`];
+  if (r.pieces < r.wasPieces) bits.push(`原本 ${r.wasPieces} 塊接成 ${r.pieces} 塊`);
+  if (r.pointOnly) {
+    bits.push(`⚠ 合的點在不同塊上，但沒有共用的邊 —— 還是 ${r.pieces} 塊、只靠點黏著，展開還是分開的。`
+      + '有縫要接：用「點連成面」，或先移過去碰到再「按距離合併」');
+  }
+  if (r.kept) bits.push(keptNote(r.kept));
+  if (r.flipped) bits.push(`有一塊正反面跟另一塊相反 ⇒ 翻了 ${r.flipped} 個面，接起來才對得上`);
+  if (r.dropped) bits.push(`收掉 ${r.dropped} 個面（收成線或點的）`);
+  if (r.wasClosed && !r.nowClosed) bits.push('⚠ 現在是開放的（有開口）→ 不能再做布林運算，展開與 STL 的行為也會變');
+  if (!r.wasClosed && r.nowClosed) bits.push('現在是封閉的');
+  bits.push('選取清掉了（點重新編號）');
+  toast(bits.join('　'), r.pointOnly);
+}
+
+/**
  * 🔴 **點連成面：選好幾個點，照選取順序圍出一個面**（＝ Blender 的 `F`）。
  *
  * ⭐ 它跟旁邊兩顆是一組，但各做各的：
@@ -8970,6 +9025,13 @@ function updateBar() {
    * ⚠ 它跟「多點連接」吃同一種東西（點），差別只在**做出線還是面** ——
    * 所以灰掉的理由要把那件事講出來，⛔ 不然使用者會以為按錯顆。
    */
+  /** 🔴 **合併點、按距離合併：只選點、兩個以上就出現**（kang 2026-10-30）*/
+  const twoVerts = sel.editMode && sel.editCount >= 2 && sel.editSels.every(e => e.kind === 'vertex');
+  for (const id of ['mergeVerts', 'mergeLast', 'mergeDist', 'mergeTol']) $(id).hidden = !twoVerts;
+  $('mergeLast').title = $('mergeLast').classList.contains('on')
+    ? '到最後選的：亮著 ＝ 合到最後點的那一個點。再按一次回到合到中間（框選沒有點選順序，框選時用合到中間）'
+    : '到最後選的：暗著 ＝ 合到中間（預設）。按一下改成合到最後點的那一個點（要一個一個點選才有順序，框選沒有）';
+
   const threeVerts = sel.editMode && sel.editCount >= 3
     && sel.editSels.every(e => e.kind === 'vertex');
   $('faceFromVerts').hidden = !threeVerts;
