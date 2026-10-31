@@ -14,7 +14,8 @@ import * as THREE from 'three';
 import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapseShort, MICRO_DIV, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
 import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { solidCheck, fillVariant, unionVariant, suggestSolid, SOLID_MODES } from '../build/importSolid.js';
-import { decimate, surfaceDev } from '../build/decimate.js';
+import { decimate, surfaceDev, CROSS_CAP } from '../build/decimate.js';
+import { crossCheck } from '../out/printShape.js';
 import { pairQuads } from '../build/quadify.js';
 import { Mesh } from '../core/mesh.js';
 import { ModelObject, KIND, recenterOrigin } from '../core/io.js';
@@ -41,7 +42,8 @@ export class Import3DPanel {
     this.app = app;
     /**
      * split ＝ 一個部分一個物件（預設，跟匯入線稿一樣）；〔micro ＝ 舊的「清掉極小的碎面」勾選 —— 第五批 b ④ 起改由面數那一區的卡片選，不再用〕；
-     * planes ＝ 平面上的小塊怎麼辦（`PLANE_MODES`，預設照建議 —— 網格核心第五批 b ②）
+     * planes ＝ 平面上的小塊怎麼辦（`PLANE_MODES`，預設照建議 —— 網格核心第五批 b ②）；
+     * noCross ＝ 減到 ___ 面時不讓面互相穿過去（沒存過 ＝ 開；`_noCross()`）
      */
     this.opt = { split: true, planes: 'suggest', ...loadOpt() };
     this.fileName = '';
@@ -308,6 +310,9 @@ export class Import3DPanel {
     this._quadThumb(ov.querySelector('.i3BigImg'), mode, quad, 720, 540);
   }
 
+  /** 減到 ___ 面時不讓面互相穿過去（預設開、記住；kang 2026-10-31 照 AI 建議）*/
+  _noCross() { return this.opt.noCross !== false; }
+
   /** 拆好部分的原樣（檔案單位、Y 朝上）＋每一片平面的判斷；同一個做法、同一種拆法只算一次 */
   _faceBase(pick, split) {
     const key = pick.mode + '|' + split;
@@ -330,7 +335,7 @@ export class Import3DPanel {
     const solidBusy = this._solid && this._solid.pending;
     if (!F.clean && !solidBusy) this._faceWork('clean');
     if (F.clean && F.clean.lazy && this.faceMode === 'clean' && !solidBusy) this._faceWork('clean');   // 超過一成的：點了才真的減
-    if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget) && !solidBusy) this._faceWork('reduce');
+    if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget || F.reduce.noCross !== this._noCross()) && !solidBusy) this._faceWork('reduce');
     const c = F.clean && (F.clean.parts || F.clean.lazy) ? F.clean : null;
     F.suggest = !c ? { mode: 'raw', why: F.clean && !F.clean.pending ? '' : '正在算清碎面…' }
       : !c.removed ? { mode: 'raw', why: '沒有比門檻短、清了不會壞的碎面 —— 不用清' }
@@ -348,13 +353,16 @@ export class Import3DPanel {
    * 清碎面：門檻（自動 ＝ 最長邊 ÷ 500）先用「兩端合到中點」數出會剩幾個面（⇒ 減多少跟 10-21 驗收的門檻一樣），
    * 再用保形狀減面減到那個數（汽車：最多偏 0.1 mm → 0.005 mm）；照原檔的格子不動。
    * 減到 N 面：照每個部分的面數分配，⛔ 保護格子（kang：你都要少面了）；減不下去的照實講。
+   * 減到 N 面預設「不讓面互相穿過去」（`_noCross()`；kang 2026-10-31「照你的建議」→ `三視圖導入-研究.md` 實驗 9）：
+   * 減的時候就擋多出來的穿面（幾個部分共用一個比較次數上限 `CROSS_CAP`），減完再數一次還有幾個三角形穿過去、照實講。
    */
   _faceWork(kind) {
     const F = this._face;
     const full = kind === 'clean' && F.clean && F.clean.lazy;     // 先前只數過、現在點了要真的減
-    if (F[kind] && !full && (kind === 'clean' || F[kind].target === this.reduceTarget)) return;
+    const noCross = kind === 'reduce' && this._noCross();
+    if (F[kind] && !full && (kind === 'clean' || (F[kind].target === this.reduceTarget && F[kind].noCross === noCross))) return;
     const target = this.reduceTarget, counted = full ? F.clean.goals : null;
-    F[kind] = { pending: true, target };
+    F[kind] = { pending: true, target, noCross };
     setTimeout(() => {
       if (this._face !== F) return;                       // 這中間換了設定
       const base = this._base, planesMode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
@@ -381,16 +389,26 @@ export class Import3DPanel {
             return;
           }
         }
+        let budget = CROSS_CAP, crossRefused = 0, crossCapped = false;
         const parts = base.parts.map((p, i) => {
           const regs = kind === 'clean' ? keptRegions(base.judged[i], planesMode) : [];
           const keep = regs.length ? keepVerts(p, regs) : null;
           const goal = goals[i];
-          const q = goal < p.faces.length ? decimate(p, { target: goal, keep }) : { ...p, from: p.faces.map((_, k) => k), stats: { maxMove: 0 } };
+          if (goal < p.faces.length && noCross && budget <= 0) crossCapped = true;      // 前面的部分已經比到上限 ⇒ 這一塊照原本的減
+          const nc = noCross && budget > 0;
+          const q = goal < p.faces.length ? decimate(p, { target: goal, keep, noCross: nc, crossCap: budget }) : { ...p, from: p.faces.map((_, k) => k), stats: { maxMove: 0 } };
+          if (nc && q.stats.crossTests !== undefined) { budget -= q.stats.crossTests; crossRefused += q.stats.crossRefused; crossCapped = crossCapped || q.stats.crossCapped; }
           left += q.faces.length; maxMove = Math.max(maxMove, q.stats.maxMove);
           if (q.faces.length < p.faces.length) dev = Math.max(dev, surfaceDev(p, q));   // 表面離原本最多多遠（⛔ 用點搬了多遠 —— 點會沿著表面滑）
           return { ...q, grid: gridEdges(q, keptRegions(base.judged[i], planesMode).filter(() => kind === 'clean'), q.from) };
         });
-        F[kind] = { target, parts, faces: left, removed: total - left, ratio: total ? (total - left) / total : 0, maxMove, dev, tol };
+        F[kind] = { target, noCross, parts, faces: left, removed: total - left, ratio: total ? (total - left) / total : 0, maxMove, dev, tol, crossRefused, crossCapped };
+        /** 減到 N 面：減完數還有幾個三角形穿過去（跟大小無關）；有的話再數原檔本來就有幾個（同一個檔只數一次）*/
+        if (kind === 'reduce' && left < total) {
+          const c = crossCheck(crossTris(parts));
+          F[kind].cross = c;
+          if (c.tris && !base.cross) base.cross = crossCheck(crossTris(base.parts));
+        }
       } catch (e) {
         F[kind] = { target, error: '算的時候出錯：' + (e.message || e) };
       }
@@ -570,7 +588,14 @@ export class Import3DPanel {
       else {
         const t = [`${r.faces} 個面（少 ${pct(r.ratio)}）`, `表面離原本最多 ${mm(r.dev * s.cmPerUnit)} mm`];
         if (mode === 'clean' && !r.removed) t[0] = '沒有比門檻短、清了不會壞的碎面';
-        if (mode === 'reduce' && r.faces > this.reduceTarget * 1.05) t.push(`最少只能減到 ${r.faces} 個面（零件多、或再減會弄出破洞、讓面翻過去）`);
+        if (mode === 'reduce' && r.faces > this.reduceTarget * 1.05) t.push(`最少只能減到 ${r.faces} 個面（零件多、或再減會弄出破洞、讓面翻過去${r.crossRefused ? '、讓面互相穿過去' : ''}）`);
+        if (mode === 'reduce' && r.crossCapped) t.push('這個模型零件互相穿過去太多，後面沒有再擋');
+        if (mode === 'reduce' && r.cross && r.cross.tris) {
+          const was = this._base && this._base.cross;
+          t.push(`還有 ${r.cross.tris} 個三角形互相穿過去${r.cross.cut ? '（太多、沒數完）' : ''}`
+            + (was && was.tris ? `（原檔本來就有 ${was.tris} 個${was.cut ? '以上' : ''}）` : '')
+            + (r.noCross ? '' : ' —— 勾下面的「不讓面互相穿過去」再減一次'));
+        }
         if (mode === 'clean' && r.ratio > CLEAN_MAX) t.push('超過一成 —— 預設不清');
         nums.textContent = t.join('　');
       }
@@ -583,7 +608,13 @@ export class Import3DPanel {
       }
       if (mode === 'reduce') {
         ctl.innerHTML = `<input type="number" class="i3Reduce" step="100" min="4" style="width:80px" placeholder="面數" value="${this.reduceTarget > 0 ? this.reduceTarget : ''}"> 面　`
-          + REDUCE_PRESETS.map(([t, n], k) => `<button class="mini" data-k="${k}">${t}</button>`).join(' ');
+          + REDUCE_PRESETS.map(([t, n], k) => `<button class="mini" data-k="${k}">${t}</button>`).join(' ')
+          + `<br><label class="i3NoCrossLbl"><input type="checkbox" class="i3NoCross"${this._noCross() ? ' checked' : ''}> 不讓面互相穿過去（比較慢）</label>`;
+        const nc = ctl.querySelector('.i3NoCross');
+        nc.parentElement.title = '減的時候，合了會讓面穿過別的面就不合（薄的殼內外兩層不會穿出來）。'
+          + '原本就穿過去的不管。比較慢：5 萬面約多 2～3 倍時間';
+        nc.parentElement.onclick = e => e.stopPropagation();
+        nc.onchange = () => { this.opt.noCross = nc.checked; save(this.opt); this._render(); };
         const inp = ctl.querySelector('input');
         inp.onclick = e => e.stopPropagation();
         inp.onchange = () => { const n = Math.round(num(inp.value, 0)); this.reduceTarget = n >= 4 ? n : 0; this.faceMode = this.reduceTarget ? 'reduce' : ''; this._render(); };
@@ -612,7 +643,7 @@ export class Import3DPanel {
     if (!F.thumbs) F.thumbs = {};
     const r = mode === 'raw' ? null : F[mode];
     const conv = s.up === 'z' ? q => [q[0] * s.cmPerUnit, q[2] * s.cmPerUnit, -q[1] * s.cmPerUnit] : q => [q[0] * s.cmPerUnit, q[1] * s.cmPerUnit, q[2] * s.cmPerUnit];
-    this._thumbPut(el, F.thumbs, `${mode}|${r ? r.target : 0}|${s.up}|${w}`, () => this._face === F,
+    this._thumbPut(el, F.thumbs, `${mode}|${r ? r.target : 0}|${r && r.noCross ? 'nc' : ''}|${s.up}|${w}`, () => this._face === F,
       () => (r ? r.parts : base.parts).map(p => ({ points: p.points.map(conv), faces: p.faces })), w, h);
   }
 
@@ -884,6 +915,15 @@ const mm = cm => String(Math.round(cm * 10 * 1000) / 1000);
 const pct = x => (Math.round(x * 1000) / 10) + '%';
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) ? x : d; };
+/** 每個部分的面拆成三角形（點換成 {x,y,z}），給 `crossCheck` 數穿面（不同部分之間穿過去也算）*/
+function crossTris(parts) {
+  const out = [];
+  for (const p of parts) {
+    const V = p.points.map(q => ({ x: q[0], y: q[1], z: q[2] }));
+    for (const f of p.faces) for (let k = 1; k + 1 < f.length; k++) out.push({ a: V[f[0]], b: V[f[k]], c: V[f[k + 1]] });
+  }
+  return out;
+}
 function loadOpt() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
 }

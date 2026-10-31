@@ -82,6 +82,18 @@ export function shapeCheck(tris, opt = {}) {
   };
 }
 
+/**
+ * 只數「面互相穿過去」（匯入視窗減到 ___ 面之後用 —— 跟大小無關；「太薄」是固定 mm，匯入大小一變就不準，
+ * `三視圖導入-研究.md` 實驗 9）。
+ * @param {{a,b,c}[]} tris 點是 {x,y,z}
+ * @returns {{tris:number, cut:boolean}} 碰到別的面的三角形有幾個；`cut` ＝ 比太多對、中途停了
+ */
+export function crossCheck(tris) {
+  if (!tris.length) return { tris: 0, cut: false };
+  const c = crossings(tris, buildTree(tris));
+  return { tris: c.hit.size, cut: c.cut };
+}
+
 // ═══ 底層：三角形包圍盒樹、打線、兩兩相交 ═══
 
 function buildTree(tris) {

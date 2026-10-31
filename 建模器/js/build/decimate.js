@@ -8,16 +8,29 @@
  * OBJ 的四邊形照樣是四邊形）；破洞邊加一道牆讓洞口不亂跑。每次合併「代價最小」的一條邊，點放在誤差最小的位置。
  * 會壞就不合（照 `collapseShort()`）：面翻過去（夾角超過 78° 就算）、多出同一組點的面、破洞或三面共用的邊變多。
  * 汽車同樣減 78.5%：兩端合到中點最多偏 0.1 mm，這個 0.005 mm（慢約 3 倍）。
+ *
+ * `noCross`（2026-10-31，`三視圖導入-研究.md` 實驗 9；kang「照你的建議」）：**合了會多出原本沒有的穿面 ⇒ 不合**。
+ * 薄殼（混元的空心殼、1 mm 面具）減到 500 面時內外兩層會穿過去（穿面 41～200 → 0～2、透出來的線少九成），
+ * 業界同一招：CGAL `Polyhedral_envelope_filter`、〈Intersection Free Simplification〉（2003）—— 減的時候就擋。
+ * - 只擋「新的」：新的面碰到某個面時，看合之前那一圈舊的面是不是本來就碰到它（原本就穿來穿去的組合件
+ *   ⛔ 每一次都擋 —— 沙箱第一版這樣做，汽車 6 小時沒算完、樹蛙穿面 13 → 214）。
+ * - 三角形兩兩比超過 `crossCap` 次就不再擋（照原本的減下去），`stats.crossCapped` 照實講。
+ * - 附近的面用均勻格子找（最長邊 ÷ 48 一格），合了就更新。慢 2～3 倍（5 萬面 4 → 7～15 秒）。
  */
+
+/** `noCross` 三角形兩兩比的次數上限（汽車：比到這裡約 4 分鐘；kang 2026-10-31 照 AI 建議）*/
+export const CROSS_CAP = 3e8;
 
 /**
  * @param {{points:number[][], faces:number[][]}} p 一個部分
- * @param {{target?:number, maxLen?:number, keep?:Set<number>|null}} opt
- *   `target` 減到幾個面（0 ＝ 不限）；`maxLen` 只合比這個短的邊；`keep` 這些點不動（第 ② 小批照原檔的格子）
- * @returns {{points, faces, from, stats:{collapsed, refused, removed, maxMove}}}
- *   `from[k]` ＝ 減完的第 k 個面是原本第幾個；`maxMove` ＝ 原本的點最多被搬多遠（點的單位）
+ * @param {{target?:number, maxLen?:number, keep?:Set<number>|null, noCross?:boolean, crossCap?:number}} opt
+ *   `target` 減到幾個面（0 ＝ 不限）；`maxLen` 只合比這個短的邊；`keep` 這些點不動（第 ② 小批照原檔的格子）；
+ *   `noCross` 不准多出新的穿面；`crossCap` 那一項最多比幾次（幾個部分分著減時，呼叫的人傳剩下的）
+ * @returns {{points, faces, from, stats:{collapsed, refused, removed, maxMove, crossRefused, crossTests, crossCapped}}}
+ *   `from[k]` ＝ 減完的第 k 個面是原本第幾個；`maxMove` ＝ 原本的點最多被搬多遠（點的單位）；
+ *   `crossRefused` ＝ 因為會穿面沒合的次數；`crossTests` ＝ 比了幾次；`crossCapped` ＝ 比到上限、後面沒再擋
  */
-export function decimate(p, { target = 0, maxLen = Infinity, keep = null } = {}) {
+export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCross = false, crossCap = CROSS_CAP } = {}) {
   const P = p.points.map(q => q.slice());
   const faces = p.faces.map(f => f.slice());
   const alive = faces.map(() => true);
@@ -104,6 +117,8 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null } = {})
   for (const key of cnt.keys()) { const [a, b] = key.split('-').map(Number); pushEdge(a, b); }
   const tidy = f => { const o = []; for (const v of f) if (o[o.length - 1] !== v) o.push(v); while (o.length > 1 && o[0] === o[o.length - 1]) o.pop(); return o; };
   let live = faces.length, collapsed = 0, refused = 0, removed = 0;
+  let crossRefused = 0, crossTests = 0, crossCapped = false;
+  const near = noCross ? faceGrid(P, faces) : null;
   while (live > target && heap.size) {
     let [, a, b, va, vb, x] = heap.pop();
     if (rep[a] !== a || rep[b] !== b || ver[a] !== va || ver[b] !== vb || !cnt.get(ek(a, b))) continue;
@@ -136,12 +151,36 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null } = {})
       for (const [k2, dd] of d) { if (!dd) continue; const was = cnt.get(k2) || 0, now = was + dd; open += (now === 1) - (was === 1); nm += (now > 2) - (was > 2); }
       if (open > 0 || nm > 0) ok = false;
     }
+    // 4. 不多出原本沒有的穿面（`noCross`）：新的面碰到附近某個面時，合之前那一圈舊的面本來就碰到它 ⇒ 不算新的
+    if (ok && near && !crossCapped) {
+      if (crossTests > crossCap) crossCapped = true;
+      else {
+        const mine = new Set(F);
+        for (let t = 0; t < F.length && ok; t++) {
+          const f = nf[t];
+          if (f.length < 3) continue;
+          const own = new Set(f), T1 = near.tris(f);
+          for (const j of near.around(f)) {
+            if (mine.has(j) || faces[j].some(v => own.has(v))) continue;   // 共點的鄰居⛔ 比（同列印檢查）
+            const T2 = near.tris(faces[j]);
+            crossTests += T1.length * T2.length;
+            if (!T1.some(x => T2.some(y => triTri(x, y)))) continue;
+            P[a] = keepA;
+            const was = F.some(i => !faces[i].some(v => faces[j].includes(v)) && near.tris(faces[i]).some(x => T2.some(y => triTri(x, y))));
+            P[a] = x;
+            if (!was) { ok = false; crossRefused++; break; }
+          }
+        }
+      }
+    }
     if (!ok) { P[a] = keepA; refused++; continue; }
     F.forEach((i, t) => {
+      if (near) near.drop(i);
       addF(faces[i], -1);
       for (const v of faces[i]) vf[v].delete(i);
       if (nf[t].length < 3) { alive[i] = false; faces[i] = null; live--; removed++; return; }
       faces[i] = nf[t];
+      if (near) near.add(i);
       addF(faces[i], 1);
       for (const v of faces[i]) vf[v].add(i);
     });
@@ -167,7 +206,54 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null } = {})
     from.push(i);
     out.push(f.map(v => { if (!used.has(v)) { used.set(v, pts.length); pts.push(P[v]); } return used.get(v); }));
   });
-  return { ...p, points: pts, faces: out, from, stats: { collapsed, refused, removed, maxMove } };
+  return { ...p, points: pts, faces: out, from, stats: { collapsed, refused, removed, maxMove, crossRefused, crossTests, crossCapped } };
+}
+
+/**
+ * `noCross` 用：每個面記在均勻格子裡（最長邊 ÷ 48 一格；面變大就佔比較多格），找「附近的面」。
+ * 面的點（`P`）會被搬 ⇒ 面改了先 `drop` 再 `add`。
+ */
+function faceGrid(P, faces) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const q of P) for (let k = 0; k < 3; k++) { if (q[k] < lo[k]) lo[k] = q[k]; if (q[k] > hi[k]) hi[k] = q[k]; }
+  const cs = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 48 || 1;
+  const grid = new Map(), cellsOf = faces.map(() => null);
+  const cells = f => {
+    const b0 = [Infinity, Infinity, Infinity], b1 = [-Infinity, -Infinity, -Infinity];
+    for (const v of f) for (let k = 0; k < 3; k++) { if (P[v][k] < b0[k]) b0[k] = P[v][k]; if (P[v][k] > b1[k]) b1[k] = P[v][k]; }
+    const c0 = b0.map((x, k) => Math.floor((x - lo[k]) / cs)), c1 = b1.map((x, k) => Math.floor((x - lo[k]) / cs)), out = [];
+    for (let x = c0[0]; x <= c1[0]; x++) for (let y = c0[1]; y <= c1[1]; y++) for (let z = c0[2]; z <= c1[2]; z++) out.push(x + ',' + y + ',' + z);
+    return out;
+  };
+  const g = {
+    add(i) { const cs2 = cells(faces[i]); cellsOf[i] = cs2; for (const c of cs2) { let s = grid.get(c); if (!s) grid.set(c, s = new Set()); s.add(i); } },
+    drop(i) { if (cellsOf[i]) for (const c of cellsOf[i]) grid.get(c).delete(i); cellsOf[i] = null; },
+    /** 跟面 `f`（點的編號）佔同一些格子的面 */
+    around(f) { const out = new Set(); for (const c of cells(f)) { const s = grid.get(c); if (s) for (const j of s) out.add(j); } return out; },
+    /** 面拆成三角形（扇形），點是目前的位置 */
+    tris(f) { const o = []; for (let k = 1; k + 1 < f.length; k++) o.push([P[f[0]], P[f[k]], P[f[k + 1]]]); return o; },
+  };
+  faces.forEach((f, i) => g.add(i));
+  return g;
+}
+
+/** 兩個三角形有沒有穿過去（同 `printShape.js` 的分離軸法；點是陣列）。只碰到不算 */
+function triTri(A, B) {
+  const sub = (u, v) => [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
+  const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const ea = [sub(A[1], A[0]), sub(A[2], A[1]), sub(A[0], A[2])], eb = [sub(B[1], B[0]), sub(B[2], B[1]), sub(B[0], B[2])];
+  const axes = [cr(ea[0], ea[1]), cr(eb[0], eb[1])];
+  for (const u of ea) for (const v of eb) axes.push(cr(u, v));
+  for (const ax of axes) {
+    const L = Math.hypot(ax[0], ax[1], ax[2]);
+    if (L < 1e-12) continue;
+    let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (const p of A) { const d = ax[0] * p[0] + ax[1] * p[1] + ax[2] * p[2]; if (d < a0) a0 = d; if (d > a1) a1 = d; }
+    for (const p of B) { const d = ax[0] * p[0] + ax[1] * p[1] + ax[2] * p[2]; if (d < b0) b0 = d; if (d > b1) b1 = d; }
+    const tol = 1e-7 * L;
+    if (a1 <= b0 + tol || b1 <= a0 + tol) return false;
+  }
+  return true;
 }
 
 /**

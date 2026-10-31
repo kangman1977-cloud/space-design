@@ -20791,7 +20791,7 @@ section('網格核心第五批 b ②：匯入時每一片平面各自判斷（�
   // 〔第五批 b ④ 起清碎面改到 `_faceWork()`（背景算、換成保形狀減面），判斷平面的快取改到 `_faceBase()` ⇒ 照新的位置守同一件事〕
   ok('★★ 視窗：先判斷（judgePlanes）再清碎面（數面數的 collapseShort 與保形狀減面都帶 keepVerts）、判斷照做法＋拆法快取',
     /this\._base = \{ key, parts, judged: parts\.map\(judgePlanes\) \}/.test(ps) && /const key = pick\.mode \+ '\|' \+ split;/.test(ps)
-    && /const keep = regs\.length \? keepVerts\(p, regs\) : null;/.test(ps) && /return collapseShort\(p, tol, regs\.length \? keepVerts\(p, regs\) : null\)\.faces\.length;/.test(ps) && /decimate\(p, \{ target: goal, keep \}\)/.test(ps));
+    && /const keep = regs\.length \? keepVerts\(p, regs\) : null;/.test(ps) && /return collapseShort\(p, tol, regs\.length \? keepVerts\(p, regs\) : null\)\.faces\.length;/.test(ps) && /decimate\(p, \{ target: goal, keep, noCross: nc, crossCap: budget \}\)/.test(ps));
   ok('★★ 視窗：三選一預設照建議、記在這個瀏覽器、匯入時標格線（markGrid）、換檔案清掉判斷',
     /planes: 'suggest'/.test(ps) && /this\.opt\.planes = sel\.value; save\(this\.opt\)/.test(ps) && /^\s+markGrid\(mesh, p\.grid\);/m.test(ps) && /this\._base = null;/.test(ps)
     && PL.PLANE_MODES.suggest === '照建議' && Object.keys(PL.PLANE_MODES).join() === 'suggest,merge,keep');
@@ -20969,18 +20969,74 @@ section('網格核心第五批 b ④：保形狀減面（清碎面換做法、�
   const keepSet = new Set([0, 1, 2, 9, 10, 11]);
   const dq = DC.decimate(quad, { target: 20, keep: keepSet });
   ok('★★ 吃四邊形（不先拆三角形）、保護的點一個都不動', quad.faces.every(f => f.length === 4) && [...keepSet].every(i => dq.points.some(q => q.join() === quad.points[i].join())) && dq.faces.some(f => f.length === 4), `${dq.faces.length} 面`);
-  // ⑤ 讀程式守著
+  // ⑤ 讀程式守著〔2026-10-31 減到 N 面多了「不讓面互相穿過去」⇒ `decimate()` 多帶 noCross、crossCap，重算條件多比勾選 —— 照新的那一行守同一件事〕
   const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), ds = readFileSync(join(here, '../js/build/decimate.js'), 'utf8');
   ok('★★ 面數那一區三張卡；超過一成不自動清、建議原樣；快捷 3D 列印不減／剖面 2 萬／紙模 500', /export const FACE_MODES = \{ raw: '原樣（不減）', clean: '清碎面', reduce: '減到 ___ 面' \};/.test(ps)
     && /export const CLEAN_MAX = 0\.1;/.test(ps) && /\['給 3D 列印（不減）', 0\], \['給剖面（約 2 萬面）', 20000\], \['給展開、紙模（約 500 面）', 500\]/.test(ps)
     && /c\.ratio <= CLEAN_MAX \? \{ mode: 'clean'/.test(ps));
-  ok('★★ 清碎面：同一個門檻數出要剩幾個面（collapseShort）再用保形狀減面減到那個數、格子保護；超過一成先只數（點了才減）', /goal = goals\[i\]/.test(ps) && /decimate\(p, \{ target: goal, keep \}\)/.test(ps)
+  ok('★★ 清碎面：同一個門檻數出要剩幾個面（collapseShort）再用保形狀減面減到那個數、格子保護；超過一成先只數（點了才減）', /goal = goals\[i\]/.test(ps) && /decimate\(p, \{ target: goal, keep, noCross: nc, crossCap: budget \}\)/.test(ps)
     && /if \(\(total - n\) \/ total > CLEAN_MAX && this\.faceMode !== 'clean'\)/.test(ps) && /F\.clean = \{ lazy: true, goals/.test(ps));
-  ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget\)/.test(ps)
+  ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget \|\| F\.reduce\.noCross !== this\._noCross\(\)\)/.test(ps)
     && /this\.goBtn\.disabled = !face\.ready;/.test(ps) && /表面離原本最多 \$\{mm\(r\.dev \* s\.cmPerUnit\)\} mm/.test(ps) && /dev = Math\.max\(dev, surfaceDev\(p, q\)\)/.test(ps));
   ok('★★ 量表面偏差用包圍盒樹（汽車的細長三角形會讓均勻格子卡住 —— 本機實際撞到）', /function boxTree\(P, T\)/.test(ds) && /const tree = boxTree\(P, T\);/.test(ds));
   const rowSrc = ps.slice(ps.indexOf('  _faceRow('), ps.indexOf('  /** 面數卡片的小圖'));
   ok('★ 面數卡片的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
+}
+
+section('減到 N 面時不讓面互相穿過去（2026-10-31）');
+{
+  /** `三視圖導入-研究.md` 實驗 9；kang 2026-10-31「照你的建議」：(a) 減的時候就擋 (b) 預設開、可以關 (c) 只用在減到 ___ 面 (d) 減不下去講「讓面互相穿過去」(e) 比較 3 億次 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const DC = await import('../js/build/decimate.js');
+  const { crossCheck, shapeCheck } = await import('../js/out/printShape.js');
+  /** 球（`r` 半徑、`n` 圈，赤道起伏一點免得太規則）；`inward` ＝ 面朝裡（空心球的內層）*/
+  const sphere = (r, n, inward, off = [0, 0, 0]) => {
+    const pts = [], faces = [];
+    for (let j = 0; j <= n; j++) for (let i = 0; i < 2 * n; i++) { const t = Math.PI * j / n, f = Math.PI * i / n; pts.push([off[0] + r * Math.sin(t) * Math.cos(f) * (1 + 0.15 * Math.sin(3 * f) * Math.sin(t)), off[1] + r * Math.cos(t), off[2] + r * Math.sin(t) * Math.sin(f)]); }
+    const id = (j, i) => j === 0 ? 0 : j === n ? n * 2 * n : j * 2 * n + (i % (2 * n));
+    for (let j = 0; j < n; j++) for (let i = 0; i < 2 * n; i++) {
+      const q = [id(j, i), id(j + 1, i), id(j + 1, i + 1), id(j, i + 1)].filter((v, k, a) => a.indexOf(v) === k);
+      if (q.length >= 3) faces.push(inward ? q.reverse() : q);
+    }
+    const used = new Map(), P = [];
+    return { points: P, faces: faces.map(f => f.map(v => { if (!used.has(v)) { used.set(v, P.length); P.push(pts[v]); } return used.get(v); })) };
+  };
+  const join2 = (...ms) => { const points = [], faces = []; for (const m of ms) { const o = points.length; points.push(...m.points); faces.push(...m.faces.map(f => f.map(v => v + o))); } return { points, faces }; };
+  const tris = d => { const V = d.points.map(q => ({ x: q[0], y: q[1], z: q[2] })), out = []; for (const f of d.faces) for (let k = 1; k + 1 < f.length; k++) out.push({ a: V[f[0]], b: V[f[k]], c: V[f[k + 1]] }); return out; };
+  const cross = d => crossCheck(tris(d)).tris;
+  // ① 薄殼（空心球、牆厚 3%）：原本的減法減到 150 面內外兩層穿過去；noCross 一個都不穿、減不下去就停在那裡
+  const shell = join2(sphere(1, 30, false), sphere(0.97, 30, true));
+  const s0 = DC.decimate(shell, { target: 150 }), s1 = DC.decimate(shell, { target: 150, noCross: true });
+  ok('★★★ 薄殼：原檔 0 個穿面；原本的減法減到 150 面穿過去 50 個以上（沙箱 109）', cross(shell) === 0 && s0.faces.length === 150 && cross(s0) >= 50, `${cross(s0)}`);
+  ok('★★★ 薄殼：不讓面互相穿過去 ⇒ 0 個穿面；擋了才減不下去（停在 150 以上、crossRefused > 0）',
+    cross(s1) === 0 && s1.faces.length > 150 && s1.stats.crossRefused > 0 && !s1.stats.crossCapped, `${s1.faces.length} 面、擋 ${s1.stats.crossRefused} 次`);
+  const e1 = (await import('../js/build/import3d.js')).edgeCheck(s1.faces);
+  ok('★★ 薄殼：擋過之後照樣封閉、方向一致', !e1.open && !e1.nonManifold && !e1.flipped);
+  // ② 原本就穿來穿去（兩顆球疊在一起，像汽車的零件）：只擋「新的」⇒ 減得到、穿面不比原本的減法多（第一版每次都擋 ⇒ 汽車 6 小時、樹蛙 13 → 214）
+  const two = join2(sphere(1, 20, false), sphere(1, 20, false, [0.8, 0, 0]));
+  const t0 = DC.decimate(two, { target: 300 }), t1 = DC.decimate(two, { target: 300, noCross: true });
+  ok('★★★ 原本就穿過去的：減得到 300 面、穿面不比原本的減法多（只擋新的）', cross(two) > 100 && t1.faces.length === 300 && cross(t1) <= cross(t0), `原檔 ${cross(two)}、原本 ${cross(t0)}、擋 ${cross(t1)}`);
+  // ③ 比較次數上限：比到上限就不再擋、照實講
+  const c1 = DC.decimate(shell, { target: 150, noCross: true, crossCap: 1000 });
+  ok('★★★ 比到上限（這裡設 1000 次）⇒ crossCapped、後面照原本的減（減得到 150 面）', c1.stats.crossCapped && c1.faces.length === 150 && c1.stats.crossTests > 1000);
+  ok('★★ 上限預設 3 億次（kang 2026-10-31 照建議）', DC.CROSS_CAP === 3e8);
+  // ④ 不勾 ⇒ 跟原本一模一樣
+  const n0 = DC.decimate(shell, { target: 150, noCross: false });
+  ok('★★★ 不勾（noCross: false）⇒ 點、面跟原本的減法一模一樣', JSON.stringify(n0.points) === JSON.stringify(s0.points) && JSON.stringify(n0.faces) === JSON.stringify(s0.faces) && n0.stats.crossTests === 0);
+  // ⑤ 只數穿面的 crossCheck ＝ 列印檢查的穿面
+  const tt = tris(s0);
+  ok('★★ crossCheck 數的跟列印檢查（shapeCheck）的穿面一樣', crossCheck(tt).tris === shapeCheck(tt.map(t => ({ ...t, n: { x: 0, y: 0, z: 1 } })), { mmPerUnit: 10 }).cross.tris.length);
+  // ⑥ 讀程式守著
+  const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8');
+  ok('★★★ (b) 預設開、記在這個瀏覽器；勾選寫「不讓面互相穿過去（比較慢）」', /_noCross\(\) \{ return this\.opt\.noCross !== false; \}/.test(ps)
+    && /不讓面互相穿過去（比較慢）/.test(ps) && /this\.opt\.noCross = nc\.checked; save\(this\.opt\)/.test(ps));
+  ok('★★★ (c) 只用在減到 ___ 面（清碎面不擋）', /const noCross = kind === 'reduce' && this\._noCross\(\);/.test(ps));
+  ok('★★ 換勾選 ⇒ 重算；小圖分開記', /F\[kind\]\.target === this\.reduceTarget && F\[kind\]\.noCross === noCross/.test(ps) && /\$\{r && r\.noCross \? 'nc' : ''\}/.test(ps));
+  ok('★★★ (e) 幾個部分共用一個上限（汽車 169 個零件 ⛔ 每塊各 3 億）', /let budget = CROSS_CAP/.test(ps) && /budget -= q\.stats\.crossTests/.test(ps) && /crossCap: budget/.test(ps));
+  ok('★★★ (d) 減不下去多講「讓面互相穿過去」；比到上限講「後面沒有再擋」', /\$\{r\.crossRefused \? '、讓面互相穿過去' : ''\}/.test(ps) && /這個模型零件互相穿過去太多，後面沒有再擋/.test(ps));
+  ok('★★★ (a) 減完再數一次穿面、照實講（有的話講原檔本來就有幾個；沒勾的時候指路）',
+    /const c = crossCheck\(crossTris\(parts\)\);/.test(ps) && /還有 \$\{r\.cross\.tris\} 個三角形互相穿過去/.test(ps) && /原檔本來就有/.test(ps) && /勾下面的「不讓面互相穿過去」再減一次/.test(ps));
 }
 
 section('網格核心第五批 b ⑤：兩兩合併只合平的（2026-10-24）');
