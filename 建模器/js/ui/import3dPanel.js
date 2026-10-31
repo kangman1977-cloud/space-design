@@ -15,6 +15,7 @@ import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapse
 import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { solidCheck, fillVariant, unionVariant, suggestSolid, SOLID_MODES } from '../build/importSolid.js';
 import { shellFind, skinVariant, solidVariant, suggestShell, SHELL_MODES, AUTO_MAX_FACES } from '../build/importShell.js';
+import { symmetryOf, symDecimate, SYM_ON, SYM_SHOW } from '../build/symmetry.js';
 import { decimate, surfaceDev, CROSS_CAP } from '../build/decimate.js';
 import { crossCheck } from '../out/printShape.js';
 import { pairQuads } from '../build/quadify.js';
@@ -39,6 +40,10 @@ export const QUAD_MODES = { raw: '原樣（三角形）', pair: '兩兩合併' }
  * 只留正面那一區的「正面朝」（建模器的方向：Y 朝上、+Z 朝前）；'' ＝ 自己猜（kang 2026-10-31 (b)）
  */
 export const SHELL_FRONTS = { '+z': '前', '-z': '後', '+x': '右', '-x': '左', '+y': '上', '-y': '下' };
+/**
+ * 對稱減面的軸（建模器的方向）與兩半的名字：照 `[負的那一半, 正的那一半]`（kang 2026-10-31 (e)(f)：預設照左半（下、後））
+ */
+export const SYM_AXES = { x: ['左右', '左', '右'], y: ['上下', '下', '上'], z: ['前後', '後', '前'] };
 export const REDUCE_PRESETS = [['給 3D 列印（不減）', 0], ['給剖面（約 2 萬面）', 20000], ['給展開、紙模（約 500 面）', 500]];
 
 export class Import3DPanel {
@@ -149,6 +154,10 @@ export class Import3DPanel {
     this.shellFront = '';          // '' ＝ 自己猜；否則 `SHELL_FRONTS` 的鍵（建模器的方向）
     this.shellFillBig = false;     // 實心：大的開口（像眼洞）也補起來（預設打穿）
     this.shellLook = false;        // 面很多（> AUTO_MAX_FACES）時按了「看看是不是薄殼」
+    this._sym = null;              // 減到 ___ 面的「對稱」：量好的三個軸（換檔案清掉）
+    this.symOn = null;             // null ＝ 照預設（最對稱的那一軸 ≥ SYM_ON 就勾）；true／false ＝ 自己勾的
+    this.symAxis = '';             // '' ＝ 自動（最對稱的那一軸）；否則 'x'／'y'／'z'（建模器的方向）
+    this.symSide = -1;             // 照哪一半：−1 ＝ 左（下、後）、+1 ＝ 右（上、前）
     if (this.read.ok) {
       this.read.check = edgeCheck(this.read.faces);
       this._startSolid();
@@ -454,6 +463,64 @@ export class Import3DPanel {
     this._shellThumb(ov.querySelector('.i3BigImg'), mode, 720, 540);
   }
 
+  /**
+   * 減到 ___ 面的「對稱」：拆好部分之後量三個軸（只在一個部分時；5 萬面約 1 秒，下一輪算、算完重畫）。
+   * 鑰匙跟拆部分一樣（整理做法、只留正面、拆法）⇒ 換了就重量。
+   */
+  _symState() {
+    const base = this._base;
+    if (!base) return null;
+    if (this._sym && this._sym.key === base.key) return this._sym;
+    const st = { key: base.key, pending: base.parts.length === 1, res: null, error: '', many: base.parts.length > 1 };
+    this._sym = st;
+    if (!st.pending) return st;
+    setTimeout(() => {
+      if (this._sym !== st) return;
+      try {
+        const p = base.parts[0], s = this._setting();
+        let lo = Infinity, hi = -Infinity, k = s.up === 'z' ? 2 : 1;
+        for (const q of p.points) { if (q[k] < lo) lo = q[k]; if (q[k] > hi) hi = q[k]; }
+        st.res = symmetryOf(p, hi - lo);
+      } catch (e) { st.error = '量對稱時出錯：' + (e.message || e); }
+      st.pending = false;
+      this._render();
+    }, 30);
+    return st;
+  }
+
+  /** 建模器的軸（'x'／'y'／'z'）→ 檔案的第幾軸、正負號（Z 朝上的檔：建模器 (x, y, z) ＝ 檔案 (x, z, −y)）*/
+  _symFileAxis(m) {
+    const z = this._setting().up === 'z';
+    return m === 'x' ? { ax: 0, sg: 1 } : m === 'y' ? { ax: z ? 2 : 1, sg: 1 } : { ax: z ? 1 : 2, sg: z ? -1 : 1 };
+  }
+
+  /** 對稱的資訊（給卡片）：最對稱的軸、每一軸幾 %、現在選哪一軸、預設勾不勾、會不會出現 */
+  _symInfo() {
+    const st = this._sym;
+    if (!st || st.pending || st.many || !st.res) return st ? { pending: st.pending, many: st.many, error: st.error } : null;
+    const pctOf = m => st.res.axes[this._symFileAxis(m).ax].within;
+    const autoAx = ['x', 'y', 'z'].reduce((a, b) => (pctOf(b) > pctOf(a) ? b : a));
+    const ax = this.symAxis || autoAx, best = pctOf(autoAx);
+    return { autoAx, ax, pct: pctOf, best, show: best >= SYM_SHOW, defaultOn: best >= SYM_ON };
+  }
+
+  /** 現在用不用對稱（勾了、出現、量好了）⇒ 檔案座標的軸、鏡射面、留哪一半、給卡片的名字；不用 ⇒ null */
+  _symUse() {
+    const inf = this._symInfo();
+    if (!inf || !inf.show) return null;
+    const on = this.symOn === null ? inf.defaultOn : this.symOn;
+    if (!on) return null;
+    const f = this._symFileAxis(inf.ax);
+    const A = SYM_AXES[inf.ax];
+    return { ax: f.ax, c: this._sym.res.axes[f.ax].c, side: this.symSide * f.sg, label: `${A[0]}對稱（照${this.symSide < 0 ? A[1] : A[2]}半）` };
+  }
+
+  /** 對稱的設定變了 ⇒ 減到 N 面要重算（量還沒好時也算一種狀態：好了再算一次）*/
+  _symKey() {
+    const u = this._symUse();
+    return u ? `${u.ax}|${u.c}|${u.side}` : (this._sym && this._sym.pending ? 'pending' : '');
+  }
+
   /** 減到 ___ 面時不讓面互相穿過去（預設開、記住；kang 2026-10-31 照 AI 建議）*/
   _noCross() { return this.opt.noCross !== false; }
 
@@ -479,7 +546,9 @@ export class Import3DPanel {
     const solidBusy = (this._solid && this._solid.pending) || (this._shell && this._shell.pending);    // 整理成實體、只留正面還在算 ⇒ 先不算
     if (!F.clean && !solidBusy) this._faceWork('clean');
     if (F.clean && F.clean.lazy && this.faceMode === 'clean' && !solidBusy) this._faceWork('clean');   // 超過一成的：點了才真的減
-    if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget || F.reduce.noCross !== this._noCross()) && !solidBusy) this._faceWork('reduce');
+    if (!solidBusy) this._symState();
+    const symBusy = this._sym && this._sym.pending;                    // 對稱還在量 ⇒ 減到 N 面先等（⛔ 先照一般減、量好又重減一次）
+    if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget || F.reduce.noCross !== this._noCross() || F.reduce.symKey !== this._symKey()) && !solidBusy && !symBusy) this._faceWork('reduce');
     const c = F.clean && (F.clean.parts || F.clean.lazy) ? F.clean : null;
     F.suggest = !c ? { mode: 'raw', why: F.clean && !F.clean.pending ? '' : '正在算清碎面…' }
       : !c.removed ? { mode: 'raw', why: '沒有比門檻短、清了不會壞的碎面 —— 不用清' }
@@ -504,9 +573,10 @@ export class Import3DPanel {
     const F = this._face;
     const full = kind === 'clean' && F.clean && F.clean.lazy;     // 先前只數過、現在點了要真的減
     const noCross = kind === 'reduce' && this._noCross();
-    if (F[kind] && !full && (kind === 'clean' || (F[kind].target === this.reduceTarget && F[kind].noCross === noCross))) return;
+    const symKey = kind === 'reduce' ? this._symKey() : '', symUse = kind === 'reduce' ? this._symUse() : null;
+    if (F[kind] && !full && (kind === 'clean' || (F[kind].target === this.reduceTarget && F[kind].noCross === noCross && F[kind].symKey === symKey))) return;
     const target = this.reduceTarget, counted = full ? F.clean.goals : null;
-    F[kind] = { pending: true, target, noCross };
+    F[kind] = { pending: true, target, noCross, symKey };
     setTimeout(() => {
       if (this._face !== F) return;                       // 這中間換了設定
       const base = this._base, planesMode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
@@ -533,20 +603,26 @@ export class Import3DPanel {
             return;
           }
         }
-        let budget = CROSS_CAP, crossRefused = 0, crossCapped = false;
+        let budget = CROSS_CAP, crossRefused = 0, crossCapped = false, symBad = '';
         const parts = base.parts.map((p, i) => {
           const regs = kind === 'clean' ? keptRegions(base.judged[i], planesMode) : [];
           const keep = regs.length ? keepVerts(p, regs) : null;
           const goal = goals[i];
           if (goal < p.faces.length && noCross && budget <= 0) crossCapped = true;      // 前面的部分已經比到上限 ⇒ 這一塊照原本的減
           const nc = noCross && budget > 0;
-          const q = goal < p.faces.length ? decimate(p, { target: goal, keep, noCross: nc, crossCap: budget }) : { ...p, from: p.faces.map((_, k) => k), stats: { maxMove: 0 } };
+          /** 左右對稱（kang 2026-10-31 (a)～(i)）：只在一個部分時；做出來塊數、破洞變多 ⇒ 改用一般減面、講原因（(g)）*/
+          let q = null;
+          if (symUse && goal < p.faces.length) {
+            const y = symDecimate(p, { target: goal, ax: symUse.ax, c: symUse.c, side: symUse.side, noCross: nc, crossCap: budget });
+            if (y.bad) symBad = y.bad; else q = y;
+          }
+          if (!q) q = goal < p.faces.length ? decimate(p, { target: goal, keep, noCross: nc, crossCap: budget }) : { ...p, from: p.faces.map((_, k) => k), stats: { maxMove: 0 } };
           if (nc && q.stats.crossTests !== undefined) { budget -= q.stats.crossTests; crossRefused += q.stats.crossRefused; crossCapped = crossCapped || q.stats.crossCapped; }
           left += q.faces.length; maxMove = Math.max(maxMove, q.stats.maxMove);
           if (q.faces.length < p.faces.length) dev = Math.max(dev, surfaceDev(p, q));   // 表面離原本最多多遠（⛔ 用點搬了多遠 —— 點會沿著表面滑）
           return { ...q, grid: gridEdges(q, keptRegions(base.judged[i], planesMode).filter(() => kind === 'clean'), q.from) };
         });
-        F[kind] = { target, noCross, parts, faces: left, removed: total - left, ratio: total ? (total - left) / total : 0, maxMove, dev, tol, crossRefused, crossCapped };
+        F[kind] = { target, noCross, symKey, sym: symUse && !symBad ? symUse.label : '', symBad, parts, faces: left, removed: total - left, ratio: total ? (total - left) / total : 0, maxMove, dev, tol, crossRefused, crossCapped };
         /** 減到 N 面：減完數還有幾個三角形穿過去（跟大小無關）；有的話再數原檔本來就有幾個（同一個檔只數一次）*/
         if (kind === 'reduce' && left < total) {
           const c = crossCheck(crossTris(parts));
@@ -736,6 +812,8 @@ export class Import3DPanel {
         if (mode === 'clean' && !r.removed) t[0] = '沒有比門檻短、清了不會壞的碎面';
         if (mode === 'reduce' && r.faces > this.reduceTarget * 1.05) t.push(`最少只能減到 ${r.faces} 個面（零件多、或再減會弄出破洞、讓面翻過去${r.crossRefused ? '、讓面互相穿過去' : ''}）`);
         if (mode === 'reduce' && r.crossCapped) t.push('這個模型零件互相穿過去太多，後面沒有再擋');
+        if (mode === 'reduce' && r.sym) t.push(r.sym + ' —— 左右兩半的網格一模一樣');
+        if (mode === 'reduce' && r.symBad) t.push(r.symBad + ' —— 改用一般減面');
         if (mode === 'reduce' && r.cross && r.cross.tris) {
           const was = this._base && this._base.cross;
           t.push(`還有 ${r.cross.tris} 個三角形互相穿過去${r.cross.cut ? '（太多、沒數完）' : ''}`
@@ -755,12 +833,14 @@ export class Import3DPanel {
       if (mode === 'reduce') {
         ctl.innerHTML = `<input type="number" class="i3Reduce" step="100" min="4" style="width:80px" placeholder="面數" value="${this.reduceTarget > 0 ? this.reduceTarget : ''}"> 面　`
           + REDUCE_PRESETS.map(([t, n], k) => `<button class="mini" data-k="${k}">${t}</button>`).join(' ')
-          + `<br><label class="i3NoCrossLbl"><input type="checkbox" class="i3NoCross"${this._noCross() ? ' checked' : ''}> 不讓面互相穿過去（比較慢）</label>`;
+          + `<br><label class="i3NoCrossLbl"><input type="checkbox" class="i3NoCross"${this._noCross() ? ' checked' : ''}> 不讓面互相穿過去（比較慢）</label>`
+          + this._symCtl();
         const nc = ctl.querySelector('.i3NoCross');
         nc.parentElement.title = '減的時候，合了會讓面穿過別的面就不合（薄的殼內外兩層不會穿出來）。'
           + '原本就穿過去的不管。比較慢：5 萬面約多 2～3 倍時間';
         nc.parentElement.onclick = e => e.stopPropagation();
         nc.onchange = () => { this.opt.noCross = nc.checked; save(this.opt); this._render(); };
+        this._symWire(ctl);
         const inp = ctl.querySelector('input');
         inp.onclick = e => e.stopPropagation();
         inp.onchange = () => { const n = Math.round(num(inp.value, 0)); this.reduceTarget = n >= 4 ? n : 0; this.faceMode = this.reduceTarget ? 'reduce' : ''; this._render(); };
@@ -783,13 +863,45 @@ export class Import3DPanel {
     return d;
   }
 
+  /**
+   * 「對稱」那一行（kang 2026-10-31 (c)(d)(e)(f)(h)）：好幾個部分 ⇒ 變灰寫原因；最對稱的軸 < `SYM_SHOW` ⇒ 不出現；
+   * ≥ `SYM_SHOW` ⇒ 勾選＋軸＋照哪一半，≥ `SYM_ON` 預設勾、不到的預設不勾並寫「會把不對稱的地方改成對稱」。
+   */
+  _symCtl() {
+    const inf = this._symInfo();
+    if (!inf) return '';
+    if (inf.many) return '<br><label class="i3SymLbl" style="opacity:.55"><input type="checkbox" class="i3Sym" disabled> 對稱減面：好幾個部分時不能用（不勾上面的「一個部分一個物件」就可以）</label>';
+    if (inf.pending) return '<br><span class="i3SymLbl">對稱減面：正在量左右對不對稱…</span>';
+    if (inf.error) return `<br><span class="i3SymLbl">${esc(inf.error)}</span>`;
+    if (!inf.show) return '';
+    const on = this.symOn === null ? inf.defaultOn : this.symOn, A = SYM_AXES[inf.ax];
+    const opt = m => `<option value="${m}"${this.symAxis === m ? ' selected' : ''}>${SYM_AXES[m][0]}（${pct(inf.pct(m))} 對稱）</option>`;
+    return `<br><label class="i3SymLbl"><input type="checkbox" class="i3Sym"${on ? ' checked' : ''}> 對稱減面（比較快）</label> `
+      + `<select class="i3SymAx"><option value=""${this.symAxis ? '' : ' selected'}>自動：${SYM_AXES[inf.autoAx][0]}（${pct(inf.best)} 對稱）</option>${['x', 'y', 'z'].map(opt).join('')}</select> `
+      + `<select class="i3SymSide"><option value="-1"${this.symSide < 0 ? ' selected' : ''}>照${A[1]}半</option><option value="1"${this.symSide > 0 ? ' selected' : ''}>照${A[2]}半</option></select>`
+      + (inf.defaultOn ? '' : `<br><span class="i3SymLbl">⚠ 只有 ${pct(inf.best)} 對稱 —— 勾了會把不對稱的地方改成對稱（看上面的「表面離原本最多」）</span>`);
+  }
+
+  _symWire(ctl) {
+    const ck = ctl.querySelector('.i3Sym'), ax = ctl.querySelector('.i3SymAx'), sd = ctl.querySelector('.i3SymSide');
+    if (ck && !ck.disabled) {
+      ck.parentElement.title = '切一半減、鏡射接回：左右兩半的網格一模一樣、展開片左右成對（可以對折一起剪）、快一倍。'
+        + '原本就對稱的形狀幾乎不變；不太對稱的會被改成對稱';
+      ck.parentElement.onclick = e => e.stopPropagation();
+      ck.onchange = () => { this.symOn = ck.checked; this._render(); };
+    }
+    for (const el of [ax, sd]) if (el) el.onclick = e => e.stopPropagation();
+    if (ax) { ax.title = '鏡射面沿哪一個方向（建模器的方向：左右 ＝ X）；自動 ＝ 量起來最對稱的那一個'; ax.onchange = () => { this.symAxis = ax.value; this._render(); }; }
+    if (sd) { sd.title = '另一半照這一半鏡射過去（很對稱的模型兩半一樣；不太對稱時挑比較好的那一半）'; sd.onchange = () => { this.symSide = +sd.value; this._render(); }; }
+  }
+
   /** 面數卡片的小圖（換算後的樣子）*/
   _faceThumb(el, mode, w, h) {
     const F = this._face, s = this._setting(), base = this._base;
     if (!F.thumbs) F.thumbs = {};
     const r = mode === 'raw' ? null : F[mode];
     const conv = s.up === 'z' ? q => [q[0] * s.cmPerUnit, q[2] * s.cmPerUnit, -q[1] * s.cmPerUnit] : q => [q[0] * s.cmPerUnit, q[1] * s.cmPerUnit, q[2] * s.cmPerUnit];
-    this._thumbPut(el, F.thumbs, `${mode}|${r ? r.target : 0}|${r && r.noCross ? 'nc' : ''}|${s.up}|${w}`, () => this._face === F,
+    this._thumbPut(el, F.thumbs, `${mode}|${r ? r.target : 0}|${r && r.noCross ? 'nc' : ''}|${r ? r.symKey : ''}|${s.up}|${w}`, () => this._face === F,
       () => (r ? r.parts : base.parts).map(p => ({ points: p.points.map(conv), faces: p.faces })), w, h);
   }
 
@@ -984,7 +1096,7 @@ export class Import3DPanel {
     if (this.app.toast) {
       this.app.toast(`已匯入「${this.fileName}」：${objs.length} 個網格物件、${nFaces} 個面，${f(z.w)} × ${f(z.h)} × ${f(z.d)} cm`
         + (face.using === 'clean' && face.clean.removed ? `（清碎面：少 ${face.clean.removed} 個面）` : '')
-        + (face.using === 'reduce' ? `（減到 ${face.reduce.faces} 個面）` : '')
+        + (face.using === 'reduce' ? `（減到 ${face.reduce.faces} 個面${face.reduce.sym ? '、' + face.reduce.sym : ''}）` : '')
         + (quad.using === 'pair' ? `（兩兩合併：合了 ${quad.pairs} 對）` : '')
         + (this._solidPick().mode !== 'raw' ? `（${SOLID_MODES[this._solidPick().mode]}）` : '')
         + (shell.using === 'skin' ? `（只留正面：面皮板件、板厚 ${mm(wall)} mm）` : shell.using === 'solid' ? '（只留正面：實心）' : '')

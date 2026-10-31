@@ -20976,7 +20976,7 @@ section('網格核心第五批 b ④：保形狀減面（清碎面換做法、�
     && /c\.ratio <= CLEAN_MAX \? \{ mode: 'clean'/.test(ps));
   ok('★★ 清碎面：同一個門檻數出要剩幾個面（collapseShort）再用保形狀減面減到那個數、格子保護；超過一成先只數（點了才減）', /goal = goals\[i\]/.test(ps) && /decimate\(p, \{ target: goal, keep, noCross: nc, crossCap: budget \}\)/.test(ps)
     && /if \(\(total - n\) \/ total > CLEAN_MAX && this\.faceMode !== 'clean'\)/.test(ps) && /F\.clean = \{ lazy: true, goals/.test(ps));
-  ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget \|\| F\.reduce\.noCross !== this\._noCross\(\)\)/.test(ps)
+  ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget \|\| F\.reduce\.noCross !== this\._noCross\(\) \|\| F\.reduce\.symKey !== this\._symKey\(\)\)/.test(ps)   // 〔2026-10-31 對稱減面：對稱的設定變了也重算 ⇒ 照新的那一行守同一件事〕
     && /const busy = !face\.ready \? '面數那一區' : shell\.pending \? '只留正面那一區' : '';\s*this\.goBtn\.disabled = !!busy;/.test(ps) && /表面離原本最多 \$\{mm\(r\.dev \* s\.cmPerUnit\)\} mm/.test(ps) && /dev = Math\.max\(dev, surfaceDev\(p, q\)\)/.test(ps));
   ok('★★ 量表面偏差用包圍盒樹（汽車的細長三角形會讓均勻格子卡住 —— 本機實際撞到）', /function boxTree\(P, T\)/.test(ds) && /const tree = boxTree\(P, T\);/.test(ds));
   const rowSrc = ps.slice(ps.indexOf('  _faceRow('), ps.indexOf('  /** 面數卡片的小圖'));
@@ -24426,6 +24426,104 @@ section('匯入時只留正面：面皮／實心（kang 2026-10-31「照你的�
     /const wall = skin \? Math\.max\(0\.01, Math\.round\(shell\.find\.wall \* s\.cmPerUnit \* 100\) \/ 100\) : 0;/.test(pn)
     && /kind: KIND\.SHEET, src: \{ type: 'mesh' \}, mesh, thickness: wall, shellIn: true/.test(pn));
   ok('★★ Z 朝上的檔：建模器的前（+Z）＝ 檔案的 −Y', /const M2F_Z = \{ '\+x': '\+x', '-x': '-x', '\+y': '\+z', '-y': '-z', '\+z': '-y', '-z': '\+y' \};/.test(pn));
+}
+
+section('減到 ___ 面的對稱減面（kang 2026-10-31「照你的建議」(a)～(i)）');
+{
+  /** `三視圖導入-研究.md` 實驗 12；規格 `規格\建模器-匯入3D模型.md`「對稱減面」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const SY = await import('../js/build/symmetry.js');
+  const DC = await import('../js/build/decimate.js');
+  const SO = await import('../js/build/importSolid.js');
+  const im = await import('../js/build/import3d.js');
+  /** 跟「只留正面」那一節一樣的合成薄殼面具（左右對稱：x 從 −1 到 1、兩個眼洞左右對稱）*/
+  const mask = ({ n = 24, R = 10, t = 0.15, holes = [] } = {}) => {
+    const dir = (i, j) => { const x = -1 + 2 * i / n, y = -1 + 2 * j / n, L = Math.hypot(x, y, 1.3); return [x / L, y / L, 1.3 / L]; };
+    const keep = (i, j) => !holes.some(([a, b, c, d]) => i >= a && i < b && j >= c && j < d);
+    const points = [], id = new Map();
+    const at = (i, j, s) => { const k = `${i},${j},${s}`; if (!id.has(k)) { const r = s ? R - t : R; id.set(k, points.length); points.push(dir(i, j).map(v => v * r)); } return id.get(k); };
+    const faces = [], cell = new Set();
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (keep(i, j)) cell.add(`${i},${j}`);
+    for (const c of cell) {
+      const [i, j] = c.split(',').map(Number);
+      faces.push([at(i, j, 0), at(i + 1, j, 0), at(i + 1, j + 1, 0), at(i, j + 1, 0)]);
+      faces.push([at(i, j + 1, 1), at(i + 1, j + 1, 1), at(i + 1, j, 1), at(i, j, 1)]);
+      const sides = [[[i, j], [i + 1, j], [i, j - 1]], [[i + 1, j], [i + 1, j + 1], [i + 1, j]], [[i + 1, j + 1], [i, j + 1], [i, j + 1]], [[i, j + 1], [i, j], [i - 1, j]]];
+      for (const [a, b, nb] of sides) if (!cell.has(`${nb[0]},${nb[1]}`)) faces.push([at(b[0], b[1], 0), at(a[0], a[1], 0), at(a[0], a[1], 1), at(b[0], b[1], 1)]);
+    }
+    return { points, faces, partOf: faces.map(() => 0), parts: [''] };
+  };
+  const vol = r => { let v = 0; for (const f of r.faces) for (let k = 1; k + 1 < f.length; k++) { const a = r.points[f[0]], b = r.points[f[k]], c = r.points[f[k + 1]]; v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } return v / 6; };
+  /** 每個點在另一邊有沒有點（差 1e-6 以內）*/
+  const mirrored = (d, ax, c) => { const key = q => q.map(x => Math.round(x * 1e5)).join(','); const set = new Set(d.points.map(key)); return d.points.filter(q => { const m = q.slice(); m[ax] = 2 * c - q[ax]; return set.has(key(m)); }).length / d.points.length; };
+  const clean = d => { const e = im.edgeCheck(d.faces); return !e.open && !e.flipped && !e.nonManifold; };
+
+  // ① 量對稱
+  const m2 = mask({ holes: [[5, 9, 12, 15], [15, 19, 12, 15]] });
+  const s2 = SY.symmetryOf(m2, 12);
+  ok('★★★ 兩個眼洞的面具：左右（X）100% 對稱、最對稱的就是 X、鏡射面在 x ＝ 0', s2.best === 0 && s2.axes[0].within >= SY.SYM_ON && Math.abs(s2.axes[0].c) < 1e-9,
+    s2.axes.map(a => a.within).join());
+  const m1 = mask({ holes: [[3, 10, 10, 17]] });
+  const s1 = SY.symmetryOf(m1, 12);
+  ok('★★ 只挖一邊的大洞：最對稱的不到 99%、但有 90% 以上（⇒ 出現、預設不勾）', s1.axes[s1.best].within < SY.SYM_ON && s1.axes[s1.best].within >= SY.SYM_SHOW, s1.axes.map(a => a.within.toFixed(3)).join());
+  const tet = { points: [[0, 0, 0], [3, 0, 0], [0, 1, 0], [0, 0, 2]], faces: [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] };
+  const st = SY.symmetryOf(tet, 1);
+  ok('★★ 歪的四面體：每個軸都不到 90%（⇒ 不出現）', st.axes.every(a => a.within < SY.SYM_SHOW), st.axes.map(a => a.within.toFixed(2)).join());
+  ok('★★ 門檻：99% 預設勾、90% 出現', SY.SYM_ON === 0.99 && SY.SYM_SHOW === 0.9);
+  // ② 切一半、鏡射接回
+  const cube = { points: [[-1, 0, 0], [1, 0, 0], [1, 1, 0], [-1, 1, 0], [-1, 0, 1], [1, 0, 1], [1, 1, 1], [-1, 1, 1]], faces: [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] };
+  const hc = SY.cutHalf(cube, 0, 0, -1, 1e-9);
+  ok('★★★ 方塊在 x ＝ 0 切一半（留左邊）：點都在 x ≤ 0、切口 4 個點、開口一圈 4 條邊', hc.points.every(q => q[0] <= 0) && hc.points.filter(q => q[0] === 0).length === 4 && im.edgeCheck(hc.faces).open === 4,
+    `${hc.points.length} 點 ${hc.faces.length} 面 開 ${im.edgeCheck(hc.faces).open}`);
+  const wc = SY.mirrorWeld(hc, 0, 0);
+  ok('★★★ 鏡射接回：封閉、方向一致、體積跟原本一樣（2）', clean(wc) && Math.abs(vol(wc) - 2) < 1e-9, `${vol(wc)}`);
+  const hr = SY.cutHalf(cube, 0, 0, 1, 1e-9);
+  ok('★★ 留右邊：點都在 x ≥ 0', hr.points.every(q => q[0] >= 0));
+  // ③ 對稱減面
+  const r2 = SY.symDecimate(m2, { target: 300, ax: 0, c: 0, side: -1 });
+  ok('★★★ 面具減到 300 面：每個點左右都有對得上的點、封閉方向一致、一塊、沒有說做不出來', mirrored(r2, 0, 0) === 1 && clean(r2) && SO.components(r2.faces, r2.points.length).length === 1 && !r2.bad && r2.faces.length <= 310,
+    `${r2.faces.length} 面、鏡像 ${mirrored(r2, 0, 0)}、${r2.bad}`);
+  const g2 = DC.decimate(m2, { target: 300 });
+  ok('★★ 一般減面（同一個面具、300 面）點對不上（⇒ 對稱減面才有）', mirrored(g2, 0, 0) < 0.9, `${mirrored(g2, 0, 0)}`);
+  ok('★★ 對稱減面的 `from` 每個面都是 −1（切過、鏡射過；後面格線那一步讀得到、⛔ 當掉）', r2.from.length === r2.faces.length && r2.from.every(x => x === -1));
+  const r2b = SY.symDecimate(m2, { target: 300, ax: 0, c: 0, side: 1 });
+  ok('★★ 照右半也一樣做得出來（鏡像 100%、封閉）', mirrored(r2b, 0, 0) === 1 && clean(r2b) && !r2b.bad);
+  const two = { points: [...cube.points, ...cube.points.map(q => [q[0] + 5, q[1], q[2]])], faces: [...cube.faces, ...cube.faces.map(f => f.map(v => v + 8))] };
+  const open = { points: cube.points, faces: cube.faces.slice(1) };
+  ok('★★★ 做出來不對的判斷：1 塊變 2 塊、多了破洞都講；一樣的 ⇒ 沒問題', /分成 2 塊（原本 1 塊）/.test(SY.symProblem(cube, two)) && /多了破洞（4 條邊沒接上）/.test(SY.symProblem(cube, open))
+    && SY.symProblem(cube, cube) === '' && SY.symProblem(open, open) === '', `${SY.symProblem(cube, two)}／${SY.symProblem(cube, open)}`);
+  // ④ decimate 的鏡射面選項：切口的點留在面上、其他點不准過去
+  const half = SY.cutHalf(m2, 0, 0, -1, 1e-9);
+  const dh = DC.decimate(half, { target: 150, plane: { ax: 0, c: 0, eps: 1e-9, side: -1 } });
+  ok('★★★ 只減左半：沒有點跑到右邊（x > 0）、開口那一圈的點都還在 x ＝ 0', dh.points.every(q => q[0] <= 0) && (() => {
+    const c = new Map(); for (const f of dh.faces) for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], key = a < b ? a + ',' + b : b + ',' + a; c.set(key, (c.get(key) || 0) + 1); }
+    return [...c].filter(([, n]) => n === 1).every(([key]) => key.split(',').every(v => Math.abs(dh.points[+v][0]) < 1e-12 || Math.abs(Math.hypot(...dh.points[+v]) - 10) < 2));
+  })(), `${dh.faces.length} 面`);
+  /** 削掉尖的四面體：尖端 (1, 0, 0) 在中線右邊、整個在左邊（x ≤ −0.05）；合併時誤差最小的位置被拉向尖端 ⇒ 會跑到右邊（合成面具碰不到這種情形 —— 故意改壞「跑到另一半不擋」第一輪沒抓到才加）*/
+  const apex = [1, 0, 0], base = [[-3, 2, 0], [-3, -1, 1.7], [-3, -1, -1.7]];
+  const tip = base.map(q => { const k = (-0.05 - q[0]) / (apex[0] - q[0]); return q.map((x, j) => x + (apex[j] - x) * k); });
+  const tr = { points: [...base, ...tip], faces: [[0, 2, 1], [3, 4, 5], [0, 1, 4, 3], [1, 2, 5, 4], [2, 0, 3, 5]] };
+  const trPlain = DC.decimate(tr, { target: 4 }), trPlane = DC.decimate(tr, { target: 4, plane: { ax: 0, c: 0, eps: 1e-9, side: -1 } });
+  ok('★★★ 尖端在另一邊的削尖四面體：一般減面有點跑到右邊；給鏡射面（留左邊）⇒ 沒有點過去', Math.max(...trPlain.points.map(q => q[0])) > 0.1 && Math.max(...trPlane.points.map(q => q[0])) <= 0,
+    `${Math.max(...trPlain.points.map(q => q[0])).toFixed(3)}／${Math.max(...trPlane.points.map(q => q[0])).toFixed(3)}`);
+  const dn = DC.decimate(half, { target: 150 });
+  ok('★★ 不給鏡射面 ⇒ 開口的點會被拉離 x ＝ 0（所以要這個選項）', dn.points.filter(q => Math.abs(q[0]) < 1e-12).length < dh.points.filter(q => Math.abs(q[0]) < 1e-12).length
+    || dn.points.some(q => q[0] > 1e-9));
+
+  // ⑤ 讀程式守著（視窗）
+  const pn = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8');
+  ok('★★ 只用在減到 ___ 面（清碎面不用）；做出來不對 ⇒ 改用一般減面、卡片講原因',
+    /const symKey = kind === 'reduce' \? this\._symKey\(\) : '', symUse = kind === 'reduce' \? this\._symUse\(\) : null;/.test(pn)
+    && /if \(y\.bad\) symBad = y\.bad; else q = y;/.test(pn) && /t\.push\(r\.symBad \+ ' —— 改用一般減面'\)/.test(pn));
+  ok('★★ 好幾個部分 ⇒ 勾選變灰、寫不能用；只在一個部分時量', /many: base\.parts\.length > 1/.test(pn) && /對稱減面：好幾個部分時不能用/.test(pn) && /pending: base\.parts\.length === 1/.test(pn));
+  ok('★★ 出現與預設：≥ 99% 預設勾、≥ 90% 出現（不勾、寫會改成對稱）、更低不出現；自己勾的照自己的',
+    /show: best >= SYM_SHOW, defaultOn: best >= SYM_ON/.test(pn) && /const on = this\.symOn === null \? inf\.defaultOn : this\.symOn;/.test(pn) && /勾了會把不對稱的地方改成對稱/.test(pn) && /if \(!inf\.show\) return '';/.test(pn));
+  ok('★★ 軸：自動（寫最對稱的、幾 %）＋左右上下前後；照哪一半：預設左（下、後）', /自動：\$\{SYM_AXES\[inf\.autoAx\]\[0\]\}（\$\{pct\(inf\.best\)\} 對稱）/.test(pn)
+    && /SYM_AXES = \{ x: \['左右', '左', '右'\], y: \['上下', '下', '上'\], z: \['前後', '後', '前'\] \}/.test(pn) && /this\.symSide = -1;/.test(pn));
+  ok('★★ Z 朝上的檔：建模器的前後 ＝ 檔案的 Y、正負相反；上下 ＝ 檔案的 Z', /return m === 'x' \? \{ ax: 0, sg: 1 \} : m === 'y' \? \{ ax: z \? 2 : 1, sg: 1 \} : \{ ax: z \? 1 : 2, sg: z \? -1 : 1 \};/.test(pn));
+  ok('★★ 對稱還在量 ⇒ 減到 N 面先等；對稱的設定變了重算；換檔案清回預設', /const symBusy = this\._sym && this\._sym\.pending;/.test(pn) && /&& !solidBusy && !symBusy\) this\._faceWork\('reduce'\)/.test(pn)
+    && /this\._sym = null;[\s\S]{0,200}this\.symOn = null;[\s\S]{0,200}this\.symAxis = '';[\s\S]{0,200}this\.symSide = -1;/.test(pn));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

@@ -16,6 +16,9 @@
  *   ⛔ 每一次都擋 —— 沙箱第一版這樣做，汽車 6 小時沒算完、樹蛙穿面 13 → 214）。
  * - 三角形兩兩比超過 `crossCap` 次就不再擋（照原本的減下去），`stats.crossCapped` 照實講。
  * - 附近的面用均勻格子找（最長邊 ÷ 48 一格），合了就更新。慢 2～3 倍（5 萬面 4 → 7～15 秒）。
+ *
+ * `plane`（2026-10-31，`三視圖導入-研究.md` 實驗 12；kang「照你的建議」）：對稱減面切一半時用（`symmetry.js`）——
+ * 切口的點（在鏡射面上）合了之後還是貼在鏡射面上、其他點⛔ 跑到另一半；沒給 ⇒ 跟原本一模一樣。
  */
 
 /** `noCross` 三角形兩兩比的次數上限（汽車：比到這裡約 4 分鐘；kang 2026-10-31 照 AI 建議）*/
@@ -23,14 +26,15 @@ export const CROSS_CAP = 3e8;
 
 /**
  * @param {{points:number[][], faces:number[][]}} p 一個部分
- * @param {{target?:number, maxLen?:number, keep?:Set<number>|null, noCross?:boolean, crossCap?:number}} opt
+ * @param {{target?:number, maxLen?:number, keep?:Set<number>|null, noCross?:boolean, crossCap?:number, plane?:{ax:number, c:number, eps:number, side:number}|null}} opt
  *   `target` 減到幾個面（0 ＝ 不限）；`maxLen` 只合比這個短的邊；`keep` 這些點不動（第 ② 小批照原檔的格子）；
- *   `noCross` 不准多出新的穿面；`crossCap` 那一項最多比幾次（幾個部分分著減時，呼叫的人傳剩下的）
+ *   `noCross` 不准多出新的穿面；`crossCap` 那一項最多比幾次（幾個部分分著減時，呼叫的人傳剩下的）；
+ *   `plane` 鏡射面（第 `ax` 軸 ＝ `c`；離它 `eps` 以內的點算切口；`side` ＝ 留下來那一半的方向 −1／+1）
  * @returns {{points, faces, from, stats:{collapsed, refused, removed, maxMove, crossRefused, crossTests, crossCapped}}}
  *   `from[k]` ＝ 減完的第 k 個面是原本第幾個；`maxMove` ＝ 原本的點最多被搬多遠（點的單位）；
  *   `crossRefused` ＝ 因為會穿面沒合的次數；`crossTests` ＝ 比了幾次；`crossCapped` ＝ 比到上限、後面沒再擋
  */
-export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCross = false, crossCap = CROSS_CAP } = {}) {
+export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCross = false, crossCap = CROSS_CAP, plane = null } = {}) {
   const P = p.points.map(q => q.slice());
   const faces = p.faces.map(f => f.slice());
   const alive = faces.map(() => true);
@@ -79,6 +83,9 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCros
     const d = -(w[0] * A[0] + w[1] * A[1] + w[2] * A[2]), W = (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * 100;
     addPlane(Q[a], w, d, W); addPlane(Q[b], w, d, W);
   }
+  /** 鏡射面：切口的點記起來（貼齊到面上）；合了之後留下來的那個點也算切口 */
+  const seam = new Set();
+  if (plane) P.forEach((q, i) => { if (Math.abs(q[plane.ax] - plane.c) <= plane.eps) { q[plane.ax] = plane.c; seam.add(i); } });
   const err = (q, x) => q[0] * x[0] * x[0] + 2 * q[1] * x[0] * x[1] + 2 * q[2] * x[0] * x[2] + 2 * q[3] * x[0]
     + q[4] * x[1] * x[1] + 2 * q[5] * x[1] * x[2] + 2 * q[6] * x[1] + q[7] * x[2] * x[2] + 2 * q[8] * x[2] + q[9];
   /** 合併 u、v 的代價與位置：解二次誤差最小的點（離這條邊太遠就不用 —— 數值不穩），跟中點、兩端比，取最小 */
@@ -99,7 +106,17 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCros
       if (Math.hypot(x[0] - mid[0], x[1] - mid[1], x[2] - mid[2]) < 2 * L) cands.unshift(x);
     }
     let bx = mid, be = Infinity;
-    for (const x of cands) { const e2 = err(q, x); if (e2 < be) { be = e2; bx = x; } }
+    if (plane) {
+      const onSeam = seam.has(u) || seam.has(v);
+      for (let k = 0; k < cands.length; k++) {
+        const x = cands[k].slice();
+        if (onSeam) x[plane.ax] = plane.c;                                                  // 切口的點 ⇒ 貼回鏡射面
+        else if ((x[plane.ax] - plane.c) * plane.side < 0) { cands[k] = null; continue; }    // ⛔ 跑到另一半
+        cands[k] = x;
+      }
+    }
+    for (const x of cands) { if (!x) continue; const e2 = err(q, x); if (e2 < be) { be = e2; bx = x; } }
+    if (be === Infinity) return [Infinity, mid.slice()];
     return [Math.max(0, be), bx.slice()];
   };
 
@@ -112,6 +129,7 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCros
     if (keep && keep.has(a) && keep.has(b)) return;
     if (len(a, b) >= maxLen) return;
     const [c, x] = best(a, b);
+    if (c === Infinity) return;                       // 每個位置都會跑到另一半（`plane`）⇒ 這條不合
     heap.push([c, a, b, ver[a], ver[b], x]);
   };
   for (const key of cnt.keys()) { const [a, b] = key.split('-').map(Number); pushEdge(a, b); }
@@ -185,6 +203,7 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCros
       for (const v of faces[i]) vf[v].add(i);
     });
     rep[b] = a;
+    if (seam.has(b)) seam.add(a);
     for (let k = 0; k < 10; k++) Q[a][k] += Q[b][k];
     ver[a]++; collapsed++;
     const nb = new Set();
@@ -279,8 +298,8 @@ export function surfaceDev(orig, out) {
   return worst;
 }
 
-/** 三角形的包圍盒二元樹（照中心點沿最長的軸對半分，葉子 ≤ 8 個）*/
-function boxTree(P, T) {
+/** 三角形的包圍盒二元樹（照中心點沿最長的軸對半分，葉子 ≤ 8 個）；`symmetry.js` 量對稱也用 */
+export function boxTree(P, T) {
   const n = T.length, idx = new Int32Array(n), cen = new Float64Array(n * 3);
   for (let i = 0; i < n; i++) { idx[i] = i; for (let k = 0; k < 3; k++) cen[i * 3 + k] = (P[T[i][0]][k] + P[T[i][1]][k] + P[T[i][2]][k]) / 3; }
   const nodes = [];
@@ -312,7 +331,7 @@ function boxDist(nd, q) {
   return Math.sqrt(s);
 }
 /** 最近的三角形有多遠：先走近的那一邊，比目前找到的還遠的盒子整個跳過 */
-function nearest(tree, q) {
+export function nearest(tree, q) {
   const { P, T, idx, nodes } = tree;
   let best = Infinity;
   const st = [0];
