@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { readModel, cleanModel, edgeCheck, guessUnit, guessUp, toParts, collapseShort, MICRO_DIV, UNIT_CM, UNIT_LABEL } from '../build/import3d.js';
 import { judgePlanes, keptRegions, keepVerts, gridEdges, markGrid, PLANE_MODES } from '../build/importPlanes.js';
 import { solidCheck, fillVariant, unionVariant, suggestSolid, SOLID_MODES } from '../build/importSolid.js';
+import { shellFind, skinVariant, solidVariant, suggestShell, SHELL_MODES, AUTO_MAX_FACES } from '../build/importShell.js';
 import { decimate, surfaceDev, CROSS_CAP } from '../build/decimate.js';
 import { crossCheck } from '../out/printShape.js';
 import { pairQuads } from '../build/quadify.js';
@@ -34,6 +35,10 @@ export const CLEAN_MAX = 0.1;
 /** 「減到 ___ 面」的快捷（kang 10-22 定）：3D 列印不減、剖面約 2 萬、展開紙模約 500 */
 /** 三角形那一區（網格核心第五批 b ⑤；kang 10-22 定、10-23「只合平的」）*/
 export const QUAD_MODES = { raw: '原樣（三角形）', pair: '兩兩合併' };
+/**
+ * 只留正面那一區的「正面朝」（建模器的方向：Y 朝上、+Z 朝前）；'' ＝ 自己猜（kang 2026-10-31 (b)）
+ */
+export const SHELL_FRONTS = { '+z': '前', '-z': '後', '+x': '右', '-x': '左', '+y': '上', '-y': '下' };
 export const REDUCE_PRESETS = [['給 3D 列印（不減）', 0], ['給剖面（約 2 萬面）', 20000], ['給展開、紙模（約 500 面）', 500]];
 
 export class Import3DPanel {
@@ -139,6 +144,11 @@ export class Import3DPanel {
     this.faceMode = '';            // '' ＝ 照建議
     this.reduceTarget = 0;         // 「減到 ___ 面」打的數字（0 ＝ 還沒打）
     this.quadMode = '';            // 三角形那一區：'' ＝ 照建議（兩兩合併）
+    this._shell = null;            // 只留正面那一區算好的（換檔案清掉）
+    this.shellMode = '';           // '' ＝ 照建議
+    this.shellFront = '';          // '' ＝ 自己猜；否則 `SHELL_FRONTS` 的鍵（建模器的方向）
+    this.shellFillBig = false;     // 實心：大的開口（像眼洞）也補起來（預設打穿）
+    this.shellLook = false;        // 面很多（> AUTO_MAX_FACES）時按了「看看是不是薄殼」
     if (this.read.ok) {
       this.read.check = edgeCheck(this.read.faces);
       this._startSolid();
@@ -207,7 +217,7 @@ export class Import3DPanel {
    * 這裡只照現在的單位、朝上換座標（保形狀減面只看形狀、跟大小和轉向無關）；還沒算好的那個做法先用原樣、寫「正在算」。
    */
   _parts() {
-    const pick = this._solidPick(), s = this._setting();
+    const spick = this._solidPick(), sh = this._shellState(spick), pick = this._shellPick(spick, sh), s = this._setting();
     const split = this.opt.split !== false;
     const base = this._faceBase(pick, split);
     const planesMode = PLANE_MODES[this.opt.planes] ? this.opt.planes : 'suggest';
@@ -248,7 +258,7 @@ export class Import3DPanel {
     const out = parts.map(p => (quad.using === 'pair' ? { ...p, faces: p.paired } : p));
     for (const p of out) { quad.faces += p.faces.length; quad.quads += p.faces.filter(f => f.length === 4).length; }
     quad.rawParts = parts;
-    return { parts: out, planes, solid: pick.mode, face, quad };
+    return { parts: out, planes, solid: spick.mode, shell: sh, face, quad };
   }
 
   /**
@@ -310,6 +320,140 @@ export class Import3DPanel {
     this._quadThumb(ov.querySelector('.i3BigImg'), mode, quad, 720, 540);
   }
 
+  /**
+   * 只留正面（面皮／實心）那一區的狀態（kang 2026-10-31「照你的建議」(a)～(k) → `build/importShell.js`）：
+   * 接在整理成實體後面、拆部分與減面前面（先挑、再減 —— `三視圖導入-研究.md` 實驗 4、10）。
+   * 換整理做法、朝上、正面、大開口補不補就重算（下一輪、算完重畫）；面很多的（> `AUTO_MAX_FACES`）按了「看看是不是薄殼」才算。
+   * 整理成實體還在算 ⇒ 先不算（算完那邊會重畫）。
+   */
+  _shellState(spick) {
+    const s = this._setting();
+    const key = [spick.mode, s.up, this.shellFront, this.shellFillBig, this.shellLook].join('|');
+    if (this._shell && this._shell.key === key) return this._shell;
+    const read = spick.read, n = read.faces.length;
+    const st = { key, pending: false, big: n > AUTO_MAX_FACES && !this.shellLook, find: null, variants: {}, suggest: { mode: 'raw', why: '' }, thumbs: {}, using: 'raw', error: '' };
+    if (st.big) { this._shell = st; return st; }
+    if (this._solid && this._solid.pending) { this._shell = null; st.pending = true; return st; }
+    this._shell = st;
+    st.pending = true;
+    setTimeout(() => {
+      if (this._shell !== st) return;                    // 這中間換了設定
+      try {
+        const height = s.up === 'z' ? read.size[2] : read.size[1];
+        st.find = shellFind(read, { height, front: this.shellFront ? toFile(this.shellFront, s.up) : '' });
+        if (st.find.shell) {
+          st.variants.skin = skinVariant(read, st.find);
+          st.variants.solid = solidVariant(st.variants.skin.read, st.find.front, { fillBig: this.shellFillBig });
+          st.suggest = suggestShell(st.find, st.variants.solid);
+        }
+      } catch (e) {
+        st.error = '算的時候出錯：' + (e.message || e);
+      }
+      st.pending = false;
+      this._render();
+    }, 30);
+    return st;
+  }
+
+  /** 現在用哪一個（沒選 ＝ 照建議；那個做不了或還在算 ⇒ 原樣）；mode 帶著整理做法與這一區的設定（拆部分、減面照它重算）*/
+  _shellPick(spick, sh) {
+    const want = this.shellMode || sh.suggest.mode;
+    const v = !sh.pending && sh.find && sh.find.shell ? sh.variants[want] : null;
+    sh.using = v && v.read ? want : 'raw';
+    return sh.using === 'raw' ? spick : { mode: `${spick.mode}|${sh.using}|${sh.key}`, read: v.read };
+  }
+
+  /**
+   * 只留正面那一區：不是薄殼只寫一行；是薄殼 ⇒ 正面朝（自己猜、可以改）、大開口補不補、三張卡（原樣／面皮／實心）。
+   * 實心做不了的卡變灰、寫原因（kang 2026-10-31 (h)）。
+   */
+  _shellRow(sh) {
+    const d = document.createElement('div');
+    d.className = 'uwSkip';
+    const T = '只留正面（面皮／實心）：';
+    if (sh.big) {
+      d.innerHTML = `${T}面很多（超過 ${AUTO_MAX_FACES} 個），沒有自動看是不是薄殼（55 萬面約 30 秒）　<button class="mini" id="i3ShellLook">看看是不是薄殼</button>`;
+      d.querySelector('#i3ShellLook').onclick = () => { this.shellLook = true; this._render(); };
+      return d;
+    }
+    if (sh.pending || !sh.find) { d.textContent = T + (sh.error || '正在看是不是薄殼（量厚度，5 萬面約 1～2 秒）…'); return d; }
+    const f = sh.find;
+    if (!f.shell) { d.textContent = `${T}不是薄殼（兩面成對的薄牆只佔表面 ${pct(f.pairPct)}）⇒ 不用`; return d; }
+    const s = this._setting();
+    const guessName = SHELL_FRONTS[toModel(f.guess, s.up)];
+    const head = document.createElement('div');
+    head.textContent = `${T}是薄殼（兩面成對的薄牆佔表面 ${pct(f.pairPct)}、牆厚約 ${mm(f.wall * s.cmPerUnit)} mm）　`
+      + `建議「${SHELL_MODES[sh.suggest.mode]}」：${sh.suggest.why}`;
+    d.appendChild(head);
+    const ctl = document.createElement('div');
+    ctl.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:4px 0';
+    ctl.innerHTML = `<span>正面朝</span><select id="i3ShellFront"><option value="">自己猜（${guessName}）</option>`
+      + Object.entries(SHELL_FRONTS).map(([k, t]) => `<option value="${k}">${t}</option>`).join('') + '</select>'
+      + `<label class="uwCk"><input type="checkbox" id="i3ShellFill"${this.shellFillBig ? ' checked' : ''}> 實心：大的開口（像眼洞）也補起來</label>`;
+    const fs = ctl.querySelector('#i3ShellFront');
+    fs.value = this.shellFront;
+    fs.title = '哪一面是正面（建模器的方向：前 ＝ 朝你）。自己猜的是從四面八方看、外面那一層的平均朝向；猜錯就選對的';
+    fs.onchange = () => { this.shellFront = fs.value; this._render(); };
+    const fb = ctl.querySelector('#i3ShellFill');
+    fb.parentElement.title = '實心的背板：比外緣一圈的 1/10 長的開口（像面具的眼洞）預設打穿到背後；勾起來 ⇒ 也補起來（小洞一律補）';
+    fb.onchange = () => { this.shellFillBig = fb.checked; this._render(); };
+    d.appendChild(ctl);
+    const row = document.createElement('div');
+    row.className = 'i3Cards';
+    const raw = this._solidPick().read;
+    for (const mode of Object.keys(SHELL_MODES)) {
+      const v = sh.variants[mode], ok = mode === 'raw' || (v && v.read);
+      const card = document.createElement('div');
+      card.className = 'i3Card' + (mode === sh.using ? ' on' : '') + (mode === sh.suggest.mode ? ' sug' : '');
+      card.innerHTML = `<div class="i3Thumb"></div><b>${SHELL_MODES[mode]}${mode === sh.suggest.mode ? '　（建議）' : ''}${mode === sh.using ? '　✓ 現在用這個' : ''}</b><div class="i3Nums"></div>`;
+      const nums = card.querySelector('.i3Nums');
+      if (mode === 'raw') nums.textContent = `${raw.faces.length} 個面　內外兩層都留著（減面時兩層會擠在一起、列印太薄）`;
+      else if (mode === 'skin') {
+        const i = v.info, t = [`${i.faces} 個面　只留正面一層（開口的）`];
+        if (i.holes) t.push(`${i.holes} 個開口`);
+        if (i.dropped) t.push(`丟掉 ${i.dropped} 個沒連在一起的小面`);
+        t.push(`匯入成面皮板件、板厚 ${mm(i.wall * s.cmPerUnit)} mm（量到的牆厚，往內長）`, '做紙模、面具選這個');
+        nums.textContent = t.join('　');
+      } else {
+        const i = v.info, t = [];
+        if (v.read) {
+          t.push(`${i.faces} 個面　正面＋背板、封閉`);
+          if (i.tunnels) t.push(`${i.tunnels} 個大開口打穿`);
+          if (i.filled) t.push(`補了 ${i.filled} 個洞`);              // 勾了「大的開口也補起來」時眼洞也算在裡面 ⇒ ⛔ 寫「小洞」
+          if (i.cross) t.push(`有 ${i.cross} 個三角形互相穿過去（不到千分之一；3D 列印前看一下）`);
+          t.push('3D 列印、剖面、木拼圖選這個');
+        } else t.push('做不了：' + i.why);
+        nums.textContent = t.join('　');
+      }
+      if (ok) {
+        card.title = '點卡片：用這個；點小圖：放大看';
+        card.onclick = () => { this.shellMode = mode; this._render(); };
+        const th = card.querySelector('.i3Thumb');
+        th.onclick = e => { e.stopPropagation(); this._bigShellThumb(mode); };
+        this._shellThumb(th, mode, 200, 150);
+      } else card.classList.add('off');
+      row.appendChild(card);
+    }
+    d.appendChild(row);
+    return d;
+  }
+
+  /** 只留正面那一區的小圖（同一份設定、同一個朝上只畫一次）*/
+  _shellThumb(el, mode, w, h) {
+    const sh = this._shell, s = this._setting();
+    const read = mode === 'raw' ? this._solidPick().read : sh.variants[mode].read;
+    this._thumbPut(el, sh.thumbs, `${mode}|${s.up}|${w}`, () => this._shell === sh, () => toParts(read, { cmPerUnit: s.cmPerUnit, up: s.up, split: false }), w, h);
+  }
+
+  _bigShellThumb(mode) {
+    const ov = document.createElement('div');
+    ov.className = 'i3Big';
+    ov.innerHTML = `<div><b>${SHELL_MODES[mode]}</b>　<span>紅線 ＝ 開口的邊；橘線 ＝ 三面以上共用的邊。點一下關掉</span></div><div class="i3BigImg"></div>`;
+    ov.onclick = () => ov.remove();
+    this.el.appendChild(ov);
+    this._shellThumb(ov.querySelector('.i3BigImg'), mode, 720, 540);
+  }
+
   /** 減到 ___ 面時不讓面互相穿過去（預設開、記住；kang 2026-10-31 照 AI 建議）*/
   _noCross() { return this.opt.noCross !== false; }
 
@@ -332,7 +476,7 @@ export class Import3DPanel {
     const key = [pick.mode, split, planesMode, this.microMm, this.microMm > 0 ? s.cmPerUnit : ''].join('|');
     if (!this._face || this._face.key !== key) this._face = { key, clean: null, reduce: null };
     const F = this._face;
-    const solidBusy = this._solid && this._solid.pending;
+    const solidBusy = (this._solid && this._solid.pending) || (this._shell && this._shell.pending);    // 整理成實體、只留正面還在算 ⇒ 先不算
     if (!F.clean && !solidBusy) this._faceWork('clean');
     if (F.clean && F.clean.lazy && this.faceMode === 'clean' && !solidBusy) this._faceWork('clean');   // 超過一成的：點了才真的減
     if (this.reduceTarget > 0 && (!F.reduce || F.reduce.target !== this.reduceTarget || F.reduce.noCross !== this._noCross()) && !solidBusy) this._faceWork('reduce');
@@ -434,6 +578,7 @@ export class Import3DPanel {
     if (ck.comps > 1) bits.push(`${ck.comps} 塊零件`);
     if (ck.holes) bits.push(`${ck.holes} 塊有破洞或面翻過來`);
     if (ck.partition) bits.push(`${ck.partition} 塊裡面有隔板（三面以上共用的邊）`);
+    if (ck.cavities) bits.push(`其中 ${ck.cavities} 塊是包在裡面的空心（朝裡的內層）`);
     head.textContent = `整理成實體：${bits.join('、')}`
       + (sol.pending ? ' —— 正在算補洞、聯集（大的模型要幾秒）…' : `　建議「${SOLID_MODES[sol.suggest.mode]}」：${sol.suggest.why}`);
     d.appendChild(head);
@@ -480,6 +625,7 @@ export class Import3DPanel {
       if (i.overlap > 0) t.push(`重疊 ${Math.round(i.overlap * 1000) / 10}%`);
       if (i.dropped) t.push(`丟掉 ${i.dropped} 塊碎屑`);
       if (i.partFixed) t.push(`修好 ${i.partFixed} 塊的隔板（修前修後剖面一樣）`);
+      if (i.cavities) t.push(`留著 ${i.cavities} 個空心`);
       if (i.kept) {
         /** 沒修的照實講為什麼（kang 2026-10-24「其他照原樣另外放、講出來」）*/
         const s = i.partSkip || { many: 0, open: 0, section: 0 }, why = [];
@@ -694,14 +840,16 @@ export class Import3DPanel {
       return;
     }
     this._fillSelects();
-    const { parts, planes, solid, face, quad } = this._parts();
-    /** 選的面數做法還在算 ⇒ 匯入鈕先不能按（不然匯進去的是原樣、跟卡片上選的不一樣）*/
-    this.goBtn.disabled = !face.ready;
-    this.goBtn.title = face.ready ? '' : '面數那一區還在算 —— 算好才能匯入';
+    const { parts, planes, solid, shell, face, quad } = this._parts();
+    /** 選的面數做法還在算、只留正面還在算 ⇒ 匯入鈕先不能按（不然匯進去的是原樣、跟卡片上選的不一樣）*/
+    const busy = !face.ready ? '面數那一區' : shell.pending ? '只留正面那一區' : '';
+    this.goBtn.disabled = !!busy;
+    this.goBtn.title = busy ? `${busy}還在算 —— 算好才能匯入` : '';
     const nFaces = parts.reduce((n, p) => n + p.faces.length, 0);
-    this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件` + (face.ready ? '' : '（面數那一區還在算）');
+    this.sum.textContent = `${nFaces} 個面、${parts.length} 個物件` + (busy ? `（${busy}還在算）` : '');
     this.body.appendChild(this._sizeCard());
     if (this._solid) this.body.appendChild(this._solidRow(solid));
+    this.body.appendChild(this._shellRow(shell));
     if (planes.cut + planes.grid) this.body.appendChild(this._planeRow(planes));
     this.body.appendChild(this._faceRow(face, this._base.parts.reduce((n, p) => n + p.faces.length, 0)));
     this.body.appendChild(this._quadRow(quad));
@@ -802,14 +950,18 @@ export class Import3DPanel {
   _import() {
     const r = this.read;
     if (!r || !r.ok) return;
-    const { parts, face, quad } = this._parts();
-    if (!face.ready) return;                               // 還在算（匯入鈕本來就不能按）
+    const { parts, face, quad, shell } = this._parts();
+    if (!face.ready || shell.pending) return;               // 還在算（匯入鈕本來就不能按）
+    /** 面皮 ⇒ 面皮板件（開放、板厚 ＝ 量到的牆厚、往內長；kang 2026-10-31 (g)）*/
+    const skin = shell.using === 'skin', s = this._setting();
+    const wall = skin ? Math.max(0.01, Math.round(shell.find.wall * s.cmPerUnit * 100) / 100) : 0;
     const objs = [];
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
       const mesh = Mesh.fromFaceList(p.points.map(q => new THREE.Vector3(q[0], q[1], q[2])), p.faces);
       markGrid(mesh, p.grid);                            // 照原檔一格一格的平面：格線看得見（網格核心第五批 b ②）
-      const o = new ModelObject({ name: this._name(p, i), kind: KIND.SOLID, src: { type: 'mesh' }, mesh });
+      const o = new ModelObject(skin ? { name: this._name(p, i), kind: KIND.SHEET, src: { type: 'mesh' }, mesh, thickness: wall, shellIn: true }
+        : { name: this._name(p, i), kind: KIND.SOLID, src: { type: 'mesh' }, mesh });
       recenterOrigin(o);                                 // 原點在自己的中心、位置照原樣
       objs.push(o);
     }
@@ -835,6 +987,7 @@ export class Import3DPanel {
         + (face.using === 'reduce' ? `（減到 ${face.reduce.faces} 個面）` : '')
         + (quad.using === 'pair' ? `（兩兩合併：合了 ${quad.pairs} 對）` : '')
         + (this._solidPick().mode !== 'raw' ? `（${SOLID_MODES[this._solidPick().mode]}）` : '')
+        + (shell.using === 'skin' ? `（只留正面：面皮板件、板厚 ${mm(wall)} mm）` : shell.using === 'solid' ? '（只留正面：實心）' : '')
         + '（鏡頭已拉到它們）　之後用建模器改它（拉點線面、刀具、布林…）');
     }
     this.close();
@@ -916,6 +1069,12 @@ const pct = x => (Math.round(x * 1000) / 10) + '%';
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const num = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) ? x : d; };
 /** 每個部分的面拆成三角形（點換成 {x,y,z}），給 `crossCheck` 數穿面（不同部分之間穿過去也算）*/
+/**
+ * 只留正面的方向：建模器（Y 朝上、+Z 朝前）↔ 檔案的座標。Z 朝上的檔：建模器 (x, y, z) ＝ 檔案 (x, z, −y)（`toParts()` 的換法）
+ */
+const M2F_Z = { '+x': '+x', '-x': '-x', '+y': '+z', '-y': '-z', '+z': '-y', '-z': '+y' };
+function toFile(k, up) { return up === 'z' ? M2F_Z[k] : k; }
+function toModel(k, up) { return up === 'z' ? Object.keys(M2F_Z).find(m => M2F_Z[m] === k) : k; }
 function crossTris(parts) {
   const out = [];
   for (const p of parts) {

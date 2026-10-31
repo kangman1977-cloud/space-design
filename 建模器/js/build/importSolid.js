@@ -45,7 +45,7 @@ export function components(faces, nPoints) {
  */
 export function solidCheck(r) {
   const comps = components(r.faces, r.points.length);
-  const out = { comps: comps.length, clean: 0, holes: 0, partition: 0, openEdges: 0, flipEdges: 0, nmEdges: 0 };
+  const out = { comps: comps.length, clean: 0, holes: 0, partition: 0, openEdges: 0, flipEdges: 0, nmEdges: 0, cavities: cavities(r, comps).size };
   for (const c of comps) {
     const e = edgeCheck(c.map(i => r.faces[i]));
     out.openEdges += e.open; out.flipEdges += e.flipped; out.nmEdges += e.nonManifold;
@@ -54,6 +54,42 @@ export function solidCheck(r) {
     else out.clean++;
   }
   return out;
+}
+
+/**
+ * 空心（kang 2026-10-31 (k) → `三視圖導入-研究.md` 實驗 11 最後）：封閉、方向一致、**體積是負的**（朝裡）、而且包在另一塊（體積是正的）裡面的那一塊
+ * ＝ 那一塊的空心，⛔ 翻成朝外。以前補洞＋修方向一塊一塊各自修，朝裡的內層被翻成朝外、當成另一塊實心 ⇒
+ * 聯集把空心填成實心（中間空的方塊體積 488 → 1,000）。包在好幾塊裡面的歸給最小的那一塊。
+ * @returns {Map<number, number>} 空心那一塊（`components()` 的順序）→ 包住它的那一塊
+ */
+export function cavities(r, comps = components(r.faces, r.points.length)) {
+  const info = comps.map(c => {
+    const fs = c.map(i => r.faces[i]), e = edgeCheck(fs);
+    const closed = !e.open && !e.flipped && !e.nonManifold;
+    return { fs, closed, vol: closed ? signedVolume(r.points, fs) : 0, W: null };
+  });
+  const out = new Map();
+  info.forEach((a, i) => {
+    if (!a.closed || !(a.vol < 0)) return;
+    const q = r.points[a.fs[0][0]];
+    let best = -1;
+    info.forEach((b, j) => {
+      if (j === i || !b.closed || !(b.vol > 0) || (best >= 0 && b.vol >= info[best].vol)) return;
+      if (!b.W) { const T = []; for (const f of b.fs) for (let k = 1; k + 1 < f.length; k++) T.push([f[0], f[k], f[k + 1]]); b.W = windTree(r.points, T); }
+      if (windSure(b.W, q) > 0.5) best = j;
+    });
+    if (best >= 0) out.set(i, best);
+  });
+  return out;
+}
+/** 帶正負號的體積（朝外 > 0）*/
+function signedVolume(P, fs) {
+  let v = 0;
+  for (const f of fs) for (let k = 1; k + 1 < f.length; k++) {
+    const a = P[f[0]], b = P[f[k]], c = P[f[k + 1]];
+    v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+  }
+  return v / 6;
 }
 
 /** 一組面（原檔的點編號）→ 建模器的網格（自己的點編號）*/
@@ -86,8 +122,8 @@ function byPart(r) {
   r.faces.forEach((f, i) => { const p = r.partOf[i]; if (!g.has(p)) g.set(p, []); g.get(p).push(f); });
   return g;
 }
-/** 收集好幾組 {points, faces, part 或 parts（每個面各自的部分）} → 跟 `cleanModel()` 一樣的形狀 */
-function assemble(r, groups) {
+/** 收集好幾組 {points, faces, part 或 parts（每個面各自的部分）} → 跟 `cleanModel()` 一樣的形狀（`importShell.js` 也用）*/
+export function assemble(r, groups) {
   const points = [], faces = [], partOf = [];
   for (const g of groups) {
     const base = points.length;
@@ -141,19 +177,28 @@ function localGroup(points, fs, part) {
 export function unionVariant(r) {
   if (!csgReady()) return { read: null, info: { why: '布林運算函式庫還沒載入' } };
   const info = { united: 0, kept: 0, holes: 0, turned: 0, sumVolume: 0, volume: 0, overlap: 0, pieces: 0, dropped: 0, why: '',
-    partFixed: 0, partWorst: 0, partSkip: { many: 0, open: 0, section: 0 }, partSkipWorst: 0 };
-  const solids = [], rest = [];
-  for (const c of components(r.faces, r.points.length)) {
+    partFixed: 0, partWorst: 0, partSkip: { many: 0, open: 0, section: 0 }, partSkipWorst: 0, cavities: 0 };
+  const comps = components(r.faces, r.points.length), cav = cavities(r, comps);
+  const solids = [], rest = [], solidOf = new Map();
+  comps.forEach((c, ci) => {
+    if (cav.has(ci)) return;                         // 空心：⛔ 翻，下面併回包住它的那一塊
     const fs = c.map(i => r.faces[i]);
     const { mesh, st } = fixMesh(toMesh(r.points, fs));
-    if (!st.failed && mesh.isClosed()) { solids.push(mesh); info.holes += st.holes; info.turned += st.turned; continue; }
+    if (!st.failed && mesh.isClosed()) { solidOf.set(ci, solids.length); solids.push(mesh); info.holes += st.holes; info.turned += st.turned; return; }
     if (st.failed === PARTITION) {
       const fx = fixPartition(r.points, fs);
-      if (fx.ok) { solids.push(fx.mesh); info.partFixed++; info.partWorst = Math.max(info.partWorst, fx.diff); continue; }
+      if (fx.ok) { solidOf.set(ci, solids.length); solids.push(fx.mesh); info.partFixed++; info.partWorst = Math.max(info.partWorst, fx.diff); return; }
       info.partSkip[fx.why]++;
       if (fx.why === 'section') info.partSkipWorst = Math.max(info.partSkipWorst, fx.diff);
     }
     rest.push(c);
+  });
+  /** 空心併回包住它的那一塊（同一個網格兩層：外朝外、內朝裡 ⇒ Manifold 收成中間空的實體）；包住它的那塊沒收進來 ⇒ 空心也照原樣另外放 */
+  for (const [ci, pj] of cav) {
+    const k = solidOf.get(pj);
+    if (k === undefined) { rest.push(comps[ci]); continue; }
+    solids[k] = Mesh.merge([solids[k], toMesh(r.points, comps[ci].map(i => r.faces[i]))]);
+    info.cavities++;
   }
   if (solids.length < 2 && !(solids.length === 1 && info.partFixed)) return { read: null, info: { why: solids.length ? '只有一塊是實體，沒有東西可以聯集' : '沒有一塊是封閉的實體' } };
   let u;
@@ -244,6 +289,7 @@ export function suggestSolid(check, union) {
   }
   if (check.holes) return { mode: 'fill', why: `有 ${check.holes} 塊有破洞或面翻過來 —— 補的只是洞口，其他表面不動` };
   if (check.partition) return { mode: 'raw', why: `有 ${check.partition} 塊裡面有隔板（三面以上共用的邊），修不好（看聯集那張卡寫的原因）—— 照原樣` };
+  if (check.cavities) return { mode: 'raw', why: `有 ${check.cavities} 塊是包在裡面的空心（朝裡的內層），沒有穿插 —— 照原樣（中間是空的）` };
   return { mode: 'raw', why: check.comps > 1 ? '每一塊都封閉、沒有穿插' : '封閉、乾淨' };
 }
 const pct = x => (Math.round(x * 1000) / 10) + '%';

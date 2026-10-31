@@ -20877,7 +20877,7 @@ section('網格核心第五批 b ③a：匯入時整理成實體（原樣／補�
   ok('★★ 大陣列⛔ 用 push(...)（汽車 50 萬點在瀏覽器會堆疊溢位 —— 本機實際撞到）', !/points\.push\(\.\.\./.test(ss));
   ok('★★ 視窗：先畫原樣、補洞聯集下一輪再算（算的時候出錯也要講）、換檔案不會蓋掉新的；選的做法用在拆部分之前、判斷平面的快取跟著做法換',
     /setTimeout\(\(\) => \{\s*\n\s*if \(this\._solid !== sol\) return;/.test(ps) && /const safe = f => \{ try \{ return f\(\); \} catch/.test(ps)
-    && /const pick = this\._solidPick\(\), s = this\._setting\(\);/.test(ps) && /toParts\(pick\.read, \{ cmPerUnit: 1, up: 'y', split \}\)/.test(ps) && /const key = pick\.mode \+ '\|' \+ split;/.test(ps) && /this\.solidMode = '';/.test(ps));   // 〔第五批 b ④ 起拆部分移到 `_faceBase()`〕
+    && /const spick = this\._solidPick\(\), sh = this\._shellState\(spick\), pick = this\._shellPick\(spick, sh\), s = this\._setting\(\);/.test(ps) && /toParts\(pick\.read, \{ cmPerUnit: 1, up: 'y', split \}\)/.test(ps) && /const key = pick\.mode \+ '\|' \+ split;/.test(ps) && /this\.solidMode = '';/.test(ps));   // 〔第五批 b ④ 起拆部分移到 `_faceBase()`；2026-10-31 整理成實體之後多一步「只留正面」（`_shellPick()` 的 mode 帶著整理做法）⇒ 照新的那一行守同一件事〕
   ok('★★ 視窗：每個做法一張卡（小圖＋數字）、建議的框起來寫理由、點卡片換、點小圖放大；破洞紅線、三面共用橘線',
     /className = 'i3Card'/.test(ps) && /' sug'/.test(ps) && /this\.solidMode = mode; this\._render\(\)/.test(ps) && /this\._bigThumb\(mode\)/.test(ps) && /0xff3b30/.test(ps) && /0xff9f0a/.test(ps));
   // 〔③a 時三面共用一律照舊警告（第三個條件寫死 false）；③b 起聯集會修隔板 ⇒ 修好幾塊就講幾塊，一塊都沒修好才警告 —— ③b 線上先驗又看到同一類矛盾〕
@@ -20977,7 +20977,7 @@ section('網格核心第五批 b ④：保形狀減面（清碎面換做法、�
   ok('★★ 清碎面：同一個門檻數出要剩幾個面（collapseShort）再用保形狀減面減到那個數、格子保護；超過一成先只數（點了才減）', /goal = goals\[i\]/.test(ps) && /decimate\(p, \{ target: goal, keep, noCross: nc, crossCap: budget \}\)/.test(ps)
     && /if \(\(total - n\) \/ total > CLEAN_MAX && this\.faceMode !== 'clean'\)/.test(ps) && /F\.clean = \{ lazy: true, goals/.test(ps));
   ok('★★ 減到 N 面：不保護格子、按了才算；還在算時匯入鈕不能按；卡片寫表面偏差', /const regs = kind === 'clean' \? keptRegions\(base\.judged\[i\], planesMode\) : \[\];/.test(ps) && /if \(this\.reduceTarget > 0 && \(!F\.reduce \|\| F\.reduce\.target !== this\.reduceTarget \|\| F\.reduce\.noCross !== this\._noCross\(\)\)/.test(ps)
-    && /this\.goBtn\.disabled = !face\.ready;/.test(ps) && /表面離原本最多 \$\{mm\(r\.dev \* s\.cmPerUnit\)\} mm/.test(ps) && /dev = Math\.max\(dev, surfaceDev\(p, q\)\)/.test(ps));
+    && /const busy = !face\.ready \? '面數那一區' : shell\.pending \? '只留正面那一區' : '';\s*this\.goBtn\.disabled = !!busy;/.test(ps) && /表面離原本最多 \$\{mm\(r\.dev \* s\.cmPerUnit\)\} mm/.test(ps) && /dev = Math\.max\(dev, surfaceDev\(p, q\)\)/.test(ps));
   ok('★★ 量表面偏差用包圍盒樹（汽車的細長三角形會讓均勻格子卡住 —— 本機實際撞到）', /function boxTree\(P, T\)/.test(ds) && /const tree = boxTree\(P, T\);/.test(ds));
   const rowSrc = ps.slice(ps.indexOf('  _faceRow('), ps.indexOf('  /** 面數卡片的小圖'));
   ok('★ 面數卡片的字⛔ 用文件的縮寫符號（⛔）', rowSrc.length > 100 && !rowSrc.includes('⛔'));
@@ -24311,6 +24311,121 @@ section('合併點／按距離合併（kang 2026-10-30 做面具第 ① 題第�
     && /_pickVertexOffSurface\(clientX, clientY\) \{\s*const obj = this\.active;\s*if \(!obj \|\| !canMarkSeams\(obj\)\) return null;/.test(sl)
     && /const grab = isTouch\(\) \? EDGE_GRAB_PX_TOUCH : EDGE_GRAB_PX;\s*let best = null, bestD = grab;/.test(sl));
   ok('★ AI 目錄有這四個的前提', /ids: \['mergeVerts', 'mergeLast', 'mergeDist', 'mergeTol'\], 前提: '拉點線面裡只選點（兩個以上）'/.test(cat));
+}
+
+section('匯入時只留正面：面皮／實心（kang 2026-10-31「照你的建議」(a)～(k)）');
+{
+  /** `三視圖導入-研究.md` 實驗 11；規格 `規格\建模器-匯入3D模型.md`「只留正面：面皮／實心」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const SH = await import('../js/build/importShell.js');
+  const SO = await import('../js/build/importSolid.js');
+  const im = await import('../js/build/import3d.js');
+  const { crossCheck } = await import('../js/out/printShape.js');
+  /**
+   * 薄殼的「面具」：球面上一片（朝 +Z 鼓出來）、外層半徑 R、內層 R − t，邊緣與開口用牆接起來（跟混元的面具一樣是一整塊封閉的薄殼）。
+   * `holes` ＝ 挖掉的格子（像眼洞）；`rot` ＝ 把點轉一下（測正面自己猜）
+   */
+  const mask = ({ n = 24, R = 10, t = 0.15, holes = [], rot = p => p } = {}) => {
+    const dir = (i, j) => { const x = -1 + 2 * i / n, y = -1 + 2 * j / n, L = Math.hypot(x, y, 1.3); return [x / L, y / L, 1.3 / L]; };
+    const keep = (i, j) => !holes.some(([a, b, c, d]) => i >= a && i < b && j >= c && j < d);
+    const points = [], id = new Map();
+    const at = (i, j, s) => { const k = `${i},${j},${s}`; if (!id.has(k)) { const r = s ? R - t : R; id.set(k, points.length); points.push(rot(dir(i, j).map(v => v * r))); } return id.get(k); };
+    const faces = [], cell = new Set();
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (keep(i, j)) cell.add(`${i},${j}`);
+    for (const c of cell) {
+      const [i, j] = c.split(',').map(Number);
+      faces.push([at(i, j, 0), at(i + 1, j, 0), at(i + 1, j + 1, 0), at(i, j + 1, 0)]);
+      faces.push([at(i, j + 1, 1), at(i + 1, j + 1, 1), at(i + 1, j, 1), at(i, j, 1)]);
+      // 邊界（隔壁那格沒有）⇒ 牆：外層的邊 a→b 反過來接、內層的邊順著接
+      const sides = [[[i, j], [i + 1, j], [i, j - 1]], [[i + 1, j], [i + 1, j + 1], [i + 1, j]], [[i + 1, j + 1], [i, j + 1], [i, j + 1]], [[i, j + 1], [i, j], [i - 1, j]]];
+      for (const [a, b, nb] of sides) if (!cell.has(`${nb[0]},${nb[1]}`)) faces.push([at(b[0], b[1], 0), at(a[0], a[1], 0), at(a[0], a[1], 1), at(b[0], b[1], 1)]);
+    }
+    const r = { points, faces, partOf: faces.map(() => 0), parts: [''], format: 'obj' };
+    const lo = [0, 1, 2].map(k => Math.min(...points.map(p => p[k]))), hi = [0, 1, 2].map(k => Math.max(...points.map(p => p[k])));
+    return { ...r, lo, hi, size: hi.map((h, k) => h - lo[k]) };
+  };
+  const vol = r => { let v = 0; for (const f of r.faces) for (let k = 1; k + 1 < f.length; k++) { const a = r.points[f[0]], b = r.points[f[k]], c = r.points[f[k + 1]]; v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } return v / 6; };
+  const meanN = r => { const m = [0, 0, 0]; for (const f of r.faces) { const a = r.points[f[0]], b = r.points[f[1]], c = r.points[f[2]]; const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]; m[0] += u[1] * w[2] - u[2] * w[1]; m[1] += u[2] * w[0] - u[0] * w[2]; m[2] += u[0] * w[1] - u[1] * w[0]; } return m; };
+  const H = r => r.size[1];
+
+  // ① 薄殼、正面自己猜
+  const m0 = mask();
+  ok('★★ 合成的薄殼面具本身：封閉、方向一致、體積是正的', (() => { const e = im.edgeCheck(m0.faces); return !e.open && !e.flipped && !e.nonManifold && vol(m0) > 0; })());
+  const f0 = SH.shellFind(m0, { height: H(m0) });
+  ok('★★★ 薄殼：是薄殼、成對的薄牆 ≥ 30%、正面自己猜 +Z、牆厚 ≈ 0.15', f0.shell && f0.pairPct >= SH.SHELL_MIN && f0.guess === '+z' && f0.front === '+z' && Math.abs(f0.wall - 0.15) < 0.03,
+    `${f0.pairPct} ${f0.guess} ${f0.wall}`);
+  const nOuter = 24 * 24;
+  /** 改壞成「不是薄殼」時照常記 ✗、⛔ 當掉（故意改壞第一輪「背板切之前不挪」整套停在半路）*/
+  const skinOf = (m, f) => (f.shell ? SH.skinVariant(m, f) : { read: null, info: { why: '不是薄殼' } });
+  const solidOf = (k, f, o) => (k.read ? SH.solidVariant(k.read, f.front, o) : { read: null, info: { why: '沒有面皮' } });
+  const k0 = skinOf(m0, f0);
+  ok('★★★ 面皮：一整塊、開口的（外緣 1 圈）、只有正面那層（面數 ≈ 外層格子數、平均朝向 +Z）、部分叫「（面皮）」',
+    !!k0.read && k0.read.parts.join() === '（面皮）' && k0.info.holes === 0 && Math.abs(k0.info.faces - nOuter) <= 24 * 4 && meanN(k0.read)[2] > 0 && im.edgeCheck(k0.read.faces).open > 0,
+    JSON.stringify(k0.info));
+  const s0 = solidOf(k0, f0);
+  ok('★★★ 實心：做得出來、封閉、方向一致、一塊、體積是正的、沒有穿面、部分叫「（實心）」',
+    !!s0.read && s0.read.parts.join() === '（實心）' && (() => { const e = im.edgeCheck(s0.read.faces); return !e.open && !e.flipped && !e.nonManifold; })()
+    && SO.components(s0.read.faces, s0.read.points.length).length === 1 && vol(s0.read) > 0 && s0.info.cross === 0, s0.info.why);
+  eq('★★ 建議實心（做得出來）', SH.suggestShell(f0, s0).mode, 'solid');
+  // ② 眼洞
+  const m1 = mask({ holes: [[5, 9, 12, 15], [15, 19, 12, 15]] });
+  const f1 = SH.shellFind(m1, { height: H(m1) }), k1 = skinOf(m1, f1);
+  eq('★★★ 有兩個眼洞：面皮 2 個開口', f1.shell && k1.info.holes, 2);
+  const s1 = solidOf(k1, f1), s1f = solidOf(k1, f1, { fillBig: true });
+  ok('★★★ 實心：眼洞（比外緣 1/10 長）預設打穿 ⇒ 2 個、封閉、體積比補起來的小', !!s1.read && s1.info.tunnels === 2 && !!s1f.read && s1f.info.tunnels === 0 && vol(s1.read) < vol(s1f.read) - 1e-3,
+    `${s1.info.tunnels}／${s1f.info.tunnels}　${s1.read ? vol(s1.read).toFixed(2) : s1.info.why}／${s1f.read ? vol(s1f.read).toFixed(2) : s1f.info.why}`);
+  ok('★★ 打穿的實心：封閉、方向一致、一塊（洞是穿過去的，⛔ 破洞）', !!s1.read && (() => { const e = im.edgeCheck(s1.read.faces); return !e.open && !e.flipped && !e.nonManifold; })() && SO.components(s1.read.faces, s1.read.points.length).length === 1, s1.info.why);
+  // ③ 轉過去：正面自己猜得到
+  const rots = { '+x': p => [p[2], p[1], -p[0]], '-x': p => [-p[2], p[1], p[0]], '-z': p => [-p[0], p[1], -p[2]], '+y': p => [p[0], p[2], -p[1]], '-y': p => [p[0], -p[2], p[1]] };
+  const got = Object.entries(rots).map(([k, f]) => { const m = mask({ rot: f }); return SH.shellFind(m, { height: m.size[1] }).guess === k ? '' : k; }).filter(Boolean);
+  ok('★★★ 轉成朝右、左、後、上、下 ⇒ 五個都猜對', !got.length, got.join());
+  // ④ 自己選正面：選反了 ⇒ 正反整個對調（面皮變成內層）
+  const f2 = SH.shellFind(m0, { height: H(m0), front: '-z' });
+  ok('★★ 選了「後」（跟外層朝向相反）⇒ 對調、面皮是內層（平均朝 −Z）', f2.shell && f2.front === '-z' && f2.swapped && meanN(skinOf(m0, f2).read)[2] < 0);
+  // ⑤ 不是薄殼
+  const cube = { points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], faces: [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]], size: [1, 1, 1] };
+  const fc = SH.shellFind(cube, { height: 1 });
+  ok('★★★ 實心方塊 ⇒ 不是薄殼（成對的薄牆 0%）、建議原樣', !fc.shell && fc.pairPct === 0 && SH.suggestShell(fc, null).mode === 'raw');
+  // ⑥ 做不了講原因
+  const closedSkin = { ...cube, partOf: cube.faces.map(() => 0), parts: [''] };
+  const sx = SH.solidVariant(closedSkin, '+z');
+  ok('★★ 面皮沒有外緣 ⇒ 實心做不了、寫原因；建議原樣（⛔ 自動換面皮）', !sx.read && /沒有外緣/.test(sx.info.why) && SH.suggestShell(f0, sx).mode === 'raw' && /自己點「面皮」/.test(SH.suggestShell(f0, sx).why));
+  // ⑦ 常數（kang 定的 (c)(e)(i) 與實驗 11 的門檻）
+  ok('★★ 門檻：薄殼 30%、大開口 1/10、20 萬面以上按了才看、看得到 45°、穿面不到千分之一照樣給',
+    SH.SHELL_MIN === 0.3 && SH.BIG_HOLE === 0.1 && SH.AUTO_MAX_FACES === 200000 && SH.SEE_DEG === 45 && SH.CROSS_FEW === 0.001 && SH.THICK_DIV === 20);
+
+  // ⑧ (k) 兩層分開的空心：⛔ 被當成另一塊實心、⛔ 被填實
+  const box = (o, n, inward) => { const P = [[0, 0, 0], [n, 0, 0], [n, n, 0], [0, n, 0], [0, 0, n], [n, 0, n], [n, n, n], [0, n, n]].map(q => q.map((v, k) => v + o[k])); let F = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]; if (inward) F = F.map(f => [...f].reverse()); return { P, F }; };
+  const model = (...cs) => { const points = [], faces = [], partOf = []; for (const { P, F } of cs) { const b = points.length; points.push(...P); for (const f of F) { faces.push(f.map(i => i + b)); partOf.push(0); } } return { points, faces, partOf, parts: ['m'], size: [15, 10, 10], lo: [0, 0, 0], hi: [15, 10, 10], format: 'obj' }; };
+  const hollow = model(box([0, 0, 0], 10), box([1, 1, 1], 8, true));
+  const ch = SO.solidCheck(hollow), sg = SO.suggestSolid(ch, SO.unionVariant(hollow));
+  ok('★★★ 空心方塊（外朝外、內朝裡）⇒ 認得出 1 個空心、建議原樣、理由講空心', ch.cavities === 1 && sg.mode === 'raw' && /空心/.test(sg.why), JSON.stringify(sg));
+  ok('★★ 大的包小的、都朝外（兩塊實心疊著）⇒ ⛔ 空心、照舊建議聯集', SO.solidCheck(model(box([0, 0, 0], 10), box([1, 1, 1], 8))).cavities === 0
+    && SO.suggestSolid(SO.solidCheck(model(box([0, 0, 0], 10), box([1, 1, 1], 8))), SO.unionVariant(model(box([0, 0, 0], 10), box([1, 1, 1], 8)))).mode === 'union');
+  const uh = SO.unionVariant(model(box([0, 0, 0], 10), box([1, 1, 1], 8, true), box([5, 0, 0], 10)));
+  near('★★★ 空心方塊＋一塊疊一半的實心聯集 ⇒ 空心留著（1500 − 沒被填到的空心 256 ＝ 1244；以前填實 ＝ 1500）', uh.read ? vol(uh.read) : -1, 1244, 1e-3);
+  ok('★★ 聯集卡片寫留著幾個空心', uh.info.cavities === 1);
+  const fh = SO.fillVariant(hollow);
+  ok('★★ 補洞＋修方向：空心那層⛔ 翻（體積還是 488）', Math.abs(vol(fh.read) - 488) < 1e-6 && fh.info.turned === 0 && fh.info.flippedSolids === 0);
+
+  // ⑨ 讀程式守著（視窗）
+  const pn = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8');
+  ok('★★ 視窗：這一區在整理成實體下面、面數上面；先挑再減（拆部分、減面照這一區的結果）',
+    /if \(this\._solid\) this\.body\.appendChild\(this\._solidRow\(solid\)\);\s*this\.body\.appendChild\(this\._shellRow\(shell\)\);/.test(pn)
+    && /const spick = this\._solidPick\(\), sh = this\._shellState\(spick\), pick = this\._shellPick\(spick, sh\)/.test(pn));
+  ok('★★ 還在算 ⇒ 匯入鈕不能按；整理成實體還在算 ⇒ 這一區先不算；減面也等它',
+    /const busy = !face\.ready \? '面數那一區' : shell\.pending \? '只留正面那一區' : '';/.test(pn) && /if \(this\._solid && this\._solid\.pending\) \{ this\._shell = null; st\.pending = true; return st; \}/.test(pn)
+    && /\(this\._shell && this\._shell\.pending\)/.test(pn));
+  ok('★★ 正面朝：自己猜（寫出猜的）＋前後左右上下；換了重算', /<option value="">自己猜（\$\{guessName\}）<\/option>/.test(pn) && /SHELL_FRONTS = \{ '\+z': '前', '-z': '後', '\+x': '右', '-x': '左', '\+y': '上', '-y': '下' \}/.test(pn)
+    && /const key = \[spick\.mode, s\.up, this\.shellFront, this\.shellFillBig, this\.shellLook\]\.join\('\|'\);/.test(pn));
+  ok('★★ 大開口也補起來：預設不勾、換檔案清回來', /this\.shellFillBig = false;/.test(pn) && /實心：大的開口（像眼洞）也補起來/.test(pn));
+  ok('★★ 20 萬面以上：不自動看、按「看看是不是薄殼」才算', /big: n > AUTO_MAX_FACES && !this\.shellLook/.test(pn) && /看看是不是薄殼<\/button>/.test(pn));
+  ok('★★ 做不了 ⇒ 卡片變灰、寫「做不了：」原因；不是薄殼只寫一行', /else t\.push\('做不了：' \+ i\.why\);/.test(pn) && /不是薄殼（兩面成對的薄牆只佔表面/.test(pn));
+  ok('★★★ 面皮匯入成面皮板件：板厚 ＝ 量到的牆厚（cm）、往內長',
+    /const wall = skin \? Math\.max\(0\.01, Math\.round\(shell\.find\.wall \* s\.cmPerUnit \* 100\) \/ 100\) : 0;/.test(pn)
+    && /kind: KIND\.SHEET, src: \{ type: 'mesh' \}, mesh, thickness: wall, shellIn: true/.test(pn));
+  ok('★★ Z 朝上的檔：建模器的前（+Z）＝ 檔案的 −Y', /const M2F_Z = \{ '\+x': '\+x', '-x': '-x', '\+y': '\+z', '-y': '-z', '\+z': '-y', '-z': '\+y' \};/.test(pn));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
