@@ -67,7 +67,11 @@ export function unfoldObject(obj, opt = {}) {
   if (Math.abs(s.x - 1) > 1e-9 || Math.abs(s.y - 1) > 1e-9 || Math.abs(s.z - 1) > 1e-9) {
     mesh = mesh.transformed(new THREE.Matrix4().makeScale(s.x, s.y, s.z));
     const uniform = Math.abs(s.x - s.y) < 1e-9 && Math.abs(s.y - s.z) < 1e-9;
-    if (!uniform) {
+    /**
+     * 網格物件⛔ 講（kang 2026-10-31 第 11 題 (j) → `三視圖導入-研究.md` 實驗 10 不足 1、實驗 13）：上面已經照縮放後的大小攤、長度是準的，
+     * 網格也沒有圓弧參數、沒有參數可改 ⇒ 兩句都不成立（混元獅子頭深度放大 1.15 倍時被這句嚇到）。參數物件照舊講。
+     */
+    if (!uniform && obj.isParametric) {
       warn.push('這個物件被非等比縮放過，圓弧會變成橢圓，展開長度只是近似值。'
               + '建議改參數而不是拉縮放');
     }

@@ -17433,7 +17433,7 @@ if (!csgOK) {
   ok('★★★ 讀程式守著：3D 列印切塊、插銷都整理', /pieces = pieces\.map\(tidyMesh\);[^\n]*\n\s*for \(const m of pieces\) refreshAfterEdit\(m\);/.test(mn) && /const m = tidyMesh\(unionMeshes\(ms\)\);/.test(mn));
   ok('★★ 讀程式守著：布林函式庫那一支⛔ 自己合（只在做出物件的那一刻合）', !/tidyMesh|mergeCoplanarFaces/.test(rd('js/build/bool.js')));
   ok('★★ 讀程式守著：「整理網格」在網格物件的面板、照當下的網格重合、記一步、講幾個 → 幾個、有勾平滑多講一句',
-    /this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb) && /const r = mergeCoplanarFaces\(obj\.mesh\(\)\);/.test(tb) && /obj\.setMesh\(r\.mesh\);/.test(tb)
+    /this\._tidyBtn\(obj\);\s*if \(!many\) this\._reduceBox\(obj, null\);[^\n]*\n\s*this\._subdBox\(obj\);/.test(tb) /* 〔2026-10-31 第 11 題：整理網格與平滑之間多「減面」〕 */ && /const r = mergeCoplanarFaces\(obj\.mesh\(\)\);/.test(tb) && /obj\.setMesh\(r\.mesh\);/.test(tb)
     && /this\._edit\('整理網格'\);/.test(tb) && /整理網格：\$\{r\.before\} → \$\{r\.after\} 個面/.test(tb) && /obj\.smoothed \? '　⚠ 這個物件有勾平滑/.test(tb));
   ok('★ 功能地圖認得「物件面板：整理網格」', /\['物件面板：整理網格',/.test(rd('js/ai/catalogInfo.js')));
 }
@@ -22064,7 +22064,7 @@ section('平滑細分 8a（第二輪第八批，2026-10-25）');
     && /: he\.smooth\)\) continue;/.test(sc) && /if \(!smooth\) for \(const \{ face \} of nonPlanarFaces\(shown\)\)/.test(sc)
     && /const onCage = !\(obj\.smoothed && !this\._cageOn\);/.test(sc) && /ghost\.raycast = \(\) => \{\};/.test(sc));
   ok('★★ 讀程式守著（面板）：網格物件才有、勾起來預設 2 次、磨幾次 1～3、保持尖的角度、平滑前後尺寸、面太多少磨、翻過來的講出來＋標出來',
-    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._skinNote\(obj\);\s*this\._tidyBtn\(obj\);\s*this\._subdBox\(obj\);/.test(tb)   // 網格核心第六批：中間多「整理網格」；面皮 A：再多面皮那一句
+    /this\.form\.appendChild\(note\('這個物件已經是網格，沒有參數可以改'\)\);\s*this\._skinNote\(obj\);\s*this\._tidyBtn\(obj\);\s*if \(!many\) this\._reduceBox\(obj, null\);[^\n]*\n\s*this\._subdBox\(obj\);/.test(tb)   // 網格核心第六批：中間多「整理網格」；面皮 A：再多面皮那一句；2026-10-31 第 11 題：整理網格與平滑之間多「減面」
     && /obj\.subd = v \? SUBD_DEFAULT : 0;/.test(tb) && /\['3', '3 次（面 ×64）'\]/.test(tb) && /this\._rowNum\('保持尖的轉折（°）'/.test(tb)
     && /平滑前 \$\{a\.map\(f2\)\.join\(' × '\)\}　→　平滑後/.test(tb) && /if \(info\.capped\)/.test(tb)
     && /有 \$\{info\.flipped\} 個小面翻過來了/.test(tb) && /setFacePreview\(info\.flipSegs\.map/.test(tb));
@@ -24524,6 +24524,85 @@ section('減到 ___ 面的對稱減面（kang 2026-10-31「照你的建議」(a)
   ok('★★ Z 朝上的檔：建模器的前後 ＝ 檔案的 Y、正負相反；上下 ＝ 檔案的 Z', /return m === 'x' \? \{ ax: 0, sg: 1 \} : m === 'y' \? \{ ax: z \? 2 : 1, sg: 1 \} : \{ ax: z \? 1 : 2, sg: z \? -1 : 1 \};/.test(pn));
   ok('★★ 對稱還在量 ⇒ 減到 N 面先等；對稱的設定變了重算；換檔案清回預設', /const symBusy = this\._sym && this\._sym\.pending;/.test(pn) && /&& !solidBusy && !symBusy\) this\._faceWork\('reduce'\)/.test(pn)
     && /this\._sym = null;[\s\S]{0,200}this\.symOn = null;[\s\S]{0,200}this\.symAxis = '';[\s\S]{0,200}this\.symSide = -1;/.test(pn));
+}
+
+section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格不講非等比縮放（kang 2026-10-31 第 11 題「照你的建議」(a)～(j)）');
+{
+  /** `三視圖導入-研究.md` 實驗 13；規格 `規格\建模器-匯入3D模型.md`「匯入之後再減面」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const MR = await import('../js/build/meshReduce.js');
+  const im = await import('../js/build/import3d.js');
+  const io = await import('../js/core/io.js');
+  const { Mesh, EDGE_ROLE } = await import('../js/core/mesh.js');
+  const { unfoldObject } = await import('../js/unfold/part.js');
+  const THREE = await import('three');
+  /** 經緯球（左右對稱、封閉）*/
+  const ball = (r = 10, n = 24) => {
+    const pts = [], faces = [];
+    for (let j = 0; j <= n; j++) for (let i = 0; i < 2 * n; i++) { const t = Math.PI * j / n, f = Math.PI * i / n; pts.push([r * Math.sin(t) * Math.cos(f), r * Math.cos(t), r * Math.sin(t) * Math.sin(f)]); }
+    const id = (j, i) => (j === 0 ? 0 : j === n ? n * 2 * n : j * 2 * n + (i % (2 * n)));
+    for (let j = 0; j < n; j++) for (let i = 0; i < 2 * n; i++) { const q = [id(j, i), id(j, i + 1), id(j + 1, i + 1), id(j + 1, i)].filter((v, k, a) => a.indexOf(v) === k); if (q.length >= 3) faces.push(q); }
+    const used = new Map(), P = [];
+    const F = faces.map(f => f.map(v => { if (!used.has(v)) { used.set(v, P.length); P.push(pts[v]); } return used.get(v); }));
+    return Mesh.fromFaceList(P.map(q => new THREE.Vector3(...q)), F);
+  };
+  const closed = m => { const vi = m._vertIndex(); const e = im.edgeCheck(m.faces.map(f => m.faceVerts(f).map(v => vi.get(v.id)))); return !e.open && !e.flipped && !e.nonManifold; };
+  const b0 = ball();
+  const n0 = b0.faces.length;
+  // ① 整個減
+  const r1 = MR.reduceMesh(b0, { target: 200 });
+  ok('★★★ 整個減到 200 面：做得到、封閉、表面偏差有算、原本的網格⛔ 被改（直接給新的）', r1.ok && r1.after <= 210 && closed(r1.mesh) && r1.dev > 0 && b0.faces.length === n0, `${r1.after} 面、偏 ${r1.dev}`);
+  const r2 = MR.reduceMesh(b0, { target: n0 + 10 });
+  ok('★★ 目標比現在還多 ⇒ 不用減、講出來', !r2.ok && /不用減/.test(r2.reason));
+  // ② 標記：預設清掉、講幾條；勾保留 ⇒ 線上的點不動、標記留著、減得比較少
+  const bm = ball();
+  let k = 0; for (const he of bm.edges()) { if (k >= 20) break; if (Math.abs(he.v.p.y) < 3 && Math.abs(he.to.p.y) < 3) { bm.setRole(he, EDGE_ROLE.CUT); k++; } }
+  ok('★★ 數標記：20 條縫、字寫「20 條縫」', MR.countMarks(bm).cut === 20 && MR.marksText(MR.countMarks(bm)) === '20 條縫');
+  const r3 = MR.reduceMesh(bm, { target: 200 }), r4 = MR.reduceMesh(bm, { target: 200, keepMarks: true });
+  ok('★★★ 不保留：縫幾乎都清掉、回報清掉幾條；保留：20 條都還在（縫少的照樣減得到 —— 實驗 13 縫上千條才減不下去）', r3.ok && r3.dropped.cut >= 15 && MR.countMarks(r3.mesh).cut === 20 - r3.dropped.cut
+    && r4.ok && MR.countMarks(r4.mesh).cut === 20 && r4.dropped.cut === 0 && r4.after >= r3.after, `${r3.dropped.cut}／${MR.countMarks(r4.mesh).cut}、${r3.after} vs ${r4.after}`);
+  const allCut = ball(); for (const he of allCut.edges()) allCut.setRole(he, EDGE_ROLE.CUT);
+  const r3b = MR.reduceMesh(allCut, { target: 200, keepMarks: true });
+  ok('★★ 每條邊都是縫又勾保留 ⇒ 一個都減不掉、講是不動的點、指路拿掉保留再減（本機驗證看到 355 條縫只講「破洞、翻面」）', !r3b.ok && /有標記的線上的點都不動/.test(r3b.reason) && /拿掉「保留有標記的線」再減/.test(r3b.reason), r3b.reason);
+  // ③ 只減選到的面：上半球；下半球的點一個都不動、下半球的標記留著
+  const bs = ball();
+  let kd = 0; for (const he of bs.edges()) { if (kd >= 10) break; if (he.v.p.y < -5 && he.to.p.y < -5) { bs.setRole(he, EDGE_ROLE.CUT); kd++; } }
+  const up = new Set(bs.faces.filter(f => bs.faceVerts(f).every(v => v.p.y > 0)));
+  const lowPts = bs.verts.filter(v => v.p.y <= 0).map(v => [v.p.x, v.p.y, v.p.z].join(','));
+  const r5 = MR.reduceMesh(bs, { target: Math.round(up.size * 0.3), faces: up });
+  const after = new Set(r5.mesh.verts.map(v => [v.p.x, v.p.y, v.p.z].join(',')));
+  ok('★★★ 只減上半球（減成三成）：下半球的點一個都沒動、面變少、封閉、下半球的 10 條縫都還在', r5.ok && lowPts.every(q => after.has(q)) && r5.after < n0 && closed(r5.mesh) && MR.countMarks(r5.mesh).cut === 10,
+    `${r5.after} 面、縫 ${MR.countMarks(r5.mesh).cut}`);
+  eq('★★★ 只減選到的：總面數剛好 ＝ 沒選到的 ＋ 選到的要減到的（目標照選到的換算；故意改壞「選到的目標沒換算」第一輪沒抓到才加）', r5.after, n0 - up.size + Math.round(up.size * 0.3));
+  const r6 = MR.reduceMesh(bs, { target: up.size + 5, faces: up });
+  ok('★★ 選到的面比目標少 ⇒ 不用減（講的是「選到的只有 N 個面」）', !r6.ok && /選到的只有/.test(r6.reason));
+  // ④ 對稱：整個、沒保留標記才用
+  const r7 = MR.reduceMesh(b0, { target: 200, sym: { ax: 0, c: 0, side: -1 } });
+  const mirrored = m => { const key = q => q.map(x => Math.round(x * 1e5)).join(','); const set = new Set(m.verts.map(v => key([v.p.x, v.p.y, v.p.z]))); return m.verts.every(v => set.has(key([-v.p.x, v.p.y, v.p.z]))); };
+  ok('★★★ 對稱減面：用了、每個點左右都對得上、封閉', r7.ok && r7.sym && mirrored(r7.mesh) && closed(r7.mesh));
+  const r8 = MR.reduceMesh(bm, { target: 200, keepMarks: true, sym: { ax: 0, c: 0, side: -1 } }), r9 = MR.reduceMesh(bs, { target: 40, faces: up, sym: { ax: 0, c: 0, side: -1 } });
+  ok('★★ 保留標記、只減選到的 ⇒ ⛔ 用對稱', r8.ok && !r8.sym && r9.ok && !r9.sym);
+  // ⑤ 第 10 題：網格物件非等比縮放⛔ 講；參數物件照舊講
+  const mo = new io.ModelObject({ name: '網格', kind: io.KIND.SOLID, src: { type: 'mesh' }, mesh: ball(10, 8) });
+  mo.scale.set(1, 1.15, 1);
+  const po = new io.ModelObject({ name: '方塊', kind: io.KIND.SOLID, src: { type: 'box', w: 10, h: 10, d: 10 } });
+  po.scale.set(1, 1.15, 1);
+  const wm = unfoldObject(mo, { material: 'paper' }).warnings, wp = unfoldObject(po, { material: 'paper' }).warnings;
+  ok('★★★ 展開：網格物件拉過深度（1.15）⇒ ⛔ 講非等比縮放；參數物件照舊講', !wm.some(w => w.includes('非等比縮放')) && wp.some(w => w.includes('非等比縮放')), `${wm.join('｜')}／${wp.join('｜')}`);
+
+  // ⑥ 讀程式守著（面板）
+  const tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8');
+  ok('★★ 物件面板：網格物件、一次一個才出現；拉點線面全選面才出現、參數物件叫先轉網格', /if \(!many\) this\._reduceBox\(obj, null\);/.test(tb)
+    && /if \(sel\.editSels\.every\(e => e\.kind === 'face' && e\.obj === el\.obj\)\) \{\s*if \(el\.obj\.isParametric\) this\.form\.appendChild\(note\('要減選到的面：先按「轉成可編輯網格」/.test(tb)
+    && /for \(const e of sel\.editSels\) for \(const f of regionOf\(mesh, e\.face\)\.faces\) fs\.add\(f\);/.test(tb));
+  ok('★★ 快捷：整個 ⇒ 約 2 萬、約 500；選到的 ⇒ 一半、三成；比現在多的不出現', /\[\['減成一半', Math\.round\(n \/ 2\)\], \['減成三成', Math\.round\(n \* 0\.3\)\]\] : \[\['約 2 萬面', 20000\], \['約 500 面', 500\]\]/.test(tb) && /presets\.filter\(\(\[, v\]\) => v >= 4 && v < n\)/.test(tb));   // 〔本機驗證：只選 2 個面時「減成一半」算出 1 面也出現 ⇒ 不到 4 面的不出現〕
+  ok('★★ 不讓面互相穿過去：跟匯入視窗共用記住的設定', /noCrossPref\(\) \? ' checked' : ''/.test(tb) && /nc\.onchange = \(\) => setNoCrossPref\(nc\.checked\);/.test(tb));
+  ok('★★ 標記：減之前講會清掉幾條、勾了保留改講留著但減得少；對稱只在整個、沒保留時', /⚠ 減完會清掉/.test(tb) && /勾了保留 ⇒ 線上的點不動、標記留著，但減得比較少/.test(tb) && /保留有標記的線（線上的點不動，減得比較少）/.test(tb) && /const sym = !faces && !this\.redKeepMarks \? this\._redSym\(obj\) : null;/.test(tb));
+  ok('★★ 按下去：先講正在減面、下一輪算、換網格、清選取、記一步、講幾面 → 幾面、偏差、清掉的標記、Ctrl+Z', /this\.app\.toast\('正在減面…/.test(tb) && /setTimeout\(\(\) => \{\s*const r = reduceMesh\(/.test(tb)
+    && /if \(this\.app\.sel\.editMode\) this\.app\.sel\.clearEditSel\(\);\s*obj\.setMesh\(r\.mesh\);/.test(tb) && /this\._edit\(faces \? '減選到的面' : '減面'\);/.test(tb)
+    && /減面：\$\{r\.before\} → \$\{r\.after\} 個面（表面離原本最多/.test(tb) && /清掉 \$\{marksText\(r\.dropped\)\}，減完再標/.test(tb) && /按 Ctrl\+Z 收得回來'\);/.test(tb));
+  ok('★★ 減不下去照實講（最少只能減到 N 個面）', /最少只能減到 \$\{r\.after\} 個面/.test(tb));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

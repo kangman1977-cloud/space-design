@@ -71,7 +71,7 @@ export function tidyPlan(mesh) {
   tidyCache.set(mesh, { sig, plan });
   return plan;
 }
-import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces, mergeCoplanarFaces }
+import { elementVerts, elementCenter, nonPlanarFaces, degenerateFaces, mergeCoplanarFaces, regionOf }
   from '../core/edit.js';
 import { measureSelection, fmtCm, meshMeasureWorld } from '../core/measure.js';
 import { clashLine } from '../core/interfere.js';
@@ -86,6 +86,9 @@ import { ask } from './askBox.js';
 import { SUBD_DEFAULT, SUBD_MAX, SUBD_FACE_CAP, decideCreases, markCreases, subdSig } from '../build/subd.js';
 import { allKeptSharp } from '../out/smoothNote.js';
 import { CREASE } from '../core/mesh.js';
+import { reduceMesh, countMarks, marksText, marked } from '../build/meshReduce.js';
+import { symmetryOf, SYM_ON, SYM_SHOW } from '../build/symmetry.js';
+import { noCrossPref, setNoCrossPref, SYM_AXES } from './import3dPanel.js';
 
 const SURFACE_TEXT = {
   [SURFACE.PLANAR]: '平面',
@@ -560,6 +563,7 @@ export class Panel {
       this.form.appendChild(note('這個物件已經是網格，沒有參數可以改'));
       this._skinNote(obj);
       this._tidyBtn(obj);
+      if (!many) this._reduceBox(obj, null);     // 一次一個物件（kang 2026-10-31 第 11 題 (h)）
       this._subdBox(obj);
     }
 
@@ -1146,6 +1150,135 @@ export class Panel {
   }
 
   /**
+   * 🔴 **減面**（匯入之後再減，kang 2026-10-31 第 11 題「照你的建議」(a)～(j) → `規格\建模器-匯入3D模型.md`「匯入之後再減面」、
+   * `三視圖導入-研究.md` 實驗 13）：物件面板（一個網格物件）減整個；拉點線面選了面 ⇒ 只減選到的（其他面的點不動）。
+   * 直接改網格、記一步（Ctrl+Z 收得回來）；「不讓面互相穿過去」跟匯入視窗共用記住的設定；對稱減面同匯入的出現與預設規則
+   * （只減選到的、保留標記時不給）；縫這些標記預設清掉、先講幾條，可以勾「保留有標記的線」（實驗 13：1,088 條剩 9 條、保住就減不下去）。
+   * @param {Set<object>|null} faces 選到的面（null ＝ 整個物件）
+   */
+  _reduceBox(obj, faces) {
+    const mesh = obj.mesh();
+    if (this._redFor !== obj.id) { this._redFor = obj.id; this.redTarget = 0; this.redKeepMarks = false; this.redSymOn = null; this.redSymAxis = ''; this.redSymSide = -1; }
+    const n = faces ? faces.size : mesh.faces.length;
+    this.form.appendChild(head(faces ? '減選到的面' : '減面'));
+    // 會清掉的標記：整個 ⇒ 全部；只減選到的 ⇒ 碰到選到的面的那些（其他的點不動、標記留著）
+    let mk = countMarks(mesh);
+    if (faces) {
+      mk = { cut: 0, fold: 0, keep: 0, hard: 0, crease: 0, total: 0 };
+      for (const he of mesh.edges()) {
+        if (!((he.face && faces.has(he.face)) || (he.twin && he.twin.face && faces.has(he.twin.face)))) continue;
+        const m = mesh.marksOf(he);
+        if (!marked(m)) continue;
+        mk.total++;
+        if (m.role === 'cut') mk.cut++; else if (m.role === 'fold') mk.fold++;
+        if (m.keep) mk.keep++;
+        if (m.hard) mk.hard++;
+        if (m.crease === CREASE.SHARP || m.crease === CREASE.SMOOTH) mk.crease++;
+      }
+    }
+    const sym = !faces && !this.redKeepMarks ? this._redSym(obj) : null;
+    const box = document.createElement('div');
+    box.className = 'note';
+    const presets = faces ? [['減成一半', Math.round(n / 2)], ['減成三成', Math.round(n * 0.3)]] : [['約 2 萬面', 20000], ['約 500 面', 500]];
+    box.innerHTML = `${faces ? `選到的 ${n} 個面減到` : `現在 ${n} 個面，減到`} <input type="number" class="redN" step="100" min="4" style="width:80px" value="${this.redTarget > 0 ? this.redTarget : ''}"> 面　`
+      + presets.filter(([, v]) => v >= 4 && v < n).map(([t, v]) => `<button class="mini" data-n="${v}">${t}</button>`).join(' ')
+      + `<br><label><input type="checkbox" class="redNc"${noCrossPref() ? ' checked' : ''}> 不讓面互相穿過去（比較慢）</label>`
+      + (sym ? sym.html : '')
+      + (mk.total ? (this.redKeepMarks ? `<br>${faces ? '選到的面上' : ''}有 ${marksText(mk)}：勾了保留 ⇒ 線上的點不動、標記留著，但減得比較少（標得多的幾乎減不下去）`
+        : `<br>⚠ 減完會清掉${faces ? '選到的面上的' : ''} ${marksText(mk)} —— 減完再標（先減面、再標縫）`)
+        + `<br><label><input type="checkbox" class="redKeep"${this.redKeepMarks ? ' checked' : ''}> 保留有標記的線（線上的點不動，減得比較少）</label>` : '')
+      + (obj.smoothed ? '<br>⚠ 這個物件有勾平滑：格子換了，平滑出來的樣子會跟著變' : '')
+      + `<br><button class="redGo">${faces ? '減選到的面' : '減面'}</button>`;
+    const inp = box.querySelector('.redN');
+    inp.onchange = () => { this.redTarget = Math.round(Number(inp.value) || 0); };
+    box.querySelectorAll('button[data-n]').forEach(b => { b.onclick = () => { this.redTarget = +b.dataset.n; inp.value = this.redTarget; }; });
+    const nc = box.querySelector('.redNc');
+    nc.parentElement.title = '減的時候，合了會讓面穿過別的面就不合（薄的殼內外兩層不會穿出來）。原本就穿過去的不管。跟匯入視窗共用這個設定';
+    nc.onchange = () => setNoCrossPref(nc.checked);
+    const kp = box.querySelector('.redKeep');
+    if (kp) {
+      kp.parentElement.title = '縫、折線、不准切、硬邊、自己標的尖圓那些線上的點不動 ⇒ 標記留得住，但減得比較少（標得多的幾乎減不下去）';
+      kp.onchange = () => { this.redKeepMarks = kp.checked; this.refresh(); };
+    }
+    if (sym) sym.wire(box);
+    const go = box.querySelector('.redGo');
+    go.title = '直接改網格；按 Ctrl+Z 收得回來';
+    go.onclick = () => {
+      const t = Math.round(Number(inp.value) || this.redTarget || 0);
+      if (!(t >= 4)) { this.app.toast('先打要減到幾個面（或按旁邊的快捷）', true); return; }
+      this.redTarget = t;
+      this.app.toast('正在減面…（面多的要幾秒）');
+      setTimeout(() => {
+        const r = reduceMesh(obj.mesh(), { target: t, faces, noCross: nc.checked, keepMarks: !!(kp && kp.checked), sym: sym ? sym.use() : null });
+        if (!r.ok) { this.app.toast(r.reason, true); return; }
+        if (this.app.sel.editMode) this.app.sel.clearEditSel();
+        obj.setMesh(r.mesh);
+        this.analysisCache.delete(obj.id);
+        this._edit(faces ? '減選到的面' : '減面');
+        this.app.toast(`減面：${r.before} → ${r.after} 個面（表面離原本最多 ${fmtMm(r.dev)} mm${r.sym ? '、' + sym.label() : ''}）`
+          + (r.short ? `　最少只能減到 ${r.after} 個面（再減會弄出破洞、讓面翻過去${nc.checked ? '或互相穿過去' : ''}${faces || (kp && kp.checked) ? '；不動的點也擋著' : ''}）` : '')
+          + (r.symBad ? `　${r.symBad} —— 改用一般減面` : '')
+          + (r.dropped.total ? `　清掉 ${marksText(r.dropped)}，減完再標` : '')
+          + '　按 Ctrl+Z 收得回來');
+      }, 30);
+    };
+    this.form.appendChild(box);
+  }
+
+  /**
+   * 物件的對稱減面（同匯入視窗：最對稱的軸 ≥ `SYM_ON` 出現預設勾、≥ `SYM_SHOW` 出現不勾、更低不出現）。
+   * 量對稱 5 萬面約 1 秒 ⇒ 照網格記住、第一次下一輪量完再重畫（⛔ 在畫面板的時候算）。網格自己的座標（Y 朝上）。
+   */
+  _redSym(obj) {
+    const mesh = obj.mesh();
+    if (!this._symCache) this._symCache = new WeakMap();
+    const st = this._symCache.get(mesh);
+    if (!st) {
+      const s2 = { pending: true, res: null };
+      this._symCache.set(mesh, s2);
+      setTimeout(() => {
+        try {
+          const vi = mesh._vertIndex();
+          const p = { points: mesh.verts.map(v => [v.p.x, v.p.y, v.p.z]), faces: mesh.faces.map(f => mesh.faceVerts(f).map(v => vi.get(v.id))) };
+          let lo = Infinity, hi = -Infinity; for (const q of p.points) { if (q[1] < lo) lo = q[1]; if (q[1] > hi) hi = q[1]; }
+          s2.res = symmetryOf(p, hi - lo);
+        } catch (e) { s2.res = null; }
+        s2.pending = false;
+        if (this.app.sel.active === obj || (this.app.sel.editSel && this.app.sel.editSel.obj === obj)) this.refresh();
+      }, 30);
+      return { html: '<br><span class="dim2">對稱減面：正在量左右對不對稱…</span>', wire() {}, use: () => null, label: () => '' };
+    }
+    if (st.pending) return { html: '<br><span class="dim2">對稱減面：正在量左右對不對稱…</span>', wire() {}, use: () => null, label: () => '' };
+    if (!st.res) return null;
+    const AX = ['x', 'y', 'z'], pctOf = m => st.res.axes[AX.indexOf(m)].within;
+    const autoAx = AX.reduce((a, b) => (pctOf(b) > pctOf(a) ? b : a)), best = pctOf(autoAx);
+    if (best < SYM_SHOW) return null;
+    const ax = this.redSymAxis || autoAx, on = this.redSymOn === null ? best >= SYM_ON : this.redSymOn, A = SYM_AXES[ax];
+    const pct = x => Math.round(x * 1000) / 10 + '%';
+    const opt = m => `<option value="${m}"${this.redSymAxis === m ? ' selected' : ''}>${SYM_AXES[m][0]}（${pct(pctOf(m))} 對稱）</option>`;
+    return {
+      html: `<br><label><input type="checkbox" class="redSym"${on ? ' checked' : ''}> 對稱減面（比較快）</label> `
+        + `<select class="redSymAx"><option value=""${this.redSymAxis ? '' : ' selected'}>自動：${SYM_AXES[autoAx][0]}（${pct(best)} 對稱）</option>${AX.map(opt).join('')}</select> `
+        + `<select class="redSymSide"><option value="-1"${this.redSymSide < 0 ? ' selected' : ''}>照${A[1]}半</option><option value="1"${this.redSymSide > 0 ? ' selected' : ''}>照${A[2]}半</option></select>`
+        + (best >= SYM_ON ? '' : `<br>⚠ 只有 ${pct(best)} 對稱 —— 勾了會把不對稱的地方改成對稱`),
+      wire: box => {
+        const ck = box.querySelector('.redSym'), sa = box.querySelector('.redSymAx'), sd = box.querySelector('.redSymSide');
+        ck.parentElement.title = '切一半減、鏡射接回：左右兩半的網格一模一樣、展開片左右成對、快一倍；原本就對稱的形狀幾乎不變';
+        ck.onchange = () => { this.redSymOn = ck.checked; };
+        sa.onchange = () => { this.redSymAxis = sa.value; this.refresh(); };
+        sd.onchange = () => { this.redSymSide = +sd.value; this.refresh(); };
+      },
+      use: () => {
+        const ck = this.form.querySelector('.redSym');
+        if (!(ck ? ck.checked : on)) return null;
+        const k = AX.indexOf(ax);
+        return { ax: k, c: st.res.axes[k].c, side: this.redSymSide };
+      },
+      label: () => `${A[0]}對稱（照${this.redSymSide < 0 ? A[1] : A[2]}半）`,
+    };
+  }
+
+  /**
    * 🔴 **拉點線面時的平滑細分**（第二輪第八批 8b，2026-10-25 kang「② 選邊＋面板兩顆 ⑤ 教人用影響半徑」→ `規格\建模器-平滑細分.md`「8b」）。
    * 選到邊 ⇒「保持尖」「磨圓」兩顆（Rhino 的 Crease／RemoveCrease）；選到點、影響半徑是 0 ⇒ 教人拉之前先填影響半徑
    * （只拉一個點，磨出來是尖尖的一撮 —— 沙箱三種判法都一樣，要圓圓鼓起來得讓旁邊的點跟著動）。
@@ -1667,6 +1800,15 @@ export class Panel {
       ));
     }
     if (el.obj.smoothed) this._subdEditBox(el.obj);
+    /** 選了面 ⇒ 只減選到的面（kang 2026-10-31 第 11 題 (b)；Meshmixer 的 Reduce 也是這樣）*/
+    if (sel.editSels.every(e => e.kind === 'face' && e.obj === el.obj)) {
+      if (el.obj.isParametric) this.form.appendChild(note('要減選到的面：先按「轉成可編輯網格」（跟標縫、面皮同一個規矩）'));
+      else {
+        const fs = new Set();
+        for (const e of sel.editSels) for (const f of regionOf(mesh, e.face).faces) fs.add(f);
+        this._reduceBox(el.obj, fs);
+      }
+    }
     const np = nonPlanarFaces(mesh);
     if (np.length) {
       const worst = np.reduce((a, b) => (a.dev > b.dev ? a : b));
@@ -2999,6 +3141,8 @@ function head(text) {
   return h;
 }
 
+/** 公分 → mm 字串（減面提示用）*/
+function fmtMm(cm) { return String(Math.round(cm * 10 * 1000) / 1000); }
 function note(text) {
   const n = document.createElement('div');
   n.className = 'note';

@@ -1195,6 +1195,12 @@ function crossTris(parts) {
   }
   return out;
 }
+/**
+ * 「不讓面互相穿過去」記住的設定（沒存過 ＝ 開）—— 物件面板的「減面」跟這個視窗共用同一個
+ * （kang 2026-10-31 第 11 題 (e)：選項跟匯入視窗同一套）
+ */
+export function noCrossPref() { return loadOpt().noCross !== false; }
+export function setNoCrossPref(v) { const o = loadOpt(); o.noCross = !!v; save(o); }
 function loadOpt() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
 }
