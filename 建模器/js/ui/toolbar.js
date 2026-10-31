@@ -1216,7 +1216,7 @@ export class Panel {
         this.analysisCache.delete(obj.id);
         this._edit(faces ? '減選到的面' : '減面');
         this.app.toast(`減面：${r.before} → ${r.after} 個面（表面離原本最多 ${fmtMm(r.dev)} mm${r.sym ? '、' + sym.label() : ''}）`
-          + (r.short ? `　最少只能減到 ${r.after} 個面（再減會弄出破洞、讓面翻過去${nc.checked ? '或互相穿過去' : ''}${faces || (kp && kp.checked) ? '；不動的點也擋著' : ''}）` : '')
+          + (r.short ? `　${faces ? `選到的面最少只能減到 ${r.selAfter} 個（整個 ${r.after}）` : `最少只能減到 ${r.after} 個面`}（再減會弄出破洞、讓面翻過去${nc.checked ? '或互相穿過去' : ''}${faces || (kp && kp.checked) ? '；不動的點也擋著' : ''}）` : '')
           + (r.symBad ? `　${r.symBad} —— 改用一般減面` : '')
           + (r.dropped.total ? `　清掉 ${marksText(r.dropped)}，減完再標` : '')
           + '　按 Ctrl+Z 收得回來');

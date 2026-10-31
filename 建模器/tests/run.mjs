@@ -24575,6 +24575,12 @@ section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格�
   ok('★★★ 只減上半球（減成三成）：下半球的點一個都沒動、面變少、封閉、下半球的 10 條縫都還在', r5.ok && lowPts.every(q => after.has(q)) && r5.after < n0 && closed(r5.mesh) && MR.countMarks(r5.mesh).cut === 10,
     `${r5.after} 面、縫 ${MR.countMarks(r5.mesh).cut}`);
   eq('★★★ 只減選到的：總面數剛好 ＝ 沒選到的 ＋ 選到的要減到的（目標照選到的換算；故意改壞「選到的目標沒換算」第一輪沒抓到才加）', r5.after, n0 - up.size + Math.round(up.size * 0.3));
+  /** 線上先驗（c162d17）：選 64 面要減到 19 只減到 62，拿整個物件比就沒講減不下去 ⇒ 改成拿選到的那幾面比 */
+  const cap = new Set(bs.faces.filter(f => bs.faceVerts(f).some(v => v.p.y > 9.99)));
+  const rc = MR.reduceMesh(bs, { target: Math.round(cap.size * 0.3), faces: cap });
+  ok('★★★ 只選頂端一圈（只有中間一個點能動）減成三成 ⇒ 算減不下去、回報選到的剩幾個；選上半球減得到的⛔ 算減不下去',
+    rc.ok && rc.short && rc.selAfter === rc.after - (n0 - cap.size) && rc.selAfter > Math.round(cap.size * 0.3) && r5.ok && !r5.short,
+    `選到 ${cap.size} 面 → ${rc.selAfter}（整個 ${rc.after}）`);
   const r6 = MR.reduceMesh(bs, { target: up.size + 5, faces: up });
   ok('★★ 選到的面比目標少 ⇒ 不用減（講的是「選到的只有 N 個面」）', !r6.ok && /選到的只有/.test(r6.reason));
   // ④ 對稱：整個、沒保留標記才用
@@ -24602,7 +24608,8 @@ section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格�
   ok('★★ 按下去：先講正在減面、下一輪算、換網格、清選取、記一步、講幾面 → 幾面、偏差、清掉的標記、Ctrl+Z', /this\.app\.toast\('正在減面…/.test(tb) && /setTimeout\(\(\) => \{\s*const r = reduceMesh\(/.test(tb)
     && /if \(this\.app\.sel\.editMode\) this\.app\.sel\.clearEditSel\(\);\s*obj\.setMesh\(r\.mesh\);/.test(tb) && /this\._edit\(faces \? '減選到的面' : '減面'\);/.test(tb)
     && /減面：\$\{r\.before\} → \$\{r\.after\} 個面（表面離原本最多/.test(tb) && /清掉 \$\{marksText\(r\.dropped\)\}，減完再標/.test(tb) && /按 Ctrl\+Z 收得回來'\);/.test(tb));
-  ok('★★ 減不下去照實講（最少只能減到 N 個面）', /最少只能減到 \$\{r\.after\} 個面/.test(tb));
+  ok('★★ 減不下去照實講（最少只能減到 N 個面；只減選到的講選到的剩幾個、整個幾個）', /最少只能減到 \$\{r\.after\} 個面/.test(tb)
+    && /faces \? `選到的面最少只能減到 \$\{r\.selAfter\} 個（整個 \$\{r\.after\}）`/.test(tb));
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

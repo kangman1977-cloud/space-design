@@ -53,7 +53,8 @@ export function marksText(c) {
  *   `target` ＝ 整個減到幾個面；`faces` 有給 ⇒ 只減這些面（`target` 是「這些面」要減到幾個），其他面的點不動；
  *   `keepMarks` ⇒ 有標記的線上的點不動（標記留得住，減得比較少）；`sym` ⇒ 對稱減面（整個物件、沒勾保留標記時才用）
  * @returns {{ok:boolean, reason?:string, mesh?:Mesh, before:number, after:number, want:number, dev:number,
- *   dropped:object, kept:number, symBad:string, sym:boolean}}
+ *   selN:number, selAfter:number, dropped:object, kept:number, symBad:string, sym:boolean, short:boolean}}
+ *   `selAfter` ＝ 選到的那幾面減完剩幾個（沒選 ＝ 整個）；`short` ＝ 比目標多太多（減不下去）
  */
 export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMarks = false, sym = null } = {}) {
   const vi = mesh._vertIndex();
@@ -112,6 +113,11 @@ export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMa
   Object.assign(left, countMarks(nm));
   const dropped = {};
   for (const k of Object.keys(all)) dropped[k] = Math.max(0, all[k] - left[k]);
-  return { ok: true, mesh: nm, before, after: out.faces.length, want, dev: surfaceDev(p, out), dropped, kept, symBad, sym: usedSym,
-    short: out.faces.length > want * 1.05 + 2 };
+  /**
+   * 減不下去：拿「選到的那幾面」減完剩幾個跟目標比（沒選 ＝ 整個）。
+   * 線上先驗看到：拿整個比，選 64 面要減到 19 只減到 62，2,046 沒超過 2,003 的 1.05 倍 ⇒ 沒講（kang 2026-11-01「照你的建議修」）
+   */
+  const selAfter = out.faces.length - (before - selN);
+  return { ok: true, mesh: nm, before, after: out.faces.length, want, selN, selAfter, dev: surfaceDev(p, out), dropped, kept, symBad, sym: usedSym,
+    short: selAfter > target * 1.05 + 2 };
 }
