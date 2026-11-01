@@ -24612,6 +24612,36 @@ section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格�
     && /faces \? `選到的面最少只能減到 \$\{r\.selAfter\} 個（整個 \$\{r\.after\}）`/.test(tb));
 }
 
+section('對稱減面不在鏡射面上貼平一條線（2026-11-01 查 A：獅子頭實心對稱減到 2,000 面出現三面共用的邊）');
+{
+  /** `三視圖導入-研究.md` 實驗 14；規格 `規格\建模器-匯入3D模型.md`「對稱減面」—— 舊版 8 個對稱樣本 × 11 種面數有 35 組做壞、改用一般減面 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const im = await import('../js/build/import3d.js');
+  const SY = await import('../js/build/symmetry.js');
+  const { decimate } = await import('../js/build/decimate.js');
+  const f = '混元_獅子頭_實心_2萬6千面.obj', b = readFileSync(join(here, '../../輸出/匯入測試/' + f));
+  const [p] = im.toParts(im.cleanModel(im.readModel(f, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))), { cmPerUnit: 1, up: 'y', split: false });
+  let lo = Infinity, hi = -Infinity; for (const q of p.points) { if (q[1] < lo) lo = q[1]; if (q[1] > hi) hi = q[1]; }
+  const c = SY.symmetryOf(p, hi - lo).axes[0].c;
+  const y = SY.symDecimate(p, { target: 2000, ax: 0, c, side: -1, noCross: true });
+  const e = im.edgeCheck(y.faces);
+  const key = q => q.map(x => Math.round(x * 1e6)).join(','), pts = new Set(y.points.map(key));
+  ok('★★★ 獅子頭實心（2萬6千面）對稱減到 2,000 面：做得出來（沒改用一般減面）、沒有三面共用、封閉、每個點左右都對得上（舊版：1 條邊被三個以上的面共用）',
+    !y.bad && !e.nonManifold && !e.open && !e.flipped && y.faces.length <= 2010 && y.points.every(q => pts.has(key([2 * c - q[0], q[1], q[2]]))), y.bad || `${y.faces.length} 面`);
+  /** 只減一半：兩頭都在鏡射面上、卻被兩個面用的邊（＝ 那一半在鏡射面上貼平一條線）一條都沒有 */
+  const L = p.points.reduce((m, q) => Math.max(m, Math.abs(q[0]), Math.abs(q[1]), Math.abs(q[2])), 0), eps = L * 1e-7;
+  const h = SY.cutHalf(p, 0, c, -1, eps);
+  const flat = d => { const n = new Map(); for (const g of d.faces) for (let k = 0; k < g.length; k++) { const u = g[k], w = g[(k + 1) % g.length]; const k2 = u < w ? u + '-' + w : w + '-' + u; n.set(k2, (n.get(k2) || 0) + 1); }
+    let m = 0; for (const [k2, cn] of n) { const [u, w] = k2.split('-').map(Number); if (cn >= 2 && d.points[u][0] === c && d.points[w][0] === c) m++; } return m; };
+  const counts = [2000, 2500, 10000].map(T => flat(decimate(h, { target: T / 2, noCross: true, plane: { ax: 0, c, eps, side: -1 } })));
+  ok('★★★ 只減那一半（1,000／1,250／5,000 面）：鏡射面上沒有被兩個面用的邊（舊版各 1 條 ⇒ 接回就三面共用）', counts.every(n => n === 0), counts.join('／'));
+  const dc = readFileSync(join(here, '../js/build/decimate.js'), 'utf8');
+  ok('★★ 讀程式守著：鏡射面那一條只在有 `plane` 時檢查、兩頭都是切口又被兩個面用 ⇒ 不合、本來就這樣的不算',
+    /if \(ok && plane\) \{/.test(dc) && /if \(!isSeam\(u\) \|\| !isSeam\(w\)\) continue;/.test(dc) && /if \(was \+ \(d\.get\(k2\) \|\| 0\) < 2\) continue;/.test(dc)
+    && /if \(was >= 2 && seam\.has\(u\) && seam\.has\(w\)\) continue;/.test(dc));
+}
+
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);
 if (fail) {
   console.log('  失敗項目：');

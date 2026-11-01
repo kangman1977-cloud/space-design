@@ -160,14 +160,37 @@ export function decimate(p, { target = 0, maxLen = Infinity, keep = null, noCros
       for (const f of nf) { if (f.length < 3) continue; const s = [...f].sort((p1, p2) => p1 - p2).join(','); if (seen.has(s)) { ok = false; break; } seen.add(s); }
     }
     // 3. 破洞、三面共用的邊不變多
+    const d = new Map();
     if (ok) {
-      const d = new Map();
       const tally = (f, s) => { for (let k = 0; k < f.length; k++) { const k2 = ek(f[k], f[(k + 1) % f.length]); d.set(k2, (d.get(k2) || 0) + s); } };
       F.forEach(i => tally(faces[i], -1));
       nf.forEach(f => { if (f.length >= 3) tally(f, 1); });
       let open = 0, nm = 0;
       for (const [k2, dd] of d) { if (!dd) continue; const was = cnt.get(k2) || 0, now = was + dd; open += (now === 1) - (was === 1); nm += (now > 2) - (was > 2); }
       if (open > 0 || nm > 0) ok = false;
+    }
+    /**
+     * 3b. 鏡射面（`plane`）：⛔ 多出「兩頭都是切口的點、卻被兩個面用」的邊 —— 那一半在鏡射面上貼平一條線，
+     * 鏡射接回時另一半也貼在同一條線 ⇒ 四個面共用（2026-11-01 查 A：獅子頭實心對稱減到 2,000、10,000 面各 1 條）。
+     * 業界的連結條件（VCGlib `edge_collapse.h`）擋的是把邊緣的點捏在一起，那一半本身還是好的、接回才壞 ⇒ 這條自己加。
+     */
+    if (ok && plane) {
+      const seamA = seam.has(a) || seam.has(b);
+      const isSeam = v => (v === a ? seamA : seam.has(v));
+      const seen = new Set();
+      for (const f of nf) {
+        if (f.length < 3 || !ok) continue;
+        for (let k = 0; k < f.length; k++) {
+          const u = f[k], w = f[(k + 1) % f.length], k2 = ek(u, w);
+          if (seen.has(k2)) continue;
+          seen.add(k2);
+          if (!isSeam(u) || !isSeam(w)) continue;
+          const was = cnt.get(k2) || 0;
+          if (was + (d.get(k2) || 0) < 2) continue;
+          if (was >= 2 && seam.has(u) && seam.has(w)) continue;          // 本來就是這樣（沒有變多）
+          ok = false; break;
+        }
+      }
     }
     // 4. 不多出原本沒有的穿面（`noCross`）：新的面碰到附近某個面時，合之前那一圈舊的面本來就碰到它 ⇒ 不算新的
     if (ok && near && !crossCapped) {
