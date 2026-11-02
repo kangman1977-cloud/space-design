@@ -17,9 +17,11 @@ export const PAIR_MAX_FACE = 40, PAIR_MAX_SHAPE = 40;
 /**
  * @param {number[][]} P 點（cm）
  * @param {number[][]} F 面（只會動三角形；四邊形、多邊形照原樣）
+ * @param {{keepEdge?:Set<string>, keepFace?:Set<number>}} [opt] 物件面板減面用（2026-11-02 實驗 15 (c)）：
+ *   `keepEdge` ＝ 不能拿掉的邊（`'小編號,大編號'`；有標記的線）；`keepFace` ＝ 不動的面（只減選到的面時，沒選到的那些）
  * @returns {{faces:number[][], pairs:number}} `pairs` ＝ 合了幾對
  */
-export function pairQuads(P, F, tol = PLANAR_TOL_CM) {
+export function pairQuads(P, F, tol = PLANAR_TOL_CM, { keepEdge = null, keepFace = null } = {}) {
   const nrm = t => {
     const a = P[t[0]], b = P[t[1]], c = P[t[2]];
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -28,14 +30,14 @@ export function pairQuads(P, F, tol = PLANAR_TOL_CM) {
   };
   const N = new Map(), E = new Map();
   F.forEach((t, i) => {
-    if (t.length !== 3) return;
+    if (t.length !== 3 || (keepFace && keepFace.has(i))) return;
     N.set(i, nrm(t));
     for (let k = 0; k < 3; k++) { const a = t[k], b = t[(k + 1) % 3], key = a < b ? a + ',' + b : b + ',' + a; if (!E.has(key)) E.set(key, []); E.get(key).push([i, k]); }
   });
   const deg = x => Math.acos(Math.max(-1, Math.min(1, x))) * 180 / Math.PI;
   const cand = [];
-  for (const l of E.values()) {
-    if (l.length !== 2) continue;
+  for (const [key, l] of E) {
+    if (l.length !== 2 || (keepEdge && keepEdge.has(key))) continue;
     const [[f, k], [g]] = l, nf = N.get(f), ng = N.get(g);
     const fa = deg(nf[0] * ng[0] + nf[1] * ng[1] + nf[2] * ng[2]);
     if (fa > PAIR_MAX_FACE) continue;

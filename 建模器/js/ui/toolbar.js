@@ -1188,6 +1188,8 @@ export class Panel {
         : `<br>⚠ 減完會清掉${faces ? '選到的面上的' : ''} ${marksText(mk)} —— 減完再標（先減面、再標縫）`)
         + `<br><label><input type="checkbox" class="redKeep"${this.redKeepMarks ? ' checked' : ''}> 保留有標記的線（線上的點不動，減得比較少）</label>` : '')
       + (obj.smoothed ? '<br>⚠ 這個物件有勾平滑：格子換了，平滑出來的樣子會跟著變' : '')
+      /** 照出口選面數（實驗 15 (a)，kang 2026-11-02「照你的建議」）：匯入一次、先改造、再複製各自減，每一份從面最多的那份減（業界做 LOD 也是）*/
+      + (faces ? '' : '<br><span class="dim2">要給好幾種用途（3D 列印、剖面、展開）：先按「複製」再減，每一份都從面最多的那份減（比一份接一份減準）</span>')
       + `<br><button class="redGo">${faces ? '減選到的面' : '減面'}</button>`;
     const inp = box.querySelector('.redN');
     inp.onchange = () => { this.redTarget = Math.round(Number(inp.value) || 0); };
@@ -1215,8 +1217,8 @@ export class Panel {
         obj.setMesh(r.mesh);
         this.analysisCache.delete(obj.id);
         this._edit(faces ? '減選到的面' : '減面');
-        this.app.toast(`減面：${r.before} → ${r.after} 個面（表面離原本最多 ${fmtMm(r.dev)} mm${r.sym ? '、' + sym.label() : ''}）`
-          + (r.short ? `　${faces ? `選到的面最少只能減到 ${r.selAfter} 個（整個 ${r.after}）` : `最少只能減到 ${r.after} 個面`}（再減會弄出破洞、讓面翻過去${nc.checked ? '或互相穿過去' : ''}${faces || (kp && kp.checked) ? '；不動的點也擋著' : ''}）` : '')
+        this.app.toast(`減面：${r.before} → ${r.after} 個面（${r.pairs ? `減到 ${r.tris} 個面、兩兩合併：合了 ${r.pairs} 對；` : ''}表面離原本最多 ${fmtMm(r.dev)} mm${r.sym ? '、' + sym.label() : ''}）`
+          + (r.short ? `　${faces ? `選到的面最少只能減到 ${r.selFaces} 個（整個 ${r.after}）` : `最少只能減到 ${r.after} 個面`}（再減會弄出破洞、讓面翻過去${nc.checked ? '或互相穿過去' : ''}${faces || (kp && kp.checked) ? '；不動的點也擋著' : ''}）` : '')
           + (r.symBad ? `　${r.symBad} —— 改用一般減面` : '')
           + (r.dropped.total ? `　清掉 ${marksText(r.dropped)}，減完再標` : '')
           + '　按 Ctrl+Z 收得回來');

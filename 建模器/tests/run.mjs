@@ -21079,7 +21079,7 @@ section('網格核心第五批 b ⑤：兩兩合併只合平的（2026-10-24）'
     && (() => { const outKeys = new Set(iq.faces.filter(g => g.length !== 3).map(keyOf)); return ipp.faces.filter(f => f.length !== 3).every(f => outKeys.has(keyOf(f))); })(), `${iq.pairs} 對`);   // 用查表（⛔ 每個都到全部的面裡找一次 —— 機身十幾萬個面，跑不完）
   // ③ 讀程式守著
   const ps = readFileSync(join(here, '../js/ui/import3dPanel.js'), 'utf8'), qs = readFileSync(join(here, '../js/build/quadify.js'), 'utf8');
-  ok('★★ 容許值跟琥珀色「不平的面」同一個（PLANAR_TOL_CM 0.01 cm）、夾角與角度 40°', /export function pairQuads\(P, F, tol = PLANAR_TOL_CM\)/.test(qs) && edit.PLANAR_TOL_CM === 0.01 && QD.PAIR_MAX_FACE === 40 && QD.PAIR_MAX_SHAPE === 40);
+  ok('★★ 容許值跟琥珀色「不平的面」同一個（PLANAR_TOL_CM 0.01 cm）、夾角與角度 40°', /export function pairQuads\(P, F, tol = PLANAR_TOL_CM, \{ keepEdge = null, keepFace = null \} = \{\}\)/.test(qs) && edit.PLANAR_TOL_CM === 0.01 && QD.PAIR_MAX_FACE === 40 && QD.PAIR_MAX_SHAPE === 40);
   ok('★★ 視窗：原樣／兩兩合併兩張卡、預設建議兩兩合併、最後一步在 cm 做、照比例記住、寫一行 Instant Meshes、小圖畫出每一條線',
     /export const QUAD_MODES = \{ raw: '原樣（三角形）', pair: '兩兩合併' \};/.test(ps) && /quad\.suggest = quad\.pairs \? 'pair' : 'raw';/.test(ps)
     && /if \(!m\.has\(s\.cmPerUnit\)\) m\.set\(s\.cmPerUnit, pairQuads\(pts, src\.faces\)\);/.test(ps) && /Instant Meshes/.test(ps) && /this\._thumbPut\(el, F\.thumbs, `quad\|/.test(ps) && /, w, h, true\);/.test(ps));
@@ -24574,12 +24574,12 @@ section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格�
   const after = new Set(r5.mesh.verts.map(v => [v.p.x, v.p.y, v.p.z].join(',')));
   ok('★★★ 只減上半球（減成三成）：下半球的點一個都沒動、面變少、封閉、下半球的 10 條縫都還在', r5.ok && lowPts.every(q => after.has(q)) && r5.after < n0 && closed(r5.mesh) && MR.countMarks(r5.mesh).cut === 10,
     `${r5.after} 面、縫 ${MR.countMarks(r5.mesh).cut}`);
-  eq('★★★ 只減選到的：總面數剛好 ＝ 沒選到的 ＋ 選到的要減到的（目標照選到的換算；故意改壞「選到的目標沒換算」第一輪沒抓到才加）', r5.after, n0 - up.size + Math.round(up.size * 0.3));
+  eq('★★★ 只減選到的：總面數剛好 ＝ 沒選到的 ＋ 選到的要減到的（目標照選到的換算；故意改壞「選到的目標沒換算」第一輪沒抓到才加；2026-11-02 減完也兩兩合併 ⇒ 照合併之前的三角形數）', r5.tris, n0 - up.size + Math.round(up.size * 0.3));
   /** 線上先驗（c162d17）：選 64 面要減到 19 只減到 62，拿整個物件比就沒講減不下去 ⇒ 改成拿選到的那幾面比 */
   const cap = new Set(bs.faces.filter(f => bs.faceVerts(f).some(v => v.p.y > 9.99)));
   const rc = MR.reduceMesh(bs, { target: Math.round(cap.size * 0.3), faces: cap });
   ok('★★★ 只選頂端一圈（只有中間一個點能動）減成三成 ⇒ 算減不下去、回報選到的剩幾個；選上半球減得到的⛔ 算減不下去',
-    rc.ok && rc.short && rc.selAfter === rc.after - (n0 - cap.size) && rc.selAfter > Math.round(cap.size * 0.3) && r5.ok && !r5.short,
+    rc.ok && rc.short && rc.selAfter === rc.tris - (n0 - cap.size) && rc.selAfter > Math.round(cap.size * 0.3) && r5.ok && !r5.short,
     `選到 ${cap.size} 面 → ${rc.selAfter}（整個 ${rc.after}）`);
   const r6 = MR.reduceMesh(bs, { target: up.size + 5, faces: up });
   ok('★★ 選到的面比目標少 ⇒ 不用減（講的是「選到的只有 N 個面」）', !r6.ok && /選到的只有/.test(r6.reason));
@@ -24607,9 +24607,9 @@ section('匯入之後再減面（物件面板、拉點線面選面）＋ 網格�
   ok('★★ 標記：減之前講會清掉幾條、勾了保留改講留著但減得少；對稱只在整個、沒保留時', /⚠ 減完會清掉/.test(tb) && /勾了保留 ⇒ 線上的點不動、標記留著，但減得比較少/.test(tb) && /保留有標記的線（線上的點不動，減得比較少）/.test(tb) && /const sym = !faces && !this\.redKeepMarks \? this\._redSym\(obj\) : null;/.test(tb));
   ok('★★ 按下去：先講正在減面、下一輪算、換網格、清選取、記一步、講幾面 → 幾面、偏差、清掉的標記、Ctrl+Z', /this\.app\.toast\('正在減面…/.test(tb) && /setTimeout\(\(\) => \{\s*const r = reduceMesh\(/.test(tb)
     && /if \(this\.app\.sel\.editMode\) this\.app\.sel\.clearEditSel\(\);\s*obj\.setMesh\(r\.mesh\);/.test(tb) && /this\._edit\(faces \? '減選到的面' : '減面'\);/.test(tb)
-    && /減面：\$\{r\.before\} → \$\{r\.after\} 個面（表面離原本最多/.test(tb) && /清掉 \$\{marksText\(r\.dropped\)\}，減完再標/.test(tb) && /按 Ctrl\+Z 收得回來'\);/.test(tb));
+    && /減面：\$\{r\.before\} → \$\{r\.after\} 個面（\$\{r\.pairs \? `減到 \$\{r\.tris\} 個面、兩兩合併：合了 \$\{r\.pairs\} 對；` : ''\}表面離原本最多/.test(tb) && /清掉 \$\{marksText\(r\.dropped\)\}，減完再標/.test(tb) && /按 Ctrl\+Z 收得回來'\);/.test(tb));
   ok('★★ 減不下去照實講（最少只能減到 N 個面；只減選到的講選到的剩幾個、整個幾個）', /最少只能減到 \$\{r\.after\} 個面/.test(tb)
-    && /faces \? `選到的面最少只能減到 \$\{r\.selAfter\} 個（整個 \$\{r\.after\}）`/.test(tb));
+    && /faces \? `選到的面最少只能減到 \$\{r\.selFaces\} 個（整個 \$\{r\.after\}）`/.test(tb));
 }
 
 section('對稱減面不在鏡射面上貼平一條線（2026-11-01 查 A：獅子頭實心對稱減到 2,000 面出現三面共用的邊）');
@@ -24640,6 +24640,80 @@ section('對稱減面不在鏡射面上貼平一條線（2026-11-01 查 A：獅�
   ok('★★ 讀程式守著：鏡射面那一條只在有 `plane` 時檢查、兩頭都是切口又被兩個面用 ⇒ 不合、本來就這樣的不算',
     /if \(ok && plane\) \{/.test(dc) && /if \(!isSeam\(u\) \|\| !isSeam\(w\)\) continue;/.test(dc) && /if \(was \+ \(d\.get\(k2\) \|\| 0\) < 2\) continue;/.test(dc)
     && /if \(was >= 2 && seam\.has\(u\) && seam\.has\(w\)\) continue;/.test(dc));
+}
+
+section('照出口選面數：複製各自一份網格、減完也兩兩合併、減面一區的提示、暫存存不進去要講（2026-11-02 實驗 15，kang「照你的建議」(a)～(d)）');
+{
+  /** `三視圖導入-研究.md` 實驗 15；規格 `規格\建模器-匯入3D模型.md`「照出口選面數」 */
+  const { readFileSync } = await import('node:fs');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const MR = await import('../js/build/meshReduce.js');
+  const QD = await import('../js/build/quadify.js');
+  const im = await import('../js/build/import3d.js');
+  const io = await import('../js/core/io.js');
+  const { Mesh, EDGE_ROLE } = await import('../js/core/mesh.js');
+  const { unfoldMany } = await import('../js/unfold/part.js');
+  const THREE = await import('three');
+  /** 方塊：每一面切成 n × n 格、每格兩個三角形（全是三角形 ⇒ 兩兩合併合得到）*/
+  const gridBox = (s = 10, n = 6) => {
+    const P = [], F = [], at = new Map();
+    const pt = q => { const k = q.map(x => Math.round(x * 1e6)).join(','); if (!at.has(k)) { at.set(k, P.length); P.push(q); } return at.get(k); };
+    const sides = [[0, 1, 2, 1], [0, 1, 2, -1], [1, 2, 0, 1], [1, 2, 0, -1], [2, 0, 1, 1], [2, 0, 1, -1]];
+    for (const [a, b, c, sg] of sides) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const q = (u, v) => { const x = [0, 0, 0]; x[a] = (u / n - 0.5) * s; x[b] = (v / n - 0.5) * s; x[c] = sg * s / 2; return pt(x); };
+      const A = q(i, j), B = q(i + 1, j), C = q(i + 1, j + 1), D = q(i, j + 1);
+      if (sg > 0) { F.push([A, B, C]); F.push([A, C, D]); } else { F.push([A, C, B]); F.push([A, D, C]); }
+    }
+    return Mesh.fromFaceList(P.map(q => new THREE.Vector3(...q)), F);
+  };
+  const closed = m => { const vi = m._vertIndex(); const e = im.edgeCheck(m.faces.map(f => m.faceVerts(f).map(v => vi.get(v.id)))); return !e.open && !e.flipped && !e.nonManifold; };
+  // (c) 減完也兩兩合併
+  const gb = gridBox(), n0 = gb.faces.length;
+  const r = MR.reduceMesh(gb, { target: 60 });
+  const quads = r.mesh.faces.filter(f => r.mesh.faceVerts(f).length === 4).length;
+  ok('★★★ (c) 整個減到 60 面：先減到三角形、再兩兩合併 ⇒ 面數 ＝ 三角形 − 合了幾對、真的有四邊形、封閉',
+    r.ok && r.tris <= 64 && r.pairs > 0 && r.after === r.tris - r.pairs && quads === r.pairs && closed(r.mesh), `${n0} → ${r.tris} 三角形、合 ${r.pairs} 對 ⇒ ${r.after}`);
+  const gm = gridBox();
+  let kc = 0; for (const he of gm.edges()) if (Math.abs(he.v.p.y) < 1e-9 && Math.abs(he.to.p.y) < 1e-9) { gm.setRole(he, EDGE_ROLE.CUT); kc++; }
+  const rk = MR.reduceMesh(gm, { target: 60, keepMarks: true });
+  ok('★★★ (c) 勾保留標記：腰上那一圈縫一條都沒被兩兩合併拿掉（照實數）', rk.ok && kc > 0 && MR.countMarks(rk.mesh).cut === kc && rk.dropped.cut === 0 && rk.pairs > 0, `${kc} 條 → ${MR.countMarks(rk.mesh).cut}、合 ${rk.pairs} 對`);
+  /** 故意改壞「帶標記的線也合」第一輪沒抓到（腰上那圈縫剛好沒被合到）⇒ 頂面每格的斜線標成折線：兩邊的三角形同一平面，⛔ 擋就被合掉 */
+  const gd = gridBox(10, 4);
+  let kf = 0; for (const he of gd.edges()) { const a = he.v.p, b = he.to.p; if (a.y > 4.99 && b.y > 4.99 && Math.abs(a.x - b.x) > 1e-6 && Math.abs(a.z - b.z) > 1e-6) { gd.setRole(he, EDGE_ROLE.FOLD); kf++; } }
+  const rd = MR.reduceMesh(gd, { target: Math.round(gd.faces.length * 0.3), keepMarks: true });
+  ok('★★★ (c) 勾保留標記：頂面 16 條斜的折線（兩邊是同一平面的三角形）一條都沒被兩兩合併拿掉、別的地方照樣有合', rd.ok && kf === 16 && MR.countMarks(rd.mesh).fold === 16 && rd.pairs > 0,
+    `${kf} 條 → ${rd.ok && MR.countMarks(rd.mesh).fold}、合 ${rd.pairs} 對`);
+  const gs = gridBox();
+  const top = new Set(gs.faces.filter(f => gs.faceVerts(f).every(v => v.p.y > 4.99)));
+  const unselQuads = m => m.faces.filter(f => { const vs = m.faceVerts(f); return vs.length === 4 && vs.every(v => v.p.y < 4.99); }).length;
+  const rs = MR.reduceMesh(gs, { target: 50, faces: top });
+  ok('★★★ (c) 只減頂面：頂面減完合成四邊形、沒選到的五面一個三角形都沒被合（還是三角形）、封閉；照合併之前算的總數 ＝ 沒選到的 ＋ 目標',
+    rs.ok && unselQuads(rs.mesh) === 0 && rs.pairs > 0 && closed(rs.mesh) && rs.tris === n0 - top.size + 50 && rs.selFaces === rs.after - (n0 - top.size)
+    && rs.selAfter === rs.tris - (n0 - top.size) && rs.selAfter !== rs.selFaces,   // 減不下去照合併之前的數判（故意改壞「拿合併之後的數判」第一輪沒抓到才加）
+ `合 ${rs.pairs} 對、沒選到的四邊形 ${unselQuads(rs.mesh)}、三角形 ${rs.tris}`);
+  const P4 = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], F4 = [[0, 1, 2], [0, 2, 3]];
+  ok('★★ (c) pairQuads 的 keepEdge／keepFace：中間那條在 keepEdge、或其中一個面在 keepFace ⇒ 不合；沒給照舊合',
+    QD.pairQuads(P4, F4).pairs === 1 && QD.pairQuads(P4, F4, undefined, { keepEdge: new Set(['0,2']) }).pairs === 0 && QD.pairQuads(P4, F4, undefined, { keepFace: new Set([1]) }).pairs === 0);
+  // (b) 複製各自一份；展開合成 ×N 比內容
+  const tb = readFileSync(join(here, '../js/ui/toolbar.js'), 'utf8'), mj = readFileSync(join(here, '../js/main.js'), 'utf8'), pj = readFileSync(join(here, '../js/unfold/part.js'), 'utf8');
+  ok('★★★ (b) 複製網格物件：各自一份網格（以前共用 ⇒ 改複本的點，原本那個也跟著動）', /if \(!o\.isParametric\) fresh\._mesh = o\.mesh\(\)\.clone\(\);/.test(mj) && !/fresh\._mesh = o\.mesh\(\);/.test(mj));
+  const mk = (m, name) => new io.ModelObject({ name, kind: io.KIND.SOLID, src: { type: 'mesh' }, mesh: m });
+  const g0 = gridBox(10, 2);
+  const moved = g0.clone(); moved.verts[0].p.x += 0.5;
+  const objs = [mk(g0, '格子方塊'), mk(g0.clone(), '複本'), mk(Mesh.fromJSON(JSON.parse(JSON.stringify(g0.toJSON()))), '存讀過的'), mk(moved, '改過一個點')];
+  const um = unfoldMany(objs, { material: 'paper' });
+  const same = um.pieces.filter(q => q.sameAs), alone = um.pieces.filter(q => !q.sameAs && /改過一個點/.test(q.name));
+  ok('★★★ (b) 展開：各自一份但內容一模一樣（複製的、存讀過的）⇒ 合成 ×3；改過一個點的⛔ 合', same.length > 0 && same.every(q => q.sameAs.join() === '格子方塊,複本,存讀過的') && alone.length > 0,
+    um.pieces.map(q => q.name + '×' + q.qty).join('／'));
+  ok('★★ (b) 讀程式：展開比網格內容（toJSON 一模一樣）、⛔ 比是不是同一份', /const c = JSON\.stringify\(o\.mesh\(\)\.toJSON\(\)\);/.test(pj) && !/meshIds\.has\(m\)/.test(pj));
+  // (a) 減面一區的提示（只在整個物件）
+  ok('★★ (a) 減面一區：整個物件時多一句「先按「複製」再減，每一份都從面最多的那份減」；只減選到的面時不講',
+    /\(faces \? '' : '<br><span class="dim2">要給好幾種用途（3D 列印、剖面、展開）：先按「複製」再減，每一份都從面最多的那份減（比一份接一份減準）<\/span>'\)/.test(tb));
+  // (d) 自動暫存存不進去要講
+  ok('★★★ (d) 自動暫存：存不進去 ⇒ 紅字一直掛著、存得進去就收起來、按知道了收起來後同一段不再出現；⛔ 用 toast、⛔ 用 $()',
+    /autosave as autosaveRaw/.test(mj) && /function autosave\(d\) \{\s*const ok = autosaveRaw\(d\);\s*if \(ok\) \{ saveWarned = false; showSaveWarn\(false\); \}\s*else if \(!saveWarned\) \{ saveWarned = true; showSaveWarn\(true\); \}/.test(mj)
+    && /let el = document\.getElementById\('saveWarn'\);/.test(mj) && /重新整理就會不見<\/b> —— 請按上面的「存檔」存成檔案/.test(mj) && /el\.querySelector\('#saveWarnOk'\)\.onclick = \(\) => \{ el\.hidden = true; \};/.test(mj)
+    && (mj.match(/autosaveRaw\(/g) || []).length === 1);
 }
 
 console.log(`\n  通過 ${pass}　失敗 ${fail}\n`);

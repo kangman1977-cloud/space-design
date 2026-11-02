@@ -473,7 +473,7 @@ export function unfoldSkinGroup(skins, opt = {}, modeOf = () => opt.mode) {
  * 🔴 **例外：確定一模一樣的複本合成一種 ×N，卡片上把每個名字都列出來**
  * （綜合評估 ⑤-16，2026-10-20，kang「同意你的建議」；補測：折板 Ctrl+D 之後出「12 種、共 12 片」）。
  * 「確定一模一樣」＝ 種類、板厚、縮放都相同，而且：參數物件的參數一字不差（`src` 整份比）；
- * 網格物件是同一份網格（Ctrl+D 複製網格物件就是共用同一份）。
+ * 網格物件的網格內容一模一樣（點、面、標記；2026-11-02 以前靠「Ctrl+D 共用同一份網格」，改點會連累原本那個 ⇒ 複製改成各自一份、這裡改比內容）。
  * ⚠ **⛔ 用寬、高、面積去比** —— 左右對稱的兩片數字一樣、其實是鏡像，硬合會切錯（Pepakura 論壇就有人碰到）。
  * ⭐ 業界：SolidWorks 下料表的「收集一模一樣的件」也是相同的才合、多一個孔就分開（經銷商教學與 SolidWorks 部落格）。
  * ⚠ 位置、旋轉⛔ 管（攤的是物件自己的網格，轉個方向攤出來一樣）。
@@ -490,9 +490,10 @@ export function unfoldMany(objs, opt = {}) {
     /** 面皮 B ④：展開方式不一樣的⛔ 合成一種（攤出來不一樣）*/
     const base = [o.kind, o.thickness, o.scale.x, o.scale.y, o.scale.z, modeOf(o) === 'dart' ? 'dart' : 'exact'].join('|');
     if (o.isParametric) return base + '|' + JSON.stringify(o.src);
-    const m = o.mesh();
-    if (!meshIds.has(m)) meshIds.set(m, meshIds.size);
-    return base + '|mesh#' + meshIds.get(m);
+    /** 網格物件比內容（點、面、標記一模一樣）—— 複製時各自一份、Ctrl+Z 與重新整理之後也各自一份（2026-11-02 實驗 15 (b)）*/
+    const c = JSON.stringify(o.mesh().toJSON());
+    if (!meshIds.has(c)) meshIds.set(c, meshIds.size);
+    return base + '|mesh#' + meshIds.get(c);
   };
   /**
    * 🔴 **面皮 B：同一個原本物件的面皮焊回去一起攤**（② 跨批也焊；③ 疊在一起的那幾張先不焊、各自攤、講）。

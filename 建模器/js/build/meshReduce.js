@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { Mesh, EDGE_ROLE, CREASE } from '../core/mesh.js';
 import { decimate, surfaceDev } from './decimate.js';
 import { symDecimate } from './symmetry.js';
+import { pairQuads } from './quadify.js';
 
 /** 有沒有「人標的」標記：切開、折、不准切、硬邊（環切的線、匯入的格線）、自己標的尖／圓（照轉折判的不算 —— 平滑細分會重判）*/
 export function marked(m) {
@@ -52,9 +53,11 @@ export function marksText(c) {
  * @param {{target:number, faces?:Set<object>|null, noCross?:boolean, keepMarks?:boolean, sym?:{ax:number, c:number, side:number}|null}} o
  *   `target` ＝ 整個減到幾個面；`faces` 有給 ⇒ 只減這些面（`target` 是「這些面」要減到幾個），其他面的點不動；
  *   `keepMarks` ⇒ 有標記的線上的點不動（標記留得住，減得比較少）；`sym` ⇒ 對稱減面（整個物件、沒勾保留標記時才用）
- * @returns {{ok:boolean, reason?:string, mesh?:Mesh, before:number, after:number, want:number, dev:number,
+ * @returns {{ok:boolean, reason?:string, mesh?:Mesh, before:number, after:number, tris:number, pairs:number, want:number, dev:number,
  *   selN:number, selAfter:number, dropped:object, kept:number, symBad:string, sym:boolean, short:boolean}}
- *   `selAfter` ＝ 選到的那幾面減完剩幾個（沒選 ＝ 整個）；`short` ＝ 比目標多太多（減不下去）
+ *   `after` ＝ 兩兩合併之後的面數；`tris` ＝ 合併之前（減到的面數；減出來的是三角形，沒動到的四邊形照原樣）、`pairs` ＝ 合了幾對；
+ *   `selAfter` ＝ 選到的那幾面減完剩幾個（沒選 ＝ 整個；合併之前的數，判斷減不下去用）、`selFaces` ＝ 同一個、合併之後的數（講給人聽）；
+ *   `short` ＝ 比目標多太多（減不下去）
  */
 export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMarks = false, sym = null } = {}) {
   const vi = mesh._vertIndex();
@@ -91,7 +94,6 @@ export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMa
       : faces ? '（選到的面邊上的點不動；再減會弄出破洞、讓面翻過去或互相穿過去）' : '（再減會弄出破洞、讓面翻過去或互相穿過去）';
     return { ok: false, reason: '一個面都減不掉' + why, before, after: before };
   }
-  const nm = Mesh.fromFaceList(out.points.map(q => new THREE.Vector3(q[0], q[1], q[2])), out.faces);
   /**
    * 標記補回去：沒動到的點（不動的點、或剛好沒被合到的）位置一模一樣 ⇒ 照位置對回原本的編號，
    * 兩頭都對得上、而且還連著的邊照原本帶。
@@ -99,6 +101,23 @@ export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMa
   const posKey = q => q[0] + ',' + q[1] + ',' + q[2];
   const old = new Map(points.map((q, i) => [posKey(q), i]));
   const map = out.points.map(q => old.get(posKey(q)));
+  /**
+   * 減完也兩兩合併（跟匯入視窗一樣：目標是三角形、合完面少一點；2026-11-02 實驗 15 (c)，kang「照你的建議」）——
+   * 以前物件面板「約 2 萬」減完 19,998 面、匯入視窗 17,529 面，兩邊對不上。
+   * ⛔ 拿掉帶標記的線（縫、折、格線…）；只減選到的面時，沒選到的面⛔ 動（點都在不動的點上的那些）。
+   */
+  const keepEdge = new Set();
+  for (const f of out.faces) for (let k = 0; k < f.length; k++) {
+    const u = f[k], w = f[(k + 1) % f.length], a = map[u], b = map[w];
+    if (a !== undefined && b !== undefined && marks.has(ek(a, b))) keepEdge.add(u < w ? u + ',' + w : w + ',' + u);
+  }
+  let keepFace = null;
+  if (faces) {
+    const unsel = new Set(); flist.forEach((f, i) => { if (!faces.has(f)) for (const v of fArr[i]) unsel.add(v); });
+    keepFace = new Set(); out.faces.forEach((f, i) => { if (f.every(v => map[v] !== undefined && unsel.has(map[v]))) keepFace.add(i); });
+  }
+  const pq = pairQuads(out.points, out.faces, undefined, { keepEdge, keepFace });
+  const nm = Mesh.fromFaceList(out.points.map(q => new THREE.Vector3(q[0], q[1], q[2])), pq.faces);
   const nvi = nm._vertIndex();
   let kept = 0;
   const left = { cut: 0, fold: 0, keep: 0, hard: 0, crease: 0, total: 0 };
@@ -117,7 +136,7 @@ export function reduceMesh(mesh, { target, faces = null, noCross = false, keepMa
    * 減不下去：拿「選到的那幾面」減完剩幾個跟目標比（沒選 ＝ 整個）。
    * 線上先驗看到：拿整個比，選 64 面要減到 19 只減到 62，2,046 沒超過 2,003 的 1.05 倍 ⇒ 沒講（kang 2026-11-01「照你的建議修」）
    */
-  const selAfter = out.faces.length - (before - selN);
-  return { ok: true, mesh: nm, before, after: out.faces.length, want, selN, selAfter, dev: surfaceDev(p, out), dropped, kept, symBad, sym: usedSym,
+  const tris = out.faces.length, selAfter = tris - (before - selN);       // 減不下去照兩兩合併之前的數（目標是減到的面數）
+  return { ok: true, mesh: nm, before, after: pq.faces.length, tris, pairs: pq.pairs, want, selN, selAfter, selFaces: pq.faces.length - (before - selN), dev: surfaceDev(p, out), dropped, kept, symBad, sym: usedSym,
     short: selAfter > target * 1.05 + 2 };
 }

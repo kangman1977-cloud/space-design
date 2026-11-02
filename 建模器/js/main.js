@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { Doc, ModelObject, KIND, boolSrcFrom, splitObjects, joinObjects, setShown, isIsolated, layerFrom, arraySrcFrom, explodeArray,
-         explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave, loadAutosave,
+         explodeShapes, recenterOrigin, setOriginTo, download, openFile, autosave as autosaveRaw, loadAutosave,
          penPathToWorld, penPathToLocal, penKind, GUIDE_AXES,
          revFollowGuide, revDetachGuide, revCheckBinds, guideFromFace, penPlaceOnPlane, penWallSide,
          revRecenterBound, makeSkins }
@@ -691,8 +691,12 @@ function duplicateSelected() {
       lockScale: o.lockScale,
       subd: o.subd, subdDeg: o.subdDeg, subdKeep: o.subdKeep      // 第八批 8a／8c
     });
-    // 已烘成網格的物件沒有參數可以重建，直接共用同一份網格資料
-    if (!o.isParametric) fresh._mesh = o.mesh();
+    /**
+     * 已烘成網格的物件沒有參數可以重建 ⇒ 複製一份網格。
+     * ⛔ 共用同一份（2026-11-02 實驗 15 本機滑鼠：以前共用 ⇒ 改複本的點，原本那個也跟著動；kang「照你的建議」(b)）。
+     * 展開「一模一樣的複本合成 ×N」改比網格內容（`unfold/part.js` `unfoldMany()`），不靠同一份。
+     */
+    if (!o.isParametric) fresh._mesh = o.mesh().clone();
     doc.add(fresh);
     made.push(fresh.id);
   }
@@ -9247,6 +9251,35 @@ function hideEmptyGroups() {
 // ── 提示條 ────────────────────────────────────────────
 
 let toastTimer = null;
+/**
+ * 🔴 **自動暫存存不進去要講**（2026-11-02 實驗 15 (d)，kang「照你的建議」）：以前 io.js 的暫存回 false 沒人看 ——
+ * 模型大（三份 5 萬面就 2～3 MB；Chrome 每個網址約 5 MB【推論】）存不進去時一聲不響，重新整理就回到上一份存得進去的。
+ * 存不進去 ⇒ 下面一行紅字一直掛著（⛔ 用 toast：會被剛做的那個動作的提示蓋掉）；存得進去就自己消失；
+ * 按「知道了」收起來，要等存得進去之後再存不進去才再出現（同一段只講一次）。
+ */
+let saveWarned = false;
+function autosave(d) {
+  const ok = autosaveRaw(d);
+  if (ok) { saveWarned = false; showSaveWarn(false); }
+  else if (!saveWarned) { saveWarned = true; showSaveWarn(true); }
+  return ok;
+}
+function showSaveWarn(on) {
+  let el = document.getElementById('saveWarn');          // ⛔ 用 $()：還沒建出來時它會換成假元件、報缺 id
+  if (!on) { if (el) el.hidden = true; return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'saveWarn';
+    el.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:60;max-width:min(720px,92vw);'
+      + 'background:#b3261e;color:#fff;padding:8px 12px;border-radius:6px;font-size:13px;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+    el.innerHTML = '<span>⚠ 瀏覽器暫存存不進去（模型太大、空間滿了，或是私密瀏覽）：剛才的改動<b>重新整理就會不見</b> —— 請按上面的「存檔」存成檔案。存得進去之後這一行會自己消失。</span> '
+      + '<button class="mini" id="saveWarnOk">知道了</button>';
+    document.body.appendChild(el);
+    el.querySelector('#saveWarnOk').onclick = () => { el.hidden = true; };
+  }
+  el.hidden = false;
+}
+
 function toast(msg, bad = false) {
   const el = $('toast');
   el.textContent = msg;
